@@ -4,6 +4,8 @@ import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { Logger } from "./log.js";
 import type { Hub, HubEvent } from "./hub.js";
 import { existsSync as fileExists } from "node:fs";
@@ -55,8 +57,13 @@ export interface BuildInfo {
 export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo, onShutdownRequest: () => void): Promise<RunningServer> {
   const uiDir = fileURLToPath(new URL("../ui/", import.meta.url));
   const assetsDir = fileURLToPath(new URL("../assets/", import.meta.url));
-  const modulesDir = fileURLToPath(new URL("../node_modules/", import.meta.url));
-  const staticDir = (dir: "ui" | "assets" | "node_modules" | undefined): string => (dir === "assets" ? assetsDir : dir === "node_modules" ? modulesDir : uiDir);
+  const resolveModule = createRequire(import.meta.url).resolve;
+  const packageDir = (name: string): string => dirname(resolveModule(`${name}/package.json`));
+  const staticPath = (entry: { file: string; dir?: "ui" | "assets" | "node_modules" }): string => {
+    if (entry.dir !== "node_modules") return (entry.dir === "assets" ? assetsDir : uiDir) + entry.file;
+    const slash = entry.file.indexOf("/");
+    return join(packageDir(entry.file.slice(0, slash)), entry.file.slice(slash + 1));
+  };
   const clients = new Set<ServerResponse>();
   const snapshot = (): unknown => ({ ...(hub.snapshot() as Record<string, unknown>), version: info });
 
@@ -99,7 +106,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     if (req.method === "GET" && STATIC_FILES[path]) {
       const entry = STATIC_FILES[path];
-      const body = await readFile(staticDir(entry.dir) + entry.file);
+      const body = await readFile(staticPath(entry));
       res.writeHead(200, { "Content-Type": entry.type, "Cache-Control": entry.dir === "ui" || !entry.dir ? "no-cache" : "public, max-age=3600" });
       res.end(body);
       return;
