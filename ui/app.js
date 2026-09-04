@@ -935,21 +935,21 @@
     els.sideRoomName.textContent = room.name;
     els.sideRoomEmoji.textContent = room.settings.emoji || "";
     els.sideRoomSub.textContent = room.settings.topic || `${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}${st.agents.length ? ` · ${st.online} online` : ""}`;
-    els.participants.innerHTML = "";
     const ordered = [...room.participants].sort((a, b) => (a.kind === "human" ? -1 : b.kind === "human" ? 1 : 0));
+    const rows = new Map([...els.participants.children].map((li) => [li.dataset.id, li]));
     for (const p of ordered) {
-      const li = document.createElement("li");
+      let li = rows.get(p.id);
       const selected = (state.selection.kind === "participant" && state.selection.id === p.id) || (p.kind === "human" && state.selection.kind === "me" && state.detailsOpen);
       const asleep = p.kind === "agent" && (p.status === "offline" || p.status === "left");
-      li.className = (p.kind === "human" ? "me" : "") + (selected ? " selected" : "") + (asleep ? " offline" : "");
+      const className = (p.kind === "human" ? "me" : "") + (selected ? " selected" : "") + (asleep ? " offline" : "");
       const sub = p.kind === "human" ? "you, the human" : [p.tagline ? `"${p.tagline}"` : "", p.agentVendor || p.agentLabel, p.model].filter(Boolean).join(" · ");
       const warn = p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>` : "";
       const status = asleep
         ? `<span class="zzz" title="${esc(STATUS_LABEL[p.status] || p.status)}">zzz</span>`
         : p.kind === "agent" && p.status !== "idle" ? `<span class="badge status-${p.status}">${p.status === "thinking" ? '<span class="dot"></span>' : ""}${STATUS_LABEL[p.status] || p.status}</span>` : "";
-      li.innerHTML = `
-        ${avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true, status: p.kind === "agent" })}
-        <div class="p-body">
+      const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true });
+      const statusClass = p.kind === "agent" ? `avatar-status status-${esc(p.status || "idle")}` : "";
+      const bodyHtml = `<div class="p-body">
           <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? '<span class="badge muted">muted</span>' : ""}${status}</div>
           <div class="p-sub">${esc(sub)}</div>
           ${warn}
@@ -958,20 +958,32 @@
           ${p.kind === "agent" && p.status === "thinking" ? `<button class="icon-btn sm stop-btn" title="Stop this reply">${ic("stop")}</button>` : ""}
           ${p.kind === "agent" && p.status === "offline" ? `<button class="icon-btn sm reconnect-btn" title="Reconnect">${ic("refresh")}</button>` : ""}
         </div>`;
-      li.addEventListener("click", (e) => {
-        if (e.target.closest("button")) return;
-        if (p.kind === "human") openDetails({ kind: "me" });
-        else openDetails({ kind: "participant", id: p.id });
-      });
-      li.addEventListener("dblclick", () => {
-        if (p.kind === "agent") insertMention(p.name);
-      });
-      const stop = li.querySelector(".stop-btn");
-      if (stop) stop.addEventListener("click", () => post(roomApi(`/participants/${encodeURIComponent(p.id)}/cancel`)).catch(showError));
-      const rec = li.querySelector(".reconnect-btn");
-      if (rec) rec.addEventListener("click", () => openReconnectDialog(room));
-      els.participants.appendChild(li);
+      if (!li) {
+        li = document.createElement("li");
+        li.dataset.id = p.id;
+        li.innerHTML = avatarHtml + bodyHtml;
+        li.dataset.avatar = avatarHtml;
+        if (statusClass) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="${statusClass}"></span>`);
+        li.dataset.body = bodyHtml;
+      } else {
+        if (li.dataset.avatar !== avatarHtml) {
+          li.querySelector(".avatar").outerHTML = avatarHtml;
+          li.dataset.avatar = avatarHtml;
+        }
+        const dot = li.querySelector(".avatar-status");
+        if (statusClass && dot && dot.className !== statusClass) dot.className = statusClass;
+        else if (statusClass && !dot) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="${statusClass}"></span>`);
+        if (li.dataset.body !== bodyHtml) {
+          li.querySelectorAll(".p-body, .p-actions").forEach((el) => el.remove());
+          li.insertAdjacentHTML("beforeend", bodyHtml);
+          li.dataset.body = bodyHtml;
+        }
+      }
+      if (li.className !== className) li.className = className;
+      if (li !== els.participants.children[ordered.indexOf(p)]) els.participants.appendChild(li);
+      rows.delete(p.id);
     }
+    for (const li of rows.values()) li.remove();
     renderHushButton(room);
     els.reconnectAllBtn.hidden = offlineAgents(room).length === 0;
   }
@@ -1675,7 +1687,7 @@
       <div class="section">
         ${sectionTitle("user", "Turn taking")}
         ${field("Who may speak", `<select id="rp-turns"><option value="one-at-a-time"${rs.turnTaking !== "parallel" ? " selected" : ""}>One vibemate at a time</option><option value="parallel"${rs.turnTaking === "parallel" ? " selected" : ""}>All addressed vibemates at once</option></select>`, null, "One at a time: the others queue and see the earlier replies before they answer; the addressed vibemates go first. All at once: fastest, but replies may cross.")}
-        ${field("Reply delay, seconds", `<input type="number" id="rp-delay" min="0" max="120" step="0.5" value="${rs.replyDelay ?? 5}">`, "With two or more vibemates, each waits a random 0–N seconds before it answers, so replies cross less often. A vibemate alone answers at once. A vibemate's own delay (in its panel) always applies.")}
+        ${field("Reply delay, seconds", `<input type="number" id="rp-delay" min="0" max="120" step="0.5" value="${rs.replyDelay ?? 4}">`, "With two or more vibemates, each waits a random 0–N seconds before it answers, so replies cross less often. A vibemate alone answers at once. A vibemate's own delay (in its panel) always applies.")}
         <label class="switch"><span class="label">Wait while you are typing${geekTip("A vibemate about to start holds back while you type (a few seconds after your last keystroke). A reply already under way is not interrupted.")}</span><input type="checkbox" id="rp-wait-typing" ${rs.waitWhileHumanTypes !== false ? "checked" : ""}></label>
       </div>
       ${geek(
@@ -1794,7 +1806,7 @@
           <div class="section">
             ${sectionTitle("bolt", "Pace")}
             ${field("Turn taking in new rooms", `<select id="sp-turns"><option value="one-at-a-time"${d.turnTaking !== "parallel" ? " selected" : ""}>One vibemate at a time</option><option value="parallel"${d.turnTaking === "parallel" ? " selected" : ""}>All addressed vibemates at once</option></select>`)}
-            ${field("Reply delay in new rooms, seconds", `<input type="number" id="sp-delay" min="0" max="120" step="0.5" value="${d.replyDelay ?? 5}">`, "Used when two or more vibemates share a room; each room can change it; a vibemate can override it in its own panel.", "Before each turn a vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive meanwhile land in its backlog. A vibemate alone answers at once unless it has its own delay.")}
+            ${field("Reply delay in new rooms, seconds", `<input type="number" id="sp-delay" min="0" max="120" step="0.5" value="${d.replyDelay ?? 4}">`, "Used when two or more vibemates share a room; each room can change it; a vibemate can override it in its own panel.", "Before each turn a vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive meanwhile land in its backlog. A vibemate alone answers at once unless it has its own delay.")}
           </div>
           <div class="section" id="sp-editor">
             ${sectionTitle("pencil", "Open files at a line")}
@@ -2305,7 +2317,7 @@
     els.invNote.textContent = "";
     els.invStatus.textContent = "";
     els.invDelay.value = "";
-    els.invDelay.placeholder = `the room's: ${(currentRoom() || {}).settings?.replyDelay ?? 5} s`;
+    els.invDelay.placeholder = `the room's: ${(currentRoom() || {}).settings?.replyDelay ?? 4} s`;
     renderSkillChecks(els.invSkills, []);
     els.invName.value = "";
     els.invAvatar.value = "";
@@ -2708,20 +2720,53 @@
     typingSentAt = now;
     post(roomApi("/typing"), {}).catch(() => undefined);
   });
+  els.participants.addEventListener("click", (e) => {
+    const li = e.target.closest("li[data-id]");
+    const room = currentRoom();
+    if (!li || !room) return;
+    const p = findById(room, li.dataset.id);
+    if (!p) return;
+    if (e.target.closest(".stop-btn")) return void post(roomApi(`/participants/${encodeURIComponent(p.id)}/cancel`)).catch(showError);
+    if (e.target.closest(".reconnect-btn")) return openReconnectDialog(room);
+    if (e.target.closest("button")) return;
+    if (p.kind === "human") openDetails({ kind: "me" });
+    else openDetails({ kind: "participant", id: p.id });
+  });
+  els.participants.addEventListener("dblclick", (e) => {
+    const li = e.target.closest("li[data-id]");
+    const p = li && findById(currentRoom(), li.dataset.id);
+    if (p && p.kind === "agent") insertMention(p.name);
+  });
   els.composer.addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = els.input.value.trim();
-    if (!text || !currentRoom()) return;
+    const room = currentRoom();
+    if (!text || !room) return;
     els.input.value = "";
     typingSentAt = 0;
     autosize();
+    const local = { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, seq: 0, from: "human", fromName: (state.settings || {}).humanName || "You", to: [], toNames: [], text, ts: Date.now(), kind: "chat", pending: true };
+    upsertMessage(room.id, local);
     try {
-      await post(roomApi("/send"), { text });
+      const r = await post(roomApi("/send"), { text });
+      adoptLocalMessage(room.id, local.id, r.id);
     } catch (error) {
+      removeMessage(room.id, local.id);
       showError(error);
       els.input.value = text;
     }
   });
+  function adoptLocalMessage(roomId, localId, realId) {
+    const room = state.rooms.get(roomId);
+    if (!room || !realId) return;
+    if (room.messages.some((m) => m.id === realId)) return removeMessage(roomId, localId);
+    const m = room.messages.find((x) => x.id === localId);
+    if (!m) return;
+    m.id = realId;
+    delete m.pending;
+    const el = els.messages.querySelector(`.msg[data-id="${localId}"]`);
+    if (el) el.dataset.id = realId;
+  }
 
 
   const RULE_MENTION_RE = /(?<![\w.\/:])@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu;
