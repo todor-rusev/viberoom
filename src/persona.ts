@@ -175,7 +175,7 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
   );
   lines.push(`- Tools: ${tools}`);
   if (settings.maxSentences) lines.push(`- Length: at most ${settings.maxSentences} sentences.`);
-  lines.push("- Format: plain chat text; Markdown is rendered (lists, tables, code, bold), so use it lightly and skip headings. For a diagram, write a ```mermaid block: the room renders it. Name files by their absolute path: the human can click them, and .md / .csv files open right in the room.");
+  lines.push("- Format: plain chat text; Markdown is rendered (lists, tables, code, bold), so use it lightly and skip headings. For a diagram, write a ```mermaid block; for tabular data, a Markdown table or a ```csv block: the room renders both. Name files by their absolute path: the human can click them, and .md / .csv files open right in the room.");
   const custom = settings.customRules
     .split(/\r?\n/)
     .map((l) => l.trim().replace(/^[-*•]\s*/, ""))

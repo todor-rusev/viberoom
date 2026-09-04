@@ -217,6 +217,57 @@
       return `<a class="open-link" data-open="${target}" href="#" title="${isUrl ? "Open in your browser" : "Open with the default app"}">${target}</a>${trail}`;
     });
   }
+  function parseCsv(text) {
+    const first = text.split(/\r?\n/, 1)[0] || "";
+    let delimiter = ",";
+    let best = -1;
+    for (const d of [",", ";", "\t"]) {
+      const n = first.split(d).length - 1;
+      if (n > best) {
+        delimiter = d;
+        best = n;
+      }
+    }
+    const rows = [];
+    let row = [];
+    let field = "";
+    let quoted = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (quoted) {
+        if (c === '"') {
+          if (text[i + 1] === '"') {
+            field += '"';
+            i++;
+          } else quoted = false;
+        } else field += c;
+        continue;
+      }
+      if (c === '"' && field === "") quoted = true;
+      else if (c === delimiter) {
+        row.push(field);
+        field = "";
+      } else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = "";
+      } else field += c;
+    }
+    if (field !== "" || row.length) {
+      row.push(field);
+      rows.push(row);
+    }
+    while (rows.length && rows[rows.length - 1].every((f) => f === "")) rows.pop();
+    return rows;
+  }
+  function csvBlock(raw) {
+    const rows = parseCsv(raw.trim());
+    const code = esc(raw.trim());
+    if (rows.length < 2) return `<pre>${code}</pre>`;
+    return `<div class="csv-block"><div class="mm-out">${csvTable(rows)}</div><pre class="mm-code" hidden>${code}</pre><div class="mm-bar"><button type="button" class="mm-src">source</button></div></div>`;
+  }
   function mermaidBlock(code) {
     return `<div class="mermaid-block" data-src="${code}"><div class="mm-out"><pre>${code}</pre></div><pre class="mm-code" hidden>${code}</pre><div class="mm-bar"><button type="button" class="mm-src">source</button></div></div>`;
   }
@@ -234,8 +285,10 @@
           return esc(token.text != null ? token.text : token.raw || "");
         },
         code(token) {
+          const lang = token.lang || "";
+          if (/^\s*(csv|tsv)\b/i.test(lang)) return csvBlock(String(token.text || ""));
           const code = esc(String(token.text || "")).trim();
-          return /^\s*mermaid\b/i.test(token.lang || "") ? mermaidBlock(code) : `<pre>${code}</pre>`;
+          return /^\s*mermaid\b/i.test(lang) ? mermaidBlock(code) : `<pre>${code}</pre>`;
         },
         link(token) {
           const inner = this.parser.parseInline(token.tokens || []);
@@ -2901,7 +2954,7 @@
     }
     const src = e.target.closest && e.target.closest(".mm-src");
     if (src) {
-      const code = src.closest(".mermaid-block").querySelector(".mm-code");
+      const code = src.closest(".mermaid-block, .csv-block").querySelector(".mm-code");
       code.hidden = !code.hidden;
       src.textContent = code.hidden ? "source" : "hide source";
     }

@@ -349,13 +349,15 @@ p .geek-tip, .hint > .geek-tip, .switch .label > .geek-tip { margin-left: 8px; }
 .open-link { color: var(--primary); font-weight: 800; text-decoration: underline; text-decoration-color: rgba(91, 91, 240, 0.35); text-underline-offset: 2px; cursor: pointer; overflow-wrap: anywhere; }
 .open-link:hover { text-decoration-color: var(--primary); }
 code .open-link { color: inherit; }
-.mermaid-block { margin: 8px 0; background: var(--card); border-radius: 14px; padding: 10px 12px 4px; max-width: 100%; overflow-x: auto; box-shadow: var(--edge); }
+.mermaid-block, .csv-block { margin: 8px 0; background: var(--card); border-radius: 14px; padding: 10px 12px 4px; max-width: 100%; overflow-x: auto; box-shadow: var(--edge); }
 .mermaid-block .mm-out svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
 .mermaid-block .mm-out pre { margin: 0; }
-.mermaid-block .mm-bar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 2px; }
-.mermaid-block .mm-src { border: 0; background: transparent; color: var(--faint); font-size: 11px; font-weight: 800; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
-.mermaid-block .mm-src:hover { background: var(--soft); color: var(--primary); }
-.mermaid-block .mm-code { margin: 6px 0 0; }
+.mermaid-block .mm-bar, .csv-block .mm-bar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 2px; }
+.mermaid-block .mm-src, .csv-block .mm-src { border: 0; background: transparent; color: var(--faint); font-size: 11px; font-weight: 800; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+.mermaid-block .mm-src:hover, .csv-block .mm-src:hover { background: var(--soft); color: var(--primary); }
+.mermaid-block .mm-code, .csv-block .mm-code { margin: 6px 0 0; }
+.csv-block .csv-wrap { box-shadow: none; max-height: 320px; }
+.csv-block .csv-count { margin: 4px 2px 0; }
 .mermaid-block.preview { margin-top: 4px; }
 .mermaid-block.preview .mm-bar { display: none; }
 .diagram-presets .chip-btn { display: inline-flex; align-items: center; gap: 6px; }
