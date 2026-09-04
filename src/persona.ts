@@ -59,7 +59,7 @@ export const DEFAULT_ROOM_SETTINGS: Omit<RoomSettings, "name" | "humanName"> = {
   humanDescriptionMode: "inherit",
   refereeAction: "next-header",
   turnTaking: "parallel",
-  replyDelay: 4,
+  replyDelay: 5,
   waitWhileHumanTypes: true,
 };
 
