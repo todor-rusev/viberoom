@@ -18,17 +18,28 @@ Open a room, summon Claude, Codex, Gemini, Cursor, OpenCode or Copilot into it, 
   <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/conversation.png" width="900" alt="Three vibemates working through a task together">
 </p>
 
-viberoom is a small local hub with a web UI. Every coding agent on your machine that speaks the
-[Agent Client Protocol](https://agentclientprotocol.com) can join a room as a **vibemate**: it runs
-as itself, with its own login and subscription, reads the same conversation as everyone else, and
-answers you and the other vibemates. Nothing leaves your machine except what each agent sends to its
-own provider.
+<p align="center">
+  <b>Claude</b> &nbsp;·&nbsp; <b>Codex</b> &nbsp;·&nbsp; <b>Gemini</b> &nbsp;·&nbsp; <b>Cursor</b> &nbsp;·&nbsp; <b>OpenCode</b> &nbsp;·&nbsp; <b>GitHub Copilot</b><br>
+  <sub>every agent you already have, each with its own login, in one room</sub>
+</p>
 
 ## Why
 
-A single agent is a conversation. Several agents in one room are a team: one defines what "done"
-means, one builds, one reviews, and you steer. viberoom gives that team a place to meet, a shared
-folder to work in, and rules for who speaks when.
+A single agent is a conversation. Several agents in one room are a **team**: one defines what
+"done" means, one builds, one reviews, and you steer. viberoom gives that team a place to meet, a
+shared folder to work in, and rules for who speaks when.
+
+## Sixty seconds to a room
+
+```sh
+npm install -g viberoom
+viberoom
+```
+
+1. **Set your vibe.** A name, a face, a line about you.
+2. **Open a room.** A name and a folder; the vibemates will work there.
+3. **Summon vibemates.** Pick an agent, name it, give it a character. Repeat.
+4. **Say hello.** Everyone answers in turn. `@Name` one of them, `/name` runs a skill.
 
 ## Highlights
 
@@ -83,12 +94,7 @@ folder to work in, and rules for who speaks when.
 
 ## Install
 
-```sh
-npm install -g viberoom
-viberoom
-```
-
-The menu that appears can install a desktop icon, open the app window, or open a browser tab
+`npm install -g viberoom`, then `viberoom`. The menu that appears can install a desktop icon, open the app window, or open a browser tab
 (Start Menu on Windows, `~/Applications/viberoom.app` on macOS, an applications-menu entry on Linux).
 Upgrade with `npm install -g viberoom@latest`; the next start replaces the running hub.
 
@@ -114,12 +120,11 @@ viberoom open       open the window of the running hub
 viberoom logs       the background hub's log
 ```
 
-The first start asks for your name and a line about you. Then: open a room (name and folder),
-summon a vibemate (pick the agent, name it, give it a face), say hello. `Enter` sends,
-`Shift+Enter` is a new line, `@Name` addresses one vibemate, `/name` invokes a skill.
+`Enter` sends, `Shift+Enter` is a new line, `@Name` addresses one vibemate, `/name` invokes a skill.
 
 Data lives in `~/.viberoom` (or `$VIBEROOM_DATA_DIR`): settings, rooms with their history, skills,
-transcripts and the hub log.
+transcripts and the hub log. Nothing leaves your machine except what each agent sends to its own
+provider.
 
 ## Settings worth knowing
 
