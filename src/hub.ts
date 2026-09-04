@@ -2,7 +2,8 @@
 
 import { EventEmitter } from "node:events";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { writeFileAtomic } from "./atomic.js";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Logger } from "./log.js";
@@ -397,7 +398,5 @@ function slugify(name: string): string {
 }
 
 function writeJson(path: string, value: unknown): void {
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(value, null, 2));
-  renameSync(tmp, path);
+  writeFileAtomic(path, JSON.stringify(value, null, 2));
 }

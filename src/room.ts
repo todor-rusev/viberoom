@@ -2,7 +2,8 @@
 
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { writeFileAtomic } from "./atomic.js";
 import { affectedByEdit, editNotice, partitionHistory, rewriteNotice, type AgentReadState, type EditMode } from "./edit.js";
 import { join, resolve } from "node:path";
 import { AcpAgent } from "./acp-client.js";
@@ -693,10 +694,7 @@ export class Room extends EventEmitter {
   }
 
   private rewriteHistory(): void {
-    const path = this.historyPath();
-    const tmp = `${path}.tmp`;
-    writeFileSync(tmp, this.messages.map((m) => JSON.stringify(m)).join("\n") + (this.messages.length ? "\n" : ""));
-    renameSync(tmp, path);
+    writeFileAtomic(this.historyPath(), this.messages.map((m) => JSON.stringify(m)).join("\n") + (this.messages.length ? "\n" : ""));
   }
 
   private appendDeleted(records: ChatMessage[], editedSeq: number): void {
