@@ -200,7 +200,38 @@
 .head .time { color: var(--faint); font-size: 11px; font-weight: 600; cursor: default; white-space: nowrap; }
 .msg.mine .head { justify-content: flex-end; }
 .msg.mine .head .name { display: none; }
-.bubble .text { white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
+.bubble .text { word-break: break-word; line-height: 1.55; }
+.text > :first-child, .file-view > :first-child { margin-top: 0; }
+.text > :last-child, .file-view > :last-child { margin-bottom: 0; }
+.text p, .file-view p { margin: 0 0 8px; }
+.text ul, .text ol, .file-view ul, .file-view ol { margin: 4px 0 8px; padding-left: 22px; }
+.text li, .file-view li { margin: 2px 0; }
+.text h1, .text h2, .text h3, .text h4, .file-view h1, .file-view h2, .file-view h3, .file-view h4 { margin: 10px 0 6px; line-height: 1.3; font-weight: 800; }
+.text h1, .file-view h1 { font-size: 1.25em; }
+.text h2, .file-view h2 { font-size: 1.15em; }
+.text h3, .text h4, .file-view h3, .file-view h4 { font-size: 1.05em; }
+.text blockquote, .file-view blockquote { margin: 6px 0 8px; padding: 2px 12px; border-left: 3px solid var(--lav); color: var(--muted); }
+.text hr, .file-view hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+.text pre, .file-view pre { margin: 6px 0 8px; }
+.text table, .file-view table { border-collapse: collapse; margin: 6px 0 8px; font-size: 13px; max-width: 100%; display: block; overflow-x: auto; }
+.text th, .text td, .file-view th, .file-view td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; vertical-align: top; }
+.text th, .file-view th { background: var(--lav); font-weight: 800; }
+.msg.mine .bubble .text th { background: rgba(255, 255, 255, 0.18); }
+.msg.mine .bubble .text th, .msg.mine .bubble .text td { border-color: rgba(255, 255, 255, 0.35); }
+.msg.mine .bubble .text blockquote { border-color: rgba(255, 255, 255, 0.5); color: rgba(255, 255, 255, 0.85); }
+.file-dialog { width: 900px; flex-direction: column; }
+.file-dialog[open] { display: flex; }
+.file-dialog .file-head { flex: 0 0 auto; }
+.file-dialog .file-head .lead { margin-bottom: 10px; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
+.file-dialog .actions { flex: 0 0 auto; margin-top: 14px; }
+.file-view { flex: 1 1 auto; min-height: 120px; max-height: 62vh; overflow: auto; padding: 14px 16px; border-radius: 14px; background: var(--bg); font-size: 14px; font-weight: 600; line-height: 1.55; color: var(--ink-2); }
+.file-view.csv { padding: 0; background: transparent; }
+.csv-wrap { overflow: auto; max-height: 58vh; border-radius: 14px; box-shadow: var(--edge); background: var(--card); }
+table.csv { border-collapse: separate; border-spacing: 0; font-size: 13px; min-width: 100%; }
+table.csv th, table.csv td { padding: 6px 12px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+table.csv th { position: sticky; top: 0; background: var(--lav); font-weight: 800; z-index: 1; }
+table.csv tbody tr:nth-child(even) td { background: rgba(91, 91, 240, 0.03); }
+.csv-count { margin: 8px 2px 0; font-size: 12px; color: var(--muted); font-weight: 700; }
 .bubble .text.clamped { max-height: 9.2em; overflow: hidden; -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent); mask-image: linear-gradient(180deg, #000 70%, transparent); }
 .bubble .more { background: none; border: 0; color: var(--primary); font-weight: 800; padding: 2px 0; font-size: 13px; }
 .msg.mine .bubble .more { color: #fff; }

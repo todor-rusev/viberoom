@@ -1,6 +1,6 @@
 {
   "name": "viberoom",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "viberoom: group chat rooms for a human and several coding agents over the Agent Client Protocol",
   "type": "module",
   "engines": {
@@ -30,6 +30,7 @@
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.73.0",
     "@agentclientprotocol/codex-acp": "^1.8.0",
+    "marked": "^16.4.2",
     "mermaid": "^11.17.2"
   },
   "devDependencies": {

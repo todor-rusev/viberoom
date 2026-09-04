@@ -210,6 +210,18 @@
       <div class="actions"><button type="button" class="btn ghost" data-close>Keep my vibe</button><button type="submit" id="erase-submit" class="btn danger solid" disabled>Erase everything</button></div>
     </form>
   </dialog>
+  <dialog id="file-dialog" class="dialog wide file-dialog">
+    <div class="file-head">
+      <h3><span class="h-ico" data-icon="link"></span><span id="fv-title">File</span></h3>
+      <p class="lead" id="fv-path"></p>
+    </div>
+    <div id="fv-body" class="file-view"></div>
+    <div class="actions">
+      <button type="button" id="fv-open" class="btn ghost">Open in editor</button>
+      <button type="button" class="btn primary" data-close>Close</button>
+    </div>
+  </dialog>
+  <script src="/vendor/marked.umd.js"></script>
   <script src="/icons.js"></script>
   <script src="/avatars.js"></script>
   <script src="/app.js"></script>

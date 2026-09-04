@@ -54,8 +54,10 @@ viberoom
 - **Hush.** One click stops every running reply; the vibemates stay quiet until you write again.
 - **Skills.** Reusable instructions in a library. Attach them to vibemates, invoke one with `/name`,
   or let a vibemate write its own.
-- **Links, files and diagrams.** Links and file paths in replies open on your machine; a path with a
-  `:line` opens in your editor at that line; a ```` ```mermaid ```` block becomes a diagram.
+- **Markdown, links, files and diagrams.** Replies render as Markdown: lists, tables, code. Links and
+  file paths open on your machine; a `.md` or `.csv` path opens right in the room (rendered, or as a
+  table); a path with a `:line` opens in your editor at that line; a ```` ```mermaid ```` block
+  becomes a diagram.
 - **Edit a message.** Change what you said: the vibemates are told, or the conversation is rewound.
 - **A desktop app.** A hidden hub, an app window of its own, a Start Menu / Dock / desktop icon.
 

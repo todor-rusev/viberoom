@@ -8,6 +8,7 @@ import { Logger } from "./log.js";
 import type { Hub, HubEvent } from "./hub.js";
 import { existsSync as fileExists } from "node:fs";
 import { classifyOpenTarget, describeOpen, detectEditor, editorCommand, isExecutablePath, openCommand, type DetectedEditor } from "./open.js";
+import { parseCsv, viewerKind, VIEWER_MAX_BYTES } from "./viewer.js";
 
 let editorFound: DetectedEditor | null | undefined;
 function currentEditor(): DetectedEditor | null {
@@ -36,6 +37,7 @@ const STATIC_FILES: Record<string, { file: string; type: string; dir?: "ui" | "a
   "/vendor-icons/opencode.svg": { file: "vendors/opencode.svg", type: "image/svg+xml", dir: "assets" },
   "/vendor-icons/copilot.svg": { file: "vendors/copilot.svg", type: "image/svg+xml", dir: "assets" },
   "/vendor/mermaid.min.js": { file: "mermaid/dist/mermaid.min.js", type: "text/javascript; charset=utf-8", dir: "node_modules" },
+  "/vendor/marked.umd.js": { file: "marked/lib/marked.umd.js", type: "text/javascript; charset=utf-8", dir: "node_modules" },
 };
 
 export interface RunningServer {
@@ -112,6 +114,25 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       res.write(`event: snapshot\ndata: ${JSON.stringify({ type: "snapshot", snapshot: snapshot() })}\n\n`);
       clients.add(res);
       req.on("close", () => clients.delete(res));
+      return;
+    }
+
+    if (req.method === "GET" && path === "/api/file") {
+      const target = classifyOpenTarget(url.searchParams.get("path") ?? "");
+      if (!target || target.kind !== "path") throw new Error("only absolute paths can be viewed");
+      const kind = viewerKind(target.value);
+      if (!kind) throw new Error("only Markdown and CSV files can be viewed in the room");
+      let info;
+      try {
+        info = await stat(target.value);
+      } catch {
+        sendJson(res, 404, { error: `no such file: ${target.value}` });
+        return;
+      }
+      if (!info.isFile()) throw new Error(`not a file: ${target.value}`);
+      if (info.size > VIEWER_MAX_BYTES) throw new Error(`too big to view here (${Math.round(info.size / 1024)} kB); open it in an editor`);
+      const text = await readFile(target.value, "utf8");
+      sendJson(res, 200, kind === "csv" ? { ok: true, kind, path: target.value, rows: parseCsv(text) } : { ok: true, kind, path: target.value, text });
       return;
     }
 

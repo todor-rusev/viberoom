@@ -24,6 +24,11 @@
   const $ = (selector) => document.querySelector(selector);
   const els = {
     app: $("#app"),
+    fileDialog: $("#file-dialog"),
+    fvTitle: $("#fv-title"),
+    fvPath: $("#fv-path"),
+    fvBody: $("#fv-body"),
+    fvOpen: $("#fv-open"),
     rail: $("#rail"),
     railRoom: $("#rail-room"),
     railRoomLabel: $("#rail-room-label"),
@@ -215,7 +220,53 @@
   function mermaidBlock(code) {
     return `<div class="mermaid-block" data-src="${code}"><div class="mm-out"><pre>${code}</pre></div><pre class="mm-code" hidden>${code}</pre><div class="mm-bar"><button type="button" class="mm-src">source</button></div></div>`;
   }
+  function mentions(room, html) {
+    return html.replace(/(?<![\w.\/:])@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu, (m, name) => {
+      const p = findByName(room, name);
+      return p ? `<span class="mention" style="color:${p.color}">@${esc(name)}</span>` : m;
+    });
+  }
+  const md = window.marked ? new window.marked.Marked({ gfm: true, breaks: true }) : null;
+  if (md) {
+    md.use({
+      renderer: {
+        html(token) {
+          return esc(token.text != null ? token.text : token.raw || "");
+        },
+        code(token) {
+          const code = esc(String(token.text || "")).trim();
+          return /^\s*mermaid\b/i.test(token.lang || "") ? mermaidBlock(code) : `<pre>${code}</pre>`;
+        },
+        link(token) {
+          const inner = this.parser.parseInline(token.tokens || []);
+          const href = String(token.href || "");
+          if (!/^(https?:|mailto:)/i.test(href)) return inner;
+          return `<a class="open-link" data-open="${esc(href)}" href="#" title="Open in your browser">${inner}</a>`;
+        },
+        image(token) {
+          return esc(token.text || token.href || "");
+        },
+      },
+    });
+  }
+  function decorate(room, html) {
+    let inside = 0;
+    let out = "";
+    for (const part of html.split(/(<[^>]*>)/)) {
+      if (!part) continue;
+      if (part[0] === "<") {
+        const m = /^<(\/?)(code|pre|a)\b/i.exec(part);
+        if (m) inside += m[1] ? -1 : 1;
+        out += part;
+      } else out += inside > 0 ? part : mentions(room, linkify(part));
+    }
+    return out;
+  }
   function renderText(room, text) {
+    if (!md) return renderTextLight(room, text);
+    return decorate(room, md.parse(String(text == null ? "" : text)));
+  }
+  function renderTextLight(room, text) {
     let html = esc(text);
     const blocks = [];
     html = html.replace(/```([^\n]*)\n([\s\S]*?)```/g, (m, lang, code) => {
@@ -225,12 +276,31 @@
     html = linkify(html);
     html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
     html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-    html = html.replace(/(?<![\w.\/:])@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu, (m, name) => {
-      const p = findByName(room, name);
-      return p ? `<span class="mention" style="color:${p.color}">@${esc(name)}</span>` : m;
-    });
+    html = mentions(room, html);
     html = html.replace(/\u0000(\d+)\u0000/g, (m, i) => blocks[Number(i)]);
     return html;
+  }
+
+
+  const VIEWABLE_RE = /\.(md|markdown|csv|tsv)$/i;
+  function csvTable(rows) {
+    if (!rows.length) return '<p class="lead">Empty file.</p>';
+    const cell = (tag, v) => `<${tag}>${esc(v)}</${tag}>`;
+    const [head, ...body] = rows;
+    const width = Math.max(head.length, ...body.map((r) => r.length));
+    const pad = (r) => r.concat(Array(Math.max(0, width - r.length)).fill(""));
+    return `<div class="csv-wrap"><table class="csv"><thead><tr>${pad(head).map((v) => cell("th", v)).join("")}</tr></thead><tbody>${body.map((r) => `<tr>${pad(r).map((v) => cell("td", v)).join("")}</tr>`).join("")}</tbody></table></div><p class="csv-count">${body.length} row${body.length === 1 ? "" : "s"} · ${width} column${width === 1 ? "" : "s"}</p>`;
+  }
+  async function viewFile(path) {
+    const r = await get(`/api/file?path=${encodeURIComponent(path)}`);
+    els.fvTitle.textContent = r.path.split(/[\\/]/).pop();
+    els.fvPath.textContent = r.path;
+    els.fvBody.className = `file-view ${r.kind}`;
+    els.fvBody.innerHTML = r.kind === "csv" ? csvTable(r.rows) : renderText(currentRoom(), r.text);
+    els.fvOpen.dataset.path = r.path;
+    els.fvBody.scrollTop = 0;
+    openDialog(els.fileDialog);
+    if (r.kind === "markdown") renderDiagrams(els.fvBody);
   }
 
 
@@ -2756,6 +2826,14 @@
   els.reconnectAllBtn.addEventListener("click", () => openReconnectDialog(currentRoom()));
   els.rcForm.addEventListener("submit", submitReconnect);
   document.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => closeDialog(b.closest("dialog"))));
+  els.fvOpen.addEventListener("click", async () => {
+    try {
+      const r = await post("/api/open", { target: `${els.fvOpen.dataset.path}:1` });
+      toast(r.message, "info");
+    } catch (err) {
+      showError(err);
+    }
+  });
   els.focusBtn.addEventListener("click", async () => {
     const room = currentRoom();
     if (!room || room.focused || els.focusBtn.classList.contains("busy")) return;
@@ -2809,7 +2887,12 @@
     if (link) {
       e.preventDefault();
       try {
-        const r = await post("/api/open", { target: link.dataset.open });
+        const target = link.dataset.open;
+        if (!/^(https?:|mailto:)/i.test(target) && VIEWABLE_RE.test(target)) {
+          await viewFile(target);
+          return;
+        }
+        const r = await post("/api/open", { target });
         if (r.action !== "open-url") toast(r.message, "info");
       } catch (err) {
         showError(err);
