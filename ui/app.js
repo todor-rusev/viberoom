@@ -196,7 +196,7 @@
   }
   function editingInDetails() {
     const el = document.activeElement;
-    return !!el && !!el.closest && (!!el.closest("#details") || !!el.closest("#page-view")) && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+    return !!el && !!el.closest && (!!el.closest("#details") || !!el.closest("#page-view")) && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable);
   }
   function currentRoom() {
     return state.rooms.get(state.currentRoomId) || null;
@@ -308,7 +308,7 @@
     for (const part of html.split(/(<[^>]*>)/)) {
       if (!part) continue;
       if (part[0] === "<") {
-        const m = /^<(\/?)(code|pre|a)\b/i.exec(part);
+        const m = /^<(\/?)(pre|a)\b/i.exec(part);
         if (m) inside += m[1] ? -1 : 1;
         out += part;
       } else out += inside > 0 ? part : mentions(room, linkify(part));
@@ -1669,7 +1669,7 @@
         ${field("Emoji", `<div id="rp-emoji-picker"></div><input type="text" id="rp-emoji" maxlength="8" value="${esc(rs.emoji || "")}" placeholder="custom emoji (optional)">`, "A face for the room, next to its name.")}
         ${field("Topic", `<input type="text" id="rp-topic" maxlength="2000" value="${esc(rs.topic || "")}" placeholder="what this room is about (optional)">`)}
         ${field("Folder", `<input type="text" id="rp-dir" maxlength="1000" value="${esc(room.dir)}" spellcheck="false">`, "Where the vibemates read and write. Changing it restarts them in the new folder; they replay the last messages.")}
-        <label class="field mention-host"><span class="label">Custom rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><textarea id="rp-rules" rows="5" maxlength="4000" placeholder="e.g. Everyone listens to @Pesho, he is the manager.&#10;Keep answers under 3 sentences.">${esc(room.customRulesText != null ? room.customRulesText : rs.customRules || "")}</textarea><span class="hint">One rule per line; type @ to reference a participant.</span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></label>
+        <label class="field mention-host"><span class="label">Custom rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">One rule per line; type @ to reference a participant.</span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></label>
         ${field("Language", `<input type="text" id="rp-lang" value="${esc(lang)}" placeholder="follow the human (default), or e.g. English">`)}
       </div>
       <div class="section">
@@ -1716,7 +1716,8 @@
         <div class="row-btns start"><button class="btn danger sm" id="rp-delete">${ic("trash")}Close this room for good</button></div>
       </div>`;
     wireDetailsClose();
-    attachMentions($("#rp-rules"), $("#rp-rules-menu"));
+    rulesToNodes($("#rp-rules"), room.customRulesText != null ? room.customRulesText : rs.customRules || "", room);
+    attachRichMentions($("#rp-rules"), $("#rp-rules-menu"));
     $("#rp-emoji-picker").appendChild(
       emojiGrid(ROOM_EMOJI, rs.emoji || "", (emoji) => {
         $("#rp-emoji").value = emoji;
@@ -1731,7 +1732,7 @@
         await post(roomApi("/settings"), {
           emoji: $("#rp-emoji").value,
           topic: $("#rp-topic").value,
-          customRules: $("#rp-rules").value,
+          customRules: rulesText($("#rp-rules")).slice(0, 4000),
           language: $("#rp-lang").value.trim() || "follow-human",
           tools: $("#rp-tools").value,
           maxSentences: $("#rp-maxlen").value === "" ? null : Number($("#rp-maxlen").value),
@@ -2721,6 +2722,162 @@
       els.input.value = text;
     }
   });
+
+
+  const RULE_MENTION_RE = /(?<![\w.\/:])@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu;
+  function mentionChip(p) {
+    const chip = document.createElement("span");
+    chip.className = "mention-chip";
+    chip.contentEditable = "false";
+    chip.dataset.name = p.name;
+    chip.style.color = p.color;
+    chip.innerHTML = `${avatar(p, 16, { vendor: false })}<span class="chip-name">@${esc(p.name)}</span>`;
+    return chip;
+  }
+  function rulesToNodes(editor, text, room) {
+    editor.innerHTML = "";
+    let last = 0;
+    for (const m of text.matchAll(RULE_MENTION_RE)) {
+      const p = findByName(room, m[1]);
+      if (!p) continue;
+      editor.appendChild(document.createTextNode(text.slice(last, m.index)));
+      editor.appendChild(mentionChip(p));
+      last = m.index + m[0].length;
+    }
+    editor.appendChild(document.createTextNode(text.slice(last)));
+  }
+  function rulesText(editor) {
+    let out = "";
+    const walk = (node) => {
+      for (const n of node.childNodes) {
+        if (n.nodeType === Node.TEXT_NODE) out += n.nodeValue;
+        else if (n.nodeName === "BR") out += "\n";
+        else if (n.classList && n.classList.contains("mention-chip")) out += `@${n.dataset.name}`;
+        else if (n.nodeName === "DIV" || n.nodeName === "P") {
+          if (out && !out.endsWith("\n")) out += "\n";
+          walk(n);
+          if (!out.endsWith("\n")) out += "\n";
+        } else walk(n);
+      }
+    };
+    walk(editor);
+    return out.replace(/\n+$/, "");
+  }
+  function attachRichMentions(editor, menuEl) {
+    const m = { open: false, items: [], index: 0, node: null, start: -1 };
+    function caret() {
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount || !sel.isCollapsed) return null;
+      const r = sel.getRangeAt(0);
+      if (r.startContainer.nodeType !== Node.TEXT_NODE || !editor.contains(r.startContainer)) return null;
+      return { node: r.startContainer, offset: r.startOffset };
+    }
+    function placeCaret(node, offset) {
+      const sel = window.getSelection();
+      const r = document.createRange();
+      r.setStart(node, offset);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    function context() {
+      const c = caret();
+      if (!c) return null;
+      const before = c.node.nodeValue.slice(0, c.offset);
+      const match = before.match(/(^|\s)@([\p{L}\p{N}_-]*)$/u);
+      if (!match) return null;
+      return { node: c.node, start: c.offset - match[2].length - 1, end: c.offset, prefix: match[2] };
+    }
+    function close() {
+      if (!m.open) return;
+      m.open = false;
+      menuEl.hidden = true;
+    }
+    function render() {
+      const ctx = context();
+      const room = currentRoom();
+      if (!ctx || !room) return close();
+      const q = ctx.prefix.toLowerCase();
+      const items = room.participants.filter((p) => p.name.toLowerCase().startsWith(q));
+      if (!items.length) return close();
+      m.open = true;
+      m.items = items;
+      m.node = ctx.node;
+      m.start = ctx.start;
+      m.end = ctx.end;
+      if (m.index >= items.length) m.index = 0;
+      menuEl.innerHTML = "";
+      items.forEach((p, i) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = i === m.index ? "active" : "";
+        b.innerHTML = `${avatar(p, 24, { vendor: true })}<span>${esc(p.name)}</span><span class="mm-sub">${esc(p.kind === "human" ? "you" : p.tagline || p.agentVendor || "")}${p.status === "offline" ? " · offline" : ""}</span>`;
+        b.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          pick(i);
+        });
+        menuEl.appendChild(b);
+      });
+      menuEl.hidden = false;
+    }
+    function chipify(node, start, end, p) {
+      const after = document.createTextNode(" " + node.nodeValue.slice(end));
+      node.nodeValue = node.nodeValue.slice(0, start);
+      const chip = mentionChip(p);
+      node.after(chip, after);
+      return after;
+    }
+    function pick(i) {
+      const p = m.items[i];
+      if (!p) return close();
+      const after = chipify(m.node, m.start, m.end, p);
+      close();
+      editor.focus();
+      placeCaret(after, 1);
+    }
+    function chipifyComplete() {
+      const room = currentRoom();
+      if (!room) return;
+      const c = caret();
+      for (const node of [...editor.childNodes, ...[...editor.querySelectorAll("div, p")].flatMap((b) => [...b.childNodes])]) {
+        if (node.nodeType !== Node.TEXT_NODE) continue;
+        for (const match of [...node.nodeValue.matchAll(RULE_MENTION_RE)].reverse()) {
+          const end = match.index + match[0].length;
+          if (!/\s/.test(node.nodeValue[end] || "")) continue;
+          const p = findByName(room, match[1]);
+          if (!p) continue;
+          const caretHere = c && c.node === node ? c.offset : -1;
+          const after = chipify(node, match.index, end + 1, p);
+          if (caretHere >= end + 1) placeCaret(after, caretHere - end);
+          break;
+        }
+      }
+    }
+    editor.addEventListener("input", () => {
+      m.index = 0;
+      chipifyComplete();
+      render();
+    });
+    editor.addEventListener("paste", (e) => {
+      e.preventDefault();
+      document.execCommand("insertText", false, (e.clipboardData || window.clipboardData).getData("text/plain"));
+    });
+    editor.addEventListener("blur", () => setTimeout(close, 150));
+    editor.addEventListener("keydown", (event) => {
+      if (!m.open) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        m.index = (m.index + (event.key === "ArrowDown" ? 1 : m.items.length - 1)) % m.items.length;
+        render();
+      } else if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        pick(m.index);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+      }
+    });
+  }
 
   function attachMentions(textarea, menuEl, options) {
     const opts = options || {};

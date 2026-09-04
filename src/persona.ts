@@ -58,7 +58,7 @@ export const DEFAULT_ROOM_SETTINGS: Omit<RoomSettings, "name" | "humanName"> = {
   emoji: "",
   humanDescriptionMode: "inherit",
   refereeAction: "next-header",
-  turnTaking: "one-at-a-time",
+  turnTaking: "parallel",
   replyDelay: 4,
   waitWhileHumanTypes: true,
 };

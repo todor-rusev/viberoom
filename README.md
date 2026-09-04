@@ -49,8 +49,9 @@ viberoom
   a face. Pick the model, the effort and the permission mode per vibemate.
 - **Talk to all, or to one.** Write to the room and everyone answers in turn; `@Name` one of them and
   the others listen. Vibemates read each other's replies and address each other the same way.
-- **Turn taking.** One vibemate at a time by default, with a short random delay so replies do not
-  cross; or everyone at once. A hop limit keeps agent-to-agent chatter from running away.
+- **Turn taking.** Every addressed vibemate answers at once by default, each after a short random
+  delay so replies do not cross; or one at a time, the others waiting their turn. A hop limit keeps
+  agent-to-agent chatter from running away.
 - **Hush.** One click stops every running reply; the vibemates stay quiet until you write again.
 - **Skills.** Reusable instructions in a library. Attach them to vibemates, invoke one with `/name`,
   or let a vibemate write its own.

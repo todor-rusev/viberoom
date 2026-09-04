@@ -253,14 +253,17 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
     process.exit(0);
   };
 
-  try {
-    server = await startServer(hub, options.port, log.child("http"), info, () => void shutdown());
-  } catch (error) {
-    const code = (error as { code?: string }).code;
-    if (code === "EADDRINUSE") {
-      throw new Error(`port ${options.port} is taken by another program (not a viberoom hub). Pick another port: viberoom --port 4811`);
+  const listenDeadline = Date.now() + 15_000;
+  for (;;) {
+    try {
+      server = await startServer(hub, options.port, log.child("http"), info, () => void shutdown());
+      break;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code !== "EADDRINUSE") throw error;
+      if (Date.now() > listenDeadline) throw new Error(`port ${options.port} is taken by another program (not a viberoom hub). Pick another port: viberoom --port 4811`);
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
-    throw error;
   }
   hub.setHubUrl(server.url);
   if (background) writePidFile(options.dataDir, { pid: process.pid, port: options.port, build: info.build, startedAt: Date.now() });
@@ -296,7 +299,7 @@ async function startBackground(options: CliOptions, log: Logger, info: BuildInfo
   child.unref();
   closeSync(fd);
   log.info(`hub started in the background (pid ${child.pid}); log: ${logPath}`);
-  const up = await waitUntil(() => isUp(url), 20_000);
+  const up = await waitUntil(async () => (await runningInstance(options.port))?.build === info.build, 20_000);
   if (!up) throw new Error(`the hub did not come up within 20 s; see ${logPath}`);
   process.stdout.write(`${url}\n`);
   if (options.open) openWindow(url, options, log);

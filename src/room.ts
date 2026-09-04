@@ -277,7 +277,7 @@ interface AgentRuntime {
   turnStartSeq: number;
   turnActive: boolean;
   pendingTurn: boolean;
-  turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number } | null;
+  turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; published: boolean } | null;
   turnsSinceBrief: number;
   usedAtBrief: number;
   briefSentThisTurn: boolean;
@@ -1733,8 +1733,7 @@ export class Room extends EventEmitter {
       toolCalls: [],
     };
     this.drafts.set(draft.id, draft);
-    runtime.turn = { message: draft, messageId: null, sawMessageId: false, startedAt: Date.now() };
-    this.push({ type: "message", message: draft });
+    runtime.turn = { message: draft, messageId: null, sawMessageId: false, startedAt: Date.now(), published: false };
 
     let result: PromptResult | null = null;
     let failure: string | null = null;
@@ -1745,6 +1744,7 @@ export class Room extends EventEmitter {
     }
 
     const startedAt = runtime.turn.startedAt;
+    const published = runtime.turn.published;
     runtime.turn = null;
     runtime.turnActive = false;
     this.drafts.delete(draft.id);
@@ -1772,7 +1772,7 @@ export class Room extends EventEmitter {
       if (retry) this.closeRetry(retry, "the correction turn failed; nothing was posted");
       return null;
     }
-    return this.finalizeTurn(participant, runtime, draft, result, Date.now() - startedAt, retry);
+    return this.finalizeTurn(participant, runtime, draft, result, Date.now() - startedAt, retry, published);
   }
 
   private finalizeTurn(
@@ -1782,6 +1782,7 @@ export class Room extends EventEmitter {
     result: PromptResult,
     durationMs: number,
     retry: RetryRequest | null,
+    published: boolean,
   ): RetryRequest | null {
     participant.status = "idle";
     this.push({ type: "participant", participant });
@@ -1811,7 +1812,7 @@ export class Room extends EventEmitter {
     }
 
     if (!text || text.toLowerCase() === SILENT_MARKER) {
-      this.push({ type: "message.removed", id: draft.id });
+      if (published) this.push({ type: "message.removed", id: draft.id });
       if (retry) {
         this.closeRetry(retry, cancelled ? "the correction turn was stopped; nothing was posted" : "the agent withdrew the reply");
         if (cancelled) this.postSystem(`${participant.name} was stopped.`);
@@ -1960,6 +1961,12 @@ export class Room extends EventEmitter {
   }
 
 
+  private showDraft(turn: NonNullable<AgentRuntime["turn"]>): void {
+    if (turn.published) return;
+    turn.published = true;
+    this.push({ type: "message", message: turn.message });
+  }
+
   private onSessionUpdate(id: string, update: SessionUpdate): void {
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
@@ -1976,13 +1983,17 @@ export class Room extends EventEmitter {
           const notices = (turn.message.notices ??= []);
           notices.push(turn.message.text.trim());
           turn.message.text = "";
-          this.push({ type: "message", message: turn.message });
+          if (turn.published) this.push({ type: "message", message: turn.message });
         } else if (messageId !== turn.messageId && turn.message.text) {
           text = "\n\n" + text;
         }
         if (messageId) turn.sawMessageId = true;
         turn.messageId = messageId;
         turn.message.text += text;
+        if (!turn.published) {
+          if (!looksSilent(turn.message.text)) this.showDraft(turn);
+          return;
+        }
         this.push({ type: "chunk", id: turn.message.id, text });
         return;
       }
@@ -1990,12 +2001,13 @@ export class Room extends EventEmitter {
         if (!turn) return;
         const text = contentText((update as { content: ContentBlock }).content);
         turn.message.thought = (turn.message.thought ?? "") + text;
-        this.push({ type: "thought", id: turn.message.id, text });
+        if (turn.published) this.push({ type: "thought", id: turn.message.id, text });
         return;
       }
       case "tool_call":
       case "tool_call_update": {
         if (!turn) return;
+        this.showDraft(turn);
         const u = update as ToolCallUpdate;
         const calls = (turn.message.toolCalls ??= []);
         let view = calls.find((c) => c.toolCallId === u.toolCallId);
@@ -2012,6 +2024,7 @@ export class Room extends EventEmitter {
       }
       case "plan": {
         if (!turn) return;
+        this.showDraft(turn);
         const entries = (update as { entries: PlanEntry[] }).entries;
         turn.message.plan = entries;
         this.push({ type: "plan", id: turn.message.id, entries });
@@ -2071,6 +2084,7 @@ export class Room extends EventEmitter {
       };
       this.permissions.set(entry.key, entry);
       const { resolve: _r, ...view } = entry;
+      if (runtime?.turn) this.showDraft(runtime.turn);
       this.push({ type: "permission", permission: view });
       this.notice(`${participant?.name ?? id} asks for permission: ${params.toolCall.title ?? params.toolCall.toolCallId}`, "info");
     });
@@ -2314,6 +2328,11 @@ function isAuthRequired(error: unknown): boolean {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function looksSilent(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  return t.length <= SILENT_MARKER.length && SILENT_MARKER.startsWith(t);
 }
 
 function contentText(block: ContentBlock): string {

@@ -200,6 +200,12 @@ pre { background: var(--code-bg); color: #f4f2ff; padding: 10px 12px; border-rad
 }
 .select:disabled, .field select:disabled, .input:disabled, .field input:disabled { opacity: 0.55; cursor: default; }
 .textarea, .field textarea { resize: vertical; min-height: 76px; height: auto; padding: 10px 14px; line-height: 1.5; }
+.field .rules-editor { display: block; width: 100%; box-sizing: border-box; min-height: 118px; max-height: 320px; overflow-y: auto; padding: 10px 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; border: 2px solid var(--lav); border-radius: var(--r-sm); background: var(--soft); color: var(--ink); font-size: 14px; font-weight: 700; font-family: inherit; }
+.field .rules-editor:hover { border-color: var(--lav-2); }
+.field .rules-editor:focus { outline: none; border-color: var(--primary); background: var(--card); }
+.field .rules-editor:empty::before { content: attr(data-placeholder); color: var(--placeholder); pointer-events: none; }
+.mention-chip { display: inline-flex; align-items: center; gap: 4px; vertical-align: baseline; padding: 0 6px 0 2px; border-radius: 7px; background: var(--soft); font-weight: 800; white-space: nowrap; line-height: 1.35; user-select: all; }
+.mention-chip .chip-name { color: inherit; }
 .field.inline-num input { width: 84px; }
 .field-grid { display: grid; gap: 8px 10px; }
 .field-grid.two { grid-template-columns: 1fr 1fr; }
