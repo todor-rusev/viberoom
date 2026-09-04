@@ -1,0 +1,217 @@
+<!-- viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>viberoom</title>
+  <link rel="icon" href="/icon.svg?v=7" type="image/svg+xml">
+  <link rel="icon" href="/favicon.ico?v=7" sizes="any">
+  <link rel="apple-touch-icon" href="/icon-256.png?v=7">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#6d5dfc">
+  <link rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div id="app" class="shell view-rooms">
+    <nav class="rail" id="rail" aria-label="Main menu">
+      <div class="rail-head">
+        <button class="rail-logo" id="rail-logo" title="viberoom"><img class="mark" src="/icon-256.png?v=7" alt=""><span class="word">viberoom</span></button>
+      </div>
+      <div class="rail-items">
+        <button class="rail-item new" id="rail-new-room" title="Open a room"><span class="ico" data-icon="plus"></span><span class="label">Open a room</span></button>
+        <button class="rail-item" data-nav="rooms" title="Rooms"><span class="ico" data-icon="rooms"></span><span class="label">Rooms</span></button>
+        <button class="rail-item" data-nav="room" title="Current room" id="rail-room" hidden><span class="ico" data-icon="chat"></span><span class="label" id="rail-room-label">Room</span><span class="rail-count" id="rail-unread" hidden></span></button>
+        <button class="rail-item" data-nav="skills" title="Skills"><span class="ico" data-icon="skills"></span><span class="label">Skills</span></button>
+        <button class="rail-item" data-nav="settings" title="Settings"><span class="ico" data-icon="settings"></span><span class="label">Settings</span></button>
+      </div>
+      <div class="rail-foot">
+        <button class="rail-item me" data-nav="me" title="Your vibe" id="rail-me"><span class="ico" id="rail-me-avatar"></span><span class="label" id="rail-me-label">You</span></button>
+        <div class="rail-status"><span class="conn" id="conn" title="Connection to the hub"></span><span class="label conn-label" id="conn-label">connected</span></div>
+        <button class="rail-toggle" id="rail-toggle" title="Expand the menu"><span data-icon="expand"></span></button>
+      </div>
+    </nav>
+    <aside class="side" id="side">
+      <div class="side-rooms" id="side-rooms">
+        <div class="side-head">
+          <h2 id="side-rooms-title">Rooms</h2>
+        </div>
+        <label class="search"><span class="search-icon" data-icon="search"></span><input id="room-search" type="search" placeholder="Find a room…" autocomplete="off"></label>
+        <ul class="side-list" id="room-list"></ul>
+      </div>
+      <div class="side-room" id="side-room" hidden>
+        <div class="side-head room">
+          <button class="icon-btn ghost sm" id="back-to-rooms" title="All rooms"><span data-icon="back"></span></button>
+          <div class="side-room-title"><h2><span id="side-room-name">Room</span> <span id="side-room-emoji"></span></h2><div class="hint" id="side-room-sub"></div></div>
+          <button class="icon-btn ghost sm" id="room-settings-btn" title="Room settings"><span data-icon="settings"></span></button>
+          <button class="icon-btn ghost sm" id="side-toggle" title="Fold this column"><span data-icon="collapse"></span></button>
+        </div>
+        <div class="side-actions">
+          <button id="invite-btn" class="btn primary cta full"><span class="cta-ico" data-icon="spark"></span><span class="label">Summon a Vibemate</span></button>
+        </div>
+        <div class="side-label">In this room</div>
+        <ul id="participants" class="side-list participants"></ul>
+        <div class="side-foot">
+          <button id="reconnect-all-btn" class="btn wake full" hidden title="Bring offline vibemates back"><span data-icon="refresh"></span><span class="label">Wake everyone up</span></button>
+          <button id="focus-btn" class="btn hush full" title="Stop every running reply; vibemates stay quiet until you speak again"><span class="hush-face">🤫</span><span class="label">Hush the room</span></button>
+        </div>
+      </div>
+    </aside>
+    <main class="main" id="main">
+      <section class="home" id="home-view" hidden></section>
+      <section class="rooms-view" id="rooms-view">
+        <header class="main-head">
+          <div><h1>Your rooms</h1><div class="hint" id="rooms-sub">Pick a room or open a new one.</div></div>
+        </header>
+        <div class="rooms-grid" id="rooms-grid"></div>
+      </section>
+      <section class="chat" id="chat-view" hidden>
+        <header class="main-head chat-head">
+          <div class="chat-title">
+            <h1 id="chat-room-name">…</h1>
+            <div class="chat-sub" id="chat-room-sub"></div>
+          </div>
+          <div class="chat-actions">
+            <label class="search"><span class="search-icon" data-icon="search"></span><input id="search" type="search" placeholder="Search in this room…" autocomplete="off"></label>
+            <button id="chat-info-btn" class="icon-btn" title="Room settings"><span data-icon="settings"></span></button>
+          </div>
+        </header>
+        <div id="messages" class="messages"></div>
+        <div id="mention-menu" class="mention-menu" hidden></div>
+        <div id="emoji-menu" class="mention-menu emoji-menu" hidden></div>
+        <form id="composer" class="composer">
+          <button type="button" class="smile-btn" id="emoji-btn" title="Add an emoji"><span data-icon="smile"></span></button>
+          <div class="composer-box">
+            <textarea id="input" rows="1" placeholder="Message the room… @Name or /skill" title="Enter sends, Shift+Enter is a new line"></textarea>
+          </div>
+          <button type="submit" class="send-btn" title="Send"><span data-icon="send"></span></button>
+        </form>
+      </section>
+      <section class="page" id="page-view" hidden>
+        <div class="page-inner" id="page-inner"></div>
+      </section>
+    </main>
+    <aside class="details" id="details" hidden>
+      <div class="resizer" id="details-resizer" title="Drag to resize; double-click to fit"></div>
+      <div class="details-inner" id="details-inner"></div>
+    </aside>
+  </div>
+  <div class="toasts" id="toasts"></div>
+  <dialog id="profile-dialog" class="dialog">
+    <form id="profile-form" method="dialog">
+      <h3><span class="h-ico" data-icon="spark"></span>Welcome to viberoom</h3>
+      <p class="lead">Every room needs a human with a vibe. Set yours: it is how the vibemates will know you. You can change it any time under Your vibe.</p>
+      <label>Vibename <span class="hint">(how you appear in every room)</span><input id="pf-name" type="text" maxlength="24" required autocomplete="off" placeholder="letters, digits, _ or -"></label>
+      <label>Vibeface <span class="hint">(pick one, or type any emoji)</span>
+        <div id="pf-avatar-picker"></div>
+        <input id="pf-avatar" type="text" maxlength="8" placeholder="custom emoji (optional)"></label>
+      <label>Your vibe line <span class="hint">(a sentence or two about you)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The vibemates get this line in every room's brief, so they know who they are talking to. A room can add its own line or replace it (Your vibe, in the room).</span>
+        <textarea id="pf-desc" rows="3" maxlength="200" placeholder="e.g. software engineer, curious about agent protocols; likes short answers"></textarea></label>
+      <p class="error" id="pf-error" hidden></p>
+      <div class="actions"><button type="submit" class="btn primary lg">Start vibing</button></div>
+    </form>
+  </dialog>
+  <dialog id="confirm-dialog" class="dialog narrow">
+    <form method="dialog">
+      <h3 id="cf-title">Are you sure?</h3>
+      <p class="lead" id="cf-text"></p>
+      <div class="actions"><button class="btn ghost" value="cancel" type="submit">Cancel</button><button class="btn primary" id="cf-ok" value="ok" type="submit">OK</button></div>
+    </form>
+  </dialog>
+  <dialog id="room-dialog" class="dialog">
+    <form id="room-form" method="dialog">
+      <h3><span class="h-ico" data-icon="rooms"></span>Open a room</h3>
+      <p class="lead">A room is a shared space for you and the vibemates you summon. Give it a name.</p>
+      <label>Room name<input id="room-name" type="text" maxlength="60" required placeholder="e.g. Architecture review"></label>
+      <label>Working directory <span class="hint">(optional)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The folder the vibemates work in (their cwd). Leave it empty and the hub keeps a folder per room. Instruction files in it (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules) are read by the vibemates by their own conventions; the hub tells you if it finds any.</span>
+        <input id="room-dir" type="text" placeholder="C:\projects\my-app"></label>
+      <p class="error" id="room-error" hidden></p>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">Open the room</button></div>
+    </form>
+  </dialog>
+  <dialog id="invite-dialog" class="dialog wide">
+    <form id="invite-form" method="dialog">
+      <h3><span class="h-ico" data-icon="spark"></span>Summon a Vibemate</h3>
+      <p class="lead">Pick a vibemate, give it a vibename and a character, and it joins the room.</p>
+      <div class="agent-grid" id="inv-agents"></div>
+      <p class="hint" id="inv-none" hidden></p>
+      <select id="inv-type" hidden></select>
+      <div id="inv-options" hidden>
+        <div class="choice-row"><span class="label">Model</span><div class="chips" data-for="inv-model"></div><select id="inv-model" hidden></select><input id="inv-model-custom" type="text" placeholder="or type a model name" hidden></div>
+        <div class="choice-row"><span class="label">Effort</span><div class="chips" data-for="inv-effort"></div><select id="inv-effort" hidden></select></div>
+        <div class="choice-row"><span class="label">Mode</span><div class="chips" data-for="inv-mode"></div><select id="inv-mode" hidden></select></div>
+      </div>
+      <div class="two-col">
+        <label>Vibename <span class="hint">(required)</span><input id="inv-name" type="text" maxlength="24" required autocomplete="off" placeholder="letters, digits, _ or -"></label>
+        <label>Vibersona <span class="hint">(optional; a few words under the vibename)</span><input id="inv-tagline" type="text" maxlength="80" placeholder="e.g. curious analyst"></label>
+      </div>
+      <label>Vibeface <span class="hint">(pick one, or type any emoji)</span>
+        <div id="inv-avatar-picker"></div>
+        <input id="inv-avatar" type="text" maxlength="8" placeholder="custom emoji (optional)"></label>
+      <label>Vibio <span class="hint">(only this vibemate reads it)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Who it is, how it speaks, what it cares about. It reaches the vibemate as instructions in its brief; the other participants never see it. You can change it later in the vibemate's panel.</span>
+        <textarea id="inv-role" rows="4" maxlength="4000" placeholder="e.g. A calm team lead who asks one question at a time."></textarea></label>
+      <details class="geek" id="inv-geek">
+        <summary><span data-icon="geek"></span>for geeks<span class="g-hint">reply delay, skills, where the vibemate lives</span><span class="chev" data-icon="down"></span></summary>
+        <div class="geek-body">
+          <label>Reply delay override, seconds<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Empty: the room's delay. A value here overrides it for this vibemate only. Before each turn the vibemate waits a random 0–N seconds, so replies cross less often; messages that arrive meanwhile land in its backlog.</span><input id="inv-delay" type="number" min="0" max="120" step="0.5" placeholder="the room's"></label>
+          <label>Skills <span class="hint">(from the library)</span><div id="inv-skills" class="check-list"></div></label>
+          <p class="hint" id="inv-where"></p>
+          <p class="hint" id="inv-note"></p>
+          <p class="hint accent" id="inv-status"></p>
+          <div class="row-btns start"><button type="button" id="inv-refresh" class="btn ghost sm" title="Ask the vibemate again what it offers"><span data-icon="refresh"></span>Ask the vibemate again what it offers</button></div>
+        </div>
+      </details>
+      <p class="error" id="inv-error" hidden></p>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="submit" id="inv-submit" class="btn primary">Summon</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="edit-dialog" class="dialog">
+    <form id="edit-form" method="dialog">
+      <h3><span class="h-ico" data-icon="pencil"></span>Edit your message</h3>
+      <p class="lead" id="ed-summary"></p>
+      <div class="choice-list">
+        <div class="choice"><span><strong>Notify vibemates</strong> — the message changes in place; the vibemates that read the old version are told.<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The vibemates that already read the old version get a room event with the change and reply only if it matters to them. Cheap; their memory still holds the old wording.</span></span></div>
+        <div class="choice"><span><strong>Rewrite from here</strong> — <span id="ed-rewrite-detail"></span> The vibemates that read the old version start over from this message.<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Those vibemates restart with a fresh session and the conversation up to this message; they lose their working memory (tool results, reasoning). The removed messages are kept for you in <code>history.deleted.jsonl</code>.</span></span></div>
+      </div>
+      <p class="error" id="ed-error" hidden></p>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="button" id="ed-rewrite" class="btn danger">Rewrite from here</button>
+        <button type="button" id="ed-notify" class="btn primary" autofocus>Notify vibemates</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="reconnect-dialog" class="dialog">
+    <form id="reconnect-form" method="dialog">
+      <h3><span class="h-ico" data-icon="refresh"></span>Welcome back</h3>
+      <p class="lead" id="rc-intro"></p>
+      <div class="choice-list">
+        <label class="choice"><input type="radio" name="rc-mode" value="replay" checked> <span><strong>Replay the last</strong> <input id="rc-replay" type="number" min="0" max="500" value="10" class="rc-num"> <strong>chat messages</strong> — a fresh start with the recent history.<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>A new vibemate session that reads the recent room history (room events in between come along), like a person coming back from a break. Cheap and works for every vibemate.</span></span></label>
+        <label class="choice"><input type="radio" name="rc-mode" value="load"> <span><strong>Restore the full session</strong> — the vibemate comes back with everything it knew.<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>ACP <code>session/load</code>: the vibemate reloads its own stored conversation, with tool results and reasoning. Its next turn pays for the whole history again. Falls back to replay if the vibemate cannot load it.</span></span></label>
+      </div>
+      <table class="rc-table" id="rc-table"></table>
+      <p class="error" id="rc-error" hidden></p>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-close>Later</button>
+        <button type="submit" id="rc-submit" class="btn primary">Reconnect</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="erase-dialog" class="dialog narrow">
+    <form id="erase-form" method="dialog">
+      <h3><span class="h-ico danger" data-icon="alert"></span>Erase my vibe</h3>
+      <p class="lead">This wipes <strong>everything</strong> in this viberoom: your vibe, all rooms and their history, every vibemate session, your skills (the built-in ones come back). The next start asks you to set a vibe again.</p>
+      <label>Type <code>erase</code> to confirm<input id="erase-word" type="text" autocomplete="off" placeholder="erase"></label>
+      <p class="error" id="erase-error" hidden></p>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Keep my vibe</button><button type="submit" id="erase-submit" class="btn danger solid" disabled>Erase everything</button></div>
+    </form>
+  </dialog>
+  <script src="/icons.js"></script>
+  <script src="/avatars.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

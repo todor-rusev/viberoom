@@ -1,0 +1,20 @@
+viberoom
+Copyright (c) 2026 Todor Rusev
+
+This product bundles the following third-party material:
+
+- Nunito (ui/fonts/): Copyright 2014 The Nunito Project Authors,
+  licensed under the SIL Open Font License, Version 1.1 (ui/fonts/OFL.txt).
+
+- Vendor icons (assets/vendors/): the logos of Claude, Codex, Gemini, Cursor,
+  OpenCode and GitHub Copilot, as published in the Agent Client Protocol
+  registry (https://agentclientprotocol.com). Each mark belongs to its owner and
+  is used only to identify the agent it stands for.
+
+- Mermaid (served from node_modules at run time, not copied): MIT License,
+  Copyright (c) 2014-2025 Knut Sveidqvist.
+
+Everything else is original to this project and licensed under the GNU Affero
+General Public License, version 3 or (at your option) any later version (see
+LICENSE). If you run a modified viberoom as a network service, section 13 of
+that licence asks you to offer its source to the people who use it.

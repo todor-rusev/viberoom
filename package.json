@@ -1,0 +1,61 @@
+{
+  "name": "viberoom",
+  "version": "0.2.0",
+  "description": "viberoom: group chat rooms for a human and several coding agents over the Agent Client Protocol",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "viberoom": "dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/main.js",
+    "dev": "npm run build && node dist/main.js --open",
+    "install:global": "node scripts/install.mjs",
+    "update": "node scripts/update.mjs",
+    "start:bg": "node dist/main.js start",
+    "icons": "node scripts/render-icon.mjs",
+    "prepack": "npm run build"
+  },
+  "files": [
+    "dist",
+    "ui",
+    "assets",
+    "scripts",
+    "NOTICE"
+  ],
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.73.0",
+    "@agentclientprotocol/codex-acp": "^1.8.0",
+    "mermaid": "^11.17.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "license": "AGPL-3.0-or-later",
+  "author": "Todor Rusev <todor.rosenov.rusev@gmail.com>",
+  "keywords": [
+    "agents",
+    "acp",
+    "agent-client-protocol",
+    "chat",
+    "claude",
+    "codex",
+    "gemini",
+    "cursor",
+    "opencode",
+    "copilot"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/todor-rusev/viberoom.git"
+  },
+  "homepage": "https://github.com/todor-rusev/viberoom#readme",
+  "bugs": {
+    "url": "https://github.com/todor-rusev/viberoom/issues"
+  }
+}
