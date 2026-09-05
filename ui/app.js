@@ -1735,7 +1735,8 @@
         ${sectionTitle("user", "Turn taking")}
         ${field("Who may speak", `<select id="rp-turns"><option value="one-at-a-time"${rs.turnTaking !== "parallel" ? " selected" : ""}>One vibemate at a time</option><option value="parallel"${rs.turnTaking === "parallel" ? " selected" : ""}>All addressed vibemates at once</option></select>`, null, "One at a time: the others queue and see the earlier replies before they answer; the addressed vibemates go first. All at once: fastest, but replies may cross.")}
         ${field("Reply delay, seconds", `<input type="number" id="rp-delay" min="0" max="120" step="0.5" value="${rs.replyDelay ?? 4}">`, "With two or more vibemates, each waits a random 0–N seconds before it answers, so replies cross less often. A vibemate alone answers at once. A vibemate's own delay (in its panel) always applies.")}
-        <label class="switch"><span class="label">Wait while you are typing${geekTip("A vibemate about to start holds back while you type (a few seconds after your last keystroke). A reply already under way is not interrupted.")}</span><input type="checkbox" id="rp-wait-typing" ${rs.waitWhileHumanTypes !== false ? "checked" : ""}></label>
+        <label class="switch"><span class="label">Vibemates wake each other<span class="hint">A reply without @ wakes every other vibemate, as yours does; each may answer or stay silent. Off: only @Name wakes a vibemate. The hop limit applies either way.</span></span><input type="checkbox" id="rp-wake" ${rs.agentsWakeEachOther !== false ? "checked" : ""}></label>
+        <label class="switch"><span class="label">Wait while you are typing<span class="hint">A vibemate about to start holds back while you type (a few seconds after your last keystroke). A reply already under way is not interrupted.</span></span><input type="checkbox" id="rp-wait-typing" ${rs.waitWhileHumanTypes !== false ? "checked" : ""}></label>
       </div>
       ${geek(
         "rp-geek",
@@ -1808,6 +1809,7 @@
           refereeAction: $("#rp-referee").value,
           turnTaking: $("#rp-turns").value,
           waitWhileHumanTypes: $("#rp-wait-typing").checked,
+          agentsWakeEachOther: $("#rp-wake").checked,
           replyDelay: Number($("#rp-delay").value),
         });
     });

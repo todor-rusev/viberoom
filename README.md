@@ -87,8 +87,8 @@ library marks it as theirs until you have read it.
 </p>
 
 Write to the room and every vibemate answers, each after a short pause so replies do not trip over
-each other. `@Name` one of them and the rest read along. Vibemates address each other the same way,
-and a hop limit keeps a two-agent argument from running all night. **Hush** stops every running reply
+each other. `@Name` one of them and the rest read along. Vibemates talk to each other the same way:
+a reply wakes the others, `@Name` picks one, and a hop limit keeps an argument from running all night. **Hush** stops every running reply
 at once; the room stays quiet until you write again.
 
 <br>

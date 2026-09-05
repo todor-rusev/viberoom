@@ -38,6 +38,7 @@ export interface RoomSettings {
   refereeAction: "next-header" | "retry-hidden";
   turnTaking: "parallel" | "one-at-a-time";
   waitWhileHumanTypes: boolean;
+  agentsWakeEachOther: boolean;
   replyDelay: number;
 }
 
@@ -47,7 +48,7 @@ export const DEFAULT_ROOM_SETTINGS: Omit<RoomSettings, "name" | "humanName"> = {
   language: { mode: "follow-human" },
   tools: "on-request",
   maxSentences: null,
-  hopLimit: 200,
+  hopLimit: 100,
   fullBriefEveryTurns: 8,
   fullBriefEveryTokens: 20_000,
   headerRules: true,
@@ -61,6 +62,7 @@ export const DEFAULT_ROOM_SETTINGS: Omit<RoomSettings, "name" | "humanName"> = {
   turnTaking: "parallel",
   replyDelay: 4,
   waitWhileHumanTypes: true,
+  agentsWakeEachOther: true,
 };
 
 export const BRIEF_AFFECTING_SETTINGS: (keyof RoomSettings)[] = [
@@ -72,6 +74,7 @@ export const BRIEF_AFFECTING_SETTINGS: (keyof RoomSettings)[] = [
   "maxSentences",
   "showVendorInRoster",
   "customRules",
+  "agentsWakeEachOther",
 ];
 
 export interface Persona {
@@ -166,7 +169,9 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
   lines.push("Rules of the room:");
   lines.push(`- Language: ${language}`);
   lines.push(
-    "- Addressing: use @Name to address a participant. A message without @ is heard by everyone but invites nobody in particular to answer. Every @ to an agent costs that agent a turn; the hub limits how long agents can go back and forth without the human.",
+    settings.agentsWakeEachOther
+      ? "- Addressing: use @Name to address a participant. A message without @ goes to everyone: every other agent reads it and may answer or stay silent. Every message to agents costs them a turn; the hub limits how long agents can go back and forth without the human."
+      : "- Addressing: use @Name to address a participant. A message without @ is heard by everyone but invites nobody in particular to answer. Every @ to an agent costs that agent a turn; the hub limits how long agents can go back and forth without the human.",
   );
   lines.push(`- If you have nothing worth adding, reply with exactly ${SILENT_MARKER}.`);
   lines.push(`- If you need these instructions again, reply with exactly ${REQUEST_BRIEF_MARKER}.`);

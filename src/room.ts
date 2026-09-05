@@ -794,6 +794,13 @@ export class Room extends EventEmitter {
         changed.push("turnTaking");
       }
     }
+    if (patch.agentsWakeEachOther !== undefined) {
+      const on = patch.agentsWakeEachOther === true || patch.agentsWakeEachOther === "true";
+      if (on !== next.agentsWakeEachOther) {
+        next.agentsWakeEachOther = on;
+        changed.push("agentsWakeEachOther");
+      }
+    }
     if (patch.waitWhileHumanTypes !== undefined) {
       const on = patch.waitWhileHumanTypes === true || patch.waitWhileHumanTypes === "true";
       if (on !== next.waitWhileHumanTypes) {
@@ -1283,14 +1290,16 @@ export class Room extends EventEmitter {
       if (!message.to.length && !message.skill && this.settings.turnTaking === "one-at-a-time" && targets.length > 1) targets = shuffle(targets);
     } else if (this.focused) {
       targets = [];
-    } else if (agentTargets.length) {
-      if (this.hops >= this.hopLimit) {
-        this.postSystem(
-          `Hop limit ${this.hopLimit} reached: ${message.toNames.join(", ")} will not be prompted until ${this.humanName} writes again.`,
-        );
-      } else {
-        this.hops += 1;
-        targets = agentTargets;
+    } else {
+      const wanted = agentTargets.length ? agentTargets : this.settings.agentsWakeEachOther ? [...this.runtimes.keys()].filter((id) => id !== message.from && live(id)) : [];
+      if (wanted.length) {
+        if (this.hops >= this.hopLimit) {
+          const who = agentTargets.length ? message.toNames.join(", ") : "the other vibemates";
+          this.postSystem(`Hop limit ${this.hopLimit} reached: ${who} will not be prompted until ${this.humanName} writes again.`);
+        } else {
+          this.hops += 1;
+          targets = this.settings.turnTaking === "one-at-a-time" && !agentTargets.length && wanted.length > 1 ? shuffle(wanted) : wanted;
+        }
       }
     }
     this.push(this.roomEvent());
