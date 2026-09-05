@@ -79,6 +79,11 @@
         </header>
         <div id="messages" class="messages"></div>
         <button type="button" id="jump-latest" class="jump-latest" title="Back to the latest messages" hidden><span data-icon="arrow-down"></span>Latest</button>
+        <div id="timeline" class="timeline" hidden>
+          <div class="tl-view"></div>
+          <div class="tl-ticks"></div>
+          <div class="tl-pop" hidden></div>
+        </div>
         <div id="mention-menu" class="mention-menu" hidden></div>
         <div id="emoji-menu" class="mention-menu emoji-menu" hidden></div>
         <form id="composer" class="composer">
@@ -127,7 +132,7 @@
       <p class="lead">A room is a shared space for you and the vibemates you summon. Give it a name.</p>
       <label>Room name<input id="room-name" type="text" maxlength="60" required placeholder="e.g. Architecture review"></label>
       <label>Working directory <span class="hint">(optional)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The folder the vibemates work in (their cwd). Leave it empty and the hub keeps a folder per room. Instruction files in it (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules) are read by the vibemates by their own conventions; the hub tells you if it finds any.</span>
-        <input id="room-dir" type="text" placeholder="C:\projects\my-app"></label>
+        <span class="dir-row"><input id="room-dir" type="text" placeholder="C:\projects\my-app"><button type="button" class="btn ghost browse-btn" id="room-dir-browse" title="Choose a folder"><span data-icon="folder"></span>Browse</button></span></label>
       <p class="error" id="room-error" hidden></p>
       <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">Open the room</button></div>
     </form>
@@ -211,6 +216,26 @@
       <p class="error" id="erase-error" hidden></p>
       <div class="actions"><button type="button" class="btn ghost" data-close>Keep my vibe</button><button type="submit" id="erase-submit" class="btn danger solid" disabled>Erase everything</button></div>
     </form>
+  </dialog>
+  <dialog id="folder-dialog" class="dialog wide folder-dialog">
+    <div class="file-head">
+      <h3><span class="h-ico" data-icon="folder"></span>Choose a folder</h3>
+      <div class="fp-bar">
+        <input id="fp-path" type="text" spellcheck="false" placeholder="Type a path and press Enter, or pick one below">
+        <button type="button" class="btn ghost" id="fp-home" title="Your home folder"><span data-icon="user"></span>Home</button>
+        <button type="button" class="btn ghost" id="fp-new" title="New folder inside the selected one"><span data-icon="plus"></span>New folder</button>
+      </div>
+      <div class="fp-recent" id="fp-recent"></div>
+    </div>
+    <div class="fp-body">
+      <ul class="tree" id="fp-tree"></ul>
+    </div>
+    <p class="error" id="fp-error" hidden></p>
+    <div class="actions">
+      <span class="fp-selected" id="fp-selected"></span>
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="button" class="btn primary" id="fp-choose">Choose this folder</button>
+    </div>
   </dialog>
   <dialog id="file-dialog" class="dialog wide file-dialog">
     <div class="file-head">

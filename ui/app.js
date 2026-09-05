@@ -578,16 +578,26 @@
   function geek(id, bodyHtml, hint) {
     return `<details class="geek" id="${id}"><summary>${ic("geek")}for geeks${hint ? `<span class="g-hint">${hint}</span>` : ""}<span class="chev">${ic("down")}</span></summary><div class="geek-body">${bodyHtml}</div></details>`;
   }
+  const recentlySaved = new Map();
   function bindSave(container, button, onSave) {
     if (!container || !button) return;
+    let dirty = false;
+    let saving = false;
+    let again = false;
     const arm = () => {
+      dirty = true;
       button.disabled = false;
       button.classList.remove("saved");
       button.textContent = "Save";
     };
-    container.addEventListener("input", arm);
-    container.addEventListener("change", arm);
-    button.addEventListener("click", async () => {
+    const save = async () => {
+      if (!dirty) return;
+      if (saving) {
+        again = true;
+        return;
+      }
+      saving = true;
+      dirty = false;
       button.disabled = true;
       button.classList.add("loading");
       try {
@@ -595,11 +605,43 @@
         button.classList.remove("loading");
         button.classList.add("saved");
         button.innerHTML = `${ic("check")} Saved`;
+        if (button.id) recentlySaved.set(button.id, Date.now());
       } catch (e) {
+        dirty = true;
         button.classList.remove("loading");
         button.disabled = false;
         showError(e);
       }
+      saving = false;
+      if (again) {
+        again = false;
+        save();
+      }
+    };
+    if (button.id && Date.now() - (recentlySaved.get(button.id) || 0) < 5000) {
+      button.disabled = true;
+      button.classList.add("saved");
+      button.innerHTML = `${ic("check")} Saved`;
+    }
+    container.addEventListener("input", arm);
+    container.addEventListener("change", () => {
+      arm();
+      save();
+    });
+    container.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      const t = e.target;
+      if (t.tagName === "INPUT" || (e.ctrlKey && (t.tagName === "TEXTAREA" || t.isContentEditable))) {
+        e.preventDefault();
+        t.blur();
+      }
+    });
+    container.addEventListener("focusout", (e) => {
+      if (e.target.isContentEditable) save();
+    });
+    button.addEventListener("click", () => {
+      dirty = true;
+      save();
     });
   }
   function roomHue(room) {
@@ -1261,6 +1303,7 @@
     for (const perm of room.permissions) renderPermission(room, perm);
     refreshSeen(room);
     scrollToBottom();
+    renderTimeline();
   }
 
   function upsertMessage(roomId, m) {
@@ -1289,6 +1332,7 @@
       if (m.from === "human") refreshSeen(room);
     }
     if (stick) scrollToBottom();
+    if (m.from === "human") renderTimeline();
   }
 
   function removeMessage(roomId, id) {
@@ -1575,7 +1619,7 @@
     $("#pp-avatar-picker").appendChild(
       window.Avatars.pickerElement(p.avatar || "", (emoji) => {
         $("#pp-avatar").value = emoji;
-        $("#pp-avatar").dispatchEvent(new Event("input", { bubbles: true }));
+        $("#pp-avatar").dispatchEvent(new Event("change", { bubbles: true }));
       }),
     );
     renderSkillChecks($("#pp-skills"), p.skills || []);
@@ -1664,7 +1708,7 @@
     $("#me-avatar-picker").appendChild(
       window.Avatars.pickerElement(s.humanAvatar || "", (emoji) => {
         $("#me-avatar").value = emoji;
-        $("#me-avatar").dispatchEvent(new Event("input", { bubbles: true }));
+        $("#me-avatar").dispatchEvent(new Event("change", { bubbles: true }));
       }),
     );
     bindSave($("#me-vibe"), $("#me-save"), () => post("/api/settings", { humanName: $("#me-name").value, humanAvatar: $("#me-avatar").value, humanDescription: $("#me-desc").value }));
@@ -1683,7 +1727,7 @@
         ${field("Name", `<input type="text" id="rp-name" maxlength="60" value="${esc(room.name)}">`)}
         ${field("Emoji", `<div id="rp-emoji-picker"></div><input type="text" id="rp-emoji" maxlength="8" value="${esc(rs.emoji || "")}" placeholder="custom emoji (optional)">`, "A face for the room, next to its name.")}
         ${field("Topic", `<input type="text" id="rp-topic" maxlength="2000" value="${esc(rs.topic || "")}" placeholder="what this room is about (optional)">`)}
-        ${field("Folder", `<input type="text" id="rp-dir" maxlength="1000" value="${esc(room.dir)}" spellcheck="false">`, "Where the vibemates read and write. Changing it restarts them in the new folder; they replay the last messages.")}
+        ${field("Folder", `<span class="dir-row"><input type="text" id="rp-dir" maxlength="1000" value="${esc(room.dir)}" spellcheck="false"><button type="button" class="btn ghost browse-btn" id="rp-dir-browse" title="Choose a folder">${ic("folder")}Browse</button></span>`, "Where the vibemates read and write. Changing it restarts them in the new folder; they replay the last messages.")}
         <label class="field mention-host"><span class="label">Room rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">One rule per line; type @ to reference a participant.</span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></label>
         ${field("Language", `<input type="text" id="rp-lang" value="${esc(lang)}" placeholder="follow the human (default), or e.g. English">`)}
       </div>
@@ -1739,6 +1783,10 @@
         $("#rp-emoji").dispatchEvent(new Event("input", { bubbles: true }));
       }),
     );
+    $("#rp-dir-browse").addEventListener("click", () => openFolderPicker($("#rp-dir").value, (dir) => {
+      $("#rp-dir").value = dir;
+      $("#rp-dir").dispatchEvent(new Event("change", { bubbles: true }));
+    }));
     bindSave($("#rp-form"), $("#rp-save"), async () => {
         const name = $("#rp-name").value;
         if (name.trim() !== room.name) await post(roomApi("/rename"), { name });
@@ -3062,6 +3110,7 @@
   els.sideToggle.addEventListener("click", () => setSideOpen(els.app.classList.contains("side-collapsed")));
   els.messages.addEventListener("scroll", () => {
     els.jumpLatest.hidden = nearBottom();
+    updateTimelineView();
   });
   els.jumpLatest.addEventListener("click", () => els.messages.scrollTo({ top: els.messages.scrollHeight, behavior: "smooth" }));
   els.detailsHandle.addEventListener("click", closeDetails);
@@ -3177,6 +3226,264 @@
     if (event.key === "Escape" && state.detailsOpen && !document.querySelector("dialog[open]") && !editingInDetails()) closeDetails();
   });
   window.addEventListener("beforeunload", () => remember("view", state.view));
+
+  const tl = { el: $("#timeline"), ticks: $("#timeline .tl-ticks"), view: $("#timeline .tl-view"), pop: $("#timeline .tl-pop"), items: [] };
+  const TICK_H = 5;
+  function renderTimeline() {
+    const room = currentRoom();
+    const nodes = room && state.view === "room" ? [...els.messages.querySelectorAll(".msg.mine:not(.hidden-by-search)")] : [];
+    tl.items = nodes;
+    tl.el.hidden = nodes.length === 0;
+    tl.pop.hidden = true;
+    if (!nodes.length) return;
+    const total = els.messages.scrollHeight || 1;
+    const h = Math.max(0, tl.ticks.clientHeight - TICK_H);
+    tl.ticks.innerHTML = "";
+    nodes.forEach((el, i) => {
+      const t = document.createElement("div");
+      t.className = "tl-tick";
+      t.dataset.i = i;
+      t.title = "";
+      t.style.top = `${Math.round((el.offsetTop / total) * h)}px`;
+      tl.ticks.appendChild(t);
+    });
+    updateTimelineView();
+  }
+  function updateTimelineView() {
+    if (tl.el.hidden) return;
+    const m = els.messages;
+    const total = m.scrollHeight || 1;
+    const h = tl.ticks.clientHeight;
+    tl.view.style.top = `${(m.scrollTop / total) * h}px`;
+    tl.view.style.height = `${Math.max(8, (m.clientHeight / total) * h)}px`;
+    const top = m.scrollTop;
+    const bottom = m.scrollTop + m.clientHeight;
+    tl.items.forEach((el, i) => {
+      const tick = tl.ticks.children[i];
+      if (tick) tick.classList.toggle("in-view", el.offsetTop + el.offsetHeight > top && el.offsetTop < bottom);
+    });
+  }
+  function timelineText(el) {
+    const t = el.querySelector(".text");
+    return (t ? t.innerText : el.innerText).trim().replace(/\s+/g, " ").slice(0, 240);
+  }
+  function showTimelinePop(i) {
+    const rows = [[i - 2, "faded far"], [i - 1, "faded"], [i, "current"], [i + 1, "faded"], [i + 2, "faded far"]].filter(([k]) => tl.items[k]);
+    tl.pop.innerHTML = rows.map(([k, c]) => `<div class="tl-row ${c}" data-i="${k}">${esc(timelineText(tl.items[k]))}</div>`).join("");
+    tl.pop.hidden = false;
+    tl.ticks.querySelectorAll(".tl-tick.active").forEach((t) => t.classList.remove("active"));
+    const tick = tl.ticks.children[i];
+    if (tick) tick.classList.add("active");
+    const current = tl.pop.querySelector(".tl-row.current");
+    let top = (tick ? tick.offsetTop : 0) - (current ? current.offsetTop + current.offsetHeight / 2 : 20) + TICK_H / 2;
+    top = Math.max(0, Math.min(top, tl.el.clientHeight - tl.pop.offsetHeight));
+    tl.pop.style.top = `${top}px`;
+  }
+  function hideTimelinePop() {
+    tl.pop.hidden = true;
+    tl.ticks.querySelectorAll(".tl-tick.active").forEach((t) => t.classList.remove("active"));
+  }
+  function jumpToMessage(el) {
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.remove("flash");
+    void el.offsetWidth;
+    el.classList.add("flash");
+  }
+  tl.ticks.addEventListener("mouseover", (e) => {
+    const tick = e.target.closest(".tl-tick");
+    if (tick) showTimelinePop(Number(tick.dataset.i));
+  });
+  tl.el.addEventListener("mouseleave", hideTimelinePop);
+  tl.ticks.addEventListener("click", (e) => {
+    const tick = e.target.closest(".tl-tick");
+    if (tick) jumpToMessage(tl.items[Number(tick.dataset.i)]);
+  });
+  tl.pop.addEventListener("click", (e) => {
+    const row = e.target.closest(".tl-row");
+    if (row) jumpToMessage(tl.items[Number(row.dataset.i)]);
+  });
+  new ResizeObserver(() => renderTimeline()).observe(els.messages);
+
+  const fp = { onChoose: null, selected: "", roots: [], home: "" };
+  const fpEls = { dialog: $("#folder-dialog"), path: $("#fp-path"), tree: $("#fp-tree"), recent: $("#fp-recent"), error: $("#fp-error"), selected: $("#fp-selected"), choose: $("#fp-choose"), home: $("#fp-home"), newBtn: $("#fp-new") };
+  const sepOf = (p) => (p.includes("\\") || /^[A-Za-z]:/.test(p) ? "\\" : "/");
+  const sameFolder = (a, b) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
+  const isUnder = (child, parent) => {
+    const c = child.replace(/[\\/]+$/, "").toLowerCase();
+    const p = parent.replace(/[\\/]+$/, "").toLowerCase();
+    return c === p || c.startsWith(p + sepOf(parent)) || (parent.endsWith(sepOf(parent)) && c.startsWith(p + sepOf(parent)));
+  };
+  function fpFail(error) {
+    fpEls.error.textContent = error.message || String(error);
+    fpEls.error.hidden = false;
+  }
+  function fpNode(entry) {
+    const li = document.createElement("li");
+    li.dataset.path = entry.path;
+    li.innerHTML = `<div class="tn${entry.hidden ? " hidden-dir" : ""}"><button type="button" class="tn-tw" title="Expand">${ic("forward")}</button><span class="tn-ico">📁</span><span class="tn-name">${esc(entry.name)}</span></div><ul hidden></ul>`;
+    return li;
+  }
+  function fpSelect(path, li) {
+    fp.selected = path;
+    fpEls.tree.querySelectorAll(".tn.selected").forEach((el) => el.classList.remove("selected"));
+    if (li) li.querySelector(":scope > .tn").classList.add("selected");
+    fpEls.path.value = path;
+    fpEls.selected.textContent = path;
+    fpEls.error.hidden = true;
+  }
+  async function fpLoad(li) {
+    const ul = li.querySelector(":scope > ul");
+    if (li.dataset.loaded) return ul;
+    const data = await get(`/api/fs/dirs?path=${encodeURIComponent(li.dataset.path)}`);
+    ul.innerHTML = "";
+    for (const d of data.dirs) ul.appendChild(fpNode(d));
+    if (!data.dirs.length) ul.innerHTML = `<li class="tn-more">no sub-folders</li>`;
+    li.dataset.loaded = "1";
+    li.querySelector(":scope > .tn").classList.toggle("leaf", !data.dirs.length);
+    return ul;
+  }
+  async function fpExpand(li, open) {
+    const tn = li.querySelector(":scope > .tn");
+    const ul = li.querySelector(":scope > ul");
+    const want = open === undefined ? ul.hidden : open;
+    if (!want) {
+      ul.hidden = true;
+      tn.classList.remove("open");
+      return;
+    }
+    tn.classList.add("open");
+    try {
+      await fpLoad(li);
+      ul.hidden = false;
+    } catch (e) {
+      tn.classList.remove("open");
+      fpFail(e);
+    }
+  }
+  async function fpReveal(path) {
+    const target = path.replace(/[\\/]+$/, "") || path;
+    let level = fpEls.tree;
+    let found = null;
+    for (let guard = 0; guard < 64; guard++) {
+      const li = [...level.children].find((el) => el.dataset && el.dataset.path && isUnder(target, el.dataset.path));
+      if (!li) break;
+      found = li;
+      if (sameFolder(li.dataset.path, target)) break;
+      await fpExpand(li, true);
+      level = li.querySelector(":scope > ul");
+    }
+    if (found && sameFolder(found.dataset.path, target)) {
+      fpSelect(found.dataset.path, found);
+      found.scrollIntoView({ block: "center" });
+      return true;
+    }
+    return false;
+  }
+  async function fpGoTo(typed) {
+    const p = typed.trim();
+    if (!p) return;
+    try {
+      const data = await get(`/api/fs/dirs?path=${encodeURIComponent(p)}`);
+      if (!(await fpReveal(data.path))) fpSelect(data.path, null);
+    } catch (e) {
+      fpFail(e);
+    }
+  }
+  function fpRecent() {
+    const dirs = [];
+    for (const room of state.rooms.values()) if (room.dir && !dirs.some((d) => sameFolder(d, room.dir))) dirs.push(room.dir);
+    fpEls.recent.innerHTML = "";
+    for (const d of dirs.slice(0, 6)) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip-btn";
+      b.title = d;
+      b.textContent = d.split(/[\\/]/).filter(Boolean).slice(-1)[0] || d;
+      b.addEventListener("click", () => fpGoTo(d));
+      fpEls.recent.appendChild(b);
+    }
+  }
+  async function openFolderPicker(initial, onChoose) {
+    fp.onChoose = onChoose;
+    fpEls.error.hidden = true;
+    fpEls.tree.innerHTML = `<li class="tn-more">loading…</li>`;
+    fpSelect("", null);
+    openDialog(fpEls.dialog);
+    try {
+      const data = await get("/api/fs/dirs");
+      fp.roots = data.roots;
+      fp.home = data.home;
+      fpEls.tree.innerHTML = "";
+      for (const r of data.roots) fpEls.tree.appendChild(fpNode(r));
+      fpRecent();
+      const start = (initial || "").trim() || data.home;
+      await fpGoTo(start);
+      fpEls.path.focus();
+    } catch (e) {
+      fpFail(e);
+    }
+  }
+  fpEls.tree.addEventListener("click", (e) => {
+    const li = e.target.closest("li[data-path]");
+    if (!li) return;
+    if (e.target.closest(".tn-tw")) return void fpExpand(li);
+    fpSelect(li.dataset.path, li);
+  });
+  fpEls.tree.addEventListener("dblclick", (e) => {
+    const li = e.target.closest("li[data-path]");
+    if (li && !e.target.closest(".tn-tw")) fpExpand(li);
+  });
+  fpEls.path.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      fpGoTo(fpEls.path.value);
+    }
+  });
+  fpEls.home.addEventListener("click", () => fpGoTo(fp.home));
+  fpEls.newBtn.addEventListener("click", async () => {
+    const li = fpEls.tree.querySelector(".tn.selected")?.closest("li[data-path]");
+    if (!li) return fpFail(new Error("select the folder to create it in first"));
+    await fpExpand(li, true);
+    const ul = li.querySelector(":scope > ul");
+    if (ul.querySelector(".tn-new")) return;
+    const row = document.createElement("li");
+    row.className = "tn-new";
+    row.innerHTML = `<span class="tn-ico">📁</span><input type="text" placeholder="folder name" maxlength="120">`;
+    ul.prepend(row);
+    const input = row.querySelector("input");
+    input.focus();
+    const done = async () => {
+      const name = input.value.trim();
+      row.remove();
+      if (!name) return;
+      try {
+        const r = await post("/api/fs/mkdir", { parent: li.dataset.path, name });
+        delete li.dataset.loaded;
+        await fpExpand(li, true);
+        await fpReveal(r.path);
+      } catch (err) {
+        fpFail(err);
+      }
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        done();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        row.remove();
+      }
+    });
+    input.addEventListener("blur", () => setTimeout(() => row.isConnected && done(), 120));
+  });
+  fpEls.choose.addEventListener("click", () => {
+    const chosen = fp.selected || fpEls.path.value.trim();
+    if (!chosen) return fpFail(new Error("pick a folder first"));
+    closeDialog(fpEls.dialog);
+    if (fp.onChoose) fp.onChoose(chosen);
+  });
+  $("#room-dir-browse").addEventListener("click", () => openFolderPicker(els.roomDir.value, (dir) => (els.roomDir.value = dir)));
 
   if (window.matchMedia("(display-mode: standalone)").matches) {
     const placement = () => ({

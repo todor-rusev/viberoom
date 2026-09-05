@@ -11,6 +11,7 @@ import type { Hub, HubEvent } from "./hub.js";
 import { existsSync as fileExists } from "node:fs";
 import { classifyOpenTarget, describeOpen, detectEditor, editorCommand, isExecutablePath, openCommand, type DetectedEditor } from "./open.js";
 import { parseCsv, viewerKind, VIEWER_MAX_BYTES } from "./viewer.js";
+import { createFolder, homeFolder, listFolders, listRoots } from "./fsbrowse.js";
 
 let editorFound: DetectedEditor | null | undefined;
 function currentEditor(): DetectedEditor | null {
@@ -124,6 +125,23 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (req.method === "GET" && path === "/api/fs/dirs") {
+      const at = url.searchParams.get("path");
+      if (!at) {
+        sendJson(res, 200, { ok: true, roots: listRoots(), home: homeFolder() });
+        return;
+      }
+      try {
+        sendJson(res, 200, { ok: true, ...(await listFolders(at)) });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") sendJson(res, 404, { error: `no such folder: ${at}` });
+        else if (code === "EACCES" || code === "EPERM") sendJson(res, 403, { error: `no access to ${at}` });
+        else throw error;
+      }
+      return;
+    }
+
     if (req.method === "GET" && path === "/api/file") {
       const target = classifyOpenTarget(url.searchParams.get("path") ?? "");
       if (!target || target.kind !== "path") throw new Error("only absolute paths can be viewed");
@@ -226,6 +244,11 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     if (path === "/api/settings") {
       sendJson(res, 200, { ok: true, settings: hub.updateSettings(body) });
+      return;
+    }
+
+    if (path === "/api/fs/mkdir") {
+      sendJson(res, 200, { ok: true, path: await createFolder(String(body.parent ?? ""), String(body.name ?? "")) });
       return;
     }
 

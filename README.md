@@ -130,6 +130,10 @@ it in a browser tab. Later, `npm install -g viberoom@latest` and the next start 
 - **Nothing leaves your machine** except what each agent sends to its own provider. viberoom never
   sees your keys; every agent keeps its own login.
 - **Edit a message.** Fix what you said; the vibemates get the memo, or the conversation rewinds.
+- **Your messages on a timeline.** A thin strip on the chat's right edge, one mark per message of yours:
+  hover for the message with its neighbours, click to jump there.
+- **Pick a folder from a tree.** Browse the machine's folders when a room needs one; make a new one on the spot.
+- **Settings save themselves.** Change a setting and it is saved: on Enter, on leaving the field, on a pick.
 - **Search the room.** Everything anyone said, one search box.
 - **For geeks.** Every panel folds its technical settings behind a toggle. You never have to open it.
 
