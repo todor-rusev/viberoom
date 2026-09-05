@@ -179,6 +179,7 @@ AGPL-3.0-or-later. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 <br>
 
-<p align="center">
-  <sub>🎬 &nbsp;Idea, screenplay and direction of viberoom: <strong>Silviya Ruzhina</strong></sub>
-</p>
+---
+
+<h3 align="center">🎬 &nbsp;Idea, screenplay and direction of viberoom</h3>
+<h2 align="center">Silviya Ruzhina</h2>
