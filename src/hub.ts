@@ -189,6 +189,24 @@ export class Hub extends EventEmitter {
     }
   }
 
+  saveWindowPlacement(report: Record<string, unknown>): void {
+    const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+    if (!num(report.left) || !num(report.top) || !num(report.width) || !num(report.height)) throw new Error("left, top, width and height must be numbers");
+    const screen = report.screen as Record<string, unknown> | undefined;
+    const record: Record<string, unknown> = {
+      left: Math.round(report.left),
+      top: Math.round(report.top),
+      width: Math.round(report.width),
+      height: Math.round(report.height),
+      maximized: !!report.maximized,
+      savedAt: new Date().toISOString(),
+    };
+    if (screen && num(screen.left) && num(screen.top) && num(screen.width) && num(screen.height)) {
+      record.screen = { left: Math.round(screen.left), top: Math.round(screen.top), width: Math.round(screen.width), height: Math.round(screen.height) };
+    }
+    writeJson(join(this.dataDir, "window.json"), record);
+  }
+
   updateSettings(patch: Record<string, unknown>): ProgramSettings {
     const next: ProgramSettings = { ...this.settings, roomDefaults: { ...this.settings.roomDefaults }, vendorPresets: { ...this.settings.vendorPresets } };
     if (patch.humanName !== undefined) {

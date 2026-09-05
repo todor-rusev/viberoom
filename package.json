@@ -1,6 +1,6 @@
 {
   "name": "viberoom",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "viberoom: group chat rooms for a human and several coding agents over the Agent Client Protocol",
   "type": "module",
   "engines": {
@@ -10,7 +10,7 @@
     "viberoom": "dist/main.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/vendor-acp.mjs && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js",
     "dev": "npm run build && node dist/main.js --open",
@@ -22,18 +22,21 @@
   },
   "files": [
     "dist",
+    "vendor",
     "ui",
     "assets",
     "scripts",
     "NOTICE"
   ],
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.73.0",
-    "@agentclientprotocol/codex-acp": "^1.8.0",
+    "@agentclientprotocol/sdk": "1.4.0",
     "marked": "^16.4.2",
-    "mermaid": "^11.17.2"
+    "mermaid": "^11.17.2",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.73.0",
+    "@agentclientprotocol/codex-acp": "1.8.0",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0"
   },

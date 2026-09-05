@@ -229,6 +229,12 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (path === "/api/window") {
+      hub.saveWindowPlacement(body);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
     if (path === "/api/open") {
       const target = classifyOpenTarget(String(body.target ?? ""));
       if (!target) throw new Error("only http(s) or mailto links and absolute paths can be opened");

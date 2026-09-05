@@ -842,8 +842,9 @@ export class Room extends EventEmitter {
       for (const runtime of this.runtimes.values()) runtime.briefPending = `room rules: ${briefChanges.join(", ")}`;
       this.postSystem(`Room settings updated (${briefChanges.join(", ")}); agents get refreshed instructions on their next turn.`);
     }
-    if (unknownRefs.length) {
-      this.notice(`Custom rules mention ${unknownRefs.map((n) => `@${n}`).join(", ")}, who ${unknownRefs.length > 1 ? "are" : "is"} not in the room; left as plain text.`, "warn");
+    const missing = unknownRefs.filter((n) => n !== "Name");
+    if (missing.length) {
+      this.notice(`Room rules mention ${missing.map((n) => `@${n}`).join(", ")}, who ${missing.length > 1 ? "are" : "is"} not in the room; left as plain text.`, "warn");
     }
     return this.settings;
   }

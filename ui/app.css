@@ -188,6 +188,10 @@
 .sys.warn { color: var(--warm-ink); background: var(--warm); border-radius: var(--r-pill); padding: 6px 12px; font-weight: 800; }
 .bubble-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: min(1040px, 100%); }
 .msg.mine .bubble-col { align-items: flex-end; }
+.shell.side-collapsed .bubble-col { max-width: min(1480px, 100%); }
+.jump-latest { position: absolute; right: 30px; bottom: 96px; z-index: 5; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px 0 10px; border: 0; border-radius: var(--r-pill); background: var(--card); color: var(--primary); font: inherit; font-size: 12px; font-weight: 800; box-shadow: var(--shadow-pop); cursor: pointer; animation: rise var(--t-base) var(--ease-out); }
+.jump-latest:hover { background: var(--soft); }
+.jump-latest svg { width: 16px; height: 16px; }
 .bubble { max-width: 100%; background: #fff; border-radius: 6px 18px 18px 18px; padding: 12px 16px; min-width: 0; font-size: 14.5px; font-weight: 600; line-height: 1.55; color: var(--ink-2); box-shadow: 0 2px 0 rgba(28, 27, 51, 0.06), 0 1px 3px rgba(28, 27, 51, 0.04); }
 .msg.mine .bubble { background: var(--grad-primary); color: #fff; border-radius: 18px 18px 6px 18px; box-shadow: 0 8px 18px -10px rgba(91, 91, 240, 0.7); padding: 11px 16px; }
 .msg.mine .bubble .text { color: #fff; }
@@ -326,6 +330,9 @@ table.csv tbody tr:nth-child(even) td { background: rgba(91, 91, 240, 0.03); }
 .resizer { position: absolute; left: -14px; top: 0; bottom: 0; width: 20px; cursor: col-resize; z-index: 3; }
 .resizer::after { content: ""; position: absolute; left: 8.5px; top: 44%; height: 12%; width: 3px; border-radius: 3px; background: var(--lav-2); opacity: 0; transition: opacity var(--t-fast); }
 .resizer:hover::after, .shell.resizing .resizer::after { opacity: 1; }
+.details-handle { position: absolute; left: 0; bottom: 18%; z-index: 4; width: 20px; height: 64px; padding: 0; border: 0; border-radius: 0 12px 12px 0; background: #d6d8fb; color: var(--primary); display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 2px 8px -2px rgba(91, 91, 240, 0.45); transition: background var(--t-fast), color var(--t-fast); }
+.details-handle:hover { background: var(--primary); color: #fff; }
+.details-handle svg { width: 16px; height: 16px; }
 .panel-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
 .panel-title h3 { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-title .hint { display: none; }

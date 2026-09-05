@@ -5,6 +5,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export type AgentTypeId = "claude" | "codex" | "gemini" | "cursor" | "opencode" | "copilot";
 
@@ -131,8 +132,30 @@ function resolveCopilot(): string | null {
   return null;
 }
 
-const claudeEntry = resolvePackageEntry("@agentclientprotocol/claude-agent-acp", join("dist", "index.js"));
-const codexEntry = resolvePackageEntry("@agentclientprotocol/codex-acp", join("dist", "index.js"));
+function resolveGlobalNpmBin(name: string): string | null {
+  const root = resolveGlobalNpmRoot();
+  if (!root) return null;
+  const candidates = isWindows ? [join(root, "..", `${name}.cmd`)] : [join(root, "..", "..", "bin", name)];
+  return candidates.find((c) => existsSync(c)) ?? null;
+}
+
+function resolveClaudeCode(): string | null {
+  const onPath = resolveOnPath(["claude"]);
+  if (onPath && !/\.(cmd|bat)$/i.test(onPath)) return onPath;
+  const native = join(homedir(), ".local", "bin", isWindows ? "claude.exe" : "claude");
+  if (existsSync(native)) return native;
+  return resolveGlobalPackageEntry("@anthropic-ai/claude-code", "cli.js");
+}
+
+function resolveCodex(): string | null {
+  return resolveGlobalNpmBin("codex") ?? resolveOnPath(["codex"]);
+}
+
+const vendorDir = join(dirname(fileURLToPath(import.meta.url)), "..", "vendor", "acp");
+const claudeAdapter = join(vendorDir, "claude-agent-acp", "dist", "index.js");
+const codexAdapter = join(vendorDir, "codex-acp", "dist", "index.js");
+const claudeExe = resolveClaudeCode();
+const codexExe = resolveCodex();
 const geminiEntry =
   resolvePackageEntry("@google/gemini-cli", join("bundle", "gemini.js")) ??
   resolveGlobalPackageEntry("@google/gemini-cli", join("bundle", "gemini.js"));
@@ -147,7 +170,7 @@ const recipes: AgentRecipe[] = [
     vendor: "Claude",
     icon: "/vendor-icons/claude.svg",
     tested: true,
-    note: "Adapter around the Claude Agent SDK; uses the machine's Claude Code login and settings.",
+    note: "Adapter around the Claude Agent SDK, driving the Claude Code installed on this machine with its login and settings.",
     modelPresets: ["haiku", "sonnet", "opus", "default"],
     defaultModel: "sonnet",
     effortPresets: ["low", "medium", "high", "default"],
@@ -155,13 +178,13 @@ const recipes: AgentRecipe[] = [
     modePresets: ["default", "acceptEdits", "plan", "auto", "bypassPermissions"],
     defaultMode: "default",
     bypassMode: "bypassPermissions",
-    unavailableReason: claudeEntry ? null : "@agentclientprotocol/claude-agent-acp is not installed",
-    installedAt: claudeEntry,
-    installHint: "npm install (bundled with viberoom); needs a Claude Code login on this machine",
+    unavailableReason: claudeExe ? null : "Claude Code not found",
+    installedAt: claudeExe,
+    installHint: "install Claude Code (npm install -g @anthropic-ai/claude-code, or the native installer) and log in with `claude`",
     build: ({ model }) => ({
       command: process.execPath,
-      args: [claudeEntry ?? ""],
-      env: model && model !== "default" ? { ANTHROPIC_MODEL: model } : undefined,
+      args: [claudeAdapter],
+      env: { CLAUDE_CODE_EXECUTABLE: claudeExe ?? "", ...(model && model !== "default" ? { ANTHROPIC_MODEL: model } : {}) },
     }),
   },
   {
@@ -170,7 +193,7 @@ const recipes: AgentRecipe[] = [
     vendor: "Codex",
     icon: "/vendor-icons/codex.svg",
     tested: true,
-    note: "Adapter around the Codex App Server (bundled Codex CLI); uses the machine's Codex login (~/.codex) or CODEX_API_KEY. Mode 'agent' edits the working directory without asking; 'read-only' for a chat-only participant.",
+    note: "Adapter around the Codex App Server of the Codex CLI installed on this machine; uses its login (~/.codex) or CODEX_API_KEY. Mode 'agent' edits the working directory without asking; 'read-only' for a chat-only participant.",
     modelPresets: ["gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
     defaultModel: "gpt-5.4-mini",
     effortPresets: ["low", "medium", "high", "xhigh"],
@@ -178,13 +201,13 @@ const recipes: AgentRecipe[] = [
     modePresets: ["read-only", "agent", "agent-full-access"],
     defaultMode: "read-only",
     bypassMode: "agent-full-access",
-    unavailableReason: codexEntry ? null : "@agentclientprotocol/codex-acp is not installed",
-    installedAt: codexEntry,
-    installHint: "npm install (bundled with viberoom); needs a Codex login (codex login) or CODEX_API_KEY",
+    unavailableReason: codexExe ? null : "Codex CLI not found",
+    installedAt: codexExe,
+    installHint: "install Codex (npm install -g @openai/codex) and log in with `codex login`",
     build: () => ({
       command: process.execPath,
-      args: [codexEntry ?? ""],
-      env: { NO_BROWSER: "1" },
+      args: [codexAdapter],
+      env: { CODEX_PATH: codexExe ?? "", NO_BROWSER: "1" },
     }),
   },
   {

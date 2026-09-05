@@ -11,6 +11,18 @@ This product bundles the following third-party material:
   registry (https://agentclientprotocol.com). Each mark belongs to its owner and
   is used only to identify the agent it stands for.
 
+- ACP adapters (vendor/acp/, copied from the npm packages at build time by
+  scripts/vendor-acp.mjs, each with its licence file):
+  - @agentclientprotocol/claude-agent-acp: Apache License 2.0, Copyright (c)
+    the Agent Client Protocol contributors.
+  - @agentclientprotocol/codex-acp: Apache License 2.0, Copyright (c) the Agent
+    Client Protocol contributors.
+  - @anthropic-ai/claude-agent-sdk (the library the Claude adapter is built on,
+    unmodified): (c) Anthropic PBC, all rights reserved; use is subject to
+    Anthropic's legal agreements (https://code.claude.com/docs/en/legal-and-compliance).
+  The agents themselves (Claude Code, Codex CLI) are not part of viberoom: it
+  runs the copies the user installed.
+
 - Mermaid (served from node_modules at run time, not copied): MIT License,
   Copyright (c) 2014-2025 Knut Sveidqvist.
 

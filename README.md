@@ -5,29 +5,106 @@
 <h1 align="center">viberoom</h1>
 
 <p align="center"><strong>One chat, many coding agents.</strong><br>
-Open a room, summon Claude, Codex, Gemini, Cursor, OpenCode or Copilot into it, and let them talk to you and to each other.</p>
+Open a room, summon the agents you already have, give each one a role, and let them work it out with you and with each other.</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/viberoom"><img src="https://img.shields.io/npm/v/viberoom?color=6c63ff&label=npm" alt="npm"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%E2%89%A5%2022-6c63ff" alt="Node 22+"></a>
-  <a href="https://agentclientprotocol.com"><img src="https://img.shields.io/badge/protocol-ACP-6c63ff" alt="Agent Client Protocol"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-6c63ff" alt="AGPL-3.0"></a>
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/conversation.png" width="900" alt="Three vibemates working through a task together">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/conversation.png" width="960" alt="Three vibemates arguing out a dedupe rule in a room">
 </p>
 
 <p align="center">
   <b>Claude</b> &nbsp;·&nbsp; <b>Codex</b> &nbsp;·&nbsp; <b>Gemini</b> &nbsp;·&nbsp; <b>Cursor</b> &nbsp;·&nbsp; <b>OpenCode</b> &nbsp;·&nbsp; <b>GitHub Copilot</b><br>
-  <sub>every agent you already have, each with its own login, in one room</sub>
+  <sub>whichever of them you have installed, with your own logins, in one room</sub>
 </p>
 
-## Why
+<br>
 
-A single agent is a conversation. Several agents in one room are a **team**: one defines what
-"done" means, one builds, one reviews, and you steer. viberoom gives that team a place to meet, a
-shared folder to work in, and rules for who speaks when.
+## The idea
+
+One agent is a conversation. Three agents in one room are a **team**: one decides what "done" means,
+one builds it, one says no. You set the roles and the rules, then talk to the room the way you would
+talk to people. They answer you, they answer each other, and you can stop all of them with one click.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/art/room.svg" width="960" alt="What a room is: a folder and a topic, vibemates with a character, rules and skills">
+</p>
+
+<br>
+
+## Give them roles
+
+A vibemate is any agent on your machine plus a character: a **vibename**, a **vibeface**, a one-line
+**vibersona** everyone sees, and a private **vibio** only this vibemate reads. Pick the model, the
+effort and how much it may do on its own. Three vibemates from the same agent with three different
+vibios behave like three different people, which is exactly the point.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/summon.png" width="960" alt="Summon a vibemate: agent, model, effort, mode, name, face and a private brief">
+</p>
+
+<br>
+
+## Set the room rules
+
+Rules are plain sentences. Who talks to whom, how long a reply may be, what happens on step three.
+Type `@` and the name becomes a live reference: rename the vibemate and the rule follows. Every
+vibemate gets the rules as instructions, so the room runs the way you wrote it down.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/rules.png" width="820" alt="Room rules with live @references to the vibemates">
+</p>
+
+Here is what a five-line ruleset buys you: a handoff chain that runs on its own, with the human at
+both ends.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/art/handoff.svg" width="960" alt="One task, four hands: you to Pip to Nova to Rex, review loop, report back">
+</p>
+
+<br>
+
+## Teach them skills
+
+A skill is a reusable instruction with a name. Keep them in one library, attach them to the vibemates
+that need them, and run one with `/name` in the chat. A vibemate can write a skill too, and the
+library marks it as theirs until you have read it.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/skills.png" width="820" alt="The skills library: a skill written by a vibemate, and a built-in one">
+</p>
+
+<br>
+
+## Talk to all, or to one
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/art/ways-to-talk.svg" width="960" alt="Four ways to speak: to everyone, to one with @, run a skill with /, and Hush">
+</p>
+
+Write to the room and every vibemate answers, each after a short pause so replies do not trip over
+each other. `@Name` one of them and the rest read along. Vibemates address each other the same way,
+and a hop limit keeps a two-agent argument from running all night. **Hush** stops every running reply
+at once; the room stays quiet until you write again.
+
+<br>
+
+## What you get back
+
+Replies come as proper text: lists, tables, code. A file path in a reply opens the file; a `.md` or
+`.csv` opens right in the room, rendered or as a table. A path with a line number opens your editor
+at that line. A diagram block becomes a diagram. Change one of your own messages after the fact and
+the vibemates are told, or the conversation rewinds to that point.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/home.png" width="960" alt="The home page: welcome back, your rooms, what you can do here">
+</p>
+
+<br>
 
 ## Sixty seconds to a room
 
@@ -41,76 +118,31 @@ viberoom
 3. **Summon vibemates.** Pick an agent, name it, give it a character. Repeat.
 4. **Say hello.** Everyone answers in turn. `@Name` one of them, `/name` runs a skill.
 
-## Highlights
+The menu that appears can put an icon on your desktop, open viberoom in a window of its own, or open
+it in a browser tab. Later, `npm install -g viberoom@latest` and the next start picks up the new version.
 
-- **Rooms.** A room is a folder and a topic. Every vibemate works in that folder, and the history
-  stays with the room. Move the folder and the vibemates move with it.
-- **Vibemates.** Summon any installed agent, give it a name, a one-line persona, a private brief and
-  a face. Pick the model, the effort and the permission mode per vibemate.
-- **Talk to all, or to one.** Write to the room and everyone answers in turn; `@Name` one of them and
-  the others listen. Vibemates read each other's replies and address each other the same way.
-- **Turn taking.** Every addressed vibemate answers at once by default, each after a short random
-  delay so replies do not cross; or one at a time, the others waiting their turn. A hop limit keeps
-  agent-to-agent chatter from running away.
-- **Hush.** One click stops every running reply; the vibemates stay quiet until you write again.
-- **Skills.** Reusable instructions in a library. Attach them to vibemates, invoke one with `/name`,
-  or let a vibemate write its own.
-- **Markdown, links, files and diagrams.** Replies render as Markdown: lists, tables, code. Links and
-  file paths open on your machine; a `.md` or `.csv` path opens right in the room (rendered, or as a
-  table); a path with a `:line` opens in your editor at that line; a ```` ```mermaid ```` block
-  becomes a diagram.
-- **Edit a message.** Change what you said: the vibemates are told, or the conversation is rewound.
-- **A desktop app.** A hidden hub, an app window of its own, a Start Menu / Dock / desktop icon.
+<br>
 
-## A tour
+## Small things you will like
 
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/welcome.png" alt="Welcome: set your vibe"><br>
-      <sub><strong>Your vibe.</strong> The first start asks how the vibemates should know you: a name, a face, a line about you.</sub>
-    </td>
-    <td width="50%" valign="top">
-      <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/home.png" alt="Home page"><br>
-      <sub><strong>Home.</strong> Open a room, come back to the last ones, and see what a room can do.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/summon.png" alt="Summon a vibemate"><br>
-      <sub><strong>Summon a vibemate.</strong> Pick the agent, the model, the effort and the permission mode; name it and give it a face.</sub>
-    </td>
-    <td width="50%" valign="top">
-      <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/vibemate.png" alt="A vibemate's persona"><br>
-      <sub><strong>Its character.</strong> A public one-liner under the name, and a private brief only this vibemate reads.</sub>
-    </td>
-  </tr>
-</table>
+- **Rooms remember.** The history stays with the room. Move the folder and the vibemates move with it.
+- **The window remembers.** Where it was, how big, which screen. Unplug that screen and it walks back.
+- **Nothing leaves your machine** except what each agent sends to its own provider. viberoom never
+  sees your keys; every agent keeps its own login.
+- **Edit a message.** Fix what you said; the vibemates get the memo, or the conversation rewinds.
+- **Search the room.** Everything anyone said, one search box.
+- **For geeks.** Every panel folds its technical settings behind a toggle. You never have to open it.
 
-## Requirements
+<br>
+
+## What you need
 
 - Node.js 22 or newer.
-- At least one coding agent installed on this machine. viberoom bundles the ACP adapters for Claude
-  Code and Codex and finds Gemini CLI, Cursor, OpenCode and Copilot when they are installed. Each
-  agent uses its own login and subscription; viberoom never sees your keys.
-- A Chromium-based browser (Chrome, Edge, Brave) for the app window; any modern browser for a tab.
+- At least one coding agent installed and logged in: Claude Code, Codex, Gemini CLI, Cursor, OpenCode
+  or GitHub Copilot. viberoom finds the ones you have and offers only those. It installs none of them.
+- A browser. Chrome, Edge or Brave for the app window; anything modern for a tab.
 
-## Install
-
-`npm install -g viberoom`, then `viberoom`. The menu that appears can install a desktop icon, open the app window, or open a browser tab
-(Start Menu on Windows, `~/Applications/viberoom.app` on macOS, an applications-menu entry on Linux).
-Upgrade with `npm install -g viberoom@latest`; the next start replaces the running hub.
-
-From a clone instead:
-
-```sh
-git clone https://github.com/todor-rusev/viberoom.git
-cd viberoom
-npm run install:global
-```
-
-`install:global` builds the project, links the `viberoom` command and creates the launcher; later,
-`npm run update` rebuilds and replaces the running hub.
+<br>
 
 ## Use
 
@@ -124,38 +156,29 @@ viberoom logs       the background hub's log
 ```
 
 `Enter` sends, `Shift+Enter` is a new line, `@Name` addresses one vibemate, `/name` invokes a skill.
+Your data lives in `~/.viberoom` (or `$VIBEROOM_DATA_DIR`): settings, rooms with their history,
+skills and the log.
 
-Data lives in `~/.viberoom` (or `$VIBEROOM_DATA_DIR`): settings, rooms with their history, skills,
-transcripts and the hub log. Nothing leaves your machine except what each agent sends to its own
-provider.
-
-## Settings worth knowing
-
-- **Vibemates act without asking.** On by default: agents edit files and run commands in the room's
-  folder without a permission prompt. Turn it off to be asked, or change it per vibemate.
-- **Custom rules.** One rule per line in the room's panel, handed to every vibemate as instructions:
-  who speaks to whom, how long a reply may be, where code goes.
-- **Language.** Vibemates follow the language you write in, or a fixed one for the room.
-- **Reply delay.** With two or more vibemates in a room, each waits a random few seconds before it
-  answers. A vibemate can override it; alone it answers at once.
-- **Open files at a line.** Which editor gets `path:line` clicks: the first one found (VS Code,
-  Cursor, Windsurf, Zed, Sublime Text, Notepad++, JetBrains) or your own command.
-- **Diagrams.** Colours for Mermaid diagrams: multicolour boxes by default, or a single tone.
-- **For geeks.** Every panel folds its technical settings behind a "for geeks" toggle.
+<br>
 
 ## Development
 
 ```sh
+git clone https://github.com/todor-rusev/viberoom.git
+cd viberoom
 npm install
-npm run build        # TypeScript to dist/
-node dist/main.js    # run the hub in this terminal
+npm run build        # then: node dist/main.js
 ```
 
-The web UI in `ui/` is plain HTML, CSS and JavaScript served by the hub; reload the page to see a
-change. `scripts/render-icon.mjs` renders the app icon from `assets/icon-vector.svg`.
+`npm run install:global` builds, links the `viberoom` command and creates the launcher; later,
+`npm run update` rebuilds and replaces the running hub.
 
 ## License
 
-GNU Affero General Public License v3.0 or later. You may use, change and share viberoom; if you
-distribute a changed version, or run one as a service for others, share your changes under the same
-licence. See `LICENSE` and `NOTICE` (third-party fonts and icons).
+AGPL-3.0-or-later. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+<br>
+
+<p align="center">
+  <sub>🎬 &nbsp;Idea, screenplay and direction of viberoom: <strong>Silviya Ruzhina</strong></sub>
+</p>

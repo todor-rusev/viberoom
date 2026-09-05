@@ -11,6 +11,7 @@ import { Logger } from "./log.js";
 import { startServer, type BuildInfo, type RunningServer } from "./server.js";
 import {
   appWindowArgs,
+  recordedWindowPlacement,
   savedWindowPlacement,
   findChromium,
   isProcessAlive,
@@ -197,10 +198,11 @@ function openWindow(url: string, options: CliOptions, log: Logger): void {
     const fresh = !existsSync(profile);
     mkdirSync(profile, { recursive: true });
     reapHiddenBrowser(profile, log);
-    const placement = fresh ? null : savedWindowPlacement(profile);
+    const recorded = fresh ? null : recordedWindowPlacement(options.dataDir);
+    const placement = recorded ?? (fresh ? null : savedWindowPlacement(profile));
     const args = appWindowArgs(url, profile, fresh, placement);
     const where = placement
-      ? `last seen at ${placement.left},${placement.top} ${placement.width}x${placement.height}${placement.maximized ? " maximized" : ""}${placement.workArea ? ` on the screen ${placement.workArea.left},${placement.workArea.top}-${placement.workArea.right},${placement.workArea.bottom}` : ""}; flags ${args.filter((a) => a.startsWith("--window-")).join(" ")}`
+      ? `last seen (${recorded ? "window's own report" : "browser profile"}) at ${placement.left},${placement.top} ${placement.width}x${placement.height}${placement.maximized ? " maximized" : ""}${placement.workArea ? ` on the screen ${placement.workArea.left},${placement.workArea.top}-${placement.workArea.right},${placement.workArea.bottom}` : ""}; flags ${args.filter((a) => a.startsWith("--window-")).join(" ")}`
       : "no saved placement";
     log.info(`opening the app window with ${chromium}: ${where}`);
     try {

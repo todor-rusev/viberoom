@@ -151,6 +151,27 @@ export function savedWindowPlacement(profileDir: string): WindowPlacement | null
   }
 }
 
+export function windowFilePath(dataDir: string): string {
+  return join(dataDir, "window.json");
+}
+
+export function recordedWindowPlacement(dataDir: string): WindowPlacement | null {
+  try {
+    const o = JSON.parse(readFileSync(windowFilePath(dataDir), "utf8")) as Record<string, unknown>;
+    const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+    if (!num(o.left) || !num(o.top) || !num(o.width) || !num(o.height)) return null;
+    if (o.width < 200 || o.height < 150) return null;
+    const placement: WindowPlacement = { left: o.left, top: o.top, width: o.width, height: o.height, maximized: !!o.maximized };
+    const s = o.screen as Record<string, unknown> | undefined;
+    if (s && num(s.left) && num(s.top) && num(s.width) && num(s.height) && s.width >= 200 && s.height >= 150) {
+      placement.workArea = { left: s.left, top: s.top, right: s.left + s.width, bottom: s.top + s.height };
+    }
+    return placement;
+  } catch {
+    return null;
+  }
+}
+
 export function windowFlags(placement: WindowPlacement): string[] {
   const wa = placement.workArea;
   if (placement.maximized && wa && wa.right - wa.left >= 200 && wa.bottom - wa.top >= 150) {

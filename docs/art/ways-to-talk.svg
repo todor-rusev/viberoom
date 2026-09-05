@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="246" viewBox="0 0 960 246" font-family="Nunito, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6a6af7"/>
+      <stop offset="1" stop-color="#4f4fe0"/>
+    </linearGradient>
+    <filter id="s" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#1c1b33" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+  <rect width="960" height="246" rx="24" fill="#f6f6fb"/>
+  <text x="32" y="44" font-size="13" font-weight="800" fill="#8f8fb0" letter-spacing="2">FOUR WAYS TO SPEAK</text>
+  <g transform="translate(32,68)">
+    <rect width="208" height="148" rx="18" fill="#fff" filter="url(#s)"/>
+    <rect x="16" y="16" width="150" height="30" rx="15" fill="url(#g)"/>
+    <text x="30" y="36" font-size="13" font-weight="800" fill="#fff">Fix the login bug</text>
+    <g font-size="20"><text x="18" y="86">🐸</text><text x="50" y="86">🦉</text><text x="82" y="86">🤠</text></g>
+    <text x="16" y="118" font-size="12" font-weight="800" fill="#2c2b4a">Everyone answers,</text>
+    <text x="16" y="120" font-size="12" font-weight="700" fill="#8f8fb0" dy="16">one after another</text>
+  </g>
+  <g transform="translate(262,68)">
+    <rect width="208" height="148" rx="18" fill="#fff" filter="url(#s)"/>
+    <rect x="16" y="16" width="170" height="30" rx="15" fill="url(#g)"/>
+    <text x="30" y="36" font-size="13" font-weight="800" fill="#fff"><tspan fill="#ffd166">@Rex</tspan> is this safe?</text>
+    <g font-size="20"><text x="18" y="86" opacity="0.25">🐸</text><text x="50" y="86" opacity="0.25">🦉</text><text x="82" y="86">🤠</text></g>
+    <text x="16" y="118" font-size="12" font-weight="800" fill="#2c2b4a">Only Rex answers,</text>
+    <text x="16" y="120" font-size="12" font-weight="700" fill="#8f8fb0" dy="16">the others read along</text>
+  </g>
+  <g transform="translate(492,68)">
+    <rect width="208" height="148" rx="18" fill="#fff" filter="url(#s)"/>
+    <rect x="16" y="16" width="176" height="30" rx="15" fill="url(#g)"/>
+    <text x="30" y="36" font-size="13" font-weight="800" fill="#fff"><tspan fill="#ffd166">/release-notes</tspan> v0.4</text>
+    <g font-size="20"><text x="18" y="86">🧩</text></g>
+    <text x="52" y="82" font-size="12" font-weight="800" fill="#5b5bf0">a skill runs</text>
+    <text x="16" y="118" font-size="12" font-weight="800" fill="#2c2b4a">Whoever has the skill</text>
+    <text x="16" y="120" font-size="12" font-weight="700" fill="#8f8fb0" dy="16">follows its instructions</text>
+  </g>
+  <g transform="translate(722,68)">
+    <rect width="208" height="148" rx="18" fill="#fff" filter="url(#s)"/>
+    <rect x="16" y="16" width="112" height="30" rx="15" fill="#fff0ee" stroke="#f7c8c0"/>
+    <text x="30" y="36" font-size="13" font-weight="800" fill="#c2410c">🤫 Hush</text>
+    <g font-size="20"><text x="18" y="86">🐸</text><text x="50" y="86">🦉</text><text x="82" y="86">🤠</text></g>
+    <g font-size="10" font-weight="800" fill="#c2410c"><text x="30" y="98">zzz</text><text x="62" y="98">zzz</text><text x="94" y="98">zzz</text></g>
+    <text x="16" y="118" font-size="12" font-weight="800" fill="#2c2b4a">Everyone stops mid-word</text>
+    <text x="16" y="120" font-size="12" font-weight="700" fill="#8f8fb0" dy="16">until you write again</text>
+  </g>
+</svg>

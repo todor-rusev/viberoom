@@ -182,7 +182,7 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
     .filter((l) => l.length > 0);
   if (custom.length) {
     lines.push("");
-    lines.push(`Custom rules of this room (set by ${human}):`);
+    lines.push(`Room rules (set by ${human}):`);
     for (const rule of custom) lines.push(`- ${rule}`);
   }
   lines.push("");

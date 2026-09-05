@@ -60,6 +60,8 @@
     chatInfoBtn: $("#chat-info-btn"),
     search: $("#search"),
     messages: $("#messages"),
+    jumpLatest: $("#jump-latest"),
+    detailsHandle: $("#details-handle"),
     mentionMenu: $("#mention-menu"),
     emojiMenu: $("#emoji-menu"),
     emojiBtn: $("#emoji-btn"),
@@ -522,6 +524,7 @@
   }
   function scrollToBottom() {
     els.messages.scrollTop = els.messages.scrollHeight;
+    els.jumpLatest.hidden = true;
   }
   function avatar(p, size, opts) {
     return window.Avatars.avatarHtml(p, size, Object.assign({ recipes: state.recipes }, opts || {}));
@@ -837,7 +840,7 @@
         <section class="hero">
           <div class="hero-text">
             <div class="hero-eyebrow">viberoom</div>
-            <h1>Welcome back, ${esc(name)} 👋</h1>
+            <h1>${state.freshVibe ? "Welcome" : "Welcome back"}, ${esc(name)} 👋</h1>
             <p>One chat, many coding agents. Summon your vibemates into a room, talk to all of them at once, and let them talk to each other.</p>
             <div class="hero-actions">
               <button class="btn cta hero-cta" id="home-open-room">${ic("plus")}Open a room</button>
@@ -1681,7 +1684,7 @@
         ${field("Emoji", `<div id="rp-emoji-picker"></div><input type="text" id="rp-emoji" maxlength="8" value="${esc(rs.emoji || "")}" placeholder="custom emoji (optional)">`, "A face for the room, next to its name.")}
         ${field("Topic", `<input type="text" id="rp-topic" maxlength="2000" value="${esc(rs.topic || "")}" placeholder="what this room is about (optional)">`)}
         ${field("Folder", `<input type="text" id="rp-dir" maxlength="1000" value="${esc(room.dir)}" spellcheck="false">`, "Where the vibemates read and write. Changing it restarts them in the new folder; they replay the last messages.")}
-        <label class="field mention-host"><span class="label">Custom rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">One rule per line; type @ to reference a participant.</span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></label>
+        <label class="field mention-host"><span class="label">Room rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">One rule per line; type @ to reference a participant.</span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></label>
         ${field("Language", `<input type="text" id="rp-lang" value="${esc(lang)}" placeholder="follow the human (default), or e.g. English">`)}
       </div>
       <div class="section">
@@ -2457,8 +2460,10 @@
   els.pfForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
+      if (!(state.settings || {}).profileCompleted) state.freshVibe = true;
       await post("/api/settings", { humanName: els.pfName.value.trim(), humanAvatar: els.pfAvatar.value.trim(), humanDescription: els.pfDesc.value.trim(), profileCompleted: true });
       closeDialog(els.pfDialog);
+      if (state.view === "home") renderHome();
       toast(`Welcome, ${els.pfName.value.trim()}. Open a room and summon a vibemate.`, "info");
     } catch (error) {
       els.pfError.textContent = error.message;
@@ -3055,6 +3060,11 @@
     els.sideToggle.innerHTML = ic(open ? "collapse" : "expand");
   }
   els.sideToggle.addEventListener("click", () => setSideOpen(els.app.classList.contains("side-collapsed")));
+  els.messages.addEventListener("scroll", () => {
+    els.jumpLatest.hidden = nearBottom();
+  });
+  els.jumpLatest.addEventListener("click", () => els.messages.scrollTo({ top: els.messages.scrollHeight, behavior: "smooth" }));
+  els.detailsHandle.addEventListener("click", closeDetails);
   setSideOpen(recall("sideOpen") !== "0");
   $("#rail-logo").addEventListener("click", () => setView("home"));
   $("#rail-new-room").addEventListener("click", openRoomDialog);
@@ -3167,6 +3177,41 @@
     if (event.key === "Escape" && state.detailsOpen && !document.querySelector("dialog[open]") && !editingInDetails()) closeDetails();
   });
   window.addEventListener("beforeunload", () => remember("view", state.view));
+
+  if (window.matchMedia("(display-mode: standalone)").matches) {
+    const placement = () => ({
+      left: window.screenX,
+      top: window.screenY,
+      width: window.outerWidth,
+      height: window.outerHeight,
+      maximized: window.outerWidth >= screen.availWidth - 2 && window.outerHeight >= screen.availHeight - 2,
+      screen: { left: screen.availLeft, top: screen.availTop, width: screen.availWidth, height: screen.availHeight },
+    });
+    const minimized = (p) => p.left <= -30000 || p.top <= -30000 || p.width < 100 || p.height < 100;
+    const overlaps = (p) => p.left < p.screen.left + p.screen.width - 40 && p.left + p.width > p.screen.left + 40 && p.top < p.screen.top + p.screen.height - 40 && p.top + p.height > p.screen.top;
+    const first = placement();
+    if (!minimized(first) && !overlaps(first)) {
+      window.resizeTo(Math.min(first.width, first.screen.width), Math.min(first.height, first.screen.height));
+      window.moveTo(first.screen.left, first.screen.top);
+    }
+    let lastReport = "";
+    let reportTimer = null;
+    const report = (keepalive) => {
+      const p = placement();
+      if (minimized(p)) return;
+      const json = JSON.stringify(p);
+      if (json === lastReport) return;
+      lastReport = json;
+      fetch("/api/window", { method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: json, keepalive }).catch(() => {});
+    };
+    const scheduleReport = () => {
+      clearTimeout(reportTimer);
+      reportTimer = setTimeout(() => report(false), 800);
+    };
+    window.addEventListener("resize", scheduleReport);
+    setInterval(scheduleReport, 3000);
+    window.addEventListener("pagehide", () => report(true));
+  }
 
   connect();
 })();
