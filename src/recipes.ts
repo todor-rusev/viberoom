@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type AgentTypeId = "claude" | "codex" | "gemini" | "cursor" | "opencode" | "copilot" | "hermes" | "grok" | "grok-full-access" | "antigravity";
+export type AgentTypeId = "claude" | "codex" | "gemini" | "cursor" | "opencode" | "copilot" | "hermes" | "grok" | "grok-full-access" | "antigravity" | "antigravity-full-access";
 
 export interface LaunchSpec {
   command: string;
@@ -402,7 +402,7 @@ const recipes: AgentRecipe[] = [
     vendor: "Antigravity",
     icon: "/vendor-icons/antigravity.svg",
     tested: false,
-    note: "Third-party ACP adapter (agy-acp, not published or endorsed by Google) wrapping the Google Antigravity CLI (agy). Google's own FAQ states third-party tools accessing Antigravity violate its Terms of Service and may lead to account suspension - use only on a secondary/test account. Mode 'accept-edits' applies file edits without interactive review; 'plan' is read-only.",
+    note: "Third-party ACP adapter (agy-acp, not published or endorsed by Google) wrapping the Google Antigravity CLI (agy). Google's own FAQ states third-party tools accessing Antigravity violate its Terms of Service and may lead to account suspension - use only on a secondary/test account. Mode 'accept-edits' applies file edits without interactive review but still asks for other tool calls (e.g. shell commands); 'plan' is read-only. Use the 'Antigravity, full access' recipe if you don't want to be asked for anything.",
     modelPresets: [],
     defaultModel: null,
     effortPresets: ["low", "medium", "high"],
@@ -416,6 +416,28 @@ const recipes: AgentRecipe[] = [
     build: () => ({
       command: process.execPath,
       args: [agyAcpEntry ?? ""],
+    }),
+  },
+  {
+    id: "antigravity-full-access",
+    label: "Antigravity, full access (agy --dangerously-skip-permissions)",
+    vendor: "Antigravity",
+    icon: "/vendor-icons/antigravity.svg",
+    tested: false,
+    note: "Same as Antigravity, but launched with --dangerously-skip-permissions: auto-approves every tool call and file edit for the whole session (agy's own flag name, not ours), no exceptions, no way to ask first with this recipe. Third-party adapter, same Terms-of-Service caveat as the base Antigravity recipe - use only on a secondary/test account.",
+    modelPresets: [],
+    defaultModel: null,
+    effortPresets: ["low", "medium", "high"],
+    defaultEffort: null,
+    modePresets: ["default"],
+    defaultMode: "default",
+    bypassMode: "default",
+    unavailableReason: agyAcpEntry ? null : "agy-acp not found",
+    installedAt: agyAcpEntry,
+    installHint: "npm install -g agy-acp (installs the Antigravity CLI itself on first run if missing)",
+    build: () => ({
+      command: process.execPath,
+      args: [agyAcpEntry ?? "", "--dangerously-skip-permissions"],
     }),
   },
 ];
