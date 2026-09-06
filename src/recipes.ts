@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type AgentTypeId = "claude" | "codex" | "gemini" | "cursor" | "opencode" | "copilot";
+export type AgentTypeId = "claude" | "codex" | "gemini" | "cursor" | "opencode" | "copilot" | "hermes" | "grok" | "grok-full-access" | "antigravity" | "antigravity-full-access";
 
 export interface LaunchSpec {
   command: string;
@@ -151,6 +151,27 @@ function resolveCodex(): string | null {
   return resolveGlobalNpmBin("codex") ?? resolveOnPath(["codex"]);
 }
 
+function resolveHermes(): string | null {
+  const onPath = resolveOnPath(["hermes"]);
+  if (onPath && !/\.(cmd|bat)$/i.test(onPath)) return onPath;
+  const native = join(homedir(), ".local", "bin", isWindows ? "hermes.exe" : "hermes");
+  return existsSync(native) ? native : null;
+}
+
+function resolveGrok(): string | null {
+  const onPath = resolveOnPath(["grok"]);
+  if (onPath && !/\.(cmd|bat)$/i.test(onPath)) return onPath;
+  const native = join(homedir(), ".grok", "bin", isWindows ? "grok.exe" : "grok");
+  return existsSync(native) ? native : null;
+}
+
+function resolveAgyAcp(): string | null {
+  return (
+    resolveGlobalPackageEntry("agy-acp", join("dist", "main.js")) ??
+    resolvePackageEntry("agy-acp", join("dist", "main.js"))
+  );
+}
+
 const vendorDir = join(dirname(fileURLToPath(import.meta.url)), "..", "vendor", "acp");
 const claudeAdapter = join(vendorDir, "claude-agent-acp", "dist", "index.js");
 const codexAdapter = join(vendorDir, "codex-acp", "dist", "index.js");
@@ -162,6 +183,9 @@ const geminiEntry =
 const cursorAgent = resolveCursorAgent();
 const openCodeExe = resolveOpenCode();
 const copilotExe = resolveCopilot();
+const hermesExe = resolveHermes();
+const grokExe = resolveGrok();
+const agyAcpEntry = resolveAgyAcp();
 
 const recipes: AgentRecipe[] = [
   {
@@ -304,6 +328,116 @@ const recipes: AgentRecipe[] = [
     build: ({ model }) => ({
       command: copilotExe ?? "",
       args: ["--acp", ...(model ? ["--model", model] : [])],
+    }),
+  },
+  {
+    id: "hermes",
+    label: "Hermes (hermes acp)",
+    vendor: "Hermes",
+    icon: "/vendor-icons/hermes.svg",
+    tested: true,
+    note: "Hermes' own native ACP mode; uses this machine's configured Hermes provider/model (see `hermes setup`). Mode 'dont_ask' edits files and runs commands without asking; 'accept_edits' auto-allows workspace/tmp edits but still asks for sensitive paths.",
+    modelPresets: [],
+    defaultModel: null,
+    effortPresets: [],
+    defaultEffort: null,
+    modePresets: ["default", "accept_edits", "dont_ask"],
+    defaultMode: "default",
+    bypassMode: "dont_ask",
+    unavailableReason: hermesExe ? null : "Hermes not found",
+    installedAt: hermesExe,
+    installHint: "install Hermes (see hermes.bot) and run `hermes setup` to configure a provider",
+    build: () => ({
+      command: hermesExe ?? "",
+      args: ["acp", "--accept-hooks"],
+    }),
+  },
+  {
+    id: "grok",
+    label: "Grok (grok agent stdio)",
+    vendor: "Grok",
+    icon: "/vendor-icons/grok.svg",
+    tested: true,
+    note: "xAI's Grok Build CLI in native ACP mode; uses this machine's SuperGrok/X Premium+ login (grok login) or XAI_API_KEY. Grok reports no session-mode list over ACP, so tool permission is decided by --always-approve at launch: the 'ask first' recipe always prompts, the '-full-access' recipe below never does, with no in-session switch between the two.",
+    modelPresets: [],
+    defaultModel: null,
+    effortPresets: [],
+    defaultEffort: null,
+    modePresets: ["default"],
+    defaultMode: "default",
+    bypassMode: null,
+    unavailableReason: grokExe ? null : "Grok CLI not found",
+    installedAt: grokExe,
+    installHint: "npm install -g @xai-official/grok, then `grok login` (SuperGrok/X Premium+)",
+    build: () => ({
+      command: grokExe ?? "",
+      args: ["agent", "stdio"],
+    }),
+  },
+  {
+    id: "grok-full-access",
+    label: "Grok, full access (grok agent stdio --always-approve)",
+    vendor: "Grok",
+    icon: "/vendor-icons/grok.svg",
+    tested: true,
+    note: "Same as Grok, but launched with --always-approve: every tool call is auto-approved from the first turn, no exceptions, no way to ask first with this recipe. Use the plain Grok recipe if you want to be asked.",
+    modelPresets: [],
+    defaultModel: null,
+    effortPresets: [],
+    defaultEffort: null,
+    modePresets: ["default"],
+    defaultMode: "default",
+    bypassMode: "default",
+    unavailableReason: grokExe ? null : "Grok CLI not found",
+    installedAt: grokExe,
+    installHint: "npm install -g @xai-official/grok, then `grok login` (SuperGrok/X Premium+)",
+    build: () => ({
+      command: grokExe ?? "",
+      args: ["agent", "--always-approve", "stdio"],
+    }),
+  },
+  {
+    id: "antigravity",
+    label: "Antigravity (agy-acp)",
+    vendor: "Antigravity",
+    icon: "/vendor-icons/antigravity.svg",
+    tested: false,
+    note: "Third-party ACP adapter (agy-acp, not published or endorsed by Google) wrapping the Google Antigravity CLI (agy). Google's own FAQ states third-party tools accessing Antigravity violate its Terms of Service and may lead to account suspension - use only on a secondary/test account. Mode 'accept-edits' applies file edits without interactive review but still asks for other tool calls (e.g. shell commands); 'plan' is read-only. Use the 'Antigravity, full access' recipe if you don't want to be asked for anything.",
+    modelPresets: [],
+    defaultModel: null,
+    effortPresets: ["low", "medium", "high"],
+    defaultEffort: null,
+    modePresets: ["default", "accept-edits", "plan"],
+    defaultMode: "default",
+    bypassMode: "accept-edits",
+    unavailableReason: agyAcpEntry ? null : "agy-acp not found",
+    installedAt: agyAcpEntry,
+    installHint: "npm install -g agy-acp (installs the Antigravity CLI itself on first run if missing)",
+    build: () => ({
+      command: process.execPath,
+      args: [agyAcpEntry ?? ""],
+    }),
+  },
+  {
+    id: "antigravity-full-access",
+    label: "Antigravity, full access (agy --dangerously-skip-permissions)",
+    vendor: "Antigravity",
+    icon: "/vendor-icons/antigravity.svg",
+    tested: false,
+    note: "Same as Antigravity, but launched with --dangerously-skip-permissions: auto-approves every tool call and file edit for the whole session (agy's own flag name, not ours), no exceptions, no way to ask first with this recipe. Third-party adapter, same Terms-of-Service caveat as the base Antigravity recipe - use only on a secondary/test account.",
+    modelPresets: [],
+    defaultModel: null,
+    effortPresets: ["low", "medium", "high"],
+    defaultEffort: null,
+    modePresets: ["default"],
+    defaultMode: "default",
+    bypassMode: "default",
+    unavailableReason: agyAcpEntry ? null : "agy-acp not found",
+    installedAt: agyAcpEntry,
+    installHint: "npm install -g agy-acp (installs the Antigravity CLI itself on first run if missing)",
+    build: () => ({
+      command: process.execPath,
+      args: [agyAcpEntry ?? "", "--dangerously-skip-permissions"],
     }),
   },
 ];
