@@ -321,6 +321,7 @@ interface PermissionEntry extends PendingPermission {
 }
 
 const COLORS = ["#6d5dfc", "#16a34a", "#d97706", "#dc2626", "#0891b2", "#be185d", "#4d7c0f", "#7c3aed"];
+const ROLE_MAX_LENGTH = 16000; // was 4000; long multi-rule personas (e.g. a PM with a 5-rule playbook) were silently truncated mid-sentence
 const NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}_-]{0,23}$/u;
 const MENTION_PATTERN = /@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu;
 const RULE_REF_TOKEN = /@\{p:([^}]+)\}/g;
@@ -855,7 +856,11 @@ export class Room extends EventEmitter {
     setText("humanDescription", 200);
     let unknownRefs: string[] = [];
     if (patch.customRules !== undefined) {
-      const resolved = this.resolveRuleReferences(String(patch.customRules).slice(0, 4000));
+      const rawRules = String(patch.customRules);
+      if (rawRules.length > ROLE_MAX_LENGTH) {
+        this.notice(`Room rules text is ${rawRules.length} chars, over the ${ROLE_MAX_LENGTH} limit; it was cut off.`, "warn");
+      }
+      const resolved = this.resolveRuleReferences(rawRules.slice(0, ROLE_MAX_LENGTH));
       unknownRefs = resolved.unknown;
       if (resolved.stored !== next.customRules) {
         next.customRules = resolved.stored;
@@ -972,7 +977,11 @@ export class Room extends EventEmitter {
       changed.push("tagline");
     }
     if (patch.role !== undefined && patch.role.trim() !== (participant.role ?? "")) {
-      participant.role = patch.role.trim().slice(0, 4000);
+      const trimmedRole = patch.role.trim();
+      if (trimmedRole.length > ROLE_MAX_LENGTH) {
+        this.notice(`${participant.name}'s role text is ${trimmedRole.length} chars, over the ${ROLE_MAX_LENGTH} limit; it was cut off. Shorten it or split instructions into an attached skill.`, "warn");
+      }
+      participant.role = trimmedRole.slice(0, ROLE_MAX_LENGTH);
       changed.push("role");
     }
     if (patch.avatar !== undefined) {
@@ -1087,6 +1096,10 @@ export class Room extends EventEmitter {
       effort: options.effort ?? recipe.defaultEffort,
       mode: options.mode ?? (this.bypassPermissionsByDefault ? recipe.bypassMode ?? recipe.defaultMode : recipe.defaultMode),
     };
+    const inviteRole = (options.role ?? "").trim();
+    if (inviteRole.length > ROLE_MAX_LENGTH) {
+      this.notice(`${name}'s role text is ${inviteRole.length} chars, over the ${ROLE_MAX_LENGTH} limit; it was cut off. Shorten it or split instructions into an attached skill.`, "warn");
+    }
     const participant: Participant = {
       id,
       name,
@@ -1098,7 +1111,7 @@ export class Room extends EventEmitter {
       turns: 0,
       color: options.color ?? COLORS[this.colorIndex++ % COLORS.length],
       tagline: (options.tagline ?? "").trim().slice(0, 80),
-      role: (options.role ?? "").trim().slice(0, 4000),
+      role: inviteRole.slice(0, ROLE_MAX_LENGTH),
       avatar: (options.avatar ?? "").trim().slice(0, 8) || undefined,
       replyDelay: options.replyDelay === undefined || options.replyDelay === null ? undefined : Math.max(0, Math.min(120, Number(options.replyDelay) || 0)),
       skills: normalizeSkillList(options.skills ?? undefined),
@@ -1118,6 +1131,10 @@ export class Room extends EventEmitter {
     if (!NAME_PATTERN.test(name)) throw new Error("name must be 1-24 letters, digits, _ or - (no spaces)");
     if (this.findByName(name)) throw new Error(`name "${name}" is already taken`);
     const id = input.id ?? `vm-${name.toLowerCase()}`;
+    const unstaffedRole = (input.role ?? "").trim();
+    if (unstaffedRole.length > ROLE_MAX_LENGTH) {
+      this.notice(`${name}'s role text is ${unstaffedRole.length} chars, over the ${ROLE_MAX_LENGTH} limit; it was cut off. Shorten it or split instructions into an attached skill.`, "warn");
+    }
     const participant: Participant = {
       id,
       name,
@@ -1127,7 +1144,7 @@ export class Room extends EventEmitter {
       turns: 0,
       color: input.color ?? COLORS[this.colorIndex++ % COLORS.length],
       tagline: (input.tagline ?? "").trim().slice(0, 80),
-      role: (input.role ?? "").trim().slice(0, 4000),
+      role: unstaffedRole.slice(0, ROLE_MAX_LENGTH),
       avatar: (input.avatar ?? "").trim().slice(0, 8) || undefined,
       skills: normalizeSkillList(input.skills),
       violations: 0,
