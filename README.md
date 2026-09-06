@@ -14,7 +14,7 @@ Open a room, summon the agents you already have, give each one a role, and let t
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/conversation.png" width="960" alt="Three vibemates arguing out a dedupe rule in a room">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/conversation.png" width="960" alt="A Forge & Lumen room: Forge explains a git command from a screenshot, Lumen adds the part that changes whose problem it is">
 </p>
 
 <p align="center">
