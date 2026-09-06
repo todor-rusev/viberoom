@@ -3,7 +3,7 @@
   "order": 1,
   "emoji": "⚒️",
   "recommended": true,
-  "description": "Two equals around one codebase. Forge builds by default, Lumen explains by default; either does either when asked, and each reviews the other's work before it counts as done. The way viberoom itself was built.",
+  "description": "Two equals around one codebase. Forge builds by default, Lumen explains by default; either does either when asked, and either reviews the other's work when you ask for it. The way viberoom itself was built.",
   "settings": {
     "language": {
       "mode": "follow-human"
