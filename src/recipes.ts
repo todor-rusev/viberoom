@@ -393,7 +393,7 @@ const recipes: AgentRecipe[] = [
     installHint: "npm install -g @xai-official/grok, then `grok login` (SuperGrok/X Premium+)",
     build: () => ({
       command: grokExe ?? "",
-      args: ["agent", "stdio", "--always-approve"],
+      args: ["agent", "--always-approve", "stdio"],
     }),
   },
   {
