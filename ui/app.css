@@ -374,7 +374,20 @@ table.csv tbody tr:nth-child(even) td { background: rgba(91, 91, 240, 0.03); }
 .tool { display: inline-flex; flex-direction: column; max-width: 100%; min-width: 0; }
 .tool.open { flex-basis: 100%; }
 .tool > .chip { font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; text-align: left; }
-.tool-body { margin: 4px 0 2px; padding: 8px 10px; background: var(--soft); border-radius: 10px; font-size: 12px; max-height: 340px; overflow: auto; }
+.tool > .chip-completed { --tool-bg: var(--mint); --tool-ink: var(--mint-ink); }
+.tool > .chip-failed { --tool-bg: var(--rose); --tool-ink: var(--rose-ink); }
+.tool > .chip-in_progress { --tool-bg: var(--warm); --tool-ink: var(--warm-ink); }
+.tool > .chip-pending { --tool-bg: var(--lav); --tool-ink: var(--primary); }
+.tool > .chip::after { content: "▾"; margin-left: auto; padding-left: 8px; opacity: 0.55; transition: transform var(--t-fast); }
+.tool.open > .chip { width: 100%; border-radius: 12px 12px 0 0; padding: 6px 12px; white-space: normal; }
+.tool.open > .chip::after { transform: rotate(180deg); }
+.tool.open { --tool-bg: var(--lav); --tool-ink: var(--primary); }
+.tool.open > .chip-completed ~ .tool-body, .tool.open > .chip-completed + .tool-body { --tool-bg: var(--mint); --tool-ink: var(--mint-ink); }
+.tool.open > .chip-failed + .tool-body { --tool-bg: var(--rose); --tool-ink: var(--rose-ink); }
+.tool.open > .chip-in_progress + .tool-body { --tool-bg: var(--warm); --tool-ink: var(--warm-ink); }
+.tool-body { margin: 0; padding: 8px 10px 10px; background: var(--card); border: 2px solid var(--tool-bg, var(--lav)); border-top: 0; border-radius: 0 0 12px 12px; font-size: 12px; max-height: 340px; overflow: auto; }
+.tool-body pre { background: var(--soft); color: var(--ink); padding: 6px 8px; border-radius: 8px; }
+.tool-sec b { color: var(--tool-ink, var(--muted)); }
 .tool-sec + .tool-sec { margin-top: 8px; }
 .tool-sec b { display: block; font-size: 10.5px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
 .tool-sec.muted { color: var(--muted); font-style: italic; }
@@ -582,3 +595,4 @@ table.csv tbody tr:nth-child(even) td { background: rgba(91, 91, 240, 0.03); }
 .done-notes { flex-direction: column; }
 .done-note.new { background: var(--card); color: var(--ink-2); }
 .done-note.new:hover { background: var(--soft); }
+.meta .seen-by { color: var(--primary); font-weight: 800; margin-left: 6px; }

@@ -1417,7 +1417,8 @@
       if (m.durationMs) parts.push(`<span title="how long the reply took">${ic("clock")} ${(m.durationMs / 1000).toFixed(1)} s</span>`);
       if (m.usage) parts.push(`<span title="tokens in">${ic("arrow-down")} ${fmtTokens(m.usage.inputTokens)}</span><span title="tokens out">${ic("arrow-up")} ${fmtTokens(m.usage.outputTokens)}</span>${m.usage.cachedWriteTokens ? `<span title="tokens written to the cache">${ic("database")} ${fmtTokens(m.usage.cachedWriteTokens)}</span>` : ""}`);
       meta.innerHTML = parts.join("<span class=\"sep\">·</span>");
-    } else if (m.from === "human") refreshSeen(room);
+      fillSeen(el, room, m);
+    } else if (m.from === "human") fillSeen(el, room, m);
     else meta.textContent = "";
   }
 
@@ -1429,23 +1430,47 @@
     return null;
   }
   function seenHtml(room, m) {
-    const present = room.participants.filter((p) => p.kind === "agent" && p.status !== "left" && p.status !== "offline");
+    const present = room.participants.filter((p) => p.kind === "agent" && p.status !== "left" && p.status !== "offline" && p.id !== m.from);
+    if (!present.length) return "";
     const seen = present.filter((p) => p.lastSeenSeq != null && p.lastSeenSeq >= m.seq);
+    if (seen.length === present.length) return "";
     if (!seen.length) return `<span class="ticks">✓</span> sent`;
-    if (present.length > 1 && seen.length === present.length) return `<span class="ticks">✓✓</span> seen by all`;
     return `<span class="ticks">✓✓</span> seen by ${esc(seen.map((p) => p.name).join(", "))}`;
   }
-  function refreshSeen(room) {
-    const last = lastHumanMessage(room);
-    const byId = new Map(room.messages.map((m) => [m.id, m]));
-    for (const el of els.messages.querySelectorAll(".msg.mine")) {
+  function fillSeen(el, room, m) {
+    if (m.kind !== "chat" || m.streaming) return;
+    const html = seenHtml(room, m);
+    if (m.from === "human") {
       const meta = el.querySelector(".meta");
-      if (!meta) continue;
-      const isLast = last && el.dataset.id === last.id;
-      meta.innerHTML = isLast ? seenHtml(room, last) : "";
-      meta.classList.toggle("seen", !!isLast);
+      if (!meta) return;
+      meta.innerHTML = html;
+      meta.classList.toggle("seen", !!html);
+    } else {
+      const meta = el.querySelector(".meta");
+      let span = meta && meta.querySelector(".seen-by");
+      if (!span && meta && html) {
+        span = document.createElement("span");
+        span.className = "seen-by";
+        meta.appendChild(span);
+      }
+      if (span) {
+        span.innerHTML = html;
+        span.hidden = !html;
+      }
+    }
+  }
+  function refreshSeen(room) {
+    const present = room.participants.filter((p) => p.kind === "agent" && p.status !== "left" && p.status !== "offline");
+    const floor = present.length ? Math.min(...present.map((p) => (p.lastSeenSeq == null ? 0 : p.lastSeenSeq))) : Infinity;
+    const byId = new Map(room.messages.map((m) => [m.id, m]));
+    for (const el of els.messages.querySelectorAll(".msg.mine, .msg.agent")) {
+      const seq = Number(el.dataset.seq);
+      const hasLabel = el.querySelector(".meta.seen, .seen-by:not([hidden])");
+      if (seq <= floor && !hasLabel) continue;
       const m = byId.get(el.dataset.id);
-      if (m && (isLast || el.classList.contains("waiting"))) renderWaiting(el, room, m);
+      if (!m) continue;
+      fillSeen(el, room, m);
+      if (m.from === "human" && (seq > floor || el.classList.contains("waiting"))) renderWaiting(el, room, m);
     }
   }
 

@@ -286,7 +286,7 @@ interface AgentRuntime {
   turnStartSeq: number;
   turnActive: boolean;
   pendingTurn: boolean;
-  turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; published: boolean } | null;
+  turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; published: boolean; publishedAt?: number } | null;
   turnsSinceBrief: number;
   usedAtBrief: number;
   briefSentThisTurn: boolean;
@@ -1901,6 +1901,7 @@ export class Room extends EventEmitter {
 
     const startedAt = runtime.turn.startedAt;
     const published = runtime.turn.published;
+    const publishedAt = runtime.turn.publishedAt ?? null;
     runtime.turn = null;
     runtime.turnActive = false;
     this.drafts.delete(draft.id);
@@ -1928,7 +1929,7 @@ export class Room extends EventEmitter {
       if (retry) this.closeRetry(retry, "the correction turn failed; nothing was posted");
       return null;
     }
-    return this.finalizeTurn(participant, runtime, draft, result, Date.now() - startedAt, retry, published);
+    return this.finalizeTurn(participant, runtime, draft, result, Date.now() - startedAt, retry, published, publishedAt);
   }
 
   private finalizeTurn(
@@ -1939,6 +1940,7 @@ export class Room extends EventEmitter {
     durationMs: number,
     retry: RetryRequest | null,
     published: boolean,
+    publishedAt: number | null = null,
   ): RetryRequest | null {
     participant.status = "idle";
     this.push({ type: "participant", participant });
@@ -2037,7 +2039,7 @@ export class Room extends EventEmitter {
       durationMs,
     };
     this.commit(message);
-    if (this.messages.some((x) => x.kind === "chat" && x.id !== message.id && x.ts > draft.ts)) {
+    if (publishedAt !== null && this.messages.some((x) => x.kind === "chat" && x.id !== message.id && x.ts > publishedAt)) {
       const at = new Date(draft.ts);
       const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
       this.postSystem(`${participant.name} finished the reply started at ${hhmm} · ${Math.round(durationMs / 1000)} s`, "human", false, { refId: message.id, agentId: participant.id });
@@ -2126,6 +2128,7 @@ export class Room extends EventEmitter {
   private showDraft(turn: NonNullable<AgentRuntime["turn"]>): void {
     if (turn.published) return;
     turn.published = true;
+    turn.publishedAt = Date.now();
     this.push({ type: "message", message: turn.message });
   }
 
