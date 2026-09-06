@@ -264,7 +264,9 @@
 .jump-latest { position: absolute; right: 30px; bottom: 96px; z-index: 5; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px 0 10px; border: 0; border-radius: var(--r-pill); background: var(--card); color: var(--primary); font: inherit; font-size: 12px; font-weight: 800; box-shadow: var(--shadow-pop); cursor: pointer; animation: rise var(--t-base) var(--ease-out); }
 .jump-latest:hover { background: var(--soft); }
 .done-notes { position: absolute; left: 30px; bottom: 96px; z-index: 5; display: flex; flex-direction: column-reverse; gap: 6px; }
-.done-note { display: inline-flex; align-items: stretch; max-width: 230px; border-radius: 14px; background: var(--warm); color: var(--warm-ink); box-shadow: var(--shadow-pop); animation: rise var(--t-base) var(--ease-out); overflow: hidden; }
+.done-note { display: inline-flex; align-items: center; gap: 8px; max-width: 230px; padding: 6px 12px 6px 8px; border: 0; border-radius: 14px; background: var(--warm); color: var(--warm-ink); font: inherit; text-align: left; cursor: pointer; box-shadow: var(--shadow-pop); animation: rise var(--t-base) var(--ease-out); overflow: hidden; }
+.done-note:hover { background: #ffeaa8; }
+.done-note .avatar { flex: none; }
 .done-go { display: inline-flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 4px 6px 8px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .done-go:hover { background: #ffeaa8; }
 .done-go .avatar { flex: none; }
@@ -577,3 +579,6 @@ table.csv tbody tr:nth-child(even) td { background: rgba(91, 91, 240, 0.03); }
 .msg.system.done { justify-content: center; }
 .done-row { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px 6px 8px; border: 0; border-radius: var(--r-pill); background: var(--warm); color: var(--warm-ink); font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; box-shadow: var(--edge); }
 .done-row:hover { background: #ffeaa8; }
+.done-notes { flex-direction: column; }
+.done-note.new { background: var(--card); color: var(--ink-2); }
+.done-note.new:hover { background: var(--soft); }

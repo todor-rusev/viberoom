@@ -1536,6 +1536,7 @@
       if (empty) empty.remove();
       els.messages.appendChild(messageElement(room, m));
       if (m.from === "human") refreshSeen(room);
+      else if (!stick && m.kind === "chat") noteNew(room, m);
     }
     if (stick) scrollToBottom();
     if (m.streaming) updateWorkingNow();
@@ -3673,6 +3674,8 @@
     els.jumpLatest.hidden = stuck;
     updateTimelineView();
     updateWorkingNow();
+    if (stuck) clearNotes();
+    else pruneDoneNotes();
   });
   els.jumpLatest.addEventListener("click", scrollToBottom);
   document.addEventListener("mousedown", (e) => {
@@ -3881,6 +3884,7 @@
     return (t ? t.textContent : el.textContent).trim().replace(/\s+/g, " ").slice(0, 240);
   }
   const doneNotes = [];
+  const NOTE_TTL_MS = 4000;
   function bubbleInView(id) {
     const head = els.messages.querySelector(`.msg[data-id="${id}"] .head`);
     if (!head) return false;
@@ -3888,14 +3892,43 @@
     const r = head.getBoundingClientRect();
     return r.bottom > box.top && r.top < box.bottom;
   }
+  function pushNote(note) {
+    const i = doneNotes.findIndex((n) => n.id === note.id);
+    if (i >= 0) {
+      clearTimeout(doneNotes[i].timer);
+      doneNotes.splice(i, 1);
+    }
+    note.timer = setTimeout(() => dropNote(note.id), NOTE_TTL_MS);
+    doneNotes.push(note);
+    while (doneNotes.length > 4) dropNote(doneNotes[0].id);
+    renderDoneNotes();
+  }
+  function dropNote(id) {
+    const i = doneNotes.findIndex((n) => n.id === id);
+    if (i < 0) return;
+    clearTimeout(doneNotes[i].timer);
+    doneNotes.splice(i, 1);
+    renderDoneNotes();
+  }
+  function clearNotes() {
+    for (const n of doneNotes) clearTimeout(n.timer);
+    doneNotes.length = 0;
+    renderDoneNotes();
+  }
   function noteFinished(room, m) {
     if (room.id !== state.currentRoomId || state.view !== "room") return;
     requestAnimationFrame(() => {
-      if (bubbleInView(m.id) || doneNotes.some((n) => n.id === m.id)) return;
+      if (bubbleInView(m.id)) return;
       const p = findById(room, m.from) || { name: m.fromName, color: "#9ca3af", kind: "agent" };
-      doneNotes.push({ id: m.id, name: p.name, p, startedAt: m.ts, durationMs: m.durationMs || 0 });
-      while (doneNotes.length > 3) doneNotes.shift();
-      renderDoneNotes();
+      pushNote({ id: m.id, kind: "done", p, text: `${p.name} finished`, sub: `started ${time(m.ts)}${m.durationMs ? ` · ${spanText(m.durationMs)}` : ""}` });
+    });
+  }
+  function noteNew(room, m) {
+    if (room.id !== state.currentRoomId || state.view !== "room") return;
+    requestAnimationFrame(() => {
+      if (bubbleInView(m.id)) return;
+      const p = findById(room, m.from) || { name: m.fromName, color: "#9ca3af", kind: "agent" };
+      pushNote({ id: m.id, kind: "new", p, text: `${p.name} wrote below`, sub: time(m.ts) });
     });
   }
   function spanText(ms) {
@@ -3906,19 +3939,18 @@
   function renderDoneNotes() {
     els.doneNotes.hidden = doneNotes.length === 0;
     els.doneNotes.innerHTML = doneNotes
-      .map((n) => `<div class="done-note" data-id="${esc(n.id)}"><button type="button" class="done-go" title="Go to the reply">${avatar(n.p, 18, {})}<span class="done-text"><b>${esc(n.name)} finished</b><small>started ${esc(time(n.startedAt))}${n.durationMs ? ` · ${esc(spanText(n.durationMs))}` : ""}</small></span></button><button type="button" class="done-x" title="Dismiss">×</button></div>`)
+      .map((n) => `<button type="button" class="done-note ${n.kind}" data-id="${esc(n.id)}" title="Go to the message">${avatar(n.p, 18, {})}<span class="done-text"><b>${esc(n.text)}</b><small>${esc(n.sub)}</small></span></button>`)
       .join("");
+  }
+  function pruneDoneNotes() {
+    for (const n of [...doneNotes]) if (bubbleInView(n.id)) dropNote(n.id);
   }
   els.doneNotes.addEventListener("click", (e) => {
     const note = e.target.closest(".done-note");
     if (!note) return;
-    if (e.target.closest(".done-x")) {
-      const i = doneNotes.findIndex((n) => n.id === note.dataset.id);
-      if (i >= 0) doneNotes.splice(i, 1);
-      renderDoneNotes();
-      return;
-    }
-    jumpToMessage(els.messages.querySelector(`.msg[data-id="${note.dataset.id}"]`));
+    const id = note.dataset.id;
+    dropNote(id);
+    jumpToMessage(els.messages.querySelector(`.msg[data-id="${id}"]`));
   });
   function jumpToMessage(el) {
     if (!el) return;
