@@ -1210,6 +1210,12 @@
     }
     if (m.kind === "system") {
       el.className = "msg system";
+      if (m.audience === "human") {
+        el.className = "msg system done";
+        const who = m.details && m.details.agentId ? findById(room, m.details.agentId) : null;
+        el.innerHTML = `<button type="button" class="done-row" data-ref="${esc((m.details && m.details.refId) || "")}" title="${esc(fullTime(m.ts))} · go to the reply">${who ? avatar(who, 20, {}) : ""}<span>${esc(m.text)}</span></button>`;
+        return el;
+      }
       if (m.audience === "agents") {
         el.className = "msg hidden";
         el.innerHTML = `<details class="hidden-turn"><summary>${ic("info")} hub → vibemates · ${esc(m.text.split(":")[0])}</summary><div class="hidden-body"><div class="hidden-label">What the vibemates were told</div><div class="hidden-text">${esc(m.text)}</div></div></details>`;
@@ -1291,6 +1297,8 @@
     if (e.key === "Escape" && !els.lightbox.hidden) closeLightbox();
   });
   els.messages.addEventListener("click", (e) => {
+    const done = e.target.closest(".done-row");
+    if (done) return void jumpToMessage(els.messages.querySelector(`.msg[data-id="${done.dataset.ref}"]`));
     const shot = e.target.closest(".shot");
     if (shot) return void openLightbox(shot.dataset.src, shot.title);
     const ref = e.target.closest(".img-ref");
@@ -3175,7 +3183,20 @@
   let shotSeq = 0;
   const shotMarker = (n) => `[img ${n}]`;
 
+  const composerClear = $("#composer-clear");
+  function updateComposerClear() {
+    composerClear.hidden = !(els.input.value.trim() || pendingShots.length);
+  }
+  composerClear.addEventListener("click", () => {
+    els.input.value = "";
+    clearShots();
+    autosize();
+    updateComposerClear();
+    els.input.focus();
+  });
+  els.input.addEventListener("input", updateComposerClear);
   function renderShotsTray() {
+    updateComposerClear();
     els.shotsTray.hidden = !pendingShots.length;
     els.shotsTray.innerHTML = pendingShots
       .map((shot, i) => `<span class="shot-chip"><img src="${esc(shot.data)}" alt=""><span class="shot-n">${shot.n}</span><button type="button" class="shot-drop" data-i="${i}" title="Remove ${esc(shot.name)}">×</button></span>`)

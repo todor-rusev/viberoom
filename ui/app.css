@@ -466,6 +466,8 @@ table.csv tbody tr:nth-child(even) td { background: rgba(91, 91, 240, 0.03); }
 .composer textarea::placeholder { color: var(--placeholder); font-weight: 600; }
 .send-btn { width: 44px; height: 44px; border-radius: 14px; border: 0; background: var(--grad-primary); color: #fff; display: grid; place-content: center; box-shadow: var(--shadow-primary); flex: none; transition: transform var(--t-fast) var(--ease-out), filter var(--t-fast); }
 .send-btn .i { width: 18px; height: 18px; display: block; }
+.composer-clear { width: 28px; height: 28px; border-radius: 50%; border: 0; background: transparent; color: var(--placeholder); font-size: 20px; line-height: 1; cursor: pointer; flex: none; margin-right: 2px; transition: background var(--t-fast), color var(--t-fast); }
+.composer-clear:hover { background: var(--soft); color: var(--danger); }
 .send-btn:hover { filter: brightness(1.05); transform: translateY(-1px); }
 .send-btn:active { transform: translateY(1px); }
 .chat .mention-menu { left: 24px; bottom: calc(var(--composer-h, 60px) + 18px); }
@@ -572,3 +574,6 @@ table.csv tbody tr:nth-child(even) td { background: rgba(91, 91, 240, 0.03); }
 .composer.gated { opacity: 0.7; }
 .composer.gated textarea { cursor: not-allowed; }
 .check-list.locked { pointer-events: none; opacity: 0.6; }
+.msg.system.done { justify-content: center; }
+.done-row { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px 6px 8px; border: 0; border-radius: var(--r-pill); background: var(--warm); color: var(--warm-ink); font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; box-shadow: var(--edge); }
+.done-row:hover { background: #ffeaa8; }

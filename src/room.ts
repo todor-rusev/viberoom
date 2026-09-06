@@ -156,12 +156,12 @@ export interface ChatMessage {
   text: string;
   ts: number;
   kind: "chat" | "system" | "hidden";
-  details?: { original?: string; corrections?: string[]; outcome?: string; skill?: string; via?: "tool" | "marker" };
+  details?: { original?: string; corrections?: string[]; outcome?: string; skill?: string; via?: "tool" | "marker"; refId?: string; agentId?: string };
   skill?: { name: string; args: string };
   edited?: { ts: number; previous: string };
   pinned?: true;
   images?: Attachment[];
-  audience?: "agents";
+  audience?: "agents" | "human";
   wakes?: true;
   streaming?: boolean;
   thought?: string;
@@ -1780,7 +1780,7 @@ export class Room extends EventEmitter {
     if (!runtime.agent.alive || participant.muted || this.focused) return;
 
     const unreadAll = this.messages.filter(
-      (m) => m.kind !== "hidden" && m.seq > runtime.lastSeenSeq && (m.kind === "system" || m.from !== id || m.seq <= runtime.replayOwnUntilSeq),
+      (m) => m.kind !== "hidden" && m.audience !== "human" && m.seq > runtime.lastSeenSeq && (m.kind === "system" || m.from !== id || m.seq <= runtime.replayOwnUntilSeq),
     );
     if (!unreadAll.some((m) => m.kind === "chat" || m.wakes)) return;
     const cap = this.settings.backlogCap;
@@ -2037,6 +2037,11 @@ export class Room extends EventEmitter {
       durationMs,
     };
     this.commit(message);
+    if (this.messages.some((x) => x.kind === "chat" && x.id !== message.id && x.ts > draft.ts)) {
+      const at = new Date(draft.ts);
+      const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+      this.postSystem(`${participant.name} finished the reply started at ${hhmm} · ${Math.round(durationMs / 1000)} s`, "human", false, { refId: message.id, agentId: participant.id });
+    }
     if (retry) {
       this.closeRetry(retry, corrections.length ? `corrected reply posted, but it still breaks: ${corrections.map((c) => c.replace(/^reminder:\s*/i, "")).join("; ")}` : "corrected reply posted");
     }
@@ -2419,7 +2424,7 @@ export class Room extends EventEmitter {
     return undefined;
   }
 
-  private postSystem(text: string, audience?: "agents", wakes?: boolean): void {
+  private postSystem(text: string, audience?: "agents" | "human", wakes?: boolean, details?: ChatMessage["details"]): void {
     const message: ChatMessage = {
       id: randomUUID(),
       seq: ++this.seq,
@@ -2433,6 +2438,7 @@ export class Room extends EventEmitter {
     };
     if (audience) message.audience = audience;
     if (wakes) message.wakes = true;
+    if (details) message.details = details;
     this.commit(message);
   }
 
