@@ -7,6 +7,11 @@ export const REQUEST_BRIEF_MARKER = "[request-brief]";
 export const SKILL_MARKER_PATTERN = /\[skill:\s*([A-Za-z0-9][A-Za-z0-9_-]{0,31})\s*\]/i;
 export const SKILL_TOOL_NAME = "load_skill";
 
+export function skillPull(reply: string): string | null {
+  const match = reply.trim().match(SKILL_MARKER_PATTERN);
+  return match && match[0] === reply.trim() ? match[1] : null;
+}
+
 export type SkillChannel = "tool" | "marker";
 
 export interface SkillsForPrompt {
@@ -88,6 +93,19 @@ export interface RosterEntry {
   kind: "human" | "agent";
   vendor?: string;
   tagline?: string;
+  muted?: boolean;
+}
+
+export const IMAGE_MARKER_PATTERN = /\[img\s+(\d+)\]/gi;
+
+export interface BacklogImage {
+  n: number;
+  ref: string;
+  name: string;
+  path: string;
+  mimeType: string;
+  attached: boolean;
+  forNames: string[];
 }
 
 export interface BacklogLine {
@@ -95,6 +113,54 @@ export interface BacklogLine {
   fromName?: string;
   toNames?: string[];
   text: string;
+  images?: BacklogImage[];
+}
+
+export type PromptPart = { type: "text"; text: string } | { type: "image"; image: BacklogImage };
+
+export function promptText(parts: PromptPart[]): string {
+  return parts.map((p) => (p.type === "text" ? p.text : "")).join("");
+}
+
+function imageMarker(image: BacklogImage): string {
+  if (image.attached) return `[img ${image.n}]`;
+  const who = image.forNames.length ? ` · for ${image.forNames.join(", ")}` : "";
+  return `[img ${image.n} · ${image.ref}${who} · ${image.path}]`;
+}
+
+function messageParts(line: BacklogLine): PromptPart[] {
+  const parts: PromptPart[] = [];
+  let text = "";
+  const flush = (): void => {
+    if (text) parts.push({ type: "text", text });
+    text = "";
+  };
+  const place = (image: BacklogImage): void => {
+    text += imageMarker(image);
+    if (image.attached) {
+      flush();
+      parts.push({ type: "image", image });
+    }
+  };
+  const images = line.images ?? [];
+  const placed = new Set<number>();
+  let last = 0;
+  for (const match of line.text.matchAll(IMAGE_MARKER_PATTERN)) {
+    const image = images.find((i) => i.n === Number(match[1]));
+    if (!image || placed.has(image.n)) continue;
+    placed.add(image.n);
+    text += line.text.slice(last, match.index);
+    place(image);
+    last = (match.index ?? 0) + match[0].length;
+  }
+  text += line.text.slice(last);
+  for (const image of images) {
+    if (placed.has(image.n)) continue;
+    if (!text.endsWith("\n") && (text || parts.length)) text += "\n";
+    place(image);
+  }
+  flush();
+  return parts;
 }
 
 export function ensureDir(dir: string): string {
@@ -109,6 +175,7 @@ function describeEntry(entry: RosterEntry, settings: RoomSettings): string {
   const parts = ["agent"];
   if (settings.showVendorInRoster && entry.vendor) parts.push(entry.vendor);
   if (entry.tagline) parts.push(`"${entry.tagline}"`);
+  if (entry.muted) parts.push("muted");
   return `${entry.name} (${parts.join(" · ")})`;
 }
 
@@ -216,7 +283,8 @@ export function buildHeader(
   const list = roster
     .map((r) => {
       if (r.name === persona.name) return `${r.name} (you)`;
-      return r.kind === "human" ? `${r.name} (human)` : r.name;
+      if (r.kind === "human") return `${r.name} (human)`;
+      return r.muted ? `${r.name} (muted)` : r.name;
     })
     .join(", ");
   const who = persona.tagline.trim() ? `${persona.name} (${persona.tagline.trim()})` : persona.name;
@@ -256,24 +324,34 @@ export function composePrompt(parts: {
   backlog: BacklogLine[];
   omitted: number;
   personaName: string;
-}): string {
-  const lines: string[] = [];
-  if (parts.brief) lines.push(parts.brief);
-  lines.push(parts.header);
-  for (const block of parts.skills ?? []) lines.push(block);
-  lines.push("<messages>");
-  if (parts.omitted > 0) lines.push(`… ${parts.omitted} earlier messages omitted`);
+}): PromptPart[] {
+  const out: PromptPart[] = [];
+  const push = (text: string): void => {
+    const lastPart = out[out.length - 1];
+    if (lastPart && lastPart.type === "text") lastPart.text += text;
+    else out.push({ type: "text", text });
+  };
+  if (parts.brief) push(`${parts.brief}\n`);
+  push(`${parts.header}\n`);
+  for (const block of parts.skills ?? []) push(`${block}\n`);
+  push("<messages>\n");
+  if (parts.omitted > 0) push(`… ${parts.omitted} earlier messages omitted\n`);
   for (const line of parts.backlog) {
     if (line.kind === "event") {
-      lines.push(`· ${line.text}`);
+      push(`· ${line.text}\n`);
     } else {
       const target = line.toNames && line.toNames.length ? ` -> ${line.toNames.map((t) => `@${t}`).join(" ")}` : "";
-      lines.push(`${line.fromName}${target}: ${line.text}`);
+      push(`${line.fromName}${target}: `);
+      for (const part of messageParts(line)) {
+        if (part.type === "text") push(part.text);
+        else out.push(part);
+      }
+      push("\n");
     }
   }
-  lines.push("</messages>");
-  lines.push(`Reply as ${parts.personaName} (or ${SILENT_MARKER}).`);
-  return lines.join("\n");
+  push("</messages>\n");
+  push(`Reply as ${parts.personaName} (or ${SILENT_MARKER}).`);
+  return out;
 }
 
 export function composeCorrectionPrompt(parts: { header: string; originalText: string; corrections: string[]; personaName: string }): string {

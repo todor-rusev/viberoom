@@ -1,6 +1,6 @@
 {
   "name": "viberoom",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "viberoom: group chat rooms for a human and several coding agents over the Agent Client Protocol",
   "type": "module",
   "engines": {
@@ -24,6 +24,7 @@
     "dist",
     "vendor",
     "ui",
+    "templates",
     "assets",
     "scripts",
     "NOTICE"

@@ -125,6 +125,10 @@ export class AcpAgent {
     return this.initResult?.agentCapabilities?.loadSession === true;
   }
 
+  get acceptsImages(): boolean {
+    return this.initResult?.agentCapabilities?.promptCapabilities?.image === true;
+  }
+
   loadSession(sessionId: string, cwd: string, mcpServers: McpServer[] = []): Promise<NewSessionResult> {
     return this.peer.request("session/load", { sessionId, cwd, mcpServers }).then((result) => ({
       ...((result as Partial<NewSessionResult>) ?? {}),

@@ -108,7 +108,7 @@ pre { background: var(--code-bg); color: #f4f2ff; padding: 10px 12px; border-rad
 *::-webkit-scrollbar-thumb { background: var(--sb-thumb); border-radius: var(--r-pill); border: 2px solid transparent; background-clip: padding-box; }
 *::-webkit-scrollbar-thumb:hover { background: var(--sb-thumb-hover); background-clip: padding-box; }
 *::-webkit-scrollbar-corner { background: transparent; }
-.i { width: 1.2em; height: 1.2em; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.25em; display: inline-block; }
+.i { width: 1.2em; height: 1.2em; flex: none; vertical-align: -0.25em; display: inline-block; background-color: currentColor; -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
 .i.lg { width: 20px; height: 20px; }
 .i.xl { width: 24px; height: 24px; }
 [data-icon] { display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
@@ -321,7 +321,7 @@ p .geek-tip, .hint > .geek-tip, .switch .label > .geek-tip { margin-left: 8px; }
 .avatar-status.status-error { background: var(--rose-ink); }
 .avatar-status.status-starting { background: #7aa7ff; }
 .avatar-status.status-queued { background: #7aa7ff; }
-.avatar-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 6px; margin: 4px 0 8px; }
+.avatar-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 6px; margin: 4px 0 8px; max-height: 148px; overflow-y: auto; padding: 2px 4px 2px 2px; scroll-padding: 4px; }
 .avatar-picker button { aspect-ratio: 1; width: 100%; border-radius: 12px; border: 2px solid transparent; background: var(--soft); font-size: 20px; padding: 0; display: inline-flex; align-items: center; justify-content: center; transition: transform var(--t-fast) var(--ease-pop), border-color var(--t-fast), background var(--t-fast); }
 .avatar-picker button:hover { transform: translateY(-1px); background: var(--lav); }
 .avatar-picker button.selected { border-color: var(--primary); background: var(--lav); }

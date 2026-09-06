@@ -12,6 +12,8 @@ import { existsSync as fileExists } from "node:fs";
 import { classifyOpenTarget, describeOpen, detectEditor, editorCommand, isExecutablePath, openCommand, type DetectedEditor } from "./open.js";
 import { parseCsv, viewerKind, VIEWER_MAX_BYTES } from "./viewer.js";
 import { createFolder, homeFolder, listFolders, listRoots } from "./fsbrowse.js";
+import { contentTypeOf, isStoredFileName, IMAGE_MAX_BYTES, IMAGES_PER_MESSAGE, type ImageInput } from "./files.js";
+import { commandTarget, parseRoomCommand } from "./commands.js";
 
 let editorFound: DetectedEditor | null | undefined;
 function currentEditor(): DetectedEditor | null {
@@ -161,6 +163,24 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    const roomFile = req.method === "GET" && path.match(/^\/api\/rooms\/([^/]+)\/files\/([^/]+)$/);
+    if (roomFile) {
+      const room = hub.getRoom(decodeURIComponent(roomFile[1]));
+      const name = decodeURIComponent(roomFile[2]);
+      if (!isStoredFileName(name)) {
+        sendJson(res, 400, { error: "not an attachment name" });
+        return;
+      }
+      try {
+        const bytes = await readFile(join(room.filesDir(), name));
+        res.writeHead(200, { "Content-Type": contentTypeOf(name), "Cache-Control": "public, max-age=31536000, immutable" });
+        res.end(bytes);
+      } catch {
+        sendJson(res, 404, { error: "no such attachment" });
+      }
+      return;
+    }
+
     if (req.method === "GET" && path === "/api/editor") {
       sendJson(res, 200, { editor: currentEditor(), settings: hub.settings.editor });
       return;
@@ -227,6 +247,11 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     const roomGet = req.method === "GET" && path.match(/^\/api\/rooms\/([^/]+)$/);
     if (roomGet) {
       sendJson(res, 200, hub.getRoom(decodeURIComponent(roomGet[1])).snapshot());
+      return;
+    }
+
+    if (req.method === "GET" && path === "/api/templates") {
+      sendJson(res, 200, { templates: hub.templates.list() });
       return;
     }
 
@@ -356,6 +381,21 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (path === "/api/rooms/from-template") {
+      const vibemates = Array.isArray(body.vibemates) ? body.vibemates : [];
+      const { room, notices } = await hub.createRoomFromTemplate({
+        templateId: String(body.template ?? ""),
+        name: String(body.name ?? ""),
+        dir: optionalString(body.dir),
+        vibemates: vibemates.map((v) => {
+          const o = (v ?? {}) as Record<string, unknown>;
+          return { name: String(o.name ?? ""), agentType: String(o.agentType ?? ""), model: optionalString(o.model), effort: optionalString(o.effort), mode: optionalString(o.mode) };
+        }),
+      });
+      sendJson(res, 200, { ok: true, room: room.snapshot(), notices });
+      return;
+    }
+
     if (path === "/api/rooms") {
       const { room, notices } = hub.createRoom({
         name: String(body.name ?? ""),
@@ -366,12 +406,25 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
-    const roomAction = path.match(/^\/api\/rooms\/([^/]+)\/(send|typing|invite|settings|focus|rename|dir|delete)$/);
+    const roomAction = path.match(/^\/api\/rooms\/([^/]+)\/(send|typing|invite|settings|focus|rename|dir|delete|open)$/);
     if (roomAction) {
       const room = hub.getRoom(decodeURIComponent(roomAction[1]));
       const action = roomAction[2];
-      if (action === "send") {
-        const message = room.postHumanMessage(String(body.text ?? ""));
+      if (action === "open") {
+        hub.markOpened(room.id);
+        sendJson(res, 200, { ok: true, openRooms: hub.openRooms });
+      } else if (action === "send") {
+        const text = String(body.text ?? "");
+        const command = parseRoomCommand(text);
+        if (command) {
+          const target = room.findByName(commandTarget(command.args));
+          if (!target) throw new Error(`/${command.name} needs the name of a vibemate in this room, like /${command.name} @Name`);
+          await room.respawnAgent(target.id);
+          hub.saveRooms();
+          sendJson(res, 200, { ok: true, command: command.name, participant: target.name });
+          return;
+        }
+        const message = room.postHumanMessage(text, imageList(body.images));
         sendJson(res, 200, { ok: true, id: message.id });
       } else if (action === "typing") {
         room.humanTyping();
@@ -415,6 +468,14 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    const messagePin = path.match(/^\/api\/rooms\/([^/]+)\/messages\/([^/]+)\/pin$/);
+    if (messagePin) {
+      const room = hub.getRoom(decodeURIComponent(messagePin[1]));
+      const message = room.setPinned(decodeURIComponent(messagePin[2]), body.pinned === true || body.pinned === "true");
+      sendJson(res, 200, { ok: true, pinned: !!message.pinned });
+      return;
+    }
+
     const messageEdit = path.match(/^\/api\/rooms\/([^/]+)\/messages\/([^/]+)\/edit$/);
     if (messageEdit) {
       const room = hub.getRoom(decodeURIComponent(messageEdit[1]));
@@ -425,12 +486,29 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
-    const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|remove|config|persona|reconnect|mute|unmute)$/);
+    const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|remove|config|persona|reconnect|mute|unmute|respawn|staff)$/);
     if (participantAction) {
       const room = hub.getRoom(decodeURIComponent(participantAction[1]));
       const id = decodeURIComponent(participantAction[2]);
       const action = participantAction[3];
       if (action === "cancel") room.cancelTurn(id);
+      else if (action === "respawn") await room.respawnAgent(id);
+      else if (action === "staff") {
+        const participant = await room.staff(id, {
+          agentType: String(body.agentType ?? ""),
+          model: optionalString(body.model),
+          effort: optionalString(body.effort),
+          mode: optionalString(body.mode),
+          name: optionalString(body.name),
+          tagline: optionalString(body.tagline),
+          role: optionalString(body.role),
+          avatar: optionalString(body.avatar),
+          skills: stringList(body.skills),
+        });
+        hub.saveRooms();
+        sendJson(res, 200, { ok: true, participant });
+        return;
+      }
       else if (action === "remove") await room.removeParticipant(id);
       else if (action === "reconnect") {
         const mode = body.mode === "load" ? "load" : "replay";
@@ -496,15 +574,35 @@ function stringList(value: unknown): string[] | undefined {
   return value.map((v) => String(v).trim()).filter((v) => v.length > 0);
 }
 
+function imageList(value: unknown): ImageInput[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, IMAGES_PER_MESSAGE).map((entry) => {
+    const image = (entry ?? {}) as Record<string, unknown>;
+    const n = Number(image.n);
+    return { name: optionalString(image.name) ?? undefined, mimeType: String(image.mimeType ?? ""), data: String(image.data ?? ""), n: Number.isInteger(n) && n > 0 ? n : undefined };
+  });
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
 }
 
+const BODY_MAX_BYTES = (IMAGE_MAX_BYTES * IMAGES_PER_MESSAGE * 4) / 3 + 64 * 1024;
+
 function readJson(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > BODY_MAX_BYTES) {
+        reject(new Error("the request is too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => {
       const raw = Buffer.concat(chunks).toString("utf8");
       if (!raw.trim()) return resolve({});

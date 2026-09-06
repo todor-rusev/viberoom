@@ -32,14 +32,24 @@ export function affectedByEdit(agents: AgentReadState[], editedSeq: number): { r
 }
 
 const QUOTE_MAX = 240;
+const FULL_MAX = 4000;
 
 function quote(text: string): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > QUOTE_MAX ? `${flat.slice(0, QUOTE_MAX)}…` : flat;
 }
 
+function full(text: string): string {
+  const trimmed = text.trim();
+  return trimmed.length > FULL_MAX ? `${trimmed.slice(0, FULL_MAX)}…` : trimmed;
+}
+
 export function editNotice(humanName: string, previous: string, next: string): string {
-  return `${humanName} edited an earlier message: "${quote(previous)}" → "${quote(next)}". Reply only if the change matters to you; otherwise [silent].`;
+  const added = next.startsWith(previous) ? next.slice(previous.length).trim() : "";
+  const body = added
+    ? `They added to the end of it:\n\n"${full(added)}"`
+    : `It now reads:\n\n"${full(next)}"\n\nBefore: "${quote(previous)}"`;
+  return `${humanName} edited an earlier message. ${body}\n\nReply only if the change matters to you; otherwise [silent].`;
 }
 
 export function rewriteNotice(humanName: string, removedCount: number, restarted: string[]): string {

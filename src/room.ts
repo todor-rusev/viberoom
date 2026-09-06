@@ -5,11 +5,12 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { writeFileAtomic } from "./atomic.js";
 import { affectedByEdit, editNotice, partitionHistory, rewriteNotice, type AgentReadState, type EditMode } from "./edit.js";
+import { saveImages, type Attachment, type ImageInput } from "./files.js";
 import { join, resolve } from "node:path";
 import { AcpAgent } from "./acp-client.js";
 import { RemoteError } from "./jsonrpc.js";
 import { getRecipe, listRecipes } from "./recipes.js";
-import { composeSkillBlock, SKILL_MARKER_PATTERN, SKILL_TOOL_NAME, type SkillsForPrompt } from "./persona.js";
+import { composeSkillBlock, skillPull, SKILL_TOOL_NAME, type SkillsForPrompt } from "./persona.js";
 import {
   BUILTIN_AUTHOR,
   parseSkillInvocation,
@@ -32,8 +33,10 @@ import {
   composePrompt,
   countSentences,
   ensureDir,
+  type BacklogImage,
   type BacklogLine,
   type Persona,
+  type PromptPart,
   type RoomSettings,
   type RosterEntry,
 } from "./persona.js";
@@ -55,7 +58,7 @@ import type {
   Usage,
 } from "./acp-types.js";
 
-export type ParticipantStatus = "starting" | "idle" | "queued" | "thinking" | "error" | "offline" | "left";
+export type ParticipantStatus = "unstaffed" | "starting" | "idle" | "queued" | "thinking" | "error" | "offline" | "left";
 
 export interface LaunchPrefs {
   model: string | null;
@@ -140,6 +143,7 @@ export interface ToolCallView {
   kind?: string | null;
   status?: string | null;
   rawInput?: unknown;
+  output?: string;
 }
 
 export interface ChatMessage {
@@ -155,7 +159,10 @@ export interface ChatMessage {
   details?: { original?: string; corrections?: string[]; outcome?: string; skill?: string; via?: "tool" | "marker" };
   skill?: { name: string; args: string };
   edited?: { ts: number; previous: string };
+  pinned?: true;
+  images?: Attachment[];
   audience?: "agents";
+  wakes?: true;
   streaming?: boolean;
   thought?: string;
   notices?: string[];
@@ -190,6 +197,8 @@ export type RoomEvent =
   | { type: "notice"; text: string; level: "info" | "warn" | "error"; ts: number };
 
 export interface InviteOptions {
+  id?: string;
+  color?: string;
   agentType: string;
   name: string;
   tagline?: string | null;
@@ -376,6 +385,14 @@ export class Room extends EventEmitter {
     return join(this.dataDir, "history.jsonl");
   }
 
+  filesDir(): string {
+    return join(this.dataDir, "files");
+  }
+
+  imagePath(attachment: Attachment): string {
+    return join(this.filesDir(), attachment.file);
+  }
+
   private loadHistory(): void {
     if (!existsSync(this.historyPath())) return;
     const lines = readFileSync(this.historyPath(), "utf8").split("\n").filter((l) => l.trim());
@@ -391,6 +408,10 @@ export class Room extends EventEmitter {
 
   restore(stored: StoredParticipant[]): void {
     for (const s of stored) {
+      if (!s.agentType) {
+        this.addUnstaffed({ name: s.name, tagline: s.tagline, role: s.role, avatar: s.avatar, skills: s.skills, color: s.color, id: s.id });
+        continue;
+      }
       const recipe = getRecipe(s.agentType);
       this.participants.set(s.id, {
         id: s.id,
@@ -431,11 +452,11 @@ export class Room extends EventEmitter {
       createdAt: this.createdAt,
       settings,
       participants: [...this.participants.values()]
-        .filter((p) => p.kind === "agent" && p.agentType)
+        .filter((p) => p.kind === "agent" && (p.agentType || p.status === "unstaffed"))
         .map((p) => ({
           id: p.id,
           name: p.name,
-          agentType: p.agentType!,
+          agentType: p.agentType ?? "",
           tagline: p.tagline ?? "",
           role: p.role ?? "",
           avatar: p.avatar ?? "",
@@ -539,9 +560,16 @@ export class Room extends EventEmitter {
   }
 
 
-  postHumanMessage(text: string): ChatMessage {
+  unstaffed(): Participant[] {
+    return [...this.participants.values()].filter((p) => p.kind === "agent" && p.status === "unstaffed");
+  }
+
+  postHumanMessage(text: string, images: ImageInput[] = []): ChatMessage {
+    const waiting = this.unstaffed();
+    if (waiting.length) throw new Error(`${waiting.map((p) => p.name).join(", ")} ${waiting.length === 1 ? "has" : "have"} no coding agent yet: summon ${waiting.length === 1 ? "it" : "them"} from the roster to start the conversation`);
     const trimmed = text.trim();
-    if (!trimmed) throw new Error("empty message");
+    if (!trimmed && !images.length) throw new Error("empty message");
+    const attachments = images.length ? saveImages(ensureDir(this.filesDir()), images) : [];
     this.humanTypingUntil = 0;
     const human = this.participants.get("human")!;
     const message: ChatMessage = {
@@ -555,6 +583,7 @@ export class Room extends EventEmitter {
       ts: Date.now(),
       kind: "chat",
     };
+    if (attachments.length) message.images = attachments;
     this.decorateHumanMessage(message);
     human.turns += 1;
     if (this.focused) {
@@ -585,7 +614,7 @@ export class Room extends EventEmitter {
   private agentReadStates(): AgentReadState[] {
     const out: AgentReadState[] = [];
     for (const p of this.participants.values()) {
-      if (p.kind !== "agent" || p.status === "left") continue;
+      if (p.kind !== "agent" || p.status === "left" || p.status === "unstaffed") continue;
       const runtime = this.runtimes.get(p.id);
       if (runtime) out.push({ id: p.id, name: p.name, lastSeenSeq: runtime.lastSeenSeq, active: runtime.turnActive, online: true });
       else out.push({ id: p.id, name: p.name, lastSeenSeq: this.restoredSeen.get(p.id) ?? -1, active: false, online: false });
@@ -596,6 +625,17 @@ export class Room extends EventEmitter {
   private editableMessage(messageId: string): ChatMessage {
     const message = this.messages.find((m) => m.id === messageId);
     if (!message || message.kind !== "chat" || message.from !== "human") throw new Error("only your own chat messages can be edited");
+    return message;
+  }
+
+  setPinned(messageId: string, pinned: boolean): ChatMessage {
+    const message = this.messages.find((m) => m.id === messageId);
+    if (!message || message.kind !== "chat") throw new Error("only chat messages can be pinned");
+    if (!!message.pinned === pinned) return message;
+    if (pinned) message.pinned = true;
+    else delete message.pinned;
+    this.rewriteHistory();
+    this.push({ type: "message", message });
     return message;
   }
 
@@ -632,7 +672,8 @@ export class Room extends EventEmitter {
     if (mode === "notify") {
       this.rewriteHistory();
       this.push({ type: "message", message });
-      if (restart.length || offline.length) this.postSystem(editNotice(this.humanName, previous, trimmed), "agents");
+      if (restart.length || offline.length) this.postSystem(editNotice(this.humanName, previous, trimmed), "agents", true);
+      for (const a of restart) this.requestTurn(a.id);
       this.log.info(`edit (notify) of #${message.seq}: ${restart.length} agents had the old version`);
       this.route(message);
       return { restarted: [], removed: 0 };
@@ -675,6 +716,29 @@ export class Room extends EventEmitter {
     this.startNext();
     this.route(message);
     return { restarted, removed: removed.length };
+  }
+
+  async respawnAgent(id: string): Promise<Participant> {
+    const participant = this.participants.get(id);
+    if (!participant || participant.kind !== "agent") throw new Error("no such agent");
+    const online = this.runtimes.has(id);
+    this.dropScheduledTurn(id);
+    this.cancelPermissionsOf(id);
+    if (this.speaking === id) this.speaking = null;
+    if (online) await this.retireRuntime(id);
+    participant.sessionId = undefined;
+    this.restoredSeen.set(id, this.seq);
+    this.push({ type: "participant", participant });
+    if (!online) {
+      participant.statusDetail = "its context was cleared; a reconnect starts it with an empty head";
+      this.postSystem(`${participant.name} was respawned while offline: it comes back knowing nothing from before.`);
+      this.push({ type: "participant", participant });
+      this.log.info(`respawn of ${participant.name} (offline): stored session dropped`);
+      return participant;
+    }
+    await this.reconnect(id, { mode: "replay", replay: 0, reason: "its context was cleared, it remembers nothing from before" });
+    this.log.info(`respawn of ${participant.name}: fresh session, no replay`);
+    return participant;
   }
 
   private async retireRuntime(id: string): Promise<void> {
@@ -986,9 +1050,10 @@ export class Room extends EventEmitter {
     if (recipe.unavailableReason) throw new Error(`${recipe.label}: ${recipe.unavailableReason}`);
     const name = options.name.trim();
     if (!NAME_PATTERN.test(name)) throw new Error("name must be 1-24 letters, digits, _ or - (no spaces)");
-    if (this.findByName(name)) throw new Error(`name "${name}" is already taken`);
+    const taken = this.findByName(name);
+    if (taken && !(options.id && taken.id === options.id && taken.status === "unstaffed")) throw new Error(`name "${name}" is already taken`);
 
-    const id = `${recipe.id}-${name.toLowerCase()}`;
+    const id = options.id ?? `${recipe.id}-${name.toLowerCase()}`;
     const launch: LaunchPrefs = {
       model: options.model ?? recipe.defaultModel,
       effort: options.effort ?? recipe.defaultEffort,
@@ -1003,7 +1068,7 @@ export class Room extends EventEmitter {
       agentVendor: recipe.vendor,
       status: "starting",
       turns: 0,
-      color: COLORS[this.colorIndex++ % COLORS.length],
+      color: options.color ?? COLORS[this.colorIndex++ % COLORS.length],
       tagline: (options.tagline ?? "").trim().slice(0, 80),
       role: (options.role ?? "").trim().slice(0, 4000),
       avatar: (options.avatar ?? "").trim().slice(0, 8) || undefined,
@@ -1018,6 +1083,53 @@ export class Room extends EventEmitter {
     this.push({ type: "participant", participant });
     await this.startAgent(participant, launch, true);
     return participant;
+  }
+
+  addUnstaffed(input: { name: string; tagline?: string; role?: string; avatar?: string; skills?: string[]; color?: string; id?: string }): Participant {
+    const name = input.name.trim();
+    if (!NAME_PATTERN.test(name)) throw new Error("name must be 1-24 letters, digits, _ or - (no spaces)");
+    if (this.findByName(name)) throw new Error(`name "${name}" is already taken`);
+    const id = input.id ?? `vm-${name.toLowerCase()}`;
+    const participant: Participant = {
+      id,
+      name,
+      kind: "agent",
+      status: "unstaffed",
+      statusDetail: "awaiting a coding agent",
+      turns: 0,
+      color: input.color ?? COLORS[this.colorIndex++ % COLORS.length],
+      tagline: (input.tagline ?? "").trim().slice(0, 80),
+      role: (input.role ?? "").trim().slice(0, 4000),
+      avatar: (input.avatar ?? "").trim().slice(0, 8) || undefined,
+      skills: normalizeSkillList(input.skills),
+      violations: 0,
+      briefsSent: 0,
+      failedTurns: 0,
+    };
+    this.participants.set(id, participant);
+    this.push({ type: "participant", participant });
+    return participant;
+  }
+
+  async staff(
+    id: string,
+    choice: { agentType: string; model?: string | null; effort?: string | null; mode?: string | null; name?: string | null; tagline?: string | null; role?: string | null; avatar?: string | null; skills?: string[] },
+  ): Promise<Participant> {
+    const placeholder = this.participants.get(id);
+    if (!placeholder || placeholder.kind !== "agent" || placeholder.status !== "unstaffed") throw new Error("this vibemate is not awaiting a coding agent");
+    return this.inviteAgent({
+      id,
+      agentType: choice.agentType,
+      name: choice.name?.trim() || placeholder.name,
+      tagline: choice.tagline ?? placeholder.tagline,
+      role: choice.role ?? placeholder.role,
+      avatar: choice.avatar ?? placeholder.avatar,
+      skills: choice.skills ?? placeholder.skills,
+      color: placeholder.color,
+      model: choice.model,
+      effort: choice.effort,
+      mode: choice.mode,
+    });
   }
 
   async reconnect(id: string, options: ReconnectOptions = { mode: "replay" }): Promise<Participant> {
@@ -1291,7 +1403,8 @@ export class Room extends EventEmitter {
     } else if (this.focused) {
       targets = [];
     } else {
-      const wanted = agentTargets.length ? agentTargets : this.settings.agentsWakeEachOther ? [...this.runtimes.keys()].filter((id) => id !== message.from && live(id)) : [];
+      const addressed = message.to.length > 0;
+      const wanted = agentTargets.length ? agentTargets : addressed ? [] : this.settings.agentsWakeEachOther ? [...this.runtimes.keys()].filter((id) => id !== message.from && live(id)) : [];
       if (wanted.length) {
         if (this.hops >= this.hopLimit) {
           const who = agentTargets.length ? message.toNames.join(", ") : "the other vibemates";
@@ -1581,11 +1694,15 @@ export class Room extends EventEmitter {
     this.floorQueue.push(id);
   }
 
+  private static readonly TYPING_HOLD_CAP_MS = 12_000;
+  private typingHoldSince = 0;
+
   private humanIsTyping(): boolean {
-    return this.settings.waitWhileHumanTypes && Date.now() < this.humanTypingUntil;
+    return this.settings.waitWhileHumanTypes && Date.now() < this.humanTypingUntil && Date.now() - this.typingHoldSince < Room.TYPING_HOLD_CAP_MS;
   }
 
   humanTyping(): void {
+    if (Date.now() >= this.humanTypingUntil) this.typingHoldSince = Date.now();
     this.humanTypingUntil = Date.now() + 4000;
     this.armTypingTimer();
   }
@@ -1665,7 +1782,7 @@ export class Room extends EventEmitter {
     const unreadAll = this.messages.filter(
       (m) => m.kind !== "hidden" && m.seq > runtime.lastSeenSeq && (m.kind === "system" || m.from !== id || m.seq <= runtime.replayOwnUntilSeq),
     );
-    if (!unreadAll.some((m) => m.kind === "chat")) return;
+    if (!unreadAll.some((m) => m.kind === "chat" || m.wakes)) return;
     const cap = this.settings.backlogCap;
     const omitted = Math.max(0, unreadAll.length - cap);
     const unread = omitted ? unreadAll.slice(omitted) : unreadAll;
@@ -1694,14 +1811,26 @@ export class Room extends EventEmitter {
       notes.push(s.invokedBy ? `${s.invokedBy} invoked your skill "${s.name}"; its instructions are attached below, follow them` : `skill "${s.name}" attached below as you asked; the same messages follow`);
     }
     const skillsForPrompt = this.skillsForPrompt(participant, runtime);
-    const promptText = composePrompt({
+    const seesImages = runtime.agent.acceptsImages;
+    const backlogImages = (m: ChatMessage): BacklogImage[] | undefined => {
+      if (!m.images || !m.images.length) return undefined;
+      const attached = seesImages && (m.to.length === 0 || m.to.includes(id));
+      return m.images.map((a, i) => ({ n: a.n ?? i + 1, ref: `#${m.seq}.${a.n ?? i + 1}`, name: a.name, path: this.imagePath(a), mimeType: a.mimeType, attached, forNames: m.to.length ? m.toNames : [] }));
+    };
+    const prompt = composePrompt({
       brief: briefReason ? buildBrief(settings, persona, roster, undefined, skillsForPrompt) : undefined,
       header: buildHeader(settings, persona, roster, this.hops, notes, skillsForPrompt),
       skills: attached.map((s) => composeSkillBlock({ name: s.name, text: s.text, invokedBy: s.invokedBy, extraFiles: s.extraFiles })),
       backlog: unread.map<BacklogLine>((m) =>
         m.kind === "system"
           ? { kind: "event", text: m.text }
-          : { kind: "message", fromName: m.from === id ? `${m.fromName} (you, earlier)` : m.fromName, toNames: m.toNames, text: m.text },
+          : {
+              kind: "message",
+              fromName: m.from === id ? `${m.fromName} (you, earlier)` : m.fromName,
+              toNames: m.toNames,
+              text: m.text,
+              images: backlogImages(m),
+            },
       ),
       omitted,
       personaName: participant.name,
@@ -1716,13 +1845,30 @@ export class Room extends EventEmitter {
     runtime.replayOwnUntilSeq = -1;
     runtime.log.info(`turn: ${unread.length} unread (${omitted} omitted), brief=${briefReason ?? "no"}, notes=${notes.length}`);
 
-    const retry = await this.executeTurn(participant, runtime, promptText, null);
+    const retry = await this.executeTurn(participant, runtime, this.promptBlocks(prompt, runtime), null);
     if (retry) {
-      await this.executeTurn(participant, runtime, retry.prompt, retry);
+      await this.executeTurn(participant, runtime, [{ type: "text", text: retry.prompt }], retry);
     }
   }
 
-  private async executeTurn(participant: Participant, runtime: AgentRuntime, promptText: string, retry: RetryRequest | null): Promise<RetryRequest | null> {
+  private promptBlocks(parts: PromptPart[], runtime: AgentRuntime): ContentBlock[] {
+    const blocks: ContentBlock[] = [];
+    for (const part of parts) {
+      if (part.type === "text") {
+        blocks.push({ type: "text", text: part.text });
+        continue;
+      }
+      try {
+        blocks.push({ type: "image", data: readFileSync(part.image.path).toString("base64"), mimeType: part.image.mimeType });
+      } catch (error) {
+        runtime.log.warn(`image ${part.image.ref} could not be read: ${describeError(error)}`);
+        blocks.push({ type: "text", text: ` (${part.image.ref} could not be read: ${part.image.path})` });
+      }
+    }
+    return blocks;
+  }
+
+  private async executeTurn(participant: Participant, runtime: AgentRuntime, blocks: ContentBlock[], retry: RetryRequest | null): Promise<RetryRequest | null> {
     const id = participant.id;
     runtime.turnActive = true;
     participant.status = "thinking";
@@ -1748,7 +1894,7 @@ export class Room extends EventEmitter {
     let result: PromptResult | null = null;
     let failure: string | null = null;
     try {
-      result = await runtime.agent.prompt(runtime.sessionId, [{ type: "text", text: promptText }]);
+      result = await runtime.agent.prompt(runtime.sessionId, blocks);
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     }
@@ -1815,10 +1961,10 @@ export class Room extends EventEmitter {
       return null;
     }
 
-    const pull = !retry ? text.match(SKILL_MARKER_PATTERN) : null;
+    const pull = !retry ? skillPull(text) : null;
     if (pull) {
       this.push({ type: "message.removed", id: draft.id });
-      return this.handleSkillPull(participant, runtime, text, pull[1]);
+      return this.handleSkillPull(participant, runtime, text, pull);
     }
 
     if (!text || text.toLowerCase() === SILENT_MARKER) {
@@ -1952,6 +2098,7 @@ export class Room extends EventEmitter {
     const corrections: string[] = [];
     const unknown: string[] = [];
     for (const match of text.matchAll(MENTION_PATTERN)) {
+      if (match[1].toLowerCase() === "all") continue;
       if (!this.findByName(match[1]) && !unknown.includes(match[1])) unknown.push(match[1]);
     }
     if (unknown.length) {
@@ -2029,6 +2176,8 @@ export class Room extends EventEmitter {
         if (u.kind !== undefined) view.kind = u.kind;
         if (u.status !== undefined) view.status = u.status;
         if (u.rawInput !== undefined) view.rawInput = u.rawInput;
+        const output = toolOutputText(u);
+        if (output) view.output = output;
         this.push({ type: "toolcall", id: turn.message.id, toolCall: view });
         return;
       }
@@ -2239,14 +2388,22 @@ export class Room extends EventEmitter {
 
   private roster(): RosterEntry[] {
     return [...this.participants.values()]
-      .filter((p) => p.status !== "left")
-      .map((p) => ({ name: p.name, kind: p.kind, vendor: p.agentVendor ?? p.agentLabel, tagline: p.tagline || undefined }));
+      .filter((p) => p.status !== "left" && p.status !== "unstaffed")
+      .map((p) => ({ name: p.name, kind: p.kind, vendor: p.agentVendor ?? p.agentLabel, tagline: p.tagline || undefined, muted: p.muted || undefined }));
   }
 
   private parseMentions(text: string): { ids: string[]; names: string[] } {
     const ids: string[] = [];
     const names: string[] = [];
     for (const match of text.matchAll(MENTION_PATTERN)) {
+      if (match[1].toLowerCase() === "all") {
+        for (const p of this.participants.values()) {
+          if (p.kind !== "agent" || p.status === "left" || ids.includes(p.id)) continue;
+          ids.push(p.id);
+        }
+        if (!names.includes("All")) names.push("All");
+        continue;
+      }
       const participant = this.findByName(match[1]);
       if (participant && !ids.includes(participant.id)) {
         ids.push(participant.id);
@@ -2256,13 +2413,13 @@ export class Room extends EventEmitter {
     return { ids, names };
   }
 
-  private findByName(name: string): Participant | undefined {
+  findByName(name: string): Participant | undefined {
     const lower = name.toLowerCase();
     for (const p of this.participants.values()) if (p.name.toLowerCase() === lower) return p;
     return undefined;
   }
 
-  private postSystem(text: string, audience?: "agents"): void {
+  private postSystem(text: string, audience?: "agents", wakes?: boolean): void {
     const message: ChatMessage = {
       id: randomUUID(),
       seq: ++this.seq,
@@ -2275,6 +2432,7 @@ export class Room extends EventEmitter {
       kind: "system",
     };
     if (audience) message.audience = audience;
+    if (wakes) message.wakes = true;
     this.commit(message);
   }
 
@@ -2327,6 +2485,12 @@ export class Room extends EventEmitter {
   }
 
   private push(event: RoomEvent): void {
+    if (event.type === "participant") {
+      const id = event.participant.id;
+      const lastSeenSeq = this.runtimes.get(id)?.lastSeenSeq ?? this.restoredSeen.get(id);
+      this.emit("event", { ...event, participant: { ...event.participant, lastSeenSeq } });
+      return;
+    }
     this.emit("event", event);
   }
 }
@@ -2343,6 +2507,20 @@ function describeError(error: unknown): string {
 function looksSilent(text: string): boolean {
   const t = text.trim().toLowerCase();
   return t.length <= SILENT_MARKER.length && SILENT_MARKER.startsWith(t);
+}
+
+function toolOutputText(u: ToolCallUpdate): string {
+  const cap = (s: string): string => (s.length > 4000 ? `${s.slice(0, 4000)}\n… (${s.length - 4000} more characters)` : s);
+  if (u.content && u.content.length) {
+    const parts = u.content.map((c) => {
+      if (c.type === "content") return contentText(c.content);
+      if (c.type === "diff") return `--- ${c.path}\n${c.oldText ? `- ${c.oldText}\n` : ""}+ ${c.newText}`;
+      return `[terminal ${c.terminalId}]`;
+    });
+    return cap(parts.join("\n"));
+  }
+  if (u.rawOutput !== undefined && u.rawOutput !== null) return cap(typeof u.rawOutput === "string" ? u.rawOutput : JSON.stringify(u.rawOutput, null, 1));
+  return "";
 }
 
 function contentText(block: ContentBlock): string {

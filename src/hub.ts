@@ -2,7 +2,7 @@
 
 import { EventEmitter } from "node:events";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { writeFileAtomic } from "./atomic.js";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import { listRecipes } from "./recipes.js";
 import { DEFAULT_ROOM_SETTINGS, type RoomSettings } from "./persona.js";
 import { Room, type DiscoveredOptions, type RoomEvent, type SkillsBridge, type StoredParticipant } from "./room.js";
 import { SkillLibrary, type SkillDraft, type SkillMeta } from "./skills.js";
+import { TemplateLibrary, type RoomTemplate } from "./templates.js";
 
 export interface VendorPreset {
   model: string | null;
@@ -58,6 +59,7 @@ export type HubEvent =
   | { type: "room.event"; roomId: string; event: RoomEvent }
   | { type: "room.created"; room: unknown }
   | { type: "room.removed"; roomId: string }
+  | { type: "rooms.opened"; roomIds: string[] }
   | { type: "settings"; settings: ProgramSettings }
   | { type: "skills"; skills: SkillMeta[] }
   | { type: "reset" };
@@ -74,6 +76,7 @@ export class Hub extends EventEmitter {
   readonly dataDir: string;
   readonly rooms = new Map<string, Room>();
   readonly skills: SkillLibrary;
+  readonly templates: TemplateLibrary;
   settings: ProgramSettings;
   private readonly log: Logger;
   private readonly optionCache = new Map<string, DiscoveredOptions>();
@@ -87,6 +90,7 @@ export class Hub extends EventEmitter {
     this.log = log;
     mkdirSync(join(this.dataDir, "rooms"), { recursive: true });
     this.skills = new SkillLibrary(join(this.dataDir, "skills"), log.child("skills"));
+    this.templates = new TemplateLibrary(join(this.dataDir, "templates"), log.child("templates"));
     try {
       this.skills.seedBuiltins();
     } catch (error) {
@@ -357,19 +361,85 @@ export class Hub extends EventEmitter {
     return { room, notices };
   }
 
+  async createRoomFromTemplate(input: {
+    templateId: string;
+    name: string;
+    dir?: string | null;
+    vibemates: { name: string; agentType: string; model?: string | null; effort?: string | null; mode?: string | null }[];
+  }): Promise<{ room: Room; notices: string[] }> {
+    const template: RoomTemplate | undefined = this.templates.get(input.templateId);
+    if (!template) throw new Error(`no such template: ${input.templateId}`);
+    const { room, notices } = this.createRoom({ name: input.name, dir: input.dir, settings: template.settings });
+    for (const [i, tv] of template.vibemates.entries()) {
+      const choice = input.vibemates[i] ?? { name: tv.name, agentType: "" };
+      const skills = (tv.skills ?? []).filter((name) => {
+        const ok = !!this.skills.get(name);
+        if (!ok) notices.push(`${choice.name || tv.name}: skill "${name}" is not in the library; not attached.`);
+        return ok;
+      });
+      if (!choice.agentType) {
+        try {
+          room.addUnstaffed({ name: choice.name || tv.name, tagline: tv.tagline, role: tv.role, avatar: tv.avatar, skills });
+        } catch (error) {
+          notices.push(`${choice.name || tv.name} could not be added: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        continue;
+      }
+      try {
+        await room.inviteAgent({
+          agentType: choice.agentType,
+          name: choice.name || tv.name,
+          tagline: tv.tagline,
+          role: tv.role,
+          avatar: tv.avatar,
+          skills,
+          model: choice.model ?? tv.model,
+          effort: choice.effort ?? tv.effort,
+          mode: choice.mode ?? tv.mode,
+        });
+      } catch (error) {
+        notices.push(`${choice.name || tv.name} could not be summoned: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    this.saveRooms();
+    return { room, notices };
+  }
+
   getRoom(id: string): Room {
     const room = this.rooms.get(id);
     if (!room) throw new Error(`no such room: ${id}`);
     return room;
   }
 
+  readonly openRooms: string[] = [];
+
+  markOpened(id: string): void {
+    this.getRoom(id);
+    if (this.openRooms.includes(id)) return;
+    this.openRooms.push(id);
+    this.emit("event", { type: "rooms.opened", roomIds: [...this.openRooms] } satisfies HubEvent);
+  }
+
   async removeRoom(id: string): Promise<void> {
     const room = this.getRoom(id);
     await room.shutdown();
     this.rooms.delete(id);
+    const at = this.openRooms.indexOf(id);
+    if (at >= 0) this.openRooms.splice(at, 1);
     this.saveRooms();
     this.emit("event", { type: "room.removed", roomId: id } satisfies HubEvent);
-    this.log.info(`removed room ${id} (history kept on disk)`);
+    const folder = join(this.dataDir, "rooms", id);
+    if (existsSync(folder)) {
+      const trash = join(this.dataDir, "trash");
+      mkdirSync(trash, { recursive: true });
+      const target = join(trash, `${id}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+      try {
+        renameSync(folder, target);
+        this.log.info(`removed room ${id}; its folder is in ${target}`);
+      } catch (error) {
+        this.log.warn(`removed room ${id}, but its folder could not be moved to trash: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else this.log.info(`removed room ${id}`);
   }
 
   snapshot(): unknown {
@@ -379,6 +449,7 @@ export class Hub extends EventEmitter {
       skills: this.skills.list(),
       roomDefaults: { ...DEFAULT_ROOM_SETTINGS, ...this.settings.roomDefaults },
       rooms: [...this.rooms.values()].map((room) => room.snapshot()),
+      openRooms: [...this.openRooms],
     };
   }
 

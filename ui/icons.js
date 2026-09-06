@@ -29,6 +29,7 @@
     at: `<circle cx="12" cy="12" r="4"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.5 7.1"/>`,
     trash: `<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>`,
     pencil: `<path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>`,
+    pin: `<path d="M9 4h6l-.8 6.5L17 13v2H7v-2l2.8-2.5L9 4z"/><path d="M12 15v6"/>`,
     send: `<path d="M4 12l16-8-6 16-2.5-6.5L4 12z"/>`,
     folder: `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>`,
     spark: `<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z"/><path d="M19 15l.6 1.6 1.6.6-1.6.6L19 19.4l-.6-1.6-1.6-.6 1.6-.6z"/>`,
@@ -56,20 +57,22 @@
 
   function install() {
     if (document.getElementById("viberoom-icons")) return;
-    const symbols = Object.entries(ICONS)
-      .map(([name, body]) => `<symbol id="i-${name}" viewBox="0 0 24 24">${body}</symbol>`)
-      .join("");
-    const holder = document.createElement("div");
-    holder.id = "viberoom-icons";
-    holder.setAttribute("aria-hidden", "true");
-    holder.style.cssText = "position:absolute;width:0;height:0;overflow:hidden";
-    holder.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg">${symbols}</svg>`;
-    document.body.prepend(holder);
+    const style = document.createElement("style");
+    style.id = "viberoom-icons";
+    style.textContent = Object.entries(ICONS)
+      .map(([name, body]) => `.i-${name}{--icon:url("${dataUri(body)}")}`)
+      .join("\n");
+    document.head.appendChild(style);
+  }
+
+  function dataUri(body) {
+    const markup = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='#000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>${body.replace(/"/g, "'").replace(/currentColor/g, "#000")}</svg>`;
+    return "data:image/svg+xml," + markup.replace(/%/g, "%25").replace(/#/g, "%23").replace(/</g, "%3C").replace(/>/g, "%3E");
   }
 
   function svg(name, cls) {
     if (!ICONS[name]) name = "info";
-    return `<svg class="i${cls ? ` ${cls}` : ""}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+    return `<span class="i i-${name}${cls ? ` ${cls}` : ""}" aria-hidden="true"></span>`;
   }
 
   window.Icons = { install, svg, names: Object.keys(ICONS) };

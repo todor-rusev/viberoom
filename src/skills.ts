@@ -4,6 +4,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { join, resolve } from "node:path";
 import { Logger } from "./log.js";
 
+import { isReservedSkillName, RESERVED_SKILL_NAMES } from "./commands.js";
+
 export const SKILL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
 export const SKILL_FILE = "SKILL.md";
 export const BUILTIN_AUTHOR = "viberoom";
@@ -86,6 +88,9 @@ export function lintSkill(input: {
   const body = input.body.replace(/\r\n/g, "\n").trim();
   const hint = (input.argumentHint ?? "").trim();
   if (!SKILL_NAME_PATTERN.test(name)) errors.push({ code: "name-invalid", message: `name "${name}" must be 1-32 letters, digits, _ or -` });
+  else if (isReservedSkillName(name)) {
+    errors.push({ code: "name-reserved", message: `"${name}" is a room command (reserved: ${RESERVED_SKILL_NAMES.join(", ")})` });
+  }
   if (input.folder && name.toLowerCase() !== input.folder.toLowerCase()) {
     errors.push({ code: "name-folder-mismatch", message: `name "${name}" differs from the folder "${input.folder}"` });
   }

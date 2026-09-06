@@ -22,7 +22,7 @@
       <div class="rail-items">
         <button class="rail-item new" id="rail-new-room" title="Open a room"><span class="ico" data-icon="plus"></span><span class="label">Open a room</span></button>
         <button class="rail-item" data-nav="rooms" title="Rooms"><span class="ico" data-icon="rooms"></span><span class="label">Rooms</span></button>
-        <button class="rail-item" data-nav="room" title="Current room" id="rail-room" hidden><span class="ico" data-icon="chat"></span><span class="label" id="rail-room-label">Room</span><span class="rail-count" id="rail-unread" hidden></span></button>
+        <div class="rail-rooms-wrap" id="rail-rooms-wrap" hidden><span class="rail-hr"></span><div class="rail-rooms" id="rail-rooms" aria-label="Open rooms"></div><span class="rail-hr"></span></div>
         <button class="rail-item" data-nav="skills" title="Skills"><span class="ico" data-icon="skills"></span><span class="label">Skills</span></button>
         <button class="rail-item" data-nav="settings" title="Settings"><span class="ico" data-icon="settings"></span><span class="label">Settings</span></button>
       </div>
@@ -70,15 +70,25 @@
         <header class="main-head chat-head">
           <div class="chat-title">
             <h1 id="chat-room-name">…</h1>
+            <div id="working-now" class="working-now" hidden></div>
             <div class="chat-sub" id="chat-room-sub"></div>
           </div>
           <div class="chat-actions">
+            <button id="pins-btn" class="chip pins-chip" type="button" hidden title="Pinned messages"></button>
             <label class="search"><span class="search-icon" data-icon="search"></span><input id="search" type="search" placeholder="Search in this room…" autocomplete="off"></label>
             <button id="chat-info-btn" class="icon-btn" title="Room settings"><span data-icon="settings"></span></button>
           </div>
         </header>
+        <div id="cast-banner" class="cast-banner" hidden></div>
         <div id="messages" class="messages"></div>
+        <div id="pins-panel" class="pins-panel" hidden></div>
+        <div id="timeline-left" class="timeline left" hidden>
+          <div class="tl-view"></div>
+          <div class="tl-ticks"></div>
+          <div class="tl-pop" hidden></div>
+        </div>
         <button type="button" id="jump-latest" class="jump-latest" title="Back to the latest messages" hidden><span data-icon="arrow-down"></span>Latest</button>
+        <div id="done-notes" class="done-notes" hidden></div>
         <div id="timeline" class="timeline" hidden>
           <div class="tl-view"></div>
           <div class="tl-ticks"></div>
@@ -87,9 +97,11 @@
         <div id="mention-menu" class="mention-menu" hidden></div>
         <div id="emoji-menu" class="mention-menu emoji-menu" hidden></div>
         <form id="composer" class="composer">
+          <div class="composer-grip" id="composer-grip" title="Drag to make the box taller; double-click to reset"></div>
           <button type="button" class="smile-btn" id="emoji-btn" title="Add an emoji"><span data-icon="smile"></span></button>
           <div class="composer-box">
-            <textarea id="input" rows="1" placeholder="Message the room… @Name or /skill" title="Enter sends, Shift+Enter is a new line"></textarea>
+            <div class="shots-tray" id="shots-tray" hidden></div>
+            <textarea id="input" rows="1" placeholder="Message the room… @Name or /skill" title="Enter sends, Shift+Enter is a new line; paste or drop an image"></textarea>
           </div>
           <button type="submit" class="send-btn" title="Send"><span data-icon="send"></span></button>
         </form>
@@ -100,7 +112,6 @@
     </main>
     <aside class="details" id="details" hidden>
       <div class="resizer" id="details-resizer" title="Drag to resize; double-click to fit"></div>
-      <button type="button" class="details-handle" id="details-handle" title="Close the panel"><span data-icon="forward"></span></button>
       <div class="details-inner" id="details-inner"></div>
     </aside>
   </div>
@@ -135,6 +146,21 @@
         <span class="dir-row"><input id="room-dir" type="text" placeholder="C:\projects\my-app"><button type="button" class="btn ghost browse-btn" id="room-dir-browse" title="Choose a folder"><span data-icon="folder"></span>Browse</button></span></label>
       <p class="error" id="room-error" hidden></p>
       <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">Open the room</button></div>
+    </form>
+  </dialog>
+  <dialog id="template-dialog" class="dialog wide">
+    <form id="template-form" method="dialog">
+      <h3><span class="h-ico" data-icon="rooms"></span>Start from a template</h3>
+      <p class="lead">A template is a room's rules and its vibemates, ready to summon. Pick one, choose who runs each vibemate, name the room.</p>
+      <div class="tpl-layout">
+        <div class="tpl-list" id="tpl-list"></div>
+        <div class="tpl-detail" id="tpl-detail"></div>
+      </div>
+      <label>Room name<input id="tpl-room-name" type="text" maxlength="60" required placeholder="e.g. Payments refactor"></label>
+      <label>Working directory <span class="hint">(optional)</span>
+        <span class="dir-row"><input id="tpl-room-dir" type="text" placeholder="C:\projects\my-app"><button type="button" class="btn ghost browse-btn" id="tpl-dir-browse" title="Choose a folder"><span data-icon="folder"></span>Browse</button></span></label>
+      <p class="error" id="tpl-error" hidden></p>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary" id="tpl-create">Create the room</button></div>
     </form>
   </dialog>
   <dialog id="invite-dialog" class="dialog wide">
@@ -176,6 +202,7 @@
       </div>
     </form>
   </dialog>
+  <div id="lightbox" class="lightbox" hidden><img alt=""></div>
   <dialog id="edit-dialog" class="dialog">
     <form id="edit-form" method="dialog">
       <h3><span class="h-ico" data-icon="pencil"></span>Edit your message</h3>
