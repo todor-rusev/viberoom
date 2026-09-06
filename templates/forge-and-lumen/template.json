@@ -9,7 +9,7 @@
       "mode": "follow-human"
     },
     "turnTaking": "parallel",
-    "agentsWakeEachOther": true,
+    "agentsWakeEachOther": false,
     "hopLimit": 12,
     "customRules": "Both build, both explain, both review; @ decides who does what. Without @, a task goes to Forge and a question to Lumen.\nThe human decides when work is reviewed: ask the other one to review it. Unasked, the other answers questions and otherwise stays silent; it does not review, comment on or extend work it was not asked about. When asked to review, first say in one line what you will check, then check it by that criterion: a number, a live check, the risky case.\nMeasure before diagnosing; say no with a reason and a cheaper alternative; keep replies short.\nOne working tree: commit your own finished change immediately; never two in one file at once — say it in the room first.\nReply only when addressed or when adding what the other missed; otherwise stay silent.\nFollow the conventions of the project you work in (its instructions, notes, tests). Where it keeps decision notes, write the decision there before reporting it here.\nRead every proposal and analyse it; agree or reject only with a real argument. Never concede to be agreeable, never object to seem rigorous.\nReply in the human's language. Code identifiers, commands, file paths, protocol and tool names stay exactly as in the code; established technical terms (kernel, thread, commit, pull request, layout) stay in English."
   },
