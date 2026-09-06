@@ -3683,6 +3683,20 @@
     if (b) selectRoom(b.dataset.room, { keepDetails: true });
   });
   els.railRooms.addEventListener("animationend", (e) => e.target.classList.remove("bump"));
+  function setTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    remember("theme", theme);
+    const icon = $("#theme-toggle-icon");
+    const label = $("#theme-toggle-label");
+    if (icon) icon.dataset.icon = theme === "dark" ? "sun" : "moon";
+    if (icon) icon.innerHTML = ic(theme === "dark" ? "sun" : "moon");
+    if (label) label.textContent = theme === "dark" ? "Light mode" : "Dark mode";
+  }
+  const themeToggle = $("#theme-toggle");
+  if (themeToggle) {
+    setTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light");
+    themeToggle.addEventListener("click", () => setTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark"));
+  }
   function setSideOpen(open) {
     els.app.classList.toggle("side-collapsed", !open);
     remember("sideOpen", open ? "1" : "0");
