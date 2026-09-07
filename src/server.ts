@@ -41,6 +41,9 @@ const STATIC_FILES: Record<string, { file: string; type: string; dir?: "ui" | "a
   "/vendor-icons/cursor.svg": { file: "vendors/cursor.svg", type: "image/svg+xml", dir: "assets" },
   "/vendor-icons/opencode.svg": { file: "vendors/opencode.svg", type: "image/svg+xml", dir: "assets" },
   "/vendor-icons/copilot.svg": { file: "vendors/copilot.svg", type: "image/svg+xml", dir: "assets" },
+  "/vendor-icons/hermes.svg": { file: "vendors/hermes.svg", type: "image/svg+xml", dir: "assets" },
+  "/vendor-icons/grok.svg": { file: "vendors/grok.svg", type: "image/svg+xml", dir: "assets" },
+  "/vendor-icons/antigravity.svg": { file: "vendors/antigravity.svg", type: "image/svg+xml", dir: "assets" },
   "/vendor/mermaid.min.js": { file: "mermaid/dist/mermaid.min.js", type: "text/javascript; charset=utf-8", dir: "node_modules" },
   "/vendor/marked.umd.js": { file: "marked/lib/marked.umd.js", type: "text/javascript; charset=utf-8", dir: "node_modules" },
 };
