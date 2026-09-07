@@ -89,6 +89,49 @@
   --canvas-pattern-size: 22px 22px;
   --grad-page: var(--bg);
 }
+:root[data-theme="dark"] {
+  --ink: #eef0fb;
+  --ink-2: #d7d9f5;
+  --ink-3: #b4b6dd;
+  --muted: #8f92c0;
+  --faint: #6f72a0;
+  --placeholder: #6f72a0;
+  --bg: #14152b;
+  --panel: #1c1e3a;
+  --card: #1c1e3a;
+  --soft: #22244a;
+  --softer: #1e2040;
+  --lav: #2a2c58;
+  --lav-2: #363a72;
+  --mint: #16382c;
+  --mint-ink: #4fd6a0;
+  --green: #2fc97e;
+  --warm: #3a3218;
+  --warm-ink: #e8c14f;
+  --peach: #3a2a18;
+  --rose: #3a1f22;
+  --rose-ink: #f27a70;
+  --sky: #182a44;
+  --code-bg: #0f1024;
+  --primary-ghost: rgba(122, 122, 255, 0.16);
+  --danger-dark: #ff6d5e;
+  --info: #6fa2ff;
+  --border: var(--lav);
+  --border-strong: var(--lav-2);
+  --edge: 0 2px 0 rgba(0, 0, 0, 0.25);
+  --shadow-tile: 0 4px 14px -4px rgba(0, 0, 0, 0.55);
+  --shadow-pop: 0 10px 28px -10px rgba(0, 0, 0, 0.65);
+  --shadow-primary: 0 8px 20px -8px rgba(91, 91, 240, 0.55);
+  --shadow-dialog: 0 30px 70px -30px rgba(0, 0, 0, 0.75);
+  --sb-thumb: rgba(122, 122, 255, 0.28);
+  --sb-thumb-hover: rgba(122, 122, 255, 0.5);
+  --grad-canvas: radial-gradient(900px 520px at 100% 100%, rgba(91, 91, 240, 0.10), transparent 70%), radial-gradient(640px 380px at 0% 0%, rgba(47, 201, 126, 0.06), transparent 70%), linear-gradient(165deg, #14152b 0%, #16172f 55%, #131428 100%);
+  --canvas-pattern: radial-gradient(circle at 1px 1px, rgba(122, 122, 255, 0.16) 0.9px, transparent 1.6px);
+}
+:root[data-theme="dark"] .msg .bubble { background: var(--card); color: var(--ink-2); box-shadow: 0 2px 0 rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.25); }
+:root[data-theme="dark"] .ha-a { background: var(--card); color: var(--ink); }
+:root[data-theme="dark"] .rail-item.new:hover, :root[data-theme="dark"] .rail-toggle:hover, :root[data-theme="dark"] .rail-item.active, :root[data-theme="dark"] .rail-item.me { background: var(--card); }
+:root[data-theme="dark"] .hero-cta { background: var(--card); color: var(--primary); }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; overflow: hidden; }
 body { font-family: var(--font); color: var(--ink); background: var(--bg); font-size: var(--fs-md); font-weight: 600; line-height: 1.45; -webkit-font-smoothing: antialiased; }

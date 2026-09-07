@@ -12,6 +12,15 @@
   <meta name="theme-color" content="#6d5dfc">
   <link rel="stylesheet" href="/theme.css">
   <link rel="stylesheet" href="/app.css">
+  <script>
+    (() => {
+      try {
+        const saved = localStorage.getItem("viberoom.theme");
+        const theme = saved || (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        if (theme === "dark") document.documentElement.setAttribute("data-theme", "dark");
+      } catch {}
+    })();
+  </script>
 </head>
 <body>
   <div id="app" class="shell view-rooms">
@@ -29,6 +38,7 @@
       <div class="rail-foot">
         <button class="rail-item me" data-nav="me" title="Your vibe" id="rail-me"><span class="ico" id="rail-me-avatar"></span><span class="label" id="rail-me-label">You</span></button>
         <div class="rail-status"><span class="conn" id="conn" title="Connection to the hub"></span><span class="label conn-label" id="conn-label">connected</span></div>
+        <button class="rail-item" id="theme-toggle" title="Toggle dark mode"><span class="ico" id="theme-toggle-icon" data-icon="moon"></span><span class="label" id="theme-toggle-label">Dark mode</span></button>
         <button class="rail-toggle" id="rail-toggle" title="Expand the menu"><span data-icon="expand"></span></button>
       </div>
     </nav>
