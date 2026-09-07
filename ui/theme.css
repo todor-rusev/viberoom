@@ -67,6 +67,9 @@
   --attention-shadow: 0 8px 18px -10px rgba(232, 100, 42, 0.7);
   --unread-grad: linear-gradient(135deg, #ff7a45, #f0452c);
   --note-hover: #ffeaa8;
+  --done: var(--st-ready);
+  --done-ink: var(--st-ready-ink);
+  --done-hover: #c4efdb;
   --tick-mine: #cdcdf9;
   --tick-mine-view: #a9a9f5;
   --tick-fallback: #9ca3af;

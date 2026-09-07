@@ -522,13 +522,18 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
-    const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|remove|config|persona|reconnect|mute|unmute|respawn|staff)$/);
+    const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|remove|config|persona|reconnect|mute|unmute|respawn|staff|notes|take-notes)$/);
     if (participantAction) {
       const room = hub.getRoom(decodeURIComponent(participantAction[1]));
       const id = decodeURIComponent(participantAction[2]);
       const action = participantAction[3];
       if (action === "cancel") room.cancelTurn(id);
-      else if (action === "respawn") await room.respawnAgent(id);
+      else if (action === "respawn") {
+        const replay = body.replay === undefined || body.replay === null || body.replay === "" ? undefined : Number(body.replay);
+        await room.respawnAgent(id, { memory: body.memory === true || body.memory === "true", replay: replay !== undefined && Number.isFinite(replay) ? Math.max(0, Math.min(500, Math.round(replay))) : undefined });
+      }
+      else if (action === "notes") room.updateNotes(id, String(body.notes ?? ""));
+      else if (action === "take-notes") await room.takeNotes(id);
       else if (action === "staff") {
         const participant = await room.staff(id, {
           agentType: String(body.agentType ?? ""),

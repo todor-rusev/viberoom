@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type AgentTypeId = "claude" | "codex" | "gemini" | "cursor" | "opencode" | "copilot";
+export type AgentTypeId = "claude" | "codex" | "gemini" | "cursor" | "opencode" | "copilot" | "fake";
 
 export interface LaunchSpec {
   command: string;
@@ -307,6 +307,29 @@ const recipes: AgentRecipe[] = [
     }),
   },
 ];
+
+const fakeAgent = process.env.VIBEROOM_FAKE_AGENT;
+if (fakeAgent) {
+  recipes.push({
+    id: "fake",
+    label: "Fake (test agent)",
+    vendor: "Fake",
+    icon: "",
+    tested: false,
+    note: "A scripted ACP agent for the hub's own probes; present only with VIBEROOM_FAKE_AGENT.",
+    modelPresets: [],
+    defaultModel: null,
+    effortPresets: [],
+    defaultEffort: null,
+    modePresets: [],
+    defaultMode: null,
+    unavailableReason: null,
+    installedAt: fakeAgent,
+    installHint: "",
+    bypassMode: null,
+    build: () => ({ command: process.execPath, args: [fakeAgent], env: {} }),
+  });
+}
 
 export function listRecipes(): AgentRecipe[] {
   return recipes;

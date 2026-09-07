@@ -555,7 +555,7 @@
   }
   function fmtTokens(n) {
     if (n === undefined || n === null) return "";
-    return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+    return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
   }
   function fmtCost(cost) {
     return cost ? `${cost.amount.toFixed(3)} ${cost.currency}` : "";
@@ -1170,7 +1170,7 @@
       if (!li) {
         li = document.createElement("li");
         li.dataset.id = p.id;
-        li.innerHTML = avatarHtml + bodyHtml;
+        li.innerHTML = avatarHtml + bodyHtml + (p.kind === "agent" ? `<button type="button" class="icon-btn sm p-gear" title="Open ${esc(p.name)}'s panel">${ic("settings")}</button>` : "");
         li.dataset.avatar = avatarHtml;
         if (statusClass) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="${statusClass}"></span>`);
         li.dataset.body = bodyHtml;
@@ -1189,10 +1189,12 @@
         }
       }
       if (li.className !== className) li.className = className;
+      if (p.kind === "agent" && !unstaffed) patchLifeRing(li, p);
       if (li !== els.participants.children[ordered.indexOf(p)]) els.participants.appendChild(li);
       rows.delete(p.id);
     }
     for (const li of rows.values()) li.remove();
+    renderLifePop();
     renderHushButton(room);
     els.reconnectAllBtn.hidden = offlineAgents(room).length === 0;
   }
@@ -1255,7 +1257,7 @@
     if (d.skill) {
       el.innerHTML = `
         <details class="hidden-turn">
-          <summary>${ic("skills")} hub ↔ ${esc(m.fromName)} · ${esc(m.text)}${d.via ? ` (${esc(d.via)})` : ""}${d.outcome ? ` · <em>${esc(d.outcome)}</em>` : ""}</summary>
+          <summary>${ic("skills")} room ↔ ${esc(m.fromName)} · ${esc(m.text)}${d.via ? ` (${esc(d.via)})` : ""}${d.outcome ? ` · <em>${esc(d.outcome)}</em>` : ""}</summary>
           <div class="hidden-body">
             ${d.original ? `<div class="hidden-label">Held reply (nobody in the room saw it)</div><div class="hidden-text">${esc(d.original)}</div>` : ""}
             <div class="hidden-label">What happened</div>
@@ -1266,7 +1268,7 @@
     }
     el.innerHTML = `
       <details class="hidden-turn">
-        <summary>${ic("tool")} hub ↔ ${esc(m.fromName)} · ${esc(m.text)}${d.outcome ? ` · <em>${esc(d.outcome)}</em>` : " · <em>waiting for the corrected reply…</em>"}</summary>
+        <summary>${ic("tool")} room ↔ ${esc(m.fromName)} · ${esc(m.text)}${d.outcome ? ` · <em>${esc(d.outcome)}</em>` : " · <em>waiting for the corrected reply…</em>"}</summary>
         <div class="hidden-body">
           <div class="hidden-label">Held reply (nobody in the room saw it)</div>
           <div class="hidden-text">${esc(d.original || "")}</div>
@@ -1937,7 +1939,8 @@
       <div class="section danger">
         ${sectionTitle("bolt", "Respawn")}
         <p class="hint">${esc(p.name)} comes back with an empty head: it forgets this conversation entirely. The room's history stays and you still see everything.${geekTip("A session's context cannot be erased, so the vibemate's process and session are closed and it starts a new one with no replay. Its stored session is dropped too, or a later reconnect would bring the old context back. Same thing as typing /respawn @Name in the composer.")}</p>
-        <div class="row-btns start"><button class="btn danger sm" data-act="respawn">${ic("bolt")}Respawn ${esc(p.name)}</button></div>
+        <div class="row-btns start"><button class="btn danger sm" data-act="respawn">${ic("bolt")}Respawn ${esc(p.name)}</button><label class="lp-with"><button type="button" class="btn sm" data-act="respawn-mem">With the last</button><input type="number" id="pp-respawn-n" min="0" max="500" value="${room.settings.replayAfterRestart ?? 10}"> messages</label></div>
+        <p class="hint">With memory: a new session that gets only ${p.notes ? "its own notes and " : ""}the last N messages of this room; the rest is gone.</p>
       </div>
       <div class="section">
         ${sectionTitle("info", "Stats")}
@@ -1957,17 +1960,9 @@
       )}`;
     wireDetailsClose();
     const respawnBtn = els.detailsInner.querySelector('button[data-act="respawn"]');
-    if (respawnBtn) {
-      respawnBtn.addEventListener("click", async () => {
-        const ok = await confirmDialog(`${p.name} forgets this whole conversation and starts over. You keep the history; it does not.`, { title: `Respawn ${p.name}?`, okLabel: "Respawn", danger: true });
-        if (!ok) return;
-        try {
-          await post(roomApi(`/participants/${encodeURIComponent(p.id)}/respawn`));
-        } catch (e) {
-          showError(e);
-        }
-      });
-    }
+    if (respawnBtn) respawnBtn.addEventListener("click", () => respawnWith(p, 0));
+    const respawnMem = els.detailsInner.querySelector('button[data-act="respawn-mem"]');
+    if (respawnMem) respawnMem.addEventListener("click", () => respawnWith(p, Number($("#pp-respawn-n").value) || 0));
     els.detailsInner.querySelectorAll(".action").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const act = btn.dataset.act;
@@ -3657,6 +3652,13 @@
     if (!li || !room) return;
     const p = findById(room, li.dataset.id);
     if (!p) return;
+    if (p.kind === "agent" && p.status !== "unstaffed" && e.target.closest(".avatar")) {
+      if (!lifePop || lifePop.id !== p.id) openLifePop(p, li);
+      else if (lifePop.hover) lifePop.hover = false;
+      else closeLifePop();
+      return;
+    }
+    if (e.target.closest(".p-gear")) return openDetails({ kind: "participant", id: p.id });
     if (e.target.closest(".stop-btn")) return void post(roomApi(`/participants/${encodeURIComponent(p.id)}/cancel`)).catch(showError);
     if (e.target.closest(".reconnect-btn")) return openReconnectDialog(room);
     if (e.target.closest("button")) return;
@@ -4364,6 +4366,181 @@
     const el = m && els.messages.querySelector(`.msg[data-id="${m.id}"]`);
     if (el && m.streaming) jumpToMessage(el);
     else scrollToBottom();
+  });
+
+  function lifeOf(p) {
+    if (!p.contextSize) return (p.turns || 0) === 0 && !p.contextUsed ? { left: 100, tone: "fresh" } : { left: null, tone: "unknown" };
+    const left = Math.max(0, Math.min(100, 100 - Math.round((100 * (p.contextUsed || 0)) / p.contextSize)));
+    return { left, tone: left <= 20 ? "hot" : left <= 50 ? "warm" : "ok" };
+  }
+  const LIFE_PATH = "M26 2.5H32.5A17 17 0 0 1 49.5 19.5V32.5A17 17 0 0 1 32.5 49.5H19.5A17 17 0 0 1 2.5 32.5V19.5A17 17 0 0 1 19.5 2.5H26";
+  const LIFE_RING = `<svg class="life" viewBox="0 0 52 52" aria-hidden="true"><path class="life-track" d="${LIFE_PATH}" pathLength="100"/><path class="life-arc" d="${LIFE_PATH}" pathLength="100"/></svg>`;
+  function patchLifeRing(li, p) {
+    const av = li.querySelector(".avatar");
+    if (!av) return;
+    let ring = av.querySelector(".life");
+    if (!ring) {
+      av.insertAdjacentHTML("afterbegin", LIFE_RING);
+      ring = av.querySelector(".life");
+      av.classList.add("has-life");
+    }
+    const { left, tone } = lifeOf(p);
+    const cls = `life life-${tone}`;
+    if (ring.getAttribute("class") !== cls) ring.setAttribute("class", cls);
+    ring.querySelector(".life-arc").style.strokeDasharray = left === null ? "0 100" : `${left} 100`;
+    const q = av.querySelector(".life-q");
+    if (tone === "unknown" && !q) av.insertAdjacentHTML("beforeend", '<span class="life-q" title="This agent does not report its context">?</span>');
+    else if (tone !== "unknown" && q) q.remove();
+    const ev = recentContextEvent(p);
+    av.classList.toggle("life-attn", !!ev && ev.kind !== "threshold");
+    av.title = (tone === "fresh" ? "Context: fresh, nothing used yet." : tone === "unknown" ? "Context: not reported by this agent." : `Context ${fmtTokens(p.contextUsed)} of ${fmtTokens(p.contextSize)} used · ${left} % left.`) + (ev ? ` ${contextEventText(p, ev)}.` : "") + " Click for details.";
+  }
+  const CONTEXT_EVENT_FRESH_MS = 15 * 60 * 1000;
+  function recentContextEvent(p) {
+    const ev = p.contextEvent;
+    return ev && Date.now() - ev.at < CONTEXT_EVENT_FRESH_MS ? ev : null;
+  }
+  function contextEventText(p, ev) {
+    const when = new Date(ev.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (ev.kind === "compacted") return `Compacted its context at ${when} (now ${fmtTokens(ev.used)})`;
+    if (ev.kind === "full") return `Ran out of context at ${when}; respawned with memory`;
+    return `Over 80 % since ${when}; leaves notes with its replies`;
+  }
+  let lifePop = null;
+  let hoverTimer = null;
+  function openLifePop(p, li, hover) {
+    closeLifePop();
+    const el = document.createElement("div");
+    el.className = "life-pop";
+    document.body.appendChild(el);
+    lifePop = { id: p.id, anchor: li.querySelector(".avatar"), el, n: null, hover: !!hover };
+    el.addEventListener("mouseenter", () => clearTimeout(hoverTimer));
+    el.addEventListener("mouseleave", () => lifePop && lifePop.hover && scheduleHoverClose());
+    renderLifePop();
+  }
+  function scheduleHoverClose() {
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => {
+      if (lifePop && lifePop.hover && !lifePop.el.matches(":hover") && !lifePop.anchor.matches(":hover")) closeLifePop();
+    }, 180);
+  }
+  els.participants.addEventListener("mouseover", (e) => {
+    const av = e.target.closest("li[data-id] .avatar");
+    const li = av && av.closest("li[data-id]");
+    if (!av || (e.relatedTarget && av.contains(e.relatedTarget))) return;
+    const room = currentRoom();
+    const p = room && findById(room, li.dataset.id);
+    if (!p || p.kind !== "agent" || p.status === "unstaffed") return;
+    clearTimeout(hoverTimer);
+    if (lifePop && lifePop.id === p.id) return;
+    hoverTimer = setTimeout(() => {
+      if (!lifePop || lifePop.hover) openLifePop(p, li, true);
+    }, 220);
+  });
+  els.participants.addEventListener("mouseout", (e) => {
+    const av = e.target.closest("li[data-id] .avatar");
+    const li = av && av.closest("li[data-id]");
+    if (!av || (e.relatedTarget && av.contains(e.relatedTarget))) return;
+    clearTimeout(hoverTimer);
+    if (lifePop && lifePop.hover && lifePop.id === li.dataset.id) scheduleHoverClose();
+  });
+  function closeLifePop() {
+    if (!lifePop) return;
+    lifePop.el.remove();
+    lifePop = null;
+  }
+  function renderLifePop() {
+    if (!lifePop) return;
+    const room = currentRoom();
+    const p = room && findById(room, lifePop.id);
+    if (!p || state.view !== "room" || !lifePop.anchor.isConnected) return closeLifePop();
+    const el = lifePop.el;
+    if (el.contains(document.activeElement)) return;
+    const { left, tone } = lifeOf(p);
+    const last = [...room.messages].reverse().find((m) => m.from === p.id && m.usage);
+    const n = lifePop.n ?? room.settings.replayAfterRestart ?? 10;
+    el.innerHTML = `<div class="lp-main">
+        <div class="lp-head">${avatar(p, 28, {})}<div><b>${esc(p.name)}</b><div class="lp-sub">${tone === "fresh" ? "fresh session: nothing used yet" : tone === "unknown" ? "context not reported by this agent" : `context ${fmtTokens(p.contextUsed)} of ${fmtTokens(p.contextSize)} used · <b>${left} % left</b>`}</div></div></div>
+        <div class="life-bar life-${tone}"><i style="width:${left ?? 0}%"></i></div>
+        ${p.contextEvent ? `<div class="lp-event${recentContextEvent(p) && p.contextEvent.kind !== "threshold" ? " fresh" : ""}">${ic("info")} ${esc(contextEventText(p, p.contextEvent))}</div>` : ""}
+        <div class="kv lp-kv">
+          <span>Turns</span><span>${p.turns}</span>
+          <span>Last reply</span><span>${last ? `<span title="tokens in">${ic("arrow-down")} ${fmtTokens(last.usage.inputTokens)}</span> <span title="tokens out">${ic("arrow-up")} ${fmtTokens(last.usage.outputTokens)}</span>` : "—"}</span>
+          <span>Cost (estimate)</span><span>${fmtCost(p.cost) || "—"}</span>
+          <span>Briefs sent</span><span>${p.briefsSent ?? 0}</span>
+          <span>Notes</span><span>${p.notes ? `taken at ${fmtTokens(p.notesAt || 0)} tokens` : "none yet"}${p.status === "offline" || p.status === "unstaffed" ? "" : ` · <button type="button" class="link-btn lp-take" title="A hidden turn: the vibemate writes 10 lines for a future restart; nothing is posted">${p.notes ? "refresh" : "take now"}</button>`}${p.notes ? ` · <button type="button" class="link-btn lp-edit">edit</button>` : ""}</span>
+        </div>
+        ${p.notes ? `<pre class="lp-notes">${esc(p.notes)}</pre><div class="lp-editor" hidden><textarea class="lp-notes-area" rows="6" maxlength="4000">${esc(p.notes)}</textarea><div class="row-btns"><button type="button" class="btn sm ghost lp-notes-clear">Clear</button><button type="button" class="btn sm primary lp-notes-save">Save</button></div></div>` : ""}
+        <div class="lp-respawn">
+          <button type="button" class="btn sm danger lp-empty" title="A new session that knows nothing of this conversation">${ic("bolt")}Respawn, empty head</button>
+          <label class="lp-with"><button type="button" class="btn sm lp-mem" title="A new session that re-reads only the last N messages${p.notes ? " and its own notes" : ""}">Respawn with the last</button><input type="number" class="lp-n" min="0" max="500" value="${n}"> messages</label>
+        </div>
+      </div>
+      <div class="lp-side"><button type="button" class="icon-btn sm lp-x" title="Close">${ic("close")}</button><button type="button" class="icon-btn sm lp-more" title="Open this vibemate's panel">${ic("settings")}</button></div>`;
+    el.querySelector(".lp-x").addEventListener("click", closeLifePop);
+    el.querySelector(".lp-more").addEventListener("click", () => {
+      closeLifePop();
+      openDetails({ kind: "participant", id: p.id });
+    });
+    el.querySelector(".lp-empty").addEventListener("click", () => respawnWith(p, 0));
+    el.querySelector(".lp-mem").addEventListener("click", () => respawnWith(p, Number(el.querySelector(".lp-n").value) || 0));
+    el.querySelector(".lp-n").addEventListener("input", (e) => (lifePop.n = Number(e.target.value) || 0));
+    const take = el.querySelector(".lp-take");
+    if (take)
+      take.addEventListener("click", async () => {
+        take.disabled = true;
+        take.textContent = "asking…";
+        try {
+          await post(roomApi(`/participants/${encodeURIComponent(p.id)}/take-notes`));
+        } catch (e) {
+          showError(e);
+          renderLifePop();
+        }
+      });
+    const edit = el.querySelector(".lp-edit");
+    if (edit)
+      edit.addEventListener("click", () => {
+        el.querySelector(".lp-notes").hidden = true;
+        el.querySelector(".lp-editor").hidden = false;
+        el.querySelector(".lp-notes-area").focus();
+      });
+    const saveNotes = async (text) => {
+      try {
+        await post(roomApi(`/participants/${encodeURIComponent(p.id)}/notes`), { notes: text });
+      } catch (e) {
+        showError(e);
+      }
+      el.querySelector(".lp-notes-area").blur();
+      renderLifePop();
+    };
+    const save = el.querySelector(".lp-notes-save");
+    if (save) save.addEventListener("click", () => saveNotes(el.querySelector(".lp-notes-area").value));
+    const clear = el.querySelector(".lp-notes-clear");
+    if (clear) clear.addEventListener("click", () => saveNotes(""));
+    const z = zoomFactor();
+    const r = lifePop.anchor.getBoundingClientRect();
+    el.style.left = `${Math.round((r.right + 12) / z)}px`;
+    el.style.top = `${Math.round(Math.max(8, Math.min(r.top / z - 10, window.innerHeight / z - el.offsetHeight - 8)))}px`;
+  }
+  async function respawnWith(p, n) {
+    const text =
+      n > 0
+        ? `${p.name} starts over with a new session that gets only ${p.notes ? "its own notes and " : ""}the last ${n} messages of this room. You keep the history; the rest of its memory is gone.`
+        : `${p.name} forgets this whole conversation and starts over. You keep the history; it does not.`;
+    const ok = await confirmDialog(text, { title: `Respawn ${p.name}?`, okLabel: "Respawn", danger: true });
+    if (!ok) return;
+    closeLifePop();
+    try {
+      await post(roomApi(`/participants/${encodeURIComponent(p.id)}/respawn`), { memory: n > 0, replay: n });
+    } catch (e) {
+      showError(e);
+    }
+  }
+  document.addEventListener("click", (e) => {
+    if (lifePop && !e.target.closest(".life-pop") && !e.target.closest("#participants .avatar")) closeLifePop();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && lifePop) closeLifePop();
   });
 
   const pinsBtn = $("#pins-btn");

@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { writeFileAtomic } from "./atomic.js";
+import { NOTES_ONLY_PROMPT, NOTES_REQUEST, crossedThreshold, extractNotes, isBareContextFullError, isContextFullError, overThreshold, visibleChunk } from "./context.js";
 import { affectedByEdit, editNotice, partitionHistory, rewriteNotice, type AgentReadState, type EditMode } from "./edit.js";
 import { saveImages, type Attachment, type ImageInput } from "./files.js";
 import { join, resolve } from "node:path";
@@ -96,6 +97,11 @@ export interface Participant {
   skillChannel?: "tool" | "marker" | "pending";
   launch?: LaunchPrefs;
   violations?: number;
+  notes?: string;
+  notesAt?: number;
+  notesSeq?: number;
+  contextEvent?: { kind: "threshold" | "compacted" | "full"; at: number; used?: number; size?: number };
+  autoRespawnAt?: number;
   briefsSent?: number;
   failedTurns?: number;
   retries?: number;
@@ -121,12 +127,16 @@ export interface StoredParticipant {
   supportsLoad?: boolean;
   lastSeenSeq?: number;
   sawFromSeq?: number;
+  notes?: string;
+  notesAt?: number;
+  notesSeq?: number;
 }
 
 export interface ReconnectOptions {
   mode: "load" | "replay";
   replay?: number;
   reason?: string;
+  memory?: boolean;
 }
 
 export interface EditPreview {
@@ -287,7 +297,7 @@ interface AgentRuntime {
   turnStartSeq: number;
   turnActive: boolean;
   pendingTurn: boolean;
-  turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; published: boolean; publishedAt?: number } | null;
+  turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; published: boolean; publishedAt?: number; hidden?: boolean } | null;
   strayMessageId: string | null;
   turnsSinceBrief: number;
   usedAtBrief: number;
@@ -296,6 +306,11 @@ interface AgentRuntime {
   briefPending: string | null;
   headerNotes: string[];
   briefRequestedAtSeq: number;
+  notesDue: boolean;
+  notesMisses: number;
+  notesAskedThisTurn: boolean;
+  lastBriefSeq: number;
+  notesForBrief: string | null;
   replayOwnUntilSeq: number;
   delayTimer: NodeJS.Timeout | null;
   addressed: boolean;
@@ -337,6 +352,7 @@ export class Room extends EventEmitter {
   hops = 0;
   focused = false;
   readonly participants = new Map<string, Participant>();
+  private lastTurnHidden = false;
   readonly messages: ChatMessage[] = [];
   private seq = 0;
   private programHumanDescription: string;
@@ -436,6 +452,9 @@ export class Room extends EventEmitter {
         sessionId: s.sessionId,
         supportsLoad: s.supportsLoad,
         sawFromSeq: s.sawFromSeq,
+        notes: s.notes,
+        notesAt: s.notesAt,
+        notesSeq: s.notesSeq,
         violations: 0,
         briefsSent: 0,
         failedTurns: 0,
@@ -497,6 +516,9 @@ export class Room extends EventEmitter {
           supportsLoad: p.supportsLoad,
           lastSeenSeq: this.runtimes.get(p.id)?.lastSeenSeq ?? this.restoredSeen.get(p.id),
           sawFromSeq: p.sawFromSeq,
+          notes: p.notes,
+          notesAt: p.notesAt,
+          notesSeq: p.notesSeq,
         })),
     };
   }
@@ -746,10 +768,13 @@ export class Room extends EventEmitter {
     return { restarted, removed: removed.length };
   }
 
-  async respawnAgent(id: string): Promise<Participant> {
+  async respawnAgent(id: string, options: { memory?: boolean; replay?: number } = {}): Promise<Participant> {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
     const online = this.runtimes.has(id);
+    const memory = !!options.memory;
+    const replay = memory ? Math.max(0, options.replay ?? this.settings.replayAfterRestart) : 0;
+    const withNotes = memory && !!participant.notes;
     this.dropScheduledTurn(id);
     this.cancelPermissionsOf(id);
     if (this.speaking === id) this.speaking = null;
@@ -758,15 +783,83 @@ export class Room extends EventEmitter {
     this.restoredSeen.set(id, this.seq);
     this.push({ type: "participant", participant });
     if (!online) {
-      participant.statusDetail = "its context was cleared; a reconnect starts it with an empty head";
-      this.postSystem(`${participant.name} was respawned while offline: it comes back knowing nothing from before.`);
+      participant.statusDetail = withNotes ? "its context was cleared; a reconnect starts it with its notes" : "its context was cleared; a reconnect starts it with an empty head";
+      this.postSystem(withNotes ? `${participant.name} was respawned while offline: it comes back with its notes.` : `${participant.name} was respawned while offline: it comes back knowing nothing from before.`);
       this.push({ type: "participant", participant });
       this.log.info(`respawn of ${participant.name} (offline): stored session dropped`);
       return participant;
     }
-    await this.reconnect(id, { mode: "replay", replay: 0, reason: "its context was cleared, it remembers nothing from before" });
-    this.log.info(`respawn of ${participant.name}: fresh session, no replay`);
+    await this.reconnect(id, memory
+      ? { mode: "replay", replay, memory: withNotes, reason: `its context was cleared; it comes back with ${withNotes ? "its notes and " : ""}the last ${replay} messages` }
+      : { mode: "replay", replay: 0, reason: "its context was cleared, it remembers nothing from before" });
+    this.log.info(`respawn of ${participant.name}: fresh session, ${memory ? `${withNotes ? "notes + " : ""}replay ${replay}` : "no replay"}`);
     return participant;
+  }
+
+  updateNotes(id: string, notes: string): Participant {
+    const participant = this.participants.get(id);
+    if (!participant || participant.kind !== "agent") throw new Error("no such agent");
+    const text = notes.trim().slice(0, 4000);
+    participant.notes = text || undefined;
+    participant.notesAt = text ? this.runtimes.get(id)?.lastUsed ?? participant.notesAt : undefined;
+    participant.notesSeq = text ? this.seq : undefined;
+    this.push({ type: "participant", participant });
+    return participant;
+  }
+
+  async takeNotes(id: string): Promise<Participant> {
+    const participant = this.participants.get(id);
+    const runtime = this.runtimes.get(id);
+    if (!participant || participant.kind !== "agent") throw new Error("no such agent");
+    if (!runtime || !runtime.agent.alive) throw new Error(`${participant.name} is not online`);
+    if (runtime.turnActive) throw new Error(`${participant.name} is in the middle of a reply; try again when it is idle`);
+    const header = buildHeader(this.effectiveSettings(), this.personaOf(participant), this.roster(), this.hops, ["hidden turn: notes only, nothing is posted"]);
+    runtime.log.info("notes: hidden turn");
+    await this.executeTurn(participant, runtime, [{ type: "text", text: `${header}\n\n${NOTES_ONLY_PROMPT}` }], null, true);
+    return participant;
+  }
+
+  private keepNotes(participant: Participant, runtime: AgentRuntime, notes: string | null, via: "reply" | "hidden turn"): boolean {
+    if (!notes) return false;
+    participant.notes = notes.slice(0, 4000);
+    participant.notesAt = runtime.lastUsed;
+    participant.notesSeq = this.seq;
+    runtime.notesDue = false;
+    runtime.notesMisses = 0;
+    this.push({ type: "participant", participant });
+    runtime.log.info(`notes: ${notes.split("\n").length} lines kept (${via}, context ${runtime.lastUsed})`);
+    return true;
+  }
+
+  private contextFull(participant: Participant, runtime: AgentRuntime, detail: string): void {
+    participant.contextEvent = { kind: "full", at: Date.now(), used: runtime.lastUsed, size: participant.contextSize };
+    const recently = participant.autoRespawnAt !== undefined && Date.now() - participant.autoRespawnAt < 10 * 60_000;
+    if (recently) {
+      participant.status = "error";
+      participant.statusDetail = "its context filled up again right after a respawn; it needs you (respawn it by hand, with fewer replayed messages)";
+      this.push({ type: "participant", participant });
+      this.postSystem(`${participant.name} ran out of context again (${detail.slice(0, 120)}); it was respawned once already and now needs you.`, "human");
+      runtime.log.warn(`context full again within 10 minutes: no automatic respawn`);
+      return;
+    }
+    participant.autoRespawnAt = Date.now();
+    this.push({ type: "participant", participant });
+    const memory = !!participant.notes;
+    this.postSystem(`${participant.name} ran out of context (${detail.slice(0, 120)}); it is respawned ${memory ? `with its notes and the last ${this.settings.replayAfterRestart} messages` : `with the last ${this.settings.replayAfterRestart} messages (it had no notes)`}.`, "human");
+    runtime.log.warn(`context full: ${detail}; respawn with ${memory ? "notes" : "no notes"}`);
+    setImmediate(() => {
+      void (memory ? this.respawnAgent(participant.id, { memory: true }) : this.reconnectAfterFull(participant.id)).catch((error) => this.notice(`${participant.name}: respawn after a full context failed: ${describeError(error)}`, "error"));
+    });
+  }
+
+  private async reconnectAfterFull(id: string): Promise<void> {
+    const participant = this.participants.get(id);
+    if (!participant) return;
+    this.dropScheduledTurn(id);
+    this.cancelPermissionsOf(id);
+    if (this.runtimes.has(id)) await this.retireRuntime(id);
+    participant.sessionId = undefined;
+    await this.reconnect(id, { mode: "replay", reason: "its context was full; it comes back with the last messages" });
   }
 
   private async retireRuntime(id: string): Promise<void> {
@@ -1251,6 +1344,11 @@ export class Room extends EventEmitter {
         briefPending: null,
         headerNotes: [],
         briefRequestedAtSeq: -1,
+        notesDue: false,
+        notesMisses: 0,
+        notesAskedThisTurn: false,
+        lastBriefSeq: -1,
+        notesForBrief: reconnectOptions?.memory && participant.notes ? participant.notes : null,
         replayOwnUntilSeq: fresh || origin === "loaded" ? -1 : this.seq,
         delayTimer: null,
         addressed: false,
@@ -1830,6 +1928,9 @@ export class Room extends EventEmitter {
 
     const notes = [...runtime.headerNotes];
     runtime.headerNotes = [];
+    if (briefReason && overThreshold(runtime.lastUsed, participant.contextSize ?? 0)) runtime.notesDue = true;
+    runtime.notesAskedThisTurn = runtime.notesDue;
+    if (runtime.notesDue) notes.push(NOTES_REQUEST);
     if (briefReason && runtime.firstTurnDone) {
       if (briefReason.startsWith("requested")) notes.push("full brief re-sent as requested");
       else if (briefReason.startsWith("room rules") || briefReason.startsWith("your persona") || briefReason.startsWith("your skills")) notes.push(`instructions updated (${briefReason})`);
@@ -1847,7 +1948,7 @@ export class Room extends EventEmitter {
       return m.images.map((a, i) => ({ n: a.n ?? i + 1, ref: `#${m.seq}.${a.n ?? i + 1}`, name: a.name, path: this.imagePath(a), mimeType: a.mimeType, attached, forNames: m.to.length ? m.toNames : [] }));
     };
     const prompt = composePrompt({
-      brief: briefReason ? buildBrief(settings, persona, roster, undefined, skillsForPrompt) : undefined,
+      brief: briefReason ? buildBrief(settings, persona, roster, runtime.notesForBrief ?? (participant.notes && (participant.notesSeq ?? -1) >= runtime.lastBriefSeq ? participant.notes : undefined), skillsForPrompt) : undefined,
       header: buildHeader(settings, persona, roster, this.hops, notes, skillsForPrompt),
       skills: attached.map((s) => composeSkillBlock({ name: s.name, text: s.text, invokedBy: s.invokedBy, extraFiles: s.extraFiles })),
       backlog: unread.map<BacklogLine>((m) =>
@@ -1868,6 +1969,8 @@ export class Room extends EventEmitter {
       runtime.briefPending = null;
       runtime.turnsSinceBrief = 0;
       runtime.briefSentThisTurn = true;
+      runtime.lastBriefSeq = this.seq;
+      runtime.notesForBrief = null;
       participant.briefsSent = (participant.briefsSent ?? 0) + 1;
     }
     runtime.firstTurnDone = true;
@@ -1897,7 +2000,7 @@ export class Room extends EventEmitter {
     return blocks;
   }
 
-  private async executeTurn(participant: Participant, runtime: AgentRuntime, blocks: ContentBlock[], retry: RetryRequest | null): Promise<RetryRequest | null> {
+  private async executeTurn(participant: Participant, runtime: AgentRuntime, blocks: ContentBlock[], retry: RetryRequest | null, hidden = false): Promise<RetryRequest | null> {
     const id = participant.id;
     runtime.turnActive = true;
     participant.status = "thinking";
@@ -1918,7 +2021,7 @@ export class Room extends EventEmitter {
       toolCalls: [],
     };
     this.drafts.set(draft.id, draft);
-    runtime.turn = { message: draft, messageId: null, sawMessageId: false, startedAt: Date.now(), published: false };
+    runtime.turn = { message: draft, messageId: null, sawMessageId: false, startedAt: Date.now(), published: false, hidden };
 
     let result: PromptResult | null = null;
     let failure: string | null = null;
@@ -1931,6 +2034,7 @@ export class Room extends EventEmitter {
     const startedAt = runtime.turn.startedAt;
     const published = runtime.turn.published;
     const publishedAt = runtime.turn.publishedAt ?? null;
+    this.lastTurnHidden = !!runtime.turn.hidden;
     runtime.turn = null;
     runtime.turnActive = false;
     this.drafts.delete(draft.id);
@@ -1953,9 +2057,10 @@ export class Room extends EventEmitter {
       this.push({ type: "participant", participant });
       this.push({ type: "message.removed", id: draft.id });
       this.notice(`${participant.name}: turn failed: ${failure ?? "no result"}`, "error");
-      this.postSystem(`${participant.name} could not answer: ${(failure ?? "no result").slice(0, 240)}`);
       runtime.log.error(`turn failed: ${failure}`);
       if (retry) this.closeRetry(retry, "the correction turn failed; nothing was posted");
+      if (isContextFullError(failure)) this.contextFull(participant, runtime, failure ?? "");
+      else this.postSystem(`${participant.name} could not answer: ${(failure ?? "no result").slice(0, 240)}`);
       return null;
     }
     return this.finalizeTurn(participant, runtime, draft, result, Date.now() - startedAt, retry, published, publishedAt);
@@ -1974,9 +2079,36 @@ export class Room extends EventEmitter {
     participant.status = "idle";
     this.push({ type: "participant", participant });
 
-    const text = draft.text.trim();
     const cancelled = result.stopReason === "cancelled";
     if (cancelled) runtime.briefPending = runtime.briefPending ?? "previous turn was cancelled";
+
+    const extracted = extractNotes(draft.text);
+    const hadNotes = this.keepNotes(participant, runtime, extracted.notes, runtime.turn?.hidden || draft.streaming === undefined ? "hidden turn" : "reply");
+    draft.text = extracted.visible;
+    const text = draft.text.trim();
+    if (this.lastTurnHidden) {
+      this.lastTurnHidden = false;
+      this.commit({
+        id: randomUUID(),
+        seq: ++this.seq,
+        from: participant.id,
+        fromName: participant.name,
+        to: [],
+        toNames: [],
+        text: hadNotes ? `took notes (${(participant.notes ?? "").split("\n").length} lines)` : "was asked for notes and gave none",
+        ts: Date.now(),
+        kind: "hidden",
+        details: { original: draft.text, outcome: hadNotes ? "notes kept" : "no <notes> block in the reply" },
+      });
+      return null;
+    }
+    if (runtime.notesAskedThisTurn && !hadNotes && !retry && !cancelled) {
+      runtime.notesMisses += 1;
+      if (runtime.notesMisses >= 2) {
+        runtime.notesMisses = 0;
+        setImmediate(() => void this.takeNotes(participant.id).catch((error) => runtime.log.warn(`notes: hidden turn failed: ${describeError(error)}`)));
+      }
+    }
 
     if (!retry && text.toLowerCase() === REQUEST_BRIEF_MARKER) {
       this.push({ type: "message.removed", id: draft.id });
@@ -2009,7 +2141,8 @@ export class Room extends EventEmitter {
       return null;
     }
 
-    if (!(draft.toolCalls?.length) && ADAPTER_ERROR_PATTERN.test(text)) {
+    const bareContextFull = isBareContextFullError(text);
+    if (!(draft.toolCalls?.length) && (ADAPTER_ERROR_PATTERN.test(text) || bareContextFull)) {
       this.push({ type: "message.removed", id: draft.id });
       participant.failedTurns = (participant.failedTurns ?? 0) + 1;
       participant.statusDetail = `agent error: ${text.replace(/\s+/g, " ").slice(0, 120)}${text.length > 120 ? "…" : ""}`;
@@ -2017,6 +2150,7 @@ export class Room extends EventEmitter {
       this.postSystem(`${participant.name}'s agent reported an error instead of a reply: ${text.slice(0, 200)}${text.length > 200 ? "…" : ""}`);
       runtime.log.warn(`adapter error text treated as failed turn: ${text.slice(0, 200)}`);
       if (retry) this.closeRetry(retry, "the agent reported an error instead of a corrected reply");
+      if (bareContextFull) this.contextFull(participant, runtime, text);
       return null;
     }
 
@@ -2155,7 +2289,7 @@ export class Room extends EventEmitter {
 
 
   private showDraft(turn: NonNullable<AgentRuntime["turn"]>): void {
-    if (turn.published) return;
+    if (turn.published || turn.hidden) return;
     turn.published = true;
     turn.publishedAt = Date.now();
     this.push({ type: "message", message: turn.message });
@@ -2187,12 +2321,13 @@ export class Room extends EventEmitter {
         }
         if (messageId) turn.sawMessageId = true;
         turn.messageId = messageId;
+        const shown = visibleChunk(turn.message.text, text);
         turn.message.text += text;
         if (!turn.published) {
-          if (!looksSilent(turn.message.text)) this.showDraft(turn);
+          if (!looksSilent(turn.message.text) && shown) this.showDraft(turn);
           return;
         }
-        this.push({ type: "chunk", id: turn.message.id, text });
+        if (shown) this.push({ type: "chunk", id: turn.message.id, text: shown });
         return;
       }
       case "agent_thought_chunk": {
@@ -2238,6 +2373,15 @@ export class Room extends EventEmitter {
         if (runtime.lastUsed > 0 && u.used < runtime.lastUsed * 0.7 && !runtime.briefPending) {
           runtime.briefPending = `context shrank from ${runtime.lastUsed} to ${u.used} tokens (compaction?)`;
           runtime.log.info(`usage dropped ${runtime.lastUsed} -> ${u.used}; brief scheduled`);
+          participant.contextEvent = { kind: "compacted", at: Date.now(), used: u.used, size: u.size };
+          runtime.notesDue = overThreshold(u.used, u.size);
+          this.postSystem(`${participant.name} compacted its context (${Math.round(runtime.lastUsed / 1000)}k → ${Math.round(u.used / 1000)}k tokens); the room rules are re-sent with its next turn${participant.notes ? ", with its notes" : ""}.`, "human");
+        }
+        if (crossedThreshold(runtime.lastUsed, u.used, u.size)) {
+          runtime.notesDue = true;
+          participant.contextEvent = { kind: "threshold", at: Date.now(), used: u.used, size: u.size };
+          this.postSystem(`${participant.name} is at ${Math.round((100 * u.used) / u.size)}% of its context; it will leave notes with its next reply. You can respawn it with memory from its panel.`, "human");
+          runtime.log.info(`context at ${u.used}/${u.size}: notes due`);
         }
         runtime.lastUsed = u.used;
         this.push({ type: "participant", participant });
