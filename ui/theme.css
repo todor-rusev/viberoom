@@ -1,5 +1,10 @@
 /* viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE */
 @import url("/fonts/nunito.css");
+@import url("/fonts/inter.css");
+@import url("/fonts/noto-sans.css");
+@import url("/fonts/jetbrains-mono.css");
+@import url("/fonts/fira-code.css");
+@import url("/fonts/source-code-pro.css");
 :root {
   --primary: #5b5bf0;
   --primary-deep: #4f4fe0;
@@ -48,6 +53,25 @@
   --mine-border: transparent;
   --text: var(--ink);
   --ok: var(--green);
+  --orchid: #f3e4fb;
+  --orchid-ink: #8a3fc2;
+  --st-ready: var(--mint);        --st-ready-ink: var(--mint-ink);       --st-ready-dot: var(--green);
+  --st-waiting: var(--sky);       --st-waiting-ink: #2a6fbf;             --st-waiting-dot: #7aa7ff;
+  --st-thinking: var(--warm);     --st-thinking-ink: var(--warm-ink);    --st-thinking-dot: var(--warn);
+  --st-writing: var(--orchid);    --st-writing-ink: var(--orchid-ink);   --st-writing-dot: #b06be0;
+  --st-error: var(--rose);        --st-error-ink: var(--rose-ink);       --st-error-dot: var(--rose-ink);
+  --st-asleep: var(--softer);     --st-asleep-ink: var(--muted);         --st-asleep-dot: var(--faint);
+  --attention: #ff8a3d;
+  --attention-ink: #c9461c;
+  --attention-grad: linear-gradient(135deg, #ff9447, #e8642a);
+  --attention-shadow: 0 8px 18px -10px rgba(232, 100, 42, 0.7);
+  --unread-grad: linear-gradient(135deg, #ff7a45, #f0452c);
+  --note-hover: #ffeaa8;
+  --tick-mine: #cdcdf9;
+  --tick-mine-view: #a9a9f5;
+  --tick-fallback: #9ca3af;
+  --unseen-ink: #be185d;
+  --unseen-bg: #fff1f7;
   --r-xs: 8px;
   --r-sm: 12px;
   --r-md: 14px;
@@ -292,35 +316,37 @@ p .geek-tip, .hint > .geek-tip, .switch .label > .geek-tip { margin-left: 8px; }
 .agent-tile.off { opacity: 0.5; filter: grayscale(1); cursor: default; }
 .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 3px 10px; border-radius: var(--r-pill); background: var(--lav); color: var(--primary); font-weight: 800; white-space: nowrap; vertical-align: middle; }
 .badge.outline { background: transparent; border: 2px solid var(--lav-2); color: var(--muted); }
-.badge.status-idle { background: var(--mint); color: var(--mint-ink); }
-.badge.status-thinking { background: var(--warm); color: var(--warm-ink); }
-.badge.status-queued { background: var(--sky); color: #2a6fbf; }
-.badge.status-starting { background: var(--sky); color: #2a6fbf; }
-.badge.status-offline { background: var(--softer); color: var(--muted); }
-.badge.status-error { background: var(--rose); color: var(--rose-ink); }
-.badge.status-left { background: var(--softer); color: var(--muted); }
+.badge.status-idle { background: var(--st-ready); color: var(--st-ready-ink); }
+.badge.status-thinking { background: var(--st-thinking); color: var(--st-thinking-ink); }
+.badge.status-writing { background: var(--st-writing); color: var(--st-writing-ink); }
+.badge.status-queued { background: var(--st-waiting); color: var(--st-waiting-ink); }
+.badge.status-starting { background: var(--st-waiting); color: var(--st-waiting-ink); }
+.badge.status-offline { background: var(--st-asleep); color: var(--st-asleep-ink); }
+.badge.status-error { background: var(--st-error); color: var(--st-error-ink); }
+.badge.status-left { background: var(--st-asleep); color: var(--st-asleep-ink); }
 .badge.muted { background: var(--softer); color: var(--muted); }
 .badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.badge.status-thinking .dot { animation: pulse 1.2s ease-in-out infinite; }
+.badge.status-thinking .dot, .badge.status-writing .dot { animation: pulse 1.2s ease-in-out infinite; }
 .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 800; background: var(--lav); color: var(--primary); border: 0; border-radius: var(--r-pill); padding: 4px 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip .i { width: 13px; height: 13px; }
-.chip-completed { background: var(--mint); color: var(--mint-ink); }
-.chip-failed { background: var(--rose); color: var(--rose-ink); }
-.chip-in_progress { background: var(--warm); color: var(--warm-ink); }
+.chip-completed { background: var(--st-ready); color: var(--st-ready-ink); }
+.chip-failed { background: var(--st-error); color: var(--st-error-ink); }
+.chip-in_progress { background: var(--st-thinking); color: var(--st-thinking-ink); }
 .count-pill { background: var(--primary); color: #fff; border-radius: var(--r-pill); font-size: 10px; padding: 1px 7px; font-weight: 800; line-height: 15px; }
 .zzz { font-size: 10px; font-weight: 800; color: var(--muted); background: var(--softer); padding: 3px 8px; border-radius: var(--r-pill); }
-.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px var(--warm); animation: pulse 1.2s ease-in-out infinite; display: inline-block; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st-thinking-dot); box-shadow: 0 0 0 3px var(--st-thinking); animation: pulse 1.2s ease-in-out infinite; display: inline-block; }
 .avatar { position: relative; display: inline-block; flex: none; }
 .avatar .av-tile { display: grid; place-items: center; width: 100%; height: 100%; font-weight: 800; line-height: 1; font-family: var(--font); user-select: none; }
 .avatar-badge { position: absolute; right: -4px; bottom: -4px; width: 44%; height: 44%; min-width: 15px; min-height: 15px; border-radius: 6px; background: #fff; border: 2px solid #fff; box-shadow: var(--shadow-tile); display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; color: var(--primary); overflow: hidden; }
 .avatar-badge img { width: 72%; height: 72%; object-fit: contain; }
 .avatar-status { position: absolute; left: -3px; bottom: -3px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; background: var(--faint); }
-.avatar-status.status-idle { background: var(--green); }
-.avatar-status.status-thinking { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
-.avatar-status.status-offline { background: var(--faint); }
-.avatar-status.status-error { background: var(--rose-ink); }
-.avatar-status.status-starting { background: #7aa7ff; }
-.avatar-status.status-queued { background: #7aa7ff; }
+.avatar-status.status-idle { background: var(--st-ready-dot); }
+.avatar-status.status-thinking { background: var(--st-thinking-dot); animation: pulse 1.2s ease-in-out infinite; }
+.avatar-status.status-writing { background: var(--st-writing-dot); animation: pulse 1.2s ease-in-out infinite; }
+.avatar-status.status-offline { background: var(--st-asleep-dot); }
+.avatar-status.status-error { background: var(--st-error-dot); }
+.avatar-status.status-starting { background: var(--st-waiting-dot); }
+.avatar-status.status-queued { background: var(--st-waiting-dot); }
 .avatar-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 6px; margin: 4px 0 8px; max-height: 148px; overflow-y: auto; padding: 2px 4px 2px 2px; scroll-padding: 4px; }
 .avatar-picker button { aspect-ratio: 1; width: 100%; border-radius: 12px; border: 2px solid transparent; background: var(--soft); font-size: 20px; padding: 0; display: inline-flex; align-items: center; justify-content: center; transition: transform var(--t-fast) var(--ease-pop), border-color var(--t-fast), background var(--t-fast); }
 .avatar-picker button:hover { transform: translateY(-1px); background: var(--lav); }

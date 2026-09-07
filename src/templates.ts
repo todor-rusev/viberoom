@@ -1,7 +1,8 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeFileAtomic } from "./atomic.js";
 import { fileURLToPath } from "node:url";
 import type { Logger } from "./log.js";
 import type { RoomSettings } from "./persona.js";
@@ -16,6 +17,7 @@ export interface TemplateVibemate {
   model?: string;
   effort?: string;
   mode?: string;
+  replyDelay?: number;
 }
 
 export interface RoomTemplate {
@@ -25,6 +27,8 @@ export interface RoomTemplate {
   order?: number;
   emoji?: string;
   recommended?: boolean;
+  dir?: string;
+  created?: string;
   settings: Partial<RoomSettings>;
   vibemates: TemplateVibemate[];
   builtin?: boolean;
@@ -48,6 +52,7 @@ export function cleanTemplate(raw: unknown, id: string): RoomTemplate {
       if (typeof o[key] === "string" && (o[key] as string).trim()) out[key] = (o[key] as string).trim();
     }
     if (Array.isArray(o.skills)) out.skills = o.skills.map((s) => String(s).trim()).filter(Boolean);
+    if (typeof o.replyDelay === "number" && Number.isFinite(o.replyDelay)) out.replyDelay = o.replyDelay;
     return out;
   });
   const settings = (t.settings && typeof t.settings === "object" ? t.settings : {}) as Partial<RoomSettings>;
@@ -55,7 +60,14 @@ export function cleanTemplate(raw: unknown, id: string): RoomTemplate {
   if (typeof t.order === "number" && Number.isFinite(t.order)) out.order = t.order;
   if (typeof t.emoji === "string" && t.emoji.trim()) out.emoji = t.emoji.trim().slice(0, 8);
   if (t.recommended === true) out.recommended = true;
+  if (typeof t.dir === "string" && t.dir.trim()) out.dir = t.dir.trim();
+  if (typeof t.created === "string" && t.created.trim()) out.created = t.created.trim();
   return out;
+}
+
+export function templateId(name: string): string {
+  const id = name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  return ID_PATTERN.test(id) ? id : "template";
 }
 
 function readTemplates(dir: string, log: Logger, builtin: boolean): RoomTemplate[] {
@@ -73,7 +85,7 @@ function readTemplates(dir: string, log: Logger, builtin: boolean): RoomTemplate
       log.warn(`template ${entry.name} in ${dir} skipped: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  return out.sort((a, b) => (a.order ?? 100) - (b.order ?? 100) || a.name.localeCompare(b.name));
+  return out.sort((a, b) => (a.order ?? 100) - (b.order ?? 100) || (b.created ?? "").localeCompare(a.created ?? "") || a.name.localeCompare(b.name));
 }
 
 export class TemplateLibrary {
@@ -86,10 +98,23 @@ export class TemplateLibrary {
   list(): RoomTemplate[] {
     const own = readTemplates(this.dir, this.log, false);
     const taken = new Set(own.map((t) => t.id));
-    return [...readTemplates(this.shippedDir, this.log, true).filter((t) => !taken.has(t.id)), ...own];
+    return [...own, ...readTemplates(this.shippedDir, this.log, true).filter((t) => !taken.has(t.id))];
   }
 
   get(id: string): RoomTemplate | undefined {
     return this.list().find((t) => t.id === id);
+  }
+
+  save(template: Omit<RoomTemplate, "id" | "builtin">): RoomTemplate {
+    const taken = new Set(this.list().map((t) => t.id));
+    const base = templateId(template.name);
+    let id = base;
+    for (let n = 2; taken.has(id); n++) id = `${base.slice(0, 40 - String(n).length - 1)}-${n}`;
+    const clean = cleanTemplate({ ...template, created: new Date().toISOString() }, id);
+    const folder = join(this.dir, id);
+    mkdirSync(folder, { recursive: true });
+    writeFileAtomic(join(folder, "template.json"), JSON.stringify(clean, null, 2) + "\n");
+    this.log.info(`saved template "${clean.name}" (${id})`);
+    return clean;
   }
 }

@@ -3,8 +3,14 @@ Copyright (c) 2026 Todor Rusev
 
 This product bundles the following third-party material:
 
-- Nunito (ui/fonts/): Copyright 2014 The Nunito Project Authors,
-  licensed under the SIL Open Font License, Version 1.1 (ui/fonts/OFL.txt).
+- Fonts (ui/fonts/), each licensed under the SIL Open Font License, Version 1.1
+  (ui/fonts/OFL.txt), fetched from Google Fonts by scripts/fetch-fonts.mjs:
+  - Nunito: Copyright 2014 The Nunito Project Authors.
+  - Inter: Copyright 2016 The Inter Project Authors.
+  - Noto Sans: Copyright 2022 The Noto Project Authors.
+  - JetBrains Mono: Copyright 2020 The JetBrains Mono Project Authors.
+  - Fira Code: Copyright 2014-2020 The Fira Code Project Authors.
+  - Source Code Pro: Copyright 2010-2019 Adobe (http://www.adobe.com/).
 
 - Vendor icons (assets/vendors/): the logos of Claude, Codex, Gemini, Cursor,
   OpenCode and GitHub Copilot, as published in the Agent Client Protocol

@@ -164,6 +164,17 @@
       <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary" id="tpl-create">Create the room</button></div>
     </form>
   </dialog>
+  <dialog id="save-template-dialog" class="dialog wide">
+    <form id="save-template-form" method="dialog">
+      <h3><span class="h-ico" data-icon="rooms"></span>Turn this room into a template</h3>
+      <p class="lead">Everything below goes into the template: the room's settings and rules, its folder, and each vibemate with the coding agent it runs on. Check it, name it, create it.</p>
+      <label>Template name<input id="stp-name" type="text" maxlength="60" required placeholder="e.g. Payments refactor"></label>
+      <label>Description <span class="hint">(optional)</span><textarea id="stp-desc" rows="2" maxlength="400" placeholder="what this setup is good for"></textarea></label>
+      <div class="stp-preview" id="stp-preview"></div>
+      <p class="error" id="stp-error" hidden></p>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary" id="stp-create">Create the template</button></div>
+    </form>
+  </dialog>
   <dialog id="invite-dialog" class="dialog wide">
     <form id="invite-form" method="dialog">
       <h3><span class="h-ico" data-icon="spark"></span>Summon a Vibemate</h3>

@@ -22,6 +22,7 @@ import {
   type SkillMeta,
 } from "./skills.js";
 import type { McpServer } from "./acp-types.js";
+import type { TemplateVibemate } from "./templates.js";
 import {
   BRIEF_AFFECTING_SETTINGS,
   DEFAULT_ROOM_SETTINGS,
@@ -287,6 +288,7 @@ interface AgentRuntime {
   turnActive: boolean;
   pendingTurn: boolean;
   turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; published: boolean; publishedAt?: number } | null;
+  strayMessageId: string | null;
   turnsSinceBrief: number;
   usedAtBrief: number;
   briefSentThisTurn: boolean;
@@ -441,6 +443,32 @@ export class Room extends EventEmitter {
       if (s.lastSeenSeq !== undefined) this.restoredSeen.set(s.id, s.lastSeenSeq);
       this.colorIndex++;
     }
+  }
+
+  templateOf(): { dir: string; settings: Partial<RoomSettings>; vibemates: TemplateVibemate[] } {
+    const { name: _n, humanName: _h, ...rest } = this.settings;
+    const settings: Partial<RoomSettings> = { ...rest, customRules: this.renderRuleReferences(this.settings.customRules) };
+    const vibemates: TemplateVibemate[] = [];
+    for (const p of this.participants.values()) {
+      if (p.kind !== "agent" || p.status === "left") continue;
+      const v: TemplateVibemate = { name: p.name };
+      if (p.tagline) v.tagline = p.tagline;
+      if (p.role) v.role = p.role;
+      if (p.avatar) v.avatar = p.avatar;
+      if (p.skills?.length) v.skills = [...p.skills];
+      if (p.replyDelay !== undefined) v.replyDelay = p.replyDelay;
+      if (p.agentType) {
+        v.agentType = p.agentType;
+        const model = p.launch?.model ?? p.model;
+        const effort = p.launch?.effort ?? p.effort;
+        const mode = p.launch?.mode ?? p.mode;
+        if (model) v.model = model;
+        if (effort) v.effort = effort;
+        if (mode) v.mode = mode;
+      }
+      vibemates.push(v);
+    }
+    return { dir: this.dir, settings, vibemates };
   }
 
   toStored(): { id: string; name: string; dir: string; createdAt: number; settings: Partial<RoomSettings>; participants: StoredParticipant[] } {
@@ -1215,6 +1243,7 @@ export class Room extends EventEmitter {
         turnActive: false,
         pendingTurn: false,
         turn: null,
+        strayMessageId: null,
         turnsSinceBrief: 0,
         usedAtBrief: 0,
         briefSentThisTurn: false,
@@ -2140,10 +2169,14 @@ export class Room extends EventEmitter {
 
     switch (update.sessionUpdate) {
       case "agent_message_chunk": {
-        if (!turn) return;
         const u = update as { content: ContentBlock; messageId?: string | null };
-        let text = contentText(u.content);
         const messageId = u.messageId ?? null;
+        if (!turn) {
+          if (messageId) runtime.strayMessageId = messageId;
+          return;
+        }
+        if (messageId && messageId === runtime.strayMessageId) return;
+        let text = contentText(u.content);
         if (messageId && !turn.sawMessageId && turn.message.text) {
           const notices = (turn.message.notices ??= []);
           notices.push(turn.message.text.trim());

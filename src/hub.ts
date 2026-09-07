@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Logger } from "./log.js";
 import { DEFAULT_EDITOR_SETTINGS, type EditorSettings } from "./open.js";
-import { listRecipes } from "./recipes.js";
+import { listRecipes, type AgentTypeId } from "./recipes.js";
 import { DEFAULT_ROOM_SETTINGS, type RoomSettings } from "./persona.js";
 import { Room, type DiscoveredOptions, type RoomEvent, type SkillsBridge, type StoredParticipant } from "./room.js";
 import { SkillLibrary, type SkillDraft, type SkillMeta } from "./skills.js";
@@ -31,7 +31,17 @@ export interface ProgramSettings {
   vendorPresets: Record<string, VendorPreset>;
   diagrams: DiagramSettings;
   editor: EditorSettings;
+  appearance: AppearanceSettings;
 }
+
+export interface AppearanceSettings {
+  chatFontSize: number;
+  font: string;
+  mono: string;
+}
+export const TEXT_FONTS = ["nunito", "inter", "noto-sans", "arial", "system"];
+export const MONO_FONTS = ["jetbrains-mono", "fira-code", "source-code-pro", "system"];
+export const DEFAULT_APPEARANCE: AppearanceSettings = { chatFontSize: 14.5, font: "nunito", mono: "jetbrains-mono" };
 
 export interface DiagramSettings {
   preset: DiagramPreset;
@@ -62,6 +72,7 @@ export type HubEvent =
   | { type: "rooms.opened"; roomIds: string[] }
   | { type: "settings"; settings: ProgramSettings }
   | { type: "skills"; skills: SkillMeta[] }
+  | { type: "templates" }
   | { type: "reset" };
 
 interface McpTokenEntry {
@@ -177,6 +188,7 @@ export class Hub extends EventEmitter {
       agentSkillsNeedApproval: false,
       diagrams: { preset: "pop", primary: null },
       editor: { ...DEFAULT_EDITOR_SETTINGS },
+      appearance: { ...DEFAULT_APPEARANCE },
       roomDefaults: {},
       vendorPresets: {},
     };
@@ -243,6 +255,17 @@ export class Hub extends EventEmitter {
       if (mode === "custom" && !command.includes("{file}")) throw new Error("editor.command must mention {file} (and usually {line})");
       next.editor = { mode, command };
     }
+    if (patch.appearance !== undefined && typeof patch.appearance === "object" && patch.appearance) {
+      const a = patch.appearance as Record<string, unknown>;
+      const chatFontSize = Number(a.chatFontSize ?? next.appearance?.chatFontSize ?? DEFAULT_APPEARANCE.chatFontSize);
+      if (!Number.isFinite(chatFontSize) || chatFontSize < 12 || chatFontSize > 24) throw new Error("appearance.chatFontSize must be between 12 and 24");
+      const font = String(a.font ?? next.appearance?.font ?? DEFAULT_APPEARANCE.font);
+      if (!TEXT_FONTS.includes(font)) throw new Error(`appearance.font must be one of ${TEXT_FONTS.join(", ")}`);
+      const mono = String(a.mono ?? next.appearance?.mono ?? DEFAULT_APPEARANCE.mono);
+      if (!MONO_FONTS.includes(mono)) throw new Error(`appearance.mono must be one of ${MONO_FONTS.join(", ")}`);
+      next.appearance = { chatFontSize: Math.round(chatFontSize * 2) / 2, font, mono };
+    }
+    next.appearance = { ...DEFAULT_APPEARANCE, ...(next.appearance ?? {}) };
     if (!next.editor) next.editor = { ...DEFAULT_EDITOR_SETTINGS };
     if (patch.roomDefaults !== undefined && typeof patch.roomDefaults === "object" && patch.roomDefaults) {
       next.roomDefaults = { ...next.roomDefaults, ...(patch.roomDefaults as Record<string, unknown>) } as ProgramSettings["roomDefaults"];
@@ -369,9 +392,14 @@ export class Hub extends EventEmitter {
   }): Promise<{ room: Room; notices: string[] }> {
     const template: RoomTemplate | undefined = this.templates.get(input.templateId);
     if (!template) throw new Error(`no such template: ${input.templateId}`);
-    const { room, notices } = this.createRoom({ name: input.name, dir: input.dir, settings: template.settings });
+    const { room, notices } = this.createRoom({ name: input.name, dir: input.dir || template.dir || null, settings: template.settings });
+    const installed = new Set(listRecipes().filter((r) => !r.unavailableReason).map((r) => r.id));
     for (const [i, tv] of template.vibemates.entries()) {
-      const choice = input.vibemates[i] ?? { name: tv.name, agentType: "" };
+      const choice = { ...(input.vibemates[i] ?? { name: tv.name, agentType: "" }) };
+      if (!choice.agentType && tv.agentType) {
+        if (installed.has(tv.agentType as AgentTypeId)) choice.agentType = tv.agentType;
+        else notices.push(`${choice.name || tv.name}: the template runs it on ${tv.agentType}, which is not installed here; pick another agent in the roster.`);
+      }
       const skills = (tv.skills ?? []).filter((name) => {
         const ok = !!this.skills.get(name);
         if (!ok) notices.push(`${choice.name || tv.name}: skill "${name}" is not in the library; not attached.`);
@@ -393,6 +421,7 @@ export class Hub extends EventEmitter {
           role: tv.role,
           avatar: tv.avatar,
           skills,
+          replyDelay: tv.replyDelay,
           model: choice.model ?? tv.model,
           effort: choice.effort ?? tv.effort,
           mode: choice.mode ?? tv.mode,
@@ -403,6 +432,24 @@ export class Hub extends EventEmitter {
     }
     this.saveRooms();
     return { room, notices };
+  }
+
+  saveRoomAsTemplate(roomId: string, input: { name: string; description: string; emoji?: string; template?: Partial<Pick<RoomTemplate, "dir" | "settings" | "vibemates">> }): RoomTemplate {
+    const name = input.name.trim();
+    if (!name) throw new Error("the template needs a name");
+    const room = this.getRoom(roomId);
+    const base = room.templateOf();
+    const edited = input.template ?? {};
+    const saved = this.templates.save({
+      name,
+      description: input.description.trim(),
+      emoji: (input.emoji ?? room.settings.emoji) || undefined,
+      dir: edited.dir?.trim() || base.dir,
+      settings: { ...base.settings, ...(edited.settings ?? {}) },
+      vibemates: edited.vibemates ?? base.vibemates,
+    });
+    this.emit("event", { type: "templates" } satisfies HubEvent);
+    return saved;
   }
 
   getRoom(id: string): Room {

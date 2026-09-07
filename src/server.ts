@@ -406,7 +406,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
-    const roomAction = path.match(/^\/api\/rooms\/([^/]+)\/(send|typing|invite|settings|focus|rename|dir|delete|open)$/);
+    const roomAction = path.match(/^\/api\/rooms\/([^/]+)\/(send|typing|invite|settings|focus|rename|dir|delete|open|template-preview|save-template)$/);
     if (roomAction) {
       const room = hub.getRoom(decodeURIComponent(roomAction[1]));
       const action = roomAction[2];
@@ -426,6 +426,21 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         }
         const message = room.postHumanMessage(text, imageList(body.images));
         sendJson(res, 200, { ok: true, id: message.id });
+      } else if (action === "template-preview") {
+        sendJson(res, 200, { template: { name: room.name, emoji: room.settings.emoji || "", ...room.templateOf() } });
+      } else if (action === "save-template") {
+        const edited = body.template && typeof body.template === "object" ? (body.template as Record<string, unknown>) : undefined;
+        const template = hub.saveRoomAsTemplate(room.id, {
+          name: String(body.name ?? ""),
+          description: String(body.description ?? ""),
+          emoji: body.emoji === undefined ? undefined : String(body.emoji),
+          template: edited && {
+            dir: optionalString(edited.dir) ?? undefined,
+            settings: edited.settings && typeof edited.settings === "object" ? (edited.settings as Record<string, unknown>) : undefined,
+            vibemates: Array.isArray(edited.vibemates) ? (edited.vibemates as never[]) : undefined,
+          },
+        });
+        sendJson(res, 200, { ok: true, template });
       } else if (action === "typing") {
         room.humanTyping();
         sendJson(res, 200, { ok: true });

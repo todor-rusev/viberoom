@@ -128,7 +128,39 @@
     eraseSubmit: $("#erase-submit"),
   };
 
-  const STATUS_LABEL = { unstaffed: "needs a coding agent", starting: "starting…", idle: "ready", queued: "waiting…", thinking: "thinking…", error: "error", offline: "offline", left: "left" };
+  const FONTS = {
+    text: {
+      nunito: { label: "Nunito (default)", stack: '"Nunito", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      inter: { label: "Inter", stack: '"Inter", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      "noto-sans": { label: "Noto Sans", stack: '"Noto Sans", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      arial: { label: "Arial / Helvetica (system)", stack: 'Arial, Helvetica, "Liberation Sans", sans-serif' },
+      system: { label: "System UI font", stack: 'system-ui, -apple-system, "Segoe UI", Roboto, Cantarell, sans-serif' },
+    },
+    mono: {
+      "jetbrains-mono": { label: "JetBrains Mono (default)", stack: '"JetBrains Mono", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
+      "fira-code": { label: "Fira Code", stack: '"Fira Code", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
+      "source-code-pro": { label: "Source Code Pro", stack: '"Source Code Pro", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
+      system: { label: "System monospace", stack: 'ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", "Courier New", monospace' },
+    },
+  };
+  const STATUS_LABEL = { unstaffed: "needs a coding agent", starting: "starting…", idle: "ready", queued: "waiting…", thinking: "thinking…", writing: "writing…", error: "error", offline: "offline", left: "left" };
+  const FALLBACK_COLOR = "#9ca3af";
+  const WORKING_SVG = '<svg class="working" viewBox="0 0 44 35" aria-hidden="true" title="working…">'
+    + '<g class="body">'
+    + '<circle cx="20" cy="6.5" r="5.6" fill="currentColor"/>'
+    + '<path d="M6 35L13.7 16.5a4 4 0 0 1 8 0L14 35z" fill="currentColor"/>'
+    + '</g>'
+    + '<path d="M19 19.5L23 27" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/>'
+    + '<g class="forearm"><path d="M23 27h10.5" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/></g>'
+    + '<rect x="26" y="30.2" width="15.5" height="3" rx="1" fill="currentColor"/>'
+    + '<path d="M35.9 30.2L41.1 14h2.4l-5.1 16.2z" fill="currentColor"/>'
+    + '<rect x="18" y="33.2" width="25" height="1.3" rx=".6" fill="currentColor"/>'
+    + '</svg>';
+
+  function shownStatus(room, p) {
+    if (p.status !== "thinking") return p.status;
+    return room.messages.some((m) => m.streaming && m.from === p.id) ? "writing" : "thinking";
+  }
   const CHAT_EMOJI = ["😀", "😄", "😂", "🙂", "😉", "😍", "🤔", "😎", "🥳", "😅", "😢", "😡", "👍", "👎", "👋", "🙏", "👏", "💪", "🔥", "✨", "🎉", "❤️", "💜", "✅", "❌", "⚠️", "💡", "🚀", "🐛", "🤖", "🤫", "☕"];
   const ROOM_EMOJI = ["🎭", "🚀", "🧪", "🛠️", "🎨", "📚", "🧠", "💬", "🔬", "🎯", "🐙", "☕", "🌈", "🏗️", "🎮", "🔥", "🧩", "📈", "🗺️", "🎧", "🌱", "🏠", "🛸", "🧭"];
   function emojiGrid(list, current, onPick) {
@@ -391,7 +423,7 @@
   function mermaidThemeVariables(d) {
     d = diagramSettings(d);
     const preset = DIAGRAM_PRESETS[d.preset] || DIAGRAM_PRESETS.pop;
-    const vars = Object.assign({}, preset, { fontFamily: "Nunito, Segoe UI, system-ui, -apple-system, Roboto, sans-serif", fontSize: "13px" });
+    const vars = Object.assign({}, preset, { fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font").trim() || "Nunito, sans-serif", fontSize: "13px" });
     delete vars.label;
     delete vars.palette;
     if (preset.palette) preset.palette.forEach((c, i) => (vars[`pie${i + 1}`] = c.fill));
@@ -1070,6 +1102,7 @@
       const selected = (state.selection.kind === "participant" && state.selection.id === p.id) || (p.kind === "human" && state.selection.kind === "me" && state.detailsOpen);
       const asleep = p.kind === "agent" && (p.status === "offline" || p.status === "left");
       const unstaffed = p.kind === "agent" && p.status === "unstaffed";
+      const shown = shownStatus(room, p);
       const className = (p.kind === "human" ? "me" : "") + (selected ? " selected" : "") + (asleep ? " offline" : "") + (unstaffed ? " unstaffed" : "");
       const sub = p.kind === "human" ? "you, the human" : [p.tagline ? `"${p.tagline}"` : "", p.agentVendor || p.agentLabel, p.model].filter(Boolean).join(" · ");
       const warn = p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>` : "";
@@ -1077,9 +1110,9 @@
         ? `<span class="badge status-unstaffed" title="Click to summon this vibemate: pick the coding agent that runs it">summon</span>`
         : asleep
         ? `<span class="zzz" title="${esc(STATUS_LABEL[p.status] || p.status)}">zzz</span>`
-        : p.kind === "agent" && p.status !== "idle" ? `<span class="badge status-${p.status}">${p.status === "thinking" ? '<span class="dot"></span>' : ""}${STATUS_LABEL[p.status] || p.status}</span>` : "";
+        : p.kind === "agent" && p.status !== "idle" ? `<span class="badge status-${shown}">${p.status === "thinking" ? '<span class="dot"></span>' : ""}${STATUS_LABEL[shown] || shown}</span>` : "";
       const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true });
-      const statusClass = p.kind === "agent" ? `avatar-status status-${esc(p.status || "idle")}` : "";
+      const statusClass = p.kind === "agent" ? `avatar-status status-${esc(shown || "idle")}` : "";
       const bodyHtml = `<div class="p-body">
           <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? '<span class="badge muted">muted</span>' : ""}${status}</div>
           <div class="p-sub">${esc(sub)}</div>
@@ -1228,7 +1261,7 @@
         : `<div class="sys${warn ? " warn" : ""}" title="${esc(fullTime(m.ts))}">${esc(m.text)}</div>`;
       return el;
     }
-    const p = findById(room, m.from) || { name: m.fromName, color: "#9ca3af", kind: m.from === "human" ? "human" : "agent" };
+    const p = findById(room, m.from) || { name: m.fromName, color: FALLBACK_COLOR, kind: m.from === "human" ? "human" : "agent" };
     const mine = m.from === "human";
     el.className = "msg " + (mine ? "mine" : "agent");
     el.innerHTML = `
@@ -1377,9 +1410,9 @@
     const more = el.querySelector(".more");
     const long = !m.streaming && m.text.length > CLAMP_CHARS;
     const expanded = state.expanded.has(m.id);
-    text.innerHTML = renderText(room, m.text, m.images) + (m.streaming ? '<span class="caret"></span>' : "");
+    text.innerHTML = renderText(room, m.text, m.images) + (m.streaming ? WORKING_SVG : "");
     if (!m.streaming) renderDiagrams(text);
-    if (m.streaming && !m.text) text.innerHTML = '<span class="pending">…</span>';
+    if (m.streaming && !m.text) text.innerHTML = '<span class="pending" title="thinking…"><i></i><i></i><i></i></span>';
     text.classList.toggle("clamped", long && !expanded);
     more.hidden = !long;
     more.textContent = expanded ? "Show less" : "Show more";
@@ -1434,8 +1467,9 @@
     if (!present.length) return "";
     const seen = present.filter((p) => p.lastSeenSeq != null && p.lastSeenSeq >= m.seq);
     if (seen.length === present.length) return "";
-    if (!seen.length) return `<span class="ticks">✓</span> sent`;
-    return `<span class="ticks">✓✓</span> seen by ${esc(seen.map((p) => p.name).join(", "))}`;
+    const you = m.from !== "human";
+    if (!seen.length) return `<span class="ticks">✓</span> sent${you ? " · seen by you" : ""}`;
+    return `<span class="ticks">✓✓</span> seen by ${esc([...(you ? ["you"] : []), ...seen.map((p) => p.name)].join(", "))}`;
   }
   function fillSeen(el, room, m) {
     if (m.kind !== "chat" || m.streaming) return;
@@ -1561,6 +1595,7 @@
       if (empty) empty.remove();
       els.messages.appendChild(messageElement(room, m));
       if (m.from === "human") refreshSeen(room);
+      if (m.streaming && m.from !== "human") renderSideRoom();
       else if (!stick && m.kind === "chat") noteNew(room, m);
     }
     if (stick) scrollToBottom();
@@ -1997,7 +2032,7 @@
         ${field("Emoji", `<div id="rp-emoji-picker"></div><input type="text" id="rp-emoji" maxlength="8" value="${esc(rs.emoji || "")}" placeholder="custom emoji (optional)">`, "A face for the room, next to its name.")}
         ${field("Topic", `<input type="text" id="rp-topic" maxlength="2000" value="${esc(rs.topic || "")}" placeholder="what this room is about (optional)">`)}
         ${field("Folder", `<span class="dir-row"><input type="text" id="rp-dir" maxlength="1000" value="${esc(room.dir)}" spellcheck="false"><button type="button" class="btn ghost browse-btn" id="rp-dir-browse" title="Choose a folder">${ic("folder")}Browse</button></span>`, "Where the vibemates read and write. Changing it restarts them in the new folder; they replay the last messages.")}
-        <label class="field mention-host"><span class="label">Room rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">One rule per line; type @ to reference a participant.</span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></label>
+        <div class="field mention-host"><span class="label">Room rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">One rule per line; type @ to reference a participant.</span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></div>
         ${field("Language", `<input type="text" id="rp-lang" value="${esc(lang)}" placeholder="follow the human (default), or e.g. English">`)}
       </div>
       <div class="section">
@@ -2006,6 +2041,11 @@
         ${field("Reply delay, seconds", `<input type="number" id="rp-delay" min="0" max="120" step="0.5" value="${rs.replyDelay ?? 4}">`, "With two or more vibemates, each waits a random 0–N seconds before it answers, so replies cross less often. A vibemate alone answers at once. A vibemate's own delay (in its panel) always applies.")}
         <label class="switch"><span class="label">Vibemates wake each other<span class="hint">A reply without @ wakes every other vibemate, as yours does; each may answer or stay silent. Off: only @Name wakes a vibemate. The hop limit applies either way.</span></span><input type="checkbox" id="rp-wake" ${rs.agentsWakeEachOther !== false ? "checked" : ""}></label>
         <label class="switch"><span class="label">Wait while you are typing<span class="hint">A vibemate about to start holds back while you type (a few seconds after your last keystroke). A reply already under way is not interrupted.</span></span><input type="checkbox" id="rp-wait-typing" ${rs.waitWhileHumanTypes !== false ? "checked" : ""}></label>
+      </div>
+      <div class="section template">
+        ${sectionTitle("rooms", "Turn this room into a template")}
+        <p class="field-note">Its settings, rules, folder and vibemates (with the coding agent each runs on) become one of your templates, listed first under "Start from a template". You see everything it will contain, and can change any of it, before you create it.</p>
+        <div class="row-btns start stp-row"><button type="button" class="btn sm primary" id="rp-template">${ic("rooms")}Preview and create template</button></div>
       </div>
       ${geek(
         "rp-geek",
@@ -2034,6 +2074,7 @@
         <label class="switch"><span class="label">Repeat core rules in every header</span><input type="checkbox" id="rp-header-rules" ${rs.headerRules ? "checked" : ""}></label>
         <label class="switch"><span class="label">Show vendor and model to other vibemates</span><input type="checkbox" id="rp-vendor" ${rs.showVendorInRoster ? "checked" : ""}></label>
         ${field("Replay last N chat messages after a reconnect", `<input type="number" id="rp-replay" min="0" max="200" value="${rs.replayAfterRestart}">`)}
+        ${field("Missed messages a vibemate reads at most on its next turn", `<input type="number" id="rp-backlog" min="1" max="1000" value="${rs.backlogCap}">`, "Everything posted since its last turn counts, including while it was muted; older messages are dropped with a note in its prompt.")}
       </div>`,
         "tools, hops, referee, briefs",
       )}
@@ -2057,6 +2098,7 @@
       $("#rp-dir").value = dir;
       $("#rp-dir").dispatchEvent(new Event("change", { bubbles: true }));
     }));
+    $("#rp-template").addEventListener("click", () => openSaveTemplateDialog(room));
     bindSave($("#rp-form"), $("#rp-save"), async () => {
         const name = $("#rp-name").value;
         if (name.trim() !== room.name) await post(roomApi("/rename"), { name });
@@ -2075,6 +2117,7 @@
           headerRules: $("#rp-header-rules").checked,
           showVendorInRoster: $("#rp-vendor").checked,
           replayAfterRestart: Number($("#rp-replay").value),
+          backlogCap: Number($("#rp-backlog").value),
           refereeAction: $("#rp-referee").value,
           turnTaking: $("#rp-turns").value,
           waitWhileHumanTypes: $("#rp-wait-typing").checked,
@@ -2129,6 +2172,13 @@
             ${sectionTitle("bolt", "Pace")}
             ${field("Turn taking in new rooms", `<select id="sp-turns"><option value="one-at-a-time"${d.turnTaking !== "parallel" ? " selected" : ""}>One vibemate at a time</option><option value="parallel"${d.turnTaking === "parallel" ? " selected" : ""}>All addressed vibemates at once</option></select>`)}
             ${field("Reply delay in new rooms, seconds", `<input type="number" id="sp-delay" min="0" max="120" step="0.5" value="${d.replyDelay ?? 4}">`, "Used when two or more vibemates share a room; each room can change it; a vibemate can override it in its own panel.", "Before each turn a vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive meanwhile land in its backlog. A vibemate alone answers at once unless it has its own delay.")}
+          </div>
+          <div class="section" id="sp-appearance">
+            ${sectionTitle("eye", "Appearance")}
+            ${field("Text size, px", `<input type="number" id="sp-chat-fs" min="12" max="24" step="0.5" value="${esc(String((s.appearance || {}).chatFontSize || 14.5))}">`, "The size of the chat text; 14.5 is the default. Everything else in the window scales with it.")}
+            ${field("Font", `<select id="sp-font">${Object.entries(FONTS.text).map(([id, f]) => `<option value="${id}"${((s.appearance || {}).font || "nunito") === id ? " selected" : ""}>${esc(f.label)}</option>`).join("")}</select>`, "Nunito, Inter and Noto Sans come with viberoom and look the same on every OS; the system entries use what this machine has.")}
+            ${field("Code font", `<select id="sp-mono">${Object.entries(FONTS.mono).map(([id, f]) => `<option value="${id}"${((s.appearance || {}).mono || "jetbrains-mono") === id ? " selected" : ""}>${esc(f.label)}</option>`).join("")}</select>`, "For code blocks, paths and tool output.")}
+            <div class="bubble" id="sp-chat-sample" style="display:inline-block;font-size:${((s.appearance || {}).chatFontSize || 14.5) / zoomFactor()}px">Messages will read like this, with <code>code</code> a step smaller.</div>
           </div>
           <div class="section" id="sp-editor">
             ${sectionTitle("pencil", "Open files at a line")}
@@ -2231,6 +2281,13 @@
     });
     $("#sp-diagram-color").addEventListener("input", redrawPreview);
     renderDiagrams(diagramSection, previewTheme());
+    const sample = $("#sp-chat-sample");
+    $("#sp-chat-fs").addEventListener("input", () => {
+      const px = Number($("#sp-chat-fs").value);
+      if (px >= 12 && px <= 24) sample.style.fontSize = `${px / zoomFactor()}px`;
+    });
+    $("#sp-font").addEventListener("change", () => (sample.style.fontFamily = FONTS.text[$("#sp-font").value].stack));
+    $("#sp-mono").addEventListener("change", () => sample.querySelectorAll("code").forEach((c) => (c.style.fontFamily = FONTS.mono[$("#sp-mono").value].stack)));
     bindSave($("#sp-form"), $("#sp-save"), async () => {
         const vendorPresets = {};
         els.pageInner.querySelectorAll("input[data-vendor]").forEach((inp) => {
@@ -2242,6 +2299,7 @@
           agentSkillsNeedApproval: $("#sp-skill-approval").checked,
           diagrams: { preset: $("#sp-diagram-preset").value, primary: $("#sp-diagram-custom").checked ? $("#sp-diagram-color").value : null },
           editor: { mode: $("#sp-editor-mode").value, command: $("#sp-editor-cmd").value },
+          appearance: { chatFontSize: Number($("#sp-chat-fs").value), font: $("#sp-font").value, mono: $("#sp-mono").value },
           roomDefaults: {
             turnTaking: $("#sp-turns").value,
             replyDelay: Number($("#sp-delay").value),
@@ -2802,7 +2860,7 @@
         const faces = t.vibemates.slice(0, 4).map((v) => avatar({ name: v.name, avatar: v.avatar, color: "#9ca3af" }, 20, {})).join("");
         return `<button type="button" class="tpl-item${on ? " on" : ""}" data-id="${esc(t.id)}" role="radio" aria-checked="${on ? "true" : "false"}">
           <span class="tpl-emoji">${esc(t.emoji || "🧩")}</span>
-          <span class="tpl-body"><b>${esc(t.name)}${t.recommended ? '<span class="badge tpl-rec">recommended</span>' : ""}</b><span class="tpl-meta">${t.vibemates.length} vibemate${t.vibemates.length === 1 ? "" : "s"}${t.builtin ? " · built in" : " · yours"}</span><span class="avatar-stack">${faces}</span></span>
+          <span class="tpl-body"><b>${esc(t.name)}${t.builtin ? "" : '<span class="badge tpl-mine">your template</span>'}${t.recommended ? '<span class="badge tpl-rec">recommended</span>' : ""}</b><span class="tpl-meta">${t.vibemates.length} vibemate${t.vibemates.length === 1 ? "" : "s"}${t.builtin ? " · built in" : ""}</span><span class="avatar-stack">${faces}</span></span>
           <span class="tpl-check">${ic("check")}</span>
         </button>`;
       })
@@ -2828,10 +2886,14 @@
           return `<div class="tpl-vm" data-i="${i}">
             <div class="tpl-vm-head"><b>${esc(v.name)}</b>${v.tagline ? `<span class="hint">"${esc(v.tagline)}"</span>` : ""}</div>
             ${v.role ? `<div class="tpl-vm-role">${esc(v.role)}</div>` : ""}
+            ${runsOn(v)}
           </div>`;
         })
         .join("")}`;
-    tplEls.detail.insertAdjacentHTML("beforeend", '<p class="hint">You pick the coding agent for each vibemate in the room, right after it opens.</p>');
+    if (t.dir) tplEls.detail.insertAdjacentHTML("beforeend", `<p class="hint">Folder: <code>${esc(t.dir)}</code> (you can change it below)</p>`);
+    tplEls.detail.insertAdjacentHTML("beforeend", t.vibemates.some((v) => v.agentType)
+      ? '<p class="hint">A vibemate whose coding agent is not installed here waits in the roster until you pick another.</p>'
+      : '<p class="hint">You pick the coding agent for each vibemate in the room, right after it opens.</p>');
   }
   $("#tpl-dir-browse").addEventListener("click", () => openFolderPicker(tplEls.dir.value, (dir) => (tplEls.dir.value = dir)));
   tplEls.form.addEventListener("submit", async (event) => {
@@ -2855,6 +2917,142 @@
     } finally {
       tplEls.create.disabled = false;
       tplEls.create.textContent = "Create the room";
+    }
+  });
+
+  function runsOn(v) {
+    if (!v.agentType) return "";
+    const rec = state.recipes.find((r) => r.id === v.agentType);
+    const parts = [rec ? rec.vendor : v.agentType, v.model, v.effort, v.mode].filter(Boolean);
+    return `<div class="chips tpl-runs">${parts.map((x) => `<span class="chip">${esc(x)}</span>`).join("")}${rec && rec.unavailableReason ? '<span class="badge status-offline">not installed here</span>' : ""}</div>`;
+  }
+
+  const stpEls = { dialog: $("#save-template-dialog"), form: $("#save-template-form"), name: $("#stp-name"), desc: $("#stp-desc"), preview: $("#stp-preview"), error: $("#stp-error"), create: $("#stp-create") };
+  const stp = { room: null, template: null };
+  async function openSaveTemplateDialog(room) {
+    stp.room = room;
+    stpEls.error.hidden = true;
+    stpEls.name.value = room.name;
+    stpEls.desc.value = "";
+    stpEls.preview.innerHTML = '<span class="hint">loading…</span>';
+    openDialog(stpEls.dialog);
+    try {
+      const t = (await post(roomApi("/template-preview"), {})).template;
+      stp.template = t;
+      stpEls.preview.innerHTML = renderTemplateForm(t);
+      stpEls.preview.querySelectorAll("[data-stp-browse]").forEach((b) => b.addEventListener("click", () => {
+        const input = $("#stp-dir");
+        openFolderPicker(input.value, (dir) => (input.value = dir));
+      }));
+      stpEls.preview.querySelectorAll("[data-stp-remove]").forEach((b) => b.addEventListener("click", () => {
+        b.closest(".stp-vm").remove();
+        $("#stp-vm-count").textContent = String(stpEls.preview.querySelectorAll(".stp-vm").length);
+      }));
+    } catch (error) {
+      stpEls.error.textContent = error.message;
+      stpEls.error.hidden = false;
+    }
+  }
+  const stpField = (label, html, wide) => `<label class="field${wide ? " wide" : ""}"><span class="label">${label}</span>${html}</label>`;
+  const stpSwitch = (label, id, on) => `<label class="switch"><span class="label">${label}</span><input type="checkbox" id="${id}"${on ? " checked" : ""}></label>`;
+  const stpSelect = (id, value, options) => `<select id="${id}">${options.map(([v, l]) => `<option value="${esc(v)}"${String(value) === v ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+  function renderTemplateForm(t) {
+    const st = t.settings || {};
+    const lang = st.language && st.language.mode === "fixed" ? st.language.language : "";
+    const room = `<div class="stp-grid">
+      ${stpField("Emoji", `<input type="text" id="stp-emoji" maxlength="8" value="${esc(t.emoji || "")}" placeholder="none">`)}
+      ${stpField("Topic", `<input type="text" id="stp-topic" maxlength="2000" value="${esc(st.topic || "")}" placeholder="what the room is about">`)}
+      ${stpField("Language", `<input type="text" id="stp-lang" value="${esc(lang)}" placeholder="follow the human (default), or e.g. English">`)}
+      ${stpField("Vibemates' own tools", stpSelect("stp-tools", st.tools || "on-request", [["on-request", "Only when someone explicitly asks"], ["never", "Never (chat only)"]]))}
+      ${stpField("Who may speak", stpSelect("stp-turns", st.turnTaking || "parallel", [["parallel", "All addressed vibemates at once"], ["one-at-a-time", "One vibemate at a time"]]))}
+      ${stpField("Reply delay, seconds", `<input type="number" id="stp-delay" min="0" max="120" step="0.5" value="${esc(String(st.replyDelay ?? 4))}">`)}
+      ${stpSwitch("Vibemates wake each other", "stp-wake", st.agentsWakeEachOther !== false)}
+      ${stpSwitch("Wait while you are typing", "stp-wait", st.waitWhileHumanTypes !== false)}
+      ${stpField("Hop limit", `<input type="number" id="stp-hops" min="0" max="10000" value="${esc(String(st.hopLimit ?? 100))}">`)}
+      ${stpField("Max sentences per reply", `<input type="number" id="stp-maxlen" min="1" max="100" value="${st.maxSentences ?? ""}" placeholder="no limit">`)}
+      ${stpField("Referee", stpSelect("stp-referee", st.refereeAction || "next-header", [["next-header", "Post it; remind in the next header"], ["retry-hidden", "Hold it; retry in a hidden turn"]]))}
+      ${stpField("About you", stpSelect("stp-about", st.humanDescriptionMode || "inherit", [["inherit", "Program-wide description"], ["append", "Program-wide + this room's"], ["override", "Only this room's"], ["none", "Nothing about me"]]))}
+      ${stpField("Full brief every N turns", `<input type="number" id="stp-brief-turns" min="1" max="10000" value="${esc(String(st.fullBriefEveryTurns ?? 8))}">`)}
+      ${stpField("…or every N tokens", `<input type="number" id="stp-brief-tokens" min="1000" max="10000000" step="1000" value="${esc(String(st.fullBriefEveryTokens ?? 20000))}">`)}
+      ${stpField("Replay after a reconnect", `<input type="number" id="stp-replay" min="0" max="200" value="${esc(String(st.replayAfterRestart ?? 10))}">`)}
+      ${stpField("Missed messages read at most", `<input type="number" id="stp-backlog" min="1" max="1000" value="${esc(String(st.backlogCap ?? 50))}">`)}
+      ${stpSwitch("Core rules in every header", "stp-header-rules", st.headerRules !== false)}
+      ${stpSwitch("Show vendor and model to other vibemates", "stp-vendor", !!st.showVendorInRoster)}
+    </div>`;
+    const agentOptions = [["", "none yet: cast when the room opens"], ...state.recipes.map((r) => [r.id, r.vendor + (r.unavailableReason ? " (not installed here)" : "")])];
+    const vms = (t.vibemates || []).map((v, i) => `<div class="stp-vm" data-i="${i}">${avatar({ name: v.name, avatar: v.avatar, color: "#9ca3af" }, 36, {})}<div>
+        <div class="stp-vm-top"><b>${esc(v.name)}</b><button type="button" class="icon-btn sm ghost" title="Leave this vibemate out of the template" data-stp-remove>${ic("close")}</button></div>
+        <div class="stp-vm-fields">
+          ${stpField("Vibename", `<input type="text" data-k="name" maxlength="40" value="${esc(v.name)}" required>`)}
+          ${stpField("Vibersona", `<input type="text" data-k="tagline" maxlength="80" value="${esc(v.tagline || "")}">`)}
+          ${stpField("Vibio", `<textarea data-k="role" rows="3" maxlength="4000">${esc(v.role || "")}</textarea>`, true)}
+          ${stpField("Vibeface", `<input type="text" data-k="avatar" maxlength="8" value="${esc(v.avatar || "")}" placeholder="initials">`)}
+          ${stpField("Coding agent", stpSelect("", v.agentType || "", agentOptions).replace('id=""', 'data-k="agentType"'))}
+          ${stpField("Model", `<input type="text" data-k="model" value="${esc(v.model || "")}" placeholder="the agent's default">`)}
+          ${stpField("Effort", `<input type="text" data-k="effort" value="${esc(v.effort || "")}" placeholder="default">`)}
+          ${stpField("Mode", `<input type="text" data-k="mode" value="${esc(v.mode || "")}" placeholder="default">`)}
+          ${stpField("Reply delay override, s", `<input type="number" data-k="replyDelay" min="0" max="120" step="0.5" value="${v.replyDelay ?? ""}" placeholder="the room's">`)}
+          ${stpField("Skills, comma-separated", `<input type="text" data-k="skills" value="${esc((v.skills || []).join(", "))}">`, true)}
+        </div>
+      </div></div>`).join("");
+    return `
+      <div class="stp-section"><h5>Room</h5>${room}</div>
+      <div class="stp-section"><h5>Room rules</h5><textarea id="stp-rules" rows="5" maxlength="4000" placeholder="one rule per line">${esc(st.customRules || "")}</textarea></div>
+      <div class="stp-section"><h5>Folder</h5><span class="dir-row"><input type="text" id="stp-dir" maxlength="1000" value="${esc(t.dir || "")}" spellcheck="false"><button type="button" class="btn ghost browse-btn" data-stp-browse>${ic("folder")}Browse</button></span></div>
+      <div class="stp-section"><h5>Vibemates · <span id="stp-vm-count">${(t.vibemates || []).length}</span></h5>${vms || '<span class="hint">none</span>'}</div>`;
+  }
+  function readTemplateForm() {
+    const num = (id) => Number($(id).value);
+    const langText = $("#stp-lang").value.trim();
+    const settings = {
+      topic: $("#stp-topic").value,
+      language: langText ? { mode: "fixed", language: langText } : { mode: "follow-human" },
+      tools: $("#stp-tools").value,
+      turnTaking: $("#stp-turns").value,
+      replyDelay: num("#stp-delay"),
+      agentsWakeEachOther: $("#stp-wake").checked,
+      waitWhileHumanTypes: $("#stp-wait").checked,
+      hopLimit: num("#stp-hops"),
+      maxSentences: $("#stp-maxlen").value === "" ? null : num("#stp-maxlen"),
+      refereeAction: $("#stp-referee").value,
+      humanDescriptionMode: $("#stp-about").value,
+      fullBriefEveryTurns: num("#stp-brief-turns"),
+      fullBriefEveryTokens: num("#stp-brief-tokens"),
+      replayAfterRestart: num("#stp-replay"),
+      backlogCap: num("#stp-backlog"),
+      headerRules: $("#stp-header-rules").checked,
+      showVendorInRoster: $("#stp-vendor").checked,
+      customRules: $("#stp-rules").value.slice(0, 4000),
+    };
+    const vibemates = [...stpEls.preview.querySelectorAll(".stp-vm")].map((row) => {
+      const v = {};
+      row.querySelectorAll("[data-k]").forEach((el) => {
+        const k = el.dataset.k;
+        const val = el.value.trim();
+        if (k === "skills") v.skills = val.split(",").map((x) => x.trim()).filter(Boolean);
+        else if (k === "replyDelay") { if (val !== "") v.replyDelay = Number(val); }
+        else if (val) v[k] = val;
+      });
+      return v;
+    });
+    return { emoji: $("#stp-emoji").value.trim(), dir: $("#stp-dir").value.trim(), settings, vibemates };
+  }
+  stpEls.form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!stp.room) return;
+    stpEls.create.disabled = true;
+    stpEls.create.textContent = "Creating…";
+    try {
+      const edited = readTemplateForm();
+      const res = await post(`/api/rooms/${encodeURIComponent(stp.room.id)}/save-template`, { name: stpEls.name.value, description: stpEls.desc.value, emoji: edited.emoji, template: { dir: edited.dir, settings: edited.settings, vibemates: edited.vibemates } });
+      closeDialog(stpEls.dialog);
+      toast(`Template "${res.template.name}" created. It is first under "Start from a template".`, "success");
+    } catch (error) {
+      stpEls.error.textContent = error.message;
+      stpEls.error.hidden = false;
+    } finally {
+      stpEls.create.disabled = false;
+      stpEls.create.textContent = "Create the template";
     }
   });
 
@@ -2953,8 +3151,18 @@
   }
 
 
+  function applyAppearance() {
+    const a = (state.settings || {}).appearance || {};
+    const root = document.documentElement;
+    root.style.zoom = String((a.chatFontSize || 14.5) / 14.5);
+    root.style.setProperty("--font", (FONTS.text[a.font] || FONTS.text.nunito).stack);
+    root.style.setProperty("--mono", (FONTS.mono[a.mono] || FONTS.mono["jetbrains-mono"]).stack);
+  }
+  const zoomFactor = () => Number(document.documentElement.style.zoom) || 1;
+
   function loadSnapshot(snapshot) {
     state.settings = snapshot.settings;
+    applyAppearance();
     state.version = snapshot.version || null;
     state.skills = snapshot.skills || [];
     state.recipes = snapshot.recipes || [];
@@ -3131,6 +3339,7 @@
     });
     es.addEventListener("settings", (e) => {
       state.settings = JSON.parse(e.data).settings;
+      applyAppearance();
       rerenderDiagrams();
       renderRail();
       if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
@@ -3178,14 +3387,14 @@
     let drag = null;
     grip.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
-      drag = { y: e.clientY, h: els.input.offsetHeight };
+      drag = { y: e.clientY / zoomFactor(), h: els.input.offsetHeight };
       grip.setPointerCapture(e.pointerId);
       els.composer.classList.add("resizing");
       e.preventDefault();
     });
     grip.addEventListener("pointermove", (e) => {
       if (!drag) return;
-      composerMin = Math.round(Math.min(composerCeiling(), Math.max(36, drag.h + drag.y - e.clientY)));
+      composerMin = Math.round(Math.min(composerCeiling(), Math.max(36, drag.h + drag.y - e.clientY / zoomFactor())));
       autosize();
     });
     const stop = () => {
