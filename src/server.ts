@@ -51,6 +51,8 @@ export interface RunningServer {
   close(): void;
 }
 
+import { checkForUpdate, installUpdate, restartWithNewBuild, runsFromSourceCheckout } from "./update.js";
+
 export interface BuildInfo {
   name: string;
   version: string;
@@ -188,6 +190,25 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     if (req.method === "GET" && path === "/api/state") {
       sendJson(res, 200, snapshot());
+      return;
+    }
+
+    if (req.method === "GET" && path === "/api/update") {
+      if (url.searchParams.get("check") === "1") hub.setUpdate(await checkForUpdate(hub.dataDir, info.version, { force: true }));
+      sendJson(res, 200, hub.update ?? { current: info.version, latest: null, available: false, checkedAt: null, error: null });
+      return;
+    }
+    if (req.method === "POST" && path === "/api/update/install") {
+      const mainUrl = new URL("./main.js", import.meta.url).href;
+      if (runsFromSourceCheckout(mainUrl)) throw new Error("this viberoom runs from a source checkout; update it with git pull and npm run update");
+      const latest = hub.update?.available ? hub.update.latest : null;
+      if (!latest) throw new Error("no newer version is known; check for updates first");
+      log.info(`installing viberoom ${latest} (npm install -g)`);
+      const result = await installUpdate(latest);
+      if (!result.ok) throw new Error(`npm install failed: ${result.output.slice(-600) || "no output"}`);
+      log.info(`viberoom ${latest} installed; starting the new build, which replaces this hub`);
+      sendJson(res, 200, { ok: true, version: latest });
+      setTimeout(() => restartWithNewBuild(mainUrl, port, hub.dataDir), 300);
       return;
     }
 

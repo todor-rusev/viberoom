@@ -114,6 +114,8 @@ Options
 `);
 }
 
+import { checkForUpdate } from "./update.js";
+
 function buildInfo(): BuildInfo {
   const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")) as { name: string; version: string };
   const built = statSync(fileURLToPath(import.meta.url)).mtime;
@@ -268,6 +270,13 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
     }
   }
   hub.setHubUrl(server.url);
+  if (hub.settings.checkForUpdates) {
+    void checkForUpdate(hub.dataDir, info.version).then((update) => {
+      hub.setUpdate(update);
+      if (update.available) log.info(`viberoom ${update.latest} is available (this is ${update.current})`);
+      else if (update.error) log.warn(`update check failed: ${update.error}`);
+    });
+  }
   if (background) writePidFile(options.dataDir, { pid: process.pid, port: options.port, build: info.build, startedAt: Date.now() });
   log.info(`viberoom ${info.version} (build ${info.build}) is open at ${server.url} (data: ${hub.dataDir}; rooms: ${[...hub.rooms.values()].map((r) => r.name).join(", ")})`);
   process.stdout.write(`${server.url}\n`);

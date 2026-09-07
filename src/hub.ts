@@ -32,6 +32,7 @@ export interface ProgramSettings {
   diagrams: DiagramSettings;
   editor: EditorSettings;
   appearance: AppearanceSettings;
+  checkForUpdates: boolean;
 }
 
 export interface AppearanceSettings {
@@ -65,7 +66,10 @@ interface RoomsFile {
   rooms: StoredRoom[];
 }
 
+import type { UpdateInfo } from "./update.js";
+
 export type HubEvent =
+  | { type: "update"; update: UpdateInfo }
   | { type: "room.event"; roomId: string; event: RoomEvent }
   | { type: "room.created"; room: unknown }
   | { type: "room.removed"; roomId: string }
@@ -189,6 +193,7 @@ export class Hub extends EventEmitter {
       diagrams: { preset: "pop", primary: null },
       editor: { ...DEFAULT_EDITOR_SETTINGS },
       appearance: { ...DEFAULT_APPEARANCE },
+      checkForUpdates: true,
       roomDefaults: {},
       vendorPresets: {},
     };
@@ -235,6 +240,7 @@ export class Hub extends EventEmitter {
     if (patch.bypassPermissionsByDefault !== undefined) next.bypassPermissionsByDefault = patch.bypassPermissionsByDefault === true || patch.bypassPermissionsByDefault === "true";
     if (patch.profileCompleted !== undefined) next.profileCompleted = patch.profileCompleted === true || patch.profileCompleted === "true";
     if (patch.agentSkillsNeedApproval !== undefined) next.agentSkillsNeedApproval = patch.agentSkillsNeedApproval === true || patch.agentSkillsNeedApproval === "true";
+    if (patch.checkForUpdates !== undefined) next.checkForUpdates = patch.checkForUpdates === true || patch.checkForUpdates === "true";
     if (patch.diagrams !== undefined && typeof patch.diagrams === "object" && patch.diagrams) {
       const d = patch.diagrams as Record<string, unknown>;
       const preset = String(d.preset ?? next.diagrams?.preset ?? "pop") as DiagramPreset;
@@ -489,9 +495,16 @@ export class Hub extends EventEmitter {
     } else this.log.info(`removed room ${id}`);
   }
 
+  update: UpdateInfo | null = null;
+  setUpdate(update: UpdateInfo): void {
+    this.update = update;
+    this.emit("event", { type: "update", update } satisfies HubEvent);
+  }
+
   snapshot(): unknown {
     return {
       settings: this.settings,
+      update: this.update,
       recipes: listRecipes().map(({ build: _b, ...r }) => r),
       skills: this.skills.list(),
       roomDefaults: { ...DEFAULT_ROOM_SETTINGS, ...this.settings.roomDefaults },

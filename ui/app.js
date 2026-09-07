@@ -823,6 +823,51 @@
     maybeOfferReconnect();
   }
 
+  function renderUpdatePop() {
+    const old = $("#update-pop");
+    const u = state.update;
+    const show = u && u.available && u.latest && recall("updateDismissed") !== u.latest;
+    if (!show) {
+      if (old && !old.dataset.busy) old.remove();
+      return;
+    }
+    if (old && old.dataset.version === u.latest) return;
+    if (old) old.remove();
+    const pop = document.createElement("div");
+    pop.id = "update-pop";
+    pop.className = "update-pop";
+    pop.dataset.version = u.latest;
+    pop.innerHTML = `<div class="up-main"><div class="up-text"><b>viberoom ${esc(u.latest)}</b> is out. You have ${esc(u.current)}.</div><button type="button" class="btn sm primary up-go">Update now and restart</button></div>
+      <div class="up-side"><button type="button" class="icon-btn sm up-x" title="Not now">${ic("close")}</button><button type="button" class="icon-btn sm up-settings" title="Update settings">${ic("settings")}</button></div>`;
+    pop.querySelector(".up-x").addEventListener("click", () => {
+      remember("updateDismissed", u.latest);
+      pop.remove();
+    });
+    pop.querySelector(".up-settings").addEventListener("click", () => setView("settings"));
+    pop.querySelector(".up-go").addEventListener("click", () => installUpdate(pop, u.latest));
+    els.rail.querySelector(".rail-foot").appendChild(pop);
+  }
+  async function installUpdate(pop, version) {
+    const go = pop.querySelector(".up-go");
+    const text = pop.querySelector(".up-text");
+    pop.dataset.busy = "1";
+    go.disabled = true;
+    go.classList.add("loading");
+    text.innerHTML = `Installing <b>viberoom ${esc(version)}</b>… this takes a moment.`;
+    try {
+      await post("/api/update/install", {});
+      go.classList.remove("loading");
+      text.innerHTML = `<b>viberoom ${esc(version)}</b> is installed. Restarting…`;
+      go.hidden = true;
+    } catch (e) {
+      delete pop.dataset.busy;
+      go.classList.remove("loading");
+      go.disabled = false;
+      go.textContent = "Try again";
+      text.innerHTML = `<span class="error">${esc(e.message || String(e))}</span>`;
+    }
+  }
+
   function renderRail() {
     els.rail.querySelectorAll(".rail-item[data-nav]").forEach((b) => {
       const nav = b.dataset.nav;
@@ -2204,6 +2249,12 @@
           </div>
         </div>
         <div>
+          <div class="section" id="sp-update">
+            ${sectionTitle("refresh", "Updates")}
+            <label class="switch"><span class="label">Check for updates once a day<span class="hint">At start, one request to the npm registry for the latest viberoom version; nothing else leaves this machine. A newer version shows as a bubble over your avatar.</span></span><input type="checkbox" id="sp-updates" ${s.checkForUpdates !== false ? "checked" : ""}></label>
+            <p class="hint" id="sp-update-status">${updateStatusText()}</p>
+            <button type="button" class="btn sm" id="sp-update-check">Check now</button>
+          </div>
           <div class="section">
             ${sectionTitle("spark", "Vibemates on this machine")}
             ${machine || '<p class="hint">No supported vibemate is installed yet.</p>'}
@@ -2288,6 +2339,20 @@
     });
     $("#sp-font").addEventListener("change", () => (sample.style.fontFamily = FONTS.text[$("#sp-font").value].stack));
     $("#sp-mono").addEventListener("change", () => sample.querySelectorAll("code").forEach((c) => (c.style.fontFamily = FONTS.mono[$("#sp-mono").value].stack)));
+    $("#sp-update-check").addEventListener("click", async () => {
+      const b = $("#sp-update-check");
+      b.disabled = true;
+      b.classList.add("loading");
+      try {
+        state.update = await get("/api/update?check=1");
+        $("#sp-update-status").textContent = updateStatusText();
+        renderUpdatePop();
+      } catch (e) {
+        showError(e);
+      }
+      b.disabled = false;
+      b.classList.remove("loading");
+    });
     bindSave($("#sp-form"), $("#sp-save"), async () => {
         const vendorPresets = {};
         els.pageInner.querySelectorAll("input[data-vendor]").forEach((inp) => {
@@ -2297,6 +2362,7 @@
         await post("/api/settings", {
           bypassPermissionsByDefault: $("#sp-bypass").checked,
           agentSkillsNeedApproval: $("#sp-skill-approval").checked,
+          checkForUpdates: $("#sp-updates").checked,
           diagrams: { preset: $("#sp-diagram-preset").value, primary: $("#sp-diagram-custom").checked ? $("#sp-diagram-color").value : null },
           editor: { mode: $("#sp-editor-mode").value, command: $("#sp-editor-cmd").value },
           appearance: { chatFontSize: Number($("#sp-chat-fs").value), font: $("#sp-font").value, mono: $("#sp-mono").value },
@@ -2312,6 +2378,16 @@
           vendorPresets,
         });
     });
+  }
+
+  function updateStatusText() {
+    const u = state.update;
+    const v = state.version ? state.version.version : "?";
+    if (!u || !u.checkedAt) return `This is viberoom ${v}; not checked yet.`;
+    const when = new Date(u.checkedAt).toLocaleString();
+    if (u.available) return `viberoom ${u.latest} is available (this is ${u.current}); checked ${when}.`;
+    if (u.error) return `Could not reach the registry (${u.error}); checked ${when}.`;
+    return `This is viberoom ${u.current}, the latest; checked ${when}.`;
   }
 
   function skillBadges(sk) {
@@ -3163,6 +3239,8 @@
   function loadSnapshot(snapshot) {
     state.settings = snapshot.settings;
     applyAppearance();
+    state.update = snapshot.update || null;
+    renderUpdatePop();
     state.version = snapshot.version || null;
     state.skills = snapshot.skills || [];
     state.recipes = snapshot.recipes || [];
@@ -3345,6 +3423,11 @@
       if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
       if (state.detailsOpen && state.selection.kind === "me" && !editingInDetails()) renderDetails();
       if (state.view === "room") renderSideRoom();
+    });
+    es.addEventListener("update", (e) => {
+      state.update = JSON.parse(e.data).update;
+      renderUpdatePop();
+      if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
     });
     es.addEventListener("reset", () => location.href = "/");
   }
