@@ -99,6 +99,67 @@ export function menuLineCount(items: MenuItem[] = MENU): number {
   return items.length + 5;
 }
 
+export function renderInstalled(o: { files: string[]; notes: string[]; platform: NodeJS.Platform; browserAdvice?: string | null }, opts: RenderOptions): string {
+  const g = opts.unicode ? GLYPHS.unicode : GLYPHS.ascii;
+  const dim = (t: string): string => paint(opts.color, "2", t);
+  const bold = (t: string): string => paint(opts.color, "1", t);
+  const green = (t: string): string => paint(opts.color, "32", t);
+  const bar = paint(opts.color, "36", g.bar);
+  const steps: string[] =
+    o.platform === "win32"
+      ? [
+          `Press the ${bold("Windows key")}, type ${bold("viberoom")}, press Enter.`,
+          `Or double-click ${bold("viberoom")} on the Desktop.`,
+          `Pin it: once the window is open, right-click its icon in the taskbar and choose "Pin to taskbar".`,
+        ]
+      : o.platform === "darwin"
+        ? [
+            `Press ${bold("⌘ Space")}, type ${bold("viberoom")}, press Enter (Spotlight); or open it from Launchpad.`,
+            `It lives in ${bold("~/Applications/viberoom.app")}; drag it to the Dock to keep it there.`,
+            `If macOS asks whether to open it the first time, choose Open: the app was made on this machine.`,
+          ]
+        : [
+            `Press the ${bold("Super key")}, type ${bold("viberoom")}, press Enter; it is in the applications menu.`,
+            `On the Desktop: right-click ${bold("viberoom.desktop")} and choose "Allow launching" once if your desktop asks.`,
+            `Pin it: right-click the running icon in the dock and choose "Add to favorites" (or your desktop's equivalent).`,
+          ];
+  const lines = [
+    `${dim(g.top)}  ${bold("The desktop icon is installed")}`,
+    dim(g.bar),
+    `${green(g.done)}  ${bold("How to start viberoom from now on")}`,
+    ...steps.map((t) => `${bar}  ${t}`),
+    bar,
+    `${green(g.done)}  ${bold("What happens")}`,
+    `${bar}  The icon starts the hub in the background and opens the app window.`,
+    `${bar}  Closing the window keeps the hub running; "viberoom stop" in a terminal ends it.`,
+    `${bar}  A newer version: the app tells you with a bubble over your avatar (Settings → Updates).`,
+  ];
+  if (o.browserAdvice) lines.push(bar, `${paint(opts.color, "33", "!")}  ${o.browserAdvice}`);
+  if (o.files.length || o.notes.length) {
+    lines.push(bar, `${green(g.done)}  ${bold("Written")}`);
+    for (const f of o.files) lines.push(`${bar}  ${dim(f)}`);
+    for (const n of o.notes) lines.push(`${bar}  ${dim(n)}`);
+  }
+  lines.push(bar, `${dim(g.bottom)}  ${dim("Press Enter to open viberoom now, or q to leave it for later.")}`);
+  return lines.join("\n") + "\n";
+}
+
+export function askEnter(stdin: ReadStream = process.stdin as ReadStream, stdout: WriteStream = process.stdout as WriteStream): Promise<boolean> {
+  if (!stdin.isTTY || !stdout.isTTY || typeof stdin.setRawMode !== "function") return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const onData = (data: Buffer): void => {
+      stdin.off("data", onData);
+      stdin.setRawMode(false);
+      stdin.pause();
+      const s = data.toString();
+      resolve(s === "\r" || s === "\n");
+    };
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.on("data", onData);
+  });
+}
+
 export function runMenu(title: string, stdin: ReadStream = process.stdin as ReadStream, stdout: WriteStream = process.stdout as WriteStream): Promise<MenuChoice | null> {
   if (!stdin.isTTY || !stdout.isTTY || typeof stdin.setRawMode !== "function") return Promise.resolve(null);
   const opts: RenderOptions = { color: !process.env.NO_COLOR, unicode: unicodeSupported(), columns: stdout.columns };

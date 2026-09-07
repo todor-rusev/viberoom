@@ -146,6 +146,8 @@ it in a browser tab. Later, `npm install -g viberoom@latest` and the next start 
   or GitHub Copilot. viberoom finds the ones you have and offers only those. It installs none of them.
 - A browser. Chrome, Edge or Brave for the app window; anything modern for a tab.
 
+Something does not start? `viberoom doctor` checks these four things and says which one is missing.
+
 <br>
 
 ## Use

@@ -1574,9 +1574,29 @@
     return el;
   }
 
+  const PAGE_SIZE = 50;
+  function placeInList(el) {
+    let page = els.messages.lastElementChild;
+    if (!page || !page.classList.contains("msgs-page") || page.childElementCount >= PAGE_SIZE) {
+      page = document.createElement("div");
+      page.className = "msgs-page";
+      els.messages.appendChild(page);
+    }
+    page.appendChild(el);
+  }
+  function topInList(el) {
+    const page = el.parentElement;
+    if (!page || !page.classList.contains("msgs-page")) return el.offsetTop;
+    if (els.messages.classList.contains("searching") || page.firstElementChild.checkVisibility({ contentVisibilityAuto: true })) return page.offsetTop + el.offsetTop;
+    let i = 0;
+    for (let n = el.previousElementSibling; n; n = n.previousElementSibling) i++;
+    return page.offsetTop + (page.offsetHeight * i) / page.childElementCount;
+  }
+
   function renderMessages() {
     const room = currentRoom();
     els.messages.innerHTML = "";
+    els.messages.classList.toggle("searching", !!state.search);
     if (!room) return;
     if (!room.messages.length) {
       els.messages.innerHTML = `<div class="empty"><div class="art">${ic("chat")}</div><strong>${esc(room.name)}</strong> is quiet.<br>Summon a vibemate from the left, then say hello. Use @Name to address someone; without @ every vibemate hears you.</div>`;
@@ -1592,20 +1612,20 @@
         d.className = "day";
         d.textContent = day;
         d.title = new Date(m.ts).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-        els.messages.appendChild(d);
+        placeInList(d);
         lastDay = day;
       }
       for (const [seq, agents] of markers) {
         if (placed.has(seq) || !(m.seq >= seq)) continue;
         if (m.seq > 0) {
           placed.add(seq);
-          els.messages.appendChild(dividerElement(agents));
+          placeInList(dividerElement(agents));
         }
       }
-      els.messages.appendChild(messageElement(room, m));
+      placeInList(messageElement(room, m));
     }
     for (const [seq, agents] of markers) {
-      if (!placed.has(seq)) els.messages.appendChild(dividerElement(agents));
+      if (!placed.has(seq)) placeInList(dividerElement(agents));
     }
     for (const perm of room.permissions) renderPermission(room, perm);
     refreshSeen(room);
@@ -1638,7 +1658,7 @@
     else {
       const empty = els.messages.querySelector(".empty");
       if (empty) empty.remove();
-      els.messages.appendChild(messageElement(room, m));
+      placeInList(messageElement(room, m));
       if (m.from === "human") refreshSeen(room);
       if (m.streaming && m.from !== "human") renderSideRoom();
       else if (!stick && m.kind === "chat") noteNew(room, m);
@@ -3450,21 +3470,33 @@
 
   let composerMin = Number(recall("composerH")) || 0;
   const composerCeiling = () => Math.max(120, els.app.clientHeight - 260);
+  const fieldSizing = CSS.supports("field-sizing", "content");
   let autosizeQueued = false;
   function autosizeSoon() {
-    if (autosizeQueued) return;
+    if (fieldSizing || autosizeQueued) return;
     autosizeQueued = true;
     requestAnimationFrame(() => {
       autosizeQueued = false;
       autosize();
     });
   }
+  let composerBounds = "";
   function autosize() {
     const min = Math.max(36, composerMin);
     const cap = Math.max(180, min);
+    if (fieldSizing) {
+      const max = Math.min(composerCeiling(), cap);
+      if (composerBounds === `${min}/${max}`) return;
+      composerBounds = `${min}/${max}`;
+      els.input.style.minHeight = `${min}px`;
+      els.input.style.maxHeight = `${max}px`;
+      return;
+    }
     els.input.style.height = "auto";
     els.input.style.height = Math.min(composerCeiling(), Math.max(min, Math.min(cap, els.input.scrollHeight))) + "px";
   }
+  window.addEventListener("resize", autosize);
+  autosize();
   {
     const grip = $("#composer-grip");
     let drag = null;
@@ -4125,7 +4157,7 @@
       if (!nodes.length) return;
       const total = els.messages.scrollHeight || 1;
       const h = Math.max(0, t.ticks.clientHeight - TICK_H);
-      const tops = nodes.map((el) => el.offsetTop);
+      const tops = nodes.map(topInList);
       const frag = document.createDocumentFragment();
       nodes.forEach((el, i) => {
         const tick = document.createElement("div");
@@ -4148,7 +4180,7 @@
       t.view.style.height = `${Math.max(8, (m.clientHeight / total) * h)}px`;
       const top = m.scrollTop;
       const bottom = m.scrollTop + m.clientHeight;
-      const inView = t.items.map((el) => el.offsetTop + el.offsetHeight > top && el.offsetTop < bottom);
+      const inView = t.items.map((el) => { const y = topInList(el); return y + el.offsetHeight > top && y < bottom; });
       inView.forEach((on, i) => {
         const tick = t.ticks.children[i];
         if (tick) tick.classList.toggle("in-view", on);
@@ -4290,8 +4322,10 @@
     renderPins();
   }
   function updateTimelineView() { for (const t of timelines) t.updateView(); }
+  const composerFollowers = [$("#timeline"), $("#timeline-left"), els.mentionMenu, els.emojiMenu];
   new ResizeObserver(() => {
-    els.app.style.setProperty("--composer-h", `${els.composer.offsetHeight}px`);
+    const h = `${els.composer.offsetHeight}px`;
+    for (const el of composerFollowers) el.style.setProperty("--composer-h", h);
     renderTimeline();
   }).observe(els.composer);
   new ResizeObserver(() => renderTimeline()).observe(els.messages);

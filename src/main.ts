@@ -13,6 +13,7 @@ import {
   appWindowArgs,
   recordedWindowPlacement,
   savedWindowPlacement,
+  browserAdvice,
   findChromium,
   isProcessAlive,
   logFilePath,
@@ -26,7 +27,8 @@ import {
   type Command,
 } from "./launcher.js";
 import { aumidSyncScript, installShortcuts, windowsShortcutPaths } from "./shortcuts.js";
-import { runMenu } from "./tui.js";
+import { askEnter, renderInstalled, runMenu, unicodeSupported } from "./tui.js";
+import { listRecipes } from "./recipes.js";
 
 interface CliOptions {
   command: Command;
@@ -104,6 +106,7 @@ Commands
   status       show whether a hub is running, its build and address
   open         open the window of the running hub
   logs         print the last lines of the background hub's log
+  doctor       check Node, the browser, the coding agents and the hub; say what is missing and why
 
 Options
   --port       localhost port for the web UI (default 4810)
@@ -218,8 +221,36 @@ function openWindow(url: string, options: CliOptions, log: Logger): void {
     }
     return;
   }
+  const advice = options.browser ? null : browserAdvice(null);
+  if (advice) {
+    log.warn(advice);
+    process.stderr.write(`${advice}\n`);
+    try {
+      appendFileSync(logFilePath(options.dataDir), `[${new Date().toISOString()}] [launcher] ${advice}\n`);
+    } catch {
+    }
+  }
   log.info("opening the default browser");
   exec(openUrlCommand(url), () => undefined);
+}
+
+async function runDoctor(options: CliOptions, info: BuildInfo): Promise<void> {
+  const lines: string[] = [];
+  const major = Number(process.versions.node.split(".")[0]);
+  lines.push(`viberoom ${info.version} (build ${info.build})`);
+  lines.push(`${major >= 22 ? "ok  " : "FAIL"} node ${process.versions.node}${major >= 22 ? "" : " (viberoom needs Node 22 or newer: https://nodejs.org)"}`);
+  const chromium = findChromium();
+  lines.push(chromium ? `ok   browser for the app window: ${chromium}` : `warn ${browserAdvice(null)}`);
+  const recipes = listRecipes();
+  const found = recipes.filter((r) => !r.unavailableReason);
+  lines.push(`${found.length ? "ok  " : "warn"} coding agents: ${found.length ? found.map((r) => r.vendor).join(", ") : "none found"}${found.length ? "" : " (install and log in to at least one: Claude Code, Codex, Gemini CLI, Cursor, OpenCode or GitHub Copilot)"}`);
+  for (const r of recipes.filter((r) => r.unavailableReason)) lines.push(`     ${r.vendor}: ${r.unavailableReason}`);
+  const running = await runningInstance(options.port);
+  lines.push(running ? `ok   hub running at ${running.url} (build ${running.build ?? "unknown"})` : `info no hub on port ${options.port}: start one with "viberoom start" (or "viberoom start --browser" without a Chromium browser)`);
+  lines.push(`     data: ${options.dataDir}`);
+  lines.push(`     log:  ${logFilePath(options.dataDir)}`);
+  process.stdout.write(lines.join("\n") + "\n");
+  if (major < 22) process.exitCode = 1;
 }
 
 
@@ -377,6 +408,9 @@ async function main(): Promise<void> {
       openWindow(url, options, log);
       return;
     }
+    case "doctor":
+      await runDoctor(options, info);
+      return;
     case "logs": {
       const path = logFilePath(options.dataDir);
       process.stdout.write(`${path}\n${tailFile(path, 60)}\n`);
@@ -394,8 +428,12 @@ async function main(): Promise<void> {
         if (choice === "shortcut") {
           const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")) as { version: string };
           const result = installShortcuts({ root: fileURLToPath(new URL("..", import.meta.url)), dataDir: options.dataDir, node: process.execPath, version: pkg.version, desktop: true });
-          for (const file of result.files) process.stdout.write(`wrote: ${file}\n`);
-          for (const note of result.notes) process.stdout.write(`${note}\n`);
+          const advice = browserAdvice(findChromium());
+          process.stdout.write(renderInstalled({ files: result.files, notes: result.notes, platform: process.platform, browserAdvice: advice && advice.replace("viberoom opens", "the icon opens viberoom") }, { color: !process.env.NO_COLOR, unicode: unicodeSupported(), columns: process.stdout.columns }));
+          if (await askEnter()) {
+            process.stdout.write("\n");
+            await startBackground(options, log, info);
+          }
           return;
         }
       }

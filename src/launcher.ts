@@ -3,9 +3,9 @@
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, posix, win32 } from "node:path";
 
-export type Command = "run" | "serve" | "start" | "stop" | "status" | "open" | "logs" | "help";
+export type Command = "run" | "serve" | "start" | "stop" | "status" | "open" | "logs" | "doctor" | "help";
 
-const COMMANDS = new Set<Command>(["run", "serve", "start", "stop", "status", "open", "logs", "help"]);
+const COMMANDS = new Set<Command>(["run", "serve", "start", "stop", "status", "open", "logs", "doctor", "help"]);
 
 export function splitCommand(argv: string[]): { command: Command; rest: string[] } {
   const first = argv[0];
@@ -201,6 +201,12 @@ export function appWindowArgs(url: string, profileDir: string, freshProfile: boo
   else if (freshProfile) args.push("--window-size=1500,950");
   if (platform === "linux") args.push("--class=viberoom");
   return args;
+}
+
+export function browserAdvice(chromium: string | null, platform: NodeJS.Platform = process.platform): string | null {
+  if (chromium) return null;
+  const names = platform === "darwin" ? "Chrome, Edge, Brave or Chromium" : platform === "win32" ? "Chrome, Edge or Chromium" : "google-chrome, chromium, microsoft-edge or brave-browser on PATH";
+  return `No Chromium-based browser found (${names}); viberoom opens in a tab of your default browser instead. Install one of them for the app window.`;
 }
 
 export function openUrlCommand(url: string, platform: NodeJS.Platform = process.platform): string {
