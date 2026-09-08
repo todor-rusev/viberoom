@@ -41,7 +41,7 @@ export function ruleLines(customRules: string): string[] {
     .filter((l) => l.length > 0);
 }
 
-const BRIEF_MECHANICS: { pattern: RegExp; what: string }[] = [
+export const BRIEF_MECHANICS: { pattern: RegExp; what: string }[] = [
   { pattern: /\[silent\]/i, what: `the ${SILENT_MARKER} reply` },
   { pattern: /\[request-brief\]/i, what: `the ${REQUEST_BRIEF_MARKER} reply` },
   { pattern: /\bmarkdown\b|\bmermaid\b/i, what: "the Markdown / mermaid format" },
@@ -124,7 +124,7 @@ export function lintRoomDesign(design: RoomDesign, context: RoomDesignContext): 
   for (const rule of rules) {
     for (const m of BRIEF_MECHANICS) if (m.pattern.test(rule)) warn("rule-repeats-brief", `the brief already explains ${m.what}; the rule "${rule.slice(0, 60)}${rule.length > 60 ? "…" : ""}" repeats it`);
   }
-  if (vibemates.length >= 2 && !rules.length) warn("no-rules", "two or more vibemates and no rules: who takes an unaddressed task, who answers an unaddressed question, when does the other stay silent?");
+  if (vibemates.length >= 2 && !rules.length) warn("no-rules", "two or more vibemates and no rules: name the situations this room will meet and answer them, for example who takes a task that names nobody, and when one of them stays quiet");
   if (vibemates.length >= 2 && settings.agentsWakeEachOther && settings.hopLimit < 3 * vibemates.length) warn("hop-limit-low", `hopLimit ${settings.hopLimit} with ${vibemates.length} vibemates who wake each other: one exchange around the room already uses ${vibemates.length}; about ${3 * vibemates.length} or more lets a handoff finish`);
 
   if (errors.length) return { errors, warnings };

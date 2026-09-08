@@ -1774,6 +1774,16 @@
   editEls.rewrite.addEventListener("click", () => editRequest && submitEdit(editRequest.room, editRequest.m, editRequest.next, "rewrite"));
 
 
+  function placeCard(card, room, ts) {
+    let anchor = null;
+    for (const m of room.messages) {
+      if (m.ts > ts) break;
+      const el = els.messages.querySelector(`.msg[data-id="${CSS.escape(m.id)}"]`);
+      if (el) anchor = el;
+    }
+    if (anchor) anchor.insertAdjacentElement("afterend", card);
+    else els.messages.appendChild(card);
+  }
   function renderPermission(room, perm) {
     const p = findById(room, perm.participantId);
     const card = document.createElement("div");
@@ -1800,8 +1810,9 @@
     actions.appendChild(cancel);
     const draft = [...room.messages].reverse().find((m) => m.streaming && m.from === perm.participantId);
     const host = draft ? els.messages.querySelector(`.msg[data-id="${draft.id}"] .perms`) : null;
-    (host || els.messages).appendChild(card);
-    scrollToBottom();
+    if (host) host.appendChild(card);
+    else placeCard(card, room, perm.ts || Date.now());
+    if (stuck) scrollToBottom();
   }
   function resolvePermissionCard(key, optionId) {
     const card = document.querySelector(`.perm[data-key="${key}"]`);
@@ -1856,8 +1867,8 @@
       actions.append(apply, reject);
     } else actions.innerHTML = `<span class="perm-result">${p.status === "applied" ? `applied${p.skipped && p.skipped.length ? ` · not applied: ${esc(p.skipped.join("; "))}` : ""}` : "rejected"}</span>`;
     if (!existing) {
-      els.messages.appendChild(card);
-      scrollToBottom();
+      placeCard(card, room, p.ts || Date.now());
+      if (stuck) scrollToBottom();
     }
   }
   function resolveProposalCard(room, key, status) {
