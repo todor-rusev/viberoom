@@ -1,7 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
 import { execSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -139,12 +139,27 @@ function resolveGlobalNpmBin(name: string): string | null {
   return candidates.find((c) => existsSync(c)) ?? null;
 }
 
+function resolveGlobalPackageBin(packageName: string, command: string): string | null {
+  const root = resolveGlobalNpmRoot();
+  if (!root) return null;
+  const dir = join(root, packageName);
+  try {
+    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { bin?: string | Record<string, string> };
+    const entry = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.[command];
+    if (!entry) return null;
+    const file = join(dir, entry);
+    return existsSync(file) ? file : null;
+  } catch {
+    return null;
+  }
+}
+
 function resolveClaudeCode(): string | null {
   const onPath = resolveOnPath(["claude"]);
   if (onPath && !/\.(cmd|bat)$/i.test(onPath)) return onPath;
   const native = join(homedir(), ".local", "bin", isWindows ? "claude.exe" : "claude");
   if (existsSync(native)) return native;
-  return resolveGlobalPackageEntry("@anthropic-ai/claude-code", "cli.js");
+  return resolveGlobalPackageBin("@anthropic-ai/claude-code", "claude");
 }
 
 function resolveCodex(): string | null {
