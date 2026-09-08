@@ -10,9 +10,14 @@ const args = new Set(process.argv.slice(2));
 const isWin = process.platform === "win32";
 const main = join(root, "dist", "main.js");
 
+function npmEnv() {
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^npm_config_/i.test(name)));
+}
+
 function run(cmd, cmdArgs, opts = {}) {
   console.log(`> ${cmd} ${cmdArgs.join(" ")}`);
-  const r = isWin && cmd === "npm" ? spawnSync(`npm ${cmdArgs.join(" ")}`, { cwd: root, stdio: "inherit", shell: true, ...opts }) : spawnSync(cmd, cmdArgs, { cwd: root, stdio: "inherit", ...opts });
+  const env = cmd === "npm" ? npmEnv() : process.env;
+  const r = isWin && cmd === "npm" ? spawnSync(`npm ${cmdArgs.join(" ")}`, { cwd: root, stdio: "inherit", env, shell: true, ...opts }) : spawnSync(cmd, cmdArgs, { cwd: root, stdio: "inherit", env, ...opts });
   if (r.status !== 0) throw new Error(`${cmd} ${cmdArgs.join(" ")} failed with exit code ${r.status}`);
 }
 

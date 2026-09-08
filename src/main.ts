@@ -214,7 +214,8 @@ function openWindow(url: string, options: CliOptions, log: Logger): void {
       appendFileSync(logFilePath(options.dataDir), `[${new Date().toISOString()}] [launcher] app window: ${where}\n`);
     } catch {
     }
-    spawn(chromium, args, { detached: true, stdio: "ignore" }).unref();
+    mkdirSync(options.dataDir, { recursive: true });
+    spawn(chromium, args, { cwd: options.dataDir, detached: true, stdio: "ignore" }).unref();
     if (process.platform === "win32") {
       const shortcuts = windowsShortcutPaths(homedir(), process.env, true).filter((p) => existsSync(p));
       if (shortcuts.length) spawn("powershell", ["-NoProfile", "-Command", aumidSyncScript(profile, shortcuts)], { detached: true, stdio: "ignore", windowsHide: true }).unref();
@@ -337,7 +338,7 @@ async function startBackground(options: CliOptions, log: Logger, info: BuildInfo
   const fd = openSync(logPath, "a");
   const args = [fileURLToPath(import.meta.url), "serve", "--port", String(options.port), "--data-dir", options.dataDir, "--no-open"];
   if (options.name) args.push("--name", options.name);
-  const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
+  const child = spawn(process.execPath, args, { cwd: options.dataDir, detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
   child.unref();
   closeSync(fd);
   log.info(`hub started in the background (pid ${child.pid}); log: ${logPath}`);

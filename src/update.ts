@@ -91,10 +91,10 @@ export function installCommandLine(version: string): string {
   return `npm install -g viberoom@${version} --no-audit --no-fund`;
 }
 
-export function installUpdate(version: string): Promise<{ ok: boolean; output: string }> {
+export function installUpdate(version: string, cwd: string): Promise<{ ok: boolean; output: string }> {
   const line = installCommandLine(version);
   return new Promise((resolve) => {
-    const child = process.platform === "win32" ? spawn(line, { shell: true, windowsHide: true }) : spawn("npm", line.split(" ").slice(1));
+    const child = process.platform === "win32" ? spawn(line, { cwd, shell: true, windowsHide: true }) : spawn("npm", line.split(" ").slice(1), { cwd });
     let output = "";
     const collect = (chunk: Buffer): void => {
       output = (output + chunk.toString()).slice(-4000);
@@ -108,6 +108,6 @@ export function installUpdate(version: string): Promise<{ ok: boolean; output: s
 
 export function restartWithNewBuild(mainModuleUrl: string, port: number, dataDir: string): void {
   const main = fileURLToPath(mainModuleUrl);
-  const child = spawn(process.execPath, [main, "start", "--port", String(port), "--data-dir", dataDir, "--no-open"], { detached: true, stdio: "ignore", windowsHide: true });
+  const child = spawn(process.execPath, [main, "start", "--port", String(port), "--data-dir", dataDir, "--no-open"], { cwd: dataDir, detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
 }

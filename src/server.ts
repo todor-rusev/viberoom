@@ -204,7 +204,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       const latest = hub.update?.available ? hub.update.latest : null;
       if (!latest) throw new Error("no newer version is known; check for updates first");
       log.info(`installing viberoom ${latest} (npm install -g)`);
-      const result = await installUpdate(latest);
+      const result = await installUpdate(latest, hub.dataDir);
       if (!result.ok) throw new Error(`npm install failed: ${result.output.slice(-600) || "no output"}`);
       log.info(`viberoom ${latest} installed; starting the new build, which replaces this hub`);
       sendJson(res, 200, { ok: true, version: latest });

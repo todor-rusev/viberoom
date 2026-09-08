@@ -22,8 +22,8 @@ export interface ShortcutResult {
   notes: string[];
 }
 
-export function vbsLauncher(node: string, main: string): string {
-  return ["' viberoom: start the hub without a console window and open the app window.", 'Set sh = CreateObject("WScript.Shell")', `sh.Run """${node}"" ""${main}"" start", 0, False`, ""].join("\r\n");
+export function vbsLauncher(node: string, main: string, workingDir: string): string {
+  return ["' viberoom: start the hub without a console window and open the app window.", 'Set sh = CreateObject("WScript.Shell")', `sh.CurrentDirectory = "${workingDir}"`, `sh.Run """${node}"" ""${main}"" start", 0, False`, ""].join("\r\n");
 }
 
 const AUMID_BASE: Record<string, string> = { "chrome.exe": "Chrome", "msedge.exe": "MSEdge", "brave.exe": "Brave", "chromium.exe": "Chromium" };
@@ -63,13 +63,13 @@ public static class LnkAumid {
 
 const psq = (s: string): string => s.replace(/'/g, "''");
 
-export function shortcutScript(lnk: string, wscript: string, vbs: string, root: string, ico: string | null, aumid: string | null = null): string {
+export function shortcutScript(lnk: string, wscript: string, vbs: string, workingDir: string, ico: string | null, aumid: string | null = null): string {
   const lines = [
     "$ErrorActionPreference = 'Stop'",
     `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${psq(lnk)}')`,
     `$s.TargetPath = '${psq(wscript)}'`,
     `$s.Arguments = '"${psq(vbs)}"'`,
-    `$s.WorkingDirectory = '${psq(root)}'`,
+    `$s.WorkingDirectory = '${psq(workingDir)}'`,
     `$s.Description = 'viberoom: rooms for you and your coding agents'`,
     ico ? `$s.IconLocation = '${psq(ico)},0'` : "",
     "$s.Save()",
@@ -104,8 +104,8 @@ export function windowsShortcutPaths(home: string, env: NodeJS.ProcessEnv, deskt
   return targets;
 }
 
-export function desktopEntry(node: string, main: string, icon: string): string {
-  return ["[Desktop Entry]", "Type=Application", "Name=viberoom", "Comment=Rooms for you and your coding agents", `Exec="${node}" "${main}" start`, `Icon=${icon}`, "Terminal=false", "StartupWMClass=viberoom", "Categories=Development;Chat;", ""].join("\n");
+export function desktopEntry(node: string, main: string, icon: string, workingDir: string): string {
+  return ["[Desktop Entry]", "Type=Application", "Name=viberoom", "Comment=Rooms for you and your coding agents", `Exec="${node}" "${main}" start`, `Path=${workingDir}`, `Icon=${icon}`, "Terminal=false", "StartupWMClass=viberoom", "Categories=Development;Chat;", ""].join("\n");
 }
 
 export function macPlist(version: string): string {
@@ -138,7 +138,7 @@ export function installShortcuts(o: ShortcutOptions): ShortcutResult {
 
   if (platform === "win32") {
     const vbs = join(launcherDir, "viberoom.vbs");
-    writeFileSync(vbs, vbsLauncher(o.node, main));
+    writeFileSync(vbs, vbsLauncher(o.node, main, o.dataDir));
     result.files.push(vbs);
     let ico: string | null = null;
     if (existsSync(icoSrc)) {
@@ -151,7 +151,7 @@ export function installShortcuts(o: ShortcutOptions): ShortcutResult {
     const aumid = appUserModelId(browser, "http://127.0.0.1:4810/", basename(join(o.dataDir, "browser")));
     for (const lnk of windowsShortcutPaths(home, env, o.desktop)) {
       mkdirSync(join(lnk, ".."), { recursive: true });
-      const r = spawnSync("powershell", ["-NoProfile", "-Command", shortcutScript(lnk, wscript, vbs, o.root, ico, aumid)], { encoding: "utf8" });
+      const r = spawnSync("powershell", ["-NoProfile", "-Command", shortcutScript(lnk, wscript, vbs, o.dataDir, ico, aumid)], { encoding: "utf8" });
       if (r.status === 0) result.files.push(lnk);
       else result.notes.push(`could not create ${lnk}: ${(r.stderr || "").split("\n")[0]}`);
     }
@@ -166,7 +166,7 @@ export function installShortcuts(o: ShortcutOptions): ShortcutResult {
     mkdirSync(join(app, "Contents", "Resources"), { recursive: true });
     writeFileSync(join(app, "Contents", "Info.plist"), macPlist(o.version));
     const exe = join(app, "Contents", "MacOS", "viberoom");
-    writeFileSync(exe, `#!/bin/sh\nexec "${o.node}" "${main}" start\n`);
+    writeFileSync(exe, `#!/bin/sh\ncd "${o.dataDir}" 2>/dev/null\nexec "${o.node}" "${main}" start\n`);
     chmodSync(exe, 0o755);
     if (existsSync(icnsSrc)) copyFileSync(icnsSrc, join(app, "Contents", "Resources", "icon.icns"));
     result.files.push(app);
@@ -181,7 +181,7 @@ export function installShortcuts(o: ShortcutOptions): ShortcutResult {
     copyFileSync(pngSrc, icon);
     result.files.push(icon);
   }
-  const entry = desktopEntry(o.node, main, icon);
+  const entry = desktopEntry(o.node, main, icon, o.dataDir);
   const appsDir = join(home, ".local", "share", "applications");
   mkdirSync(appsDir, { recursive: true });
   const menuEntry = join(appsDir, "viberoom.desktop");
