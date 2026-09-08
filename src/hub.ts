@@ -12,7 +12,7 @@ import { listRecipes, type AgentTypeId } from "./recipes.js";
 import { DEFAULT_ROOM_SETTINGS, type RoomSettings } from "./persona.js";
 import { Room, type DiscoveredOptions, type RoomEvent, type SkillsBridge, type StoredParticipant } from "./room.js";
 import { SkillLibrary, type SkillDraft, type SkillMeta } from "./skills.js";
-import { TemplateLibrary, type RoomTemplate } from "./templates.js";
+import { TemplateLibrary, roomSettingsFromTemplate, type RoomTemplate } from "./templates.js";
 
 export interface VendorPreset {
   model: string | null;
@@ -115,6 +115,8 @@ export class Hub extends EventEmitter {
       library: this.skills,
       serverScript: fileURLToPath(new URL("./mcp-skills-server.js", import.meta.url)),
       hubUrl: () => this.hubUrl,
+      templates: this.templates,
+      templatesChanged: () => this.emit("event", { type: "templates" } satisfies HubEvent),
       needApproval: () => this.settings.agentSkillsNeedApproval === true,
       save: (draft) => {
         const { body: _b, ...meta } = this.saveSkillInternal(draft);
@@ -398,7 +400,7 @@ export class Hub extends EventEmitter {
   }): Promise<{ room: Room; notices: string[] }> {
     const template: RoomTemplate | undefined = this.templates.get(input.templateId);
     if (!template) throw new Error(`no such template: ${input.templateId}`);
-    const { room, notices } = this.createRoom({ name: input.name, dir: input.dir || template.dir || null, settings: template.settings });
+    const { room, notices } = this.createRoom({ name: input.name, dir: input.dir || template.dir || null, settings: roomSettingsFromTemplate(template) });
     const installed = new Set(listRecipes().filter((r) => !r.unavailableReason).map((r) => r.id));
     for (const [i, tv] of template.vibemates.entries()) {
       const choice = { ...(input.vibemates[i] ?? { name: tv.name, agentType: "" }) };

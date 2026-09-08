@@ -67,6 +67,7 @@
         ? `<span class="avatar-badge" title="${title}"><img src="${escapeAttr(recipe.icon)}" alt="" onerror="this.replaceWith(document.createTextNode('${letter}'))"></span>`
         : `<span class="avatar-badge" title="${title}">${letter}</span>`;
     }
+    if (opts.muted && participant.kind === "agent" && window.Icons) badge = `<span class="avatar-badge muted" title="muted: receives no prompts">${window.Icons.svg("mute")}</span>`;
     return `<span class="avatar" style="width:${size}px;height:${size}px">${svg}${badge}${status}</span>`;
   }
 
@@ -77,37 +78,135 @@
     "🌙", "⭐", "🔥", "🍀", "🌵", "🌈", "🎧", "🎸", "🚀", "🛸", "🧠", "🎯", "🧩", "💎", "🍕", "☕",
   ];
 
-  function pickerElement(current, onPick) {
+  const EMOJI_NAMES = {
+    "🎭": "theatre masks drama roles", "🚀": "rocket launch ship", "🧪": "test tube experiment lab", "🛠️": "hammer and wrench tools",
+    "🎨": "palette art design paint", "📚": "books library docs", "🧠": "brain mind thinking", "💬": "speech bubble chat talk",
+    "🔬": "microscope science research", "🎯": "target goal focus aim", "🐙": "octopus github", "☕": "coffee cup break cafe",
+    "🌈": "rainbow colors", "🏗️": "construction crane building site", "🎮": "game controller gaming play", "🔥": "fire hot flame",
+    "🧩": "puzzle piece", "📈": "chart up growth trending", "🗺️": "world map", "🎧": "headphones audio music",
+    "🌱": "seedling plant grow sprout", "🏠": "house home", "🛸": "flying saucer ufo", "🧭": "compass navigate direction",
+    "🧑‍💻": "technologist developer coder programmer laptop", "⚒️": "hammer and pick tools forge", "🔨": "hammer build", "🔧": "wrench fix repair",
+    "🔩": "nut and bolt hardware", "⚙️": "gear settings cog", "🧰": "toolbox tools kit", "🪛": "screwdriver",
+    "🧱": "brick wall", "🏭": "factory plant", "🔌": "electric plug power", "🖥️": "desktop computer monitor screen",
+    "💻": "laptop computer", "⌨️": "keyboard typing", "🤖": "robot bot ai", "🐛": "bug insect caterpillar",
+    "🐞": "lady beetle ladybug bug", "⚡": "lightning bolt zap fast electric", "🔋": "battery energy charge", "📊": "bar chart data statistics",
+    "📉": "chart down decline", "🧮": "abacus math calculate", "🔍": "magnifying glass search find zoom", "🔭": "telescope explore astronomy",
+    "🧬": "dna genetics biology", "⚗️": "alembic chemistry", "🧲": "magnet attract", "📡": "satellite antenna signal radar",
+    "🛰️": "satellite space orbit", "🗄️": "file cabinet archive storage", "💾": "floppy disk save storage", "🗃️": "card file box archive",
+    "🌐": "globe web internet network", "🔗": "link chain url", "☁️": "cloud weather sky", "✍️": "writing hand write author",
+    "📝": "memo note pencil notes", "📖": "open book read", "📰": "newspaper news", "📜": "scroll document parchment",
+    "📎": "paperclip attach", "📌": "pushpin pin", "🗂️": "card index dividers files folders", "🏷️": "label tag price",
+    "✉️": "envelope mail email letter", "📣": "megaphone announce loud", "🗣️": "speaking head talk speech", "🤝": "handshake deal agreement",
+    "👥": "busts silhouette people team group", "🖌️": "paintbrush paint brush", "🖼️": "framed picture image painting", "📷": "camera photo",
+    "🎬": "clapper board movie film", "🎥": "movie camera video", "🎵": "musical note music", "🎹": "piano keys music",
+    "🎸": "guitar music rock", "🎤": "microphone sing karaoke", "🎲": "game die dice random", "♟️": "chess pawn strategy",
+    "🧸": "teddy bear toy", "🎪": "circus tent", "🎁": "gift present wrapped", "📅": "calendar date schedule",
+    "⏰": "alarm clock time", "⏳": "hourglass waiting time sand", "🗳️": "ballot box vote election", "⚖️": "balance scale justice law",
+    "🧾": "receipt invoice bill", "💰": "money bag budget cash", "📦": "package box parcel delivery", "🚚": "delivery truck shipping",
+    "🛒": "shopping cart", "🏦": "bank finance", "🏢": "office building company", "🎓": "graduation cap learn study",
+    "🏫": "school", "🏁": "chequered flag finish race", "🏆": "trophy win award cup", "💎": "gem stone diamond",
+    "🔐": "locked with key security", "🔑": "key access password", "🛡️": "shield protect security defense", "🚨": "police light alarm alert siren",
+    "🚦": "traffic light", "🧯": "fire extinguisher", "🩺": "stethoscope health doctor medical", "🧹": "broom clean sweep",
+    "♻️": "recycle recycling", "🧑‍🍳": "cook chef kitchen", "🧑‍🔬": "scientist lab", "🧑‍🎨": "artist painter",
+    "🧑‍🏫": "teacher", "🧑‍🚀": "astronaut space", "🕵️": "detective spy investigate", "🧙": "mage wizard magic",
+    "🦉": "owl wise night bird", "🦊": "fox", "🐼": "panda", "🐝": "honeybee bee",
+    "🐢": "turtle slow tortoise", "🐬": "dolphin", "🦄": "unicorn", "🐲": "dragon face",
+    "🌍": "earth globe world europe africa", "🌙": "crescent moon night", "⭐": "star", "🌊": "water wave ocean sea",
+    "🏔️": "snow capped mountain", "🏝️": "desert island beach", "🌲": "evergreen tree forest pine", "🍀": "four leaf clover luck",
+    "🌸": "cherry blossom flower spring", "🍕": "pizza", "🍎": "red apple fruit", "✨": "sparkles magic shiny",
+    "💡": "light bulb idea", "🔮": "crystal ball fortune", "🪄": "magic wand", "❤️": "red heart love",
+    "🐯": "tiger face", "🐸": "frog face", "👩‍💻": "woman technologist developer coder", "🐺": "wolf face",
+    "🐧": "penguin", "🦁": "lion face", "🐨": "koala", "👾": "alien monster space invader pixel",
+    "🐱": "cat face", "🐶": "dog face", "🦝": "raccoon", "🦋": "butterfly",
+    "🦩": "flamingo", "🦖": "t-rex dinosaur", "🐳": "spouting whale", "🦭": "seal",
+    "🐹": "hamster", "🦔": "hedgehog", "🐻": "bear face", "🐮": "cow face",
+    "🐵": "monkey face", "🧑‍🚒": "firefighter", "🧑‍⚕️": "health worker doctor nurse", "🧑‍✈️": "pilot",
+    "🧛": "vampire", "🧜": "merperson mermaid", "🧞": "genie", "🦸": "superhero",
+    "🥷": "ninja", "🤠": "cowboy hat face", "👽": "alien", "👻": "ghost",
+    "🎃": "jack-o-lantern pumpkin halloween", "🌵": "cactus",
+    "😀": "grinning face smile happy", "😄": "grinning face smiling eyes happy", "😂": "face with tears of joy laugh lol", "🙂": "slightly smiling face",
+    "😉": "winking face wink", "😍": "smiling face heart eyes love", "🤔": "thinking face hmm", "😎": "smiling face sunglasses cool",
+    "🥳": "partying face party celebrate", "😅": "grinning face sweat nervous", "😢": "crying face sad tear", "😡": "pouting face angry mad",
+    "👍": "thumbs up yes like ok", "👎": "thumbs down no dislike", "👋": "waving hand hello bye", "🙏": "folded hands thanks please pray",
+    "👏": "clapping hands applause bravo", "💪": "flexed biceps strong muscle", "🎉": "party popper celebrate tada", "💜": "purple heart",
+    "✅": "check mark button done yes", "❌": "cross mark no wrong", "⚠️": "warning caution", "🤫": "shushing face quiet hush",
+  };
+  function emojiName(emoji) {
+    return EMOJI_NAMES[emoji] || "";
+  }
+  function emojiMatches(emoji, query) {
+    return emoji === query || emojiName(emoji).includes(query);
+  }
+
+  function searchableGrid(list, current, onPick, none) {
     const wrap = document.createElement("div");
-    wrap.className = "avatar-picker";
-    const render = (value) => {
-      wrap.innerHTML = "";
-      const none = document.createElement("button");
-      none.type = "button";
-      none.className = "none" + (!value ? " selected" : "");
-      none.textContent = "Aa";
-      none.title = "Initials";
-      none.addEventListener("click", () => {
-        onPick("");
-        render("");
-      });
-      wrap.appendChild(none);
-      for (const e of GALLERY) {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.textContent = e;
-        b.className = e === value ? "selected" : "";
-        b.addEventListener("click", () => {
+    wrap.className = "emoji-pick";
+    const search = document.createElement("input");
+    search.type = "search";
+    search.className = "emoji-search";
+    search.placeholder = "Search by name…";
+    search.autocomplete = "off";
+    search.spellcheck = false;
+    search.setAttribute("aria-label", "Search emoji by name");
+    const grid = document.createElement("div");
+    grid.className = "avatar-picker";
+    let value = current || "";
+    const button = (text, title, cls, onClick) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = text;
+      if (title) b.title = title;
+      b.className = cls;
+      b.addEventListener("click", onClick);
+      return b;
+    };
+    const render = () => {
+      grid.innerHTML = "";
+      const q = search.value.trim().toLowerCase();
+      if (none && !q) {
+        grid.appendChild(button(none.label, none.title, "none" + (!value ? " selected" : ""), () => {
+          value = "";
+          onPick("");
+          render();
+        }));
+      }
+      const shown = q ? list.filter((e) => emojiMatches(e, q)) : list;
+      for (const e of shown) {
+        grid.appendChild(button(e, emojiName(e), e === value ? "selected" : "", () => {
+          value = e;
           onPick(e);
-          render(e);
-        });
-        wrap.appendChild(b);
+          render();
+        }));
+      }
+      if (!shown.length) {
+        const empty = document.createElement("div");
+        empty.className = "emoji-none";
+        empty.textContent = `No emoji called "${q}" here.`;
+        grid.appendChild(empty);
       }
     };
-    render(current || "");
-    wrap.setValue = render;
+    for (const type of ["input", "change"]) {
+      search.addEventListener(type, (e) => {
+        e.stopPropagation();
+        if (type === "input") render();
+      });
+    }
+    search.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") e.preventDefault();
+    });
+    wrap.append(search, grid);
+    render();
+    wrap.setValue = (v) => {
+      value = v || "";
+      render();
+    };
     return wrap;
   }
 
-  window.Avatars = { avatarSvg, avatarHtml, initials, pickerElement, GALLERY };
+  function pickerElement(current, onPick) {
+    return searchableGrid(GALLERY, current, onPick, { label: "Aa", title: "Initials" });
+  }
+
+  window.Avatars = { avatarSvg, avatarHtml, initials, pickerElement, searchableGrid, emojiName, GALLERY };
 })();

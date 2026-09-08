@@ -26,6 +26,8 @@
     bell: `<path d="M6 8a6 6 0 1 1 12 0v5l2 3H4l2-3V8z"/><path d="M10 20a2 2 0 0 0 4 0"/>`,
     "bell-off": BELL_OFF,
     hush: BELL_OFF,
+    unmute: `<path d="M19 5H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h7.5l3.5 3.5V17h3a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/>`,
+    mute: `<path d="M5.5 17H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h8.2"/><path d="M16.4 5H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-3v3.5L12.5 17H9"/><path d="M5 20.5L16 3"/>`,
     at: `<circle cx="12" cy="12" r="4"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.5 7.1"/>`,
     trash: `<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>`,
     pencil: `<path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>`,

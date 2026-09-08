@@ -32,6 +32,14 @@ export function crossedThreshold(previousUsed: number, used: number, size: numbe
   return used / size >= threshold && previousUsed / size < threshold;
 }
 
+export function emptyUsageReport(previousUsed: number, used: number): boolean {
+  return previousUsed > 0 && used === 0;
+}
+
+export function looksCompacted(previousUsed: number, used: number): boolean {
+  return previousUsed > 0 && used > 0 && used < previousUsed * 0.7;
+}
+
 export function overThreshold(used: number, size: number, threshold = NOTES_THRESHOLD): boolean {
   return size > 0 && used / size >= threshold;
 }

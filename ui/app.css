@@ -486,6 +486,18 @@ table.csv tbody tr:nth-child(even) td { background: rgba(91, 91, 240, 0.03); }
 .perm-btn.kind-allow_once, .perm-btn.kind-allow_always { background: var(--mint); color: var(--mint-ink); }
 .perm-btn.kind-reject_once, .perm-btn.kind-reject_always { background: var(--rose); color: var(--rose-ink); }
 .perm-result { color: var(--muted); font-size: 12px; }
+.proposal { max-width: 760px; }
+.prop-why { font-weight: 500; margin: 4px 0 6px; }
+.prop-diff { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; font-size: 12px; font-weight: 500; }
+.prop-row { background: rgba(255, 255, 255, 0.6); border-radius: 8px; padding: 6px 8px; }
+.prop-row > b { font-weight: 800; margin-right: 6px; }
+.prop-line { margin-top: 2px; white-space: pre-wrap; }
+.prop-line.add { color: var(--mint-ink); }
+.prop-line.del { color: var(--rose-ink); text-decoration: line-through; opacity: 0.8; }
+.prop-from { color: var(--muted); }
+.prop-to { font-weight: 800; }
+.prop-warn { margin: 6px 0 0 16px; padding: 0; font-size: 12px; font-weight: 500; color: var(--warm-ink, inherit); }
+.prop-own { display: flex; gap: 6px; align-items: center; font-size: 12px; font-weight: 600; margin-top: 6px; }
 .visibility-divider { display: flex; align-items: center; gap: 10px; margin: 4px 0; }
 .visibility-divider .vd-line { flex: 1; height: 8px; background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='8' viewBox='0 0 16 8'><path d='M0 4 Q4 0 8 4 T16 4' fill='none' stroke='%23f472b6' stroke-width='1.6'/></svg>") repeat-x center / 16px 8px; opacity: 0.7; }
 .visibility-divider .vd-label { color: var(--unseen-ink); background: var(--unseen-bg); border-radius: var(--r-pill); padding: 4px 12px; font-size: 11px; font-weight: 800; white-space: nowrap; max-width: 70%; overflow: hidden; text-overflow: ellipsis; }

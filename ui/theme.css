@@ -276,8 +276,10 @@ pre { background: var(--code-bg); color: #f4f2ff; padding: 10px 12px; border-rad
 .section.danger > h4 { color: var(--rose-ink); }
 .save-row { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 2px; }
 .save-row .hint { flex: 1; margin: 0; }
-.btn.save { min-width: 90px; }
-.btn.save.saved { background: var(--mint); color: var(--mint-ink); box-shadow: none; }
+.field > .label .fsaved { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; color: var(--mint-ink); font-size: 11px; font-weight: 800; animation: fade-in var(--t-base) var(--ease-out); }
+.field > .label .fsaved .i { width: 13px; height: 13px; }
+.switch > .label .fsaved { float: right; display: inline-flex; align-items: center; gap: 3px; color: var(--mint-ink); font-size: 11px; font-weight: 800; animation: fade-in var(--t-base) var(--ease-out); }
+.switch > .label .fsaved .i { width: 13px; height: 13px; }
 .section .row-btns { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin: 2px 0 6px; flex-wrap: wrap; }
 .row-btns { display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; }
 .row-btns.start { justify-content: flex-start; }
@@ -342,6 +344,8 @@ p .geek-tip, .hint > .geek-tip, .switch .label > .geek-tip { margin-left: 8px; }
 .avatar .av-tile { display: grid; place-items: center; width: 100%; height: 100%; font-weight: 800; line-height: 1; font-family: var(--font); user-select: none; }
 .avatar-badge { position: absolute; right: -4px; bottom: -4px; width: 44%; height: 44%; min-width: 15px; min-height: 15px; border-radius: 6px; background: #fff; border: 2px solid #fff; box-shadow: var(--shadow-tile); display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; color: var(--primary); overflow: hidden; }
 .avatar-badge img { width: 72%; height: 72%; object-fit: contain; }
+.avatar-badge.muted { color: var(--warm-ink); background: var(--warm); border-color: #fff; }
+.avatar-badge.muted .i { width: 78%; height: 78%; }
 .avatar-status { position: absolute; left: -3px; bottom: -3px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; background: var(--faint); }
 .avatar-status.status-idle { background: var(--st-ready-dot); }
 .avatar-status.status-thinking { background: var(--st-thinking-dot); animation: pulse 1.2s ease-in-out infinite; }
@@ -355,6 +359,11 @@ p .geek-tip, .hint > .geek-tip, .switch .label > .geek-tip { margin-left: 8px; }
 .avatar-picker button:hover { transform: translateY(-1px); background: var(--lav); }
 .avatar-picker button.selected { border-color: var(--primary); background: var(--lav); }
 .avatar-picker button.none { font-size: 12px; font-weight: 800; color: var(--muted); }
+.emoji-pick { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 8px; min-width: 0; }
+.emoji-pick .avatar-picker { margin: 0; }
+.emoji-pick .emoji-search, .field .emoji-pick .emoji-search { width: 100%; box-sizing: border-box; height: 32px; min-height: 0; padding: 0 12px; border-radius: var(--r-sm); border: 2px solid var(--lav); background: var(--soft); font: inherit; font-size: 13px; font-weight: 700; color: var(--ink); }
+.emoji-pick .emoji-search:focus, .field .emoji-pick .emoji-search:focus { outline: none; border-color: var(--primary); }
+.emoji-none { grid-column: 1 / -1; color: var(--muted); font-size: 12px; font-weight: 700; padding: 8px 4px; }
 .avatar-stack { display: flex; }
 .avatar-stack .avatar { margin-left: -8px; }
 .avatar-stack .avatar .av-tile { box-shadow: 0 0 0 2px #fff; }
@@ -406,6 +415,7 @@ code .open-link { color: inherit; }
 .mention-menu.inline { left: 0; top: 100%; bottom: auto; margin-top: 4px; }
 .emoji-menu { min-width: 0; width: 352px; padding: 8px; }
 .emoji-menu .avatar-picker { margin: 0; grid-template-columns: repeat(8, 1fr); }
+#rp-emoji-picker .avatar-picker { max-height: 236px; }
 .dialog { border: 0; border-radius: 22px; padding: 24px 26px; width: 580px; max-width: 94vw; max-height: 90vh; box-shadow: var(--shadow-dialog); overflow: auto; overflow-x: hidden; background: var(--card); color: var(--ink); }
 .dialog::backdrop { background: rgba(28, 27, 51, 0.4); backdrop-filter: blur(4px); }
 .dialog[open] { animation: pop var(--t-slow) var(--ease-pop); }

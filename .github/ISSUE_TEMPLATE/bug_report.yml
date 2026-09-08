@@ -1,0 +1,66 @@
+name: Bug report
+description: Something in viberoom does not work as it should.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. A question goes to [Q&A](https://github.com/todor-rusev/viberoom/discussions/categories/q-a), an idea to [Ideas](https://github.com/todor-rusev/viberoom/discussions/categories/ideas).
+        Run `viberoom doctor` first: it lists the coding agents it found and says why the others are missing.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, what happened instead. Steps that reproduce it are the most useful thing here.
+      placeholder: |
+        1. Opened a room in folder ...
+        2. Summoned a Claude vibemate
+        3. Sent "hello"
+        Expected: an answer. Got: "adapter exited" in the room.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `viberoom doctor`
+      description: Paste it as is. It shows the viberoom version and build, Node, the browser and every coding agent with its status.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Coding agent and its version, if the bug involves one
+      description: For example `claude --version`, `codex --version`, `gemini --version`.
+      placeholder: Claude Code 2.1.260 (installed with npm)
+  - type: dropdown
+    id: how-started
+    attributes:
+      label: How viberoom was started
+      options:
+        - Desktop icon / Start menu
+        - viberoom start (background hub)
+        - viberoom in a terminal
+        - Other (say in the notes)
+  - type: textarea
+    id: log
+    attributes:
+      label: Hub log
+      description: "`viberoom logs` prints the last lines of the background hub's log; the full file is `hub.log` in your data folder (`~/.viberoom` unless you set `VIBEROOM_DATA_DIR`). Remove anything private before pasting."
+      render: text
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: A screenshot, the room rules, what you already tried.

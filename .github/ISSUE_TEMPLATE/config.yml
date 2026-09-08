@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/todor-rusev/viberoom/discussions/categories/q-a
+    about: How do I ...? Questions go to Discussions, where an accepted answer helps the next person too.
+  - name: Suggest an idea
+    url: https://github.com/todor-rusev/viberoom/discussions/categories/ideas
+    about: A feature or a change you would like. Ideas are discussed and voted on before they become work.

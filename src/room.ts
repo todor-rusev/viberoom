@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { writeFileAtomic } from "./atomic.js";
-import { NOTES_ONLY_PROMPT, NOTES_REQUEST, crossedThreshold, extractNotes, isBareContextFullError, isContextFullError, overThreshold, visibleChunk } from "./context.js";
+import { NOTES_ONLY_PROMPT, NOTES_REQUEST, crossedThreshold, emptyUsageReport, extractNotes, isBareContextFullError, isContextFullError, looksCompacted, overThreshold, visibleChunk } from "./context.js";
 import { affectedByEdit, editNotice, partitionHistory, rewriteNotice, type AgentReadState, type EditMode } from "./edit.js";
 import { saveImages, type Attachment, type ImageInput } from "./files.js";
 import { join, resolve } from "node:path";
@@ -23,11 +23,17 @@ import {
   type SkillMeta,
 } from "./skills.js";
 import type { McpServer } from "./acp-types.js";
-import type { TemplateVibemate } from "./templates.js";
+import { templateId, type TemplateLibrary, type TemplateVibemate } from "./templates.js";
+import { applyVibemateChanges, diffSettings, lintRoomDesign, ruleLines, type RoomChangeSet, type RoomDesign, type RoomDesignContext, type SettingChange, type VibemateChange } from "./room-design.js";
 import {
   BRIEF_AFFECTING_SETTINGS,
+  AGENT_SETTINGS,
+  coerceSetting,
+  describeSettings,
   DEFAULT_ROOM_SETTINGS,
+  ROOM_SETTINGS_SPEC,
   REQUEST_BRIEF_MARKER,
+  NAME_PATTERN,
   SILENT_MARKER,
   buildBrief,
   buildHeader,
@@ -192,6 +198,20 @@ export interface PendingPermission {
   ts: number;
 }
 
+export interface RoomProposal {
+  key: string;
+  participantId: string;
+  participantName: string;
+  ts: number;
+  why: string;
+  settings: SettingChange[];
+  vibemates: VibemateChange[];
+  warnings: string[];
+  touchesOwn: boolean;
+  status: "pending" | "applied" | "rejected";
+  skipped?: string[];
+}
+
 export type RoomEvent =
   | { type: "participant"; participant: Participant }
   | { type: "participant.removed"; id: string }
@@ -204,6 +224,8 @@ export type RoomEvent =
   | { type: "plan"; id: string; entries: PlanEntry[] }
   | { type: "permission"; permission: PendingPermission }
   | { type: "permission.resolved"; key: string; optionId: string | null }
+  | { type: "proposal"; proposal: RoomProposal }
+  | { type: "proposal.resolved"; key: string; status: "applied" | "rejected"; skipped?: string[] }
   | { type: "room"; hopLimit: number; hops: number; settings: RoomSettings; customRulesText: string; focused: boolean; name: string; dir: string }
   | { type: "notice"; text: string; level: "info" | "warn" | "error"; ts: number };
 
@@ -239,6 +261,8 @@ export interface SkillsBridge {
   revokeToken: (token: string) => void;
   needApproval: () => boolean;
   save: (draft: SkillDraft) => SkillMeta;
+  templates: TemplateLibrary;
+  templatesChanged: () => void;
 }
 
 export interface AgentSkillInput {
@@ -336,7 +360,6 @@ interface PermissionEntry extends PendingPermission {
 }
 
 const COLORS = ["#6d5dfc", "#16a34a", "#d97706", "#dc2626", "#0891b2", "#be185d", "#4d7c0f", "#7c3aed"];
-const NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}_-]{0,23}$/u;
 const MENTION_PATTERN = /@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu;
 const RULE_REF_TOKEN = /@\{p:([^}]+)\}/g;
 const ADAPTER_ERROR_PATTERN =
@@ -367,6 +390,8 @@ export class Room extends EventEmitter {
   private readonly runtimes = new Map<string, AgentRuntime>();
   private readonly drafts = new Map<string, ChatMessage>();
   private readonly permissions = new Map<string, PermissionEntry>();
+  private readonly proposals = new Map<string, RoomProposal>();
+  private readonly proposalPlans = new Map<string, { settings: SettingChange[]; vibemates: TemplateVibemate[]; ops: VibemateChange[]; ids: Record<string, string> }>();
   private readonly optionCache: Map<string, DiscoveredOptions>;
   private readonly log: Logger;
   private colorIndex = 0;
@@ -554,6 +579,7 @@ export class Room extends EventEmitter {
       participants: [...this.participants.values()],
       messages: [...this.messages, ...this.drafts.values()],
       permissions: [...this.permissions.values()].map(({ resolve: _r, ...p }) => p),
+      proposals: [...this.proposals.values()],
       recipes: listRecipes().map(({ build: _b, ...r }) => r),
       lastMessageAt: last?.ts ?? this.createdAt,
     };
@@ -916,117 +942,20 @@ export class Room extends EventEmitter {
   updateSettings(patch: Record<string, unknown>): RoomSettings {
     const next: RoomSettings = { ...this.settings };
     const changed: string[] = [];
-    const setNumber = (key: "hopLimit" | "fullBriefEveryTurns" | "fullBriefEveryTokens" | "replayAfterRestart" | "backlogCap", min: number, max: number) => {
-      if (patch[key] === undefined) return;
-      const value = Number(patch[key]);
-      if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${key} must be an integer between ${min} and ${max}`);
-      if (value !== next[key]) {
-        next[key] = value;
-        changed.push(key);
-      }
-    };
-    setNumber("hopLimit", 0, 10_000);
-    setNumber("fullBriefEveryTurns", 1, 10_000);
-    setNumber("fullBriefEveryTokens", 1000, 10_000_000);
-    setNumber("replayAfterRestart", 0, 200);
-    setNumber("backlogCap", 1, 1000);
-    if (patch.replyDelay !== undefined) {
-      const value = Number(patch.replyDelay);
-      if (!Number.isFinite(value) || value < 0 || value > 120) throw new Error("replyDelay must be between 0 and 120 seconds");
-      next.replyDelay = value;
-    }
-    const setText = (key: "topic" | "humanDescription" | "customRules" | "emoji", max: number) => {
-      if (patch[key] === undefined) return;
-      const value = String(patch[key]).slice(0, max);
-      if (value !== next[key]) {
-        next[key] = value;
-        changed.push(key);
-      }
-    };
-    setText("topic", 2000);
-    setText("emoji", 8);
-    setText("humanDescription", 200);
     let unknownRefs: string[] = [];
-    if (patch.customRules !== undefined) {
-      const resolved = this.resolveRuleReferences(String(patch.customRules).slice(0, 4000));
-      unknownRefs = resolved.unknown;
-      if (resolved.stored !== next.customRules) {
-        next.customRules = resolved.stored;
-        changed.push("customRules");
+    for (const key of Object.keys(ROOM_SETTINGS_SPEC) as (keyof RoomSettings)[]) {
+      if (patch[key] === undefined || ROOM_SETTINGS_SPEC[key].kind === "own-path") continue;
+      let value: RoomSettings[typeof key] = coerceSetting(key, patch[key]);
+      if (key === "customRules") {
+        const resolved = this.resolveRuleReferences(value as string);
+        unknownRefs = resolved.unknown;
+        value = resolved.stored;
+      }
+      if (JSON.stringify(value) !== JSON.stringify(next[key])) {
+        (next as unknown as Record<string, unknown>)[key] = value;
+        changed.push(key);
       }
     }
-    if (patch.humanDescriptionMode !== undefined) {
-      const mode = String(patch.humanDescriptionMode);
-      if (mode !== "inherit" && mode !== "override" && mode !== "append" && mode !== "none") throw new Error("humanDescriptionMode must be inherit, override, append or none");
-      if (mode !== next.humanDescriptionMode) {
-        next.humanDescriptionMode = mode;
-        changed.push("humanDescriptionMode");
-      }
-    }
-    if (patch.refereeAction !== undefined) {
-      const action = String(patch.refereeAction);
-      if (action !== "next-header" && action !== "retry-hidden") throw new Error("refereeAction must be next-header or retry-hidden");
-      if (action !== next.refereeAction) {
-        next.refereeAction = action;
-        changed.push("refereeAction");
-      }
-    }
-    if (patch.turnTaking !== undefined) {
-      const mode = String(patch.turnTaking);
-      if (mode !== "parallel" && mode !== "one-at-a-time") throw new Error("turnTaking must be parallel or one-at-a-time");
-      if (mode !== next.turnTaking) {
-        next.turnTaking = mode;
-        changed.push("turnTaking");
-      }
-    }
-    if (patch.agentsWakeEachOther !== undefined) {
-      const on = patch.agentsWakeEachOther === true || patch.agentsWakeEachOther === "true";
-      if (on !== next.agentsWakeEachOther) {
-        next.agentsWakeEachOther = on;
-        changed.push("agentsWakeEachOther");
-      }
-    }
-    if (patch.waitWhileHumanTypes !== undefined) {
-      const on = patch.waitWhileHumanTypes === true || patch.waitWhileHumanTypes === "true";
-      if (on !== next.waitWhileHumanTypes) {
-        next.waitWhileHumanTypes = on;
-        changed.push("waitWhileHumanTypes");
-      }
-    }
-    if (patch.language !== undefined) {
-      const raw = String(patch.language).trim();
-      const language: RoomSettings["language"] = !raw || raw === "follow-human" ? { mode: "follow-human" } : { mode: "fixed", language: raw };
-      if (JSON.stringify(language) !== JSON.stringify(next.language)) {
-        next.language = language;
-        changed.push("language");
-      }
-    }
-    if (patch.tools !== undefined) {
-      const tools = String(patch.tools);
-      if (tools !== "on-request" && tools !== "never") throw new Error("tools must be on-request or never");
-      if (tools !== next.tools) {
-        next.tools = tools;
-        changed.push("tools");
-      }
-    }
-    if (patch.maxSentences !== undefined) {
-      const value = patch.maxSentences === null || patch.maxSentences === "" ? null : Number(patch.maxSentences);
-      if (value !== null && (!Number.isInteger(value) || value < 1 || value > 100)) throw new Error("maxSentences must be 1-100 or empty");
-      if (value !== next.maxSentences) {
-        next.maxSentences = value;
-        changed.push("maxSentences");
-      }
-    }
-    for (const key of ["headerRules", "showVendorInRoster"] as const) {
-      if (patch[key] !== undefined) {
-        const value = patch[key] === true || patch[key] === "true";
-        if (value !== next[key]) {
-          next[key] = value;
-          changed.push(key);
-        }
-      }
-    }
-
     this.settings = next;
     this.push(this.roomEvent());
     const briefChanges = changed.filter((c) => BRIEF_AFFECTING_SETTINGS.includes(c as keyof RoomSettings));
@@ -1566,6 +1495,214 @@ export class Room extends EventEmitter {
     const channel = runtime.skillChannel === "tool" ? "tool" : "marker";
     if (!items.length && channel !== "tool") return undefined;
     return { items, channel, canCreate: channel === "tool" };
+  }
+
+
+  private skillsForDesign(participantId: string): RoomDesignContext["skills"] {
+    if (!this.skills) return undefined;
+    const runtime = this.runtimes.get(participantId);
+    const channel = runtime?.skillChannel === "tool" ? "tool" : "marker";
+    return {
+      library: this.skills.library.list().filter((s) => !s.problems.length && !s.draft && s.agentInvocable).map((s) => ({ name: s.name, description: s.description })),
+      channel,
+      canCreate: channel === "tool",
+    };
+  }
+
+  private agentInRoom(participantId: string): Participant {
+    const participant = this.participants.get(participantId);
+    if (!participant || !this.runtimes.has(participantId)) throw new Error("this agent is not in the room any more");
+    return participant;
+  }
+
+  describeRoomForAgent(participantId: string): Record<string, unknown> {
+    const participant = this.agentInRoom(participantId);
+    const shape = this.templateOf();
+    const skills = this.skills ? this.skills.library.list().filter((s) => !s.problems.length && !s.draft).map((s) => ({ name: s.name, description: s.description })) : [];
+    const templates = this.skills ? this.skills.templates.list().map((t) => ({ id: t.id, name: t.name, builtin: !!t.builtin })) : [];
+    return {
+      room: { name: this.settings.name, topic: this.settings.topic, emoji: this.settings.emoji, dir: this.dir },
+      human: this.settings.humanName,
+      you: participant.name,
+      settings: describeSettings({ ...this.settings, customRules: this.renderRuleReferences(this.settings.customRules) }),
+      rules: ruleLines(this.renderRuleReferences(this.settings.customRules)),
+      vibemates: shape.vibemates.map((v) => {
+        const role = v.role ?? "";
+        const own = v.name === participant.name;
+        return {
+          name: v.name,
+          tagline: v.tagline ?? "",
+          ...(own ? { role } : { rolePrivate: true, roleLength: role.length }),
+          avatar: v.avatar ?? "",
+          skills: v.skills ?? [],
+          agentType: v.agentType,
+        };
+      }),
+      skills,
+      templates,
+      yourBrief: buildBrief(this.settings, this.personaOf(participant), this.roster(), undefined, this.skillsForPrompt(participant, this.runtimes.get(participant.id)!)),
+      howTo: "Settings are proposed by key with the values above; rules are one per line in customRules; a vibemate is { name, tagline, role, avatar, skills }. Another vibemate's role is private: you learn only that it has one and how long it is, and you may still propose a new one, which the human reads in full on the card. Check a design with lint_room_design, then create_template (a file for the human to pick) or propose_room_changes (a card the human applies).",
+    };
+  }
+
+  lintDesignForAgent(participantId: string, kind: "template" | "room", design: RoomDesign): { ok: boolean; errors: string[]; warnings: string[]; preview?: string } {
+    this.agentInRoom(participantId);
+    const result = lintRoomDesign(design, { ...this.designContext(kind), skills: this.skillsForDesign(participantId) });
+    return { ok: !result.errors.length, errors: result.errors.map((e) => e.message), warnings: result.warnings.map((w) => w.message), preview: result.preview };
+  }
+
+  private designContext(kind: "template" | "room"): RoomDesignContext {
+    return {
+      kind,
+      humanName: this.settings.humanName,
+      roomName: this.settings.name,
+      base: kind === "room" ? { ...this.settings, customRules: this.renderRuleReferences(this.settings.customRules) } : undefined,
+      knownSkills: this.skills ? this.skills.library.list().map((s) => s.name) : undefined,
+    };
+  }
+
+  createTemplateForAgent(participantId: string, design: RoomDesign, replace: boolean): { ok: true; message: string; id: string; path: string; warnings: string[] } {
+    const participant = this.agentInRoom(participantId);
+    if (!this.skills) throw new Error("templates are not available in this hub");
+    const result = lintRoomDesign(design, this.designContext("template"));
+    if (result.errors.length) throw new Error(`not saved: ${result.errors.map((e) => e.message).join("; ")}`);
+    const settings = result.settings!;
+    const rest: Partial<RoomSettings> = {};
+    for (const key of Object.keys(design.settings ?? {}) as (keyof RoomSettings)[]) if (AGENT_SETTINGS.includes(key)) (rest as Record<string, unknown>)[key] = settings[key];
+    const draft = {
+      name: String(design.name).trim(),
+      description: String(design.description ?? "").trim(),
+      emoji: settings.emoji || undefined,
+      settings: rest,
+      vibemates: (design.vibemates ?? []).map((v) => {
+        const out: TemplateVibemate = { name: v.name.trim() };
+        if (v.tagline?.trim()) out.tagline = v.tagline.trim();
+        if (v.role?.trim()) out.role = v.role.trim();
+        if (v.avatar?.trim()) out.avatar = v.avatar.trim();
+        if (v.skills?.length) out.skills = v.skills.map((s) => s.trim()).filter(Boolean);
+        if (typeof v.replyDelay === "number") out.replyDelay = v.replyDelay;
+        return out;
+      }),
+    };
+    const library = this.skills.templates;
+    const wanted = templateId(draft.name);
+    const existing = library.list().find((t) => t.id === wanted);
+    let saved;
+    if (existing && replace) {
+      if (existing.builtin) throw new Error(`"${existing.name}" is a template viberoom ships and cannot be replaced; pick another name`);
+      saved = library.overwrite(wanted, draft);
+    } else saved = library.save(draft);
+    this.skills.templatesChanged();
+    const warnings = result.warnings.map((w) => w.message);
+    this.postSystem(`${participant.name} ${existing && replace ? "updated" : "created"} the room template "${saved.name}" (${saved.vibemates.map((v) => v.name).join(", ") || "no vibemates"}); it is in the picker under New room.`);
+    this.log.info(`templates: ${participant.name} ${existing && replace ? "updated" : "created"} "${saved.name}" (${saved.id})`);
+    return {
+      ok: true,
+      message: `Template "${saved.name}" saved as ${saved.id}${existing && !replace ? ` (the name was taken, so the id got a number; pass replace: true to update your own template instead)` : ""}. The human creates a room from it under New room; nothing in this room changed.${warnings.length ? ` Warnings: ${warnings.join("; ")}` : ""}`,
+      id: saved.id,
+      path: join(library.dir, saved.id, "template.json"),
+      warnings,
+    };
+  }
+
+
+  proposeRoomChanges(participantId: string, why: string, changes: RoomChangeSet): { ok: true; message: string; key: string; warnings: string[] } {
+    const participant = this.agentInRoom(participantId);
+    const shape = this.templateOf();
+    const current = shape.vibemates;
+    const vibes = applyVibemateChanges(current, changes.vibemates);
+    if (vibes.errors.length) throw new Error(`not proposed: ${vibes.errors.join("; ")}`);
+    const touched = vibes.ops.flatMap((op) => [op.name, ...(op.fields ?? []).filter((f) => f.field === "name").map((f) => f.to)]);
+    const result = lintRoomDesign({ settings: changes.settings, vibemates: vibes.next }, { ...this.designContext("room"), changedVibemates: touched });
+    if (result.errors.length) throw new Error(`not proposed: ${result.errors.map((e) => e.message).join("; ")}`);
+    const base = this.designContext("room").base!;
+    const settingChanges = diffSettings(base, result.settings!);
+    if (!settingChanges.length && !vibes.ops.length) throw new Error("not proposed: the change set leaves the room as it is");
+    const touchesOwn = vibes.ops.some((op) => op.name.toLowerCase() === participant.name.toLowerCase()) || settingChanges.some((c) => c.key === "customRules");
+    const proposal: RoomProposal = {
+      key: randomUUID(),
+      participantId,
+      participantName: participant.name,
+      ts: Date.now(),
+      why: String(why ?? "").trim().slice(0, 600),
+      settings: settingChanges,
+      vibemates: vibes.ops,
+      warnings: result.warnings.map((w) => w.message),
+      touchesOwn,
+      status: "pending",
+    };
+    const ids: Record<string, string> = {};
+    for (const op of vibes.ops) {
+      const target = op.op === "add" ? undefined : this.findByName(op.name);
+      if (target) ids[op.name] = target.id;
+    }
+    this.proposalPlans.set(proposal.key, { settings: settingChanges, vibemates: vibes.next, ops: vibes.ops, ids });
+    this.proposals.set(proposal.key, proposal);
+    this.push({ type: "proposal", proposal });
+    const what = [...settingChanges.map((c) => c.key), ...vibes.ops.map((o) => `${o.op} ${o.name}`)].join(", ");
+    this.postSystem(`${participant.name} proposes changes to the room (${what}); apply or reject them on the card.`, "human");
+    this.log.info(`proposal ${proposal.key} from ${participant.name}: ${what}`);
+    return {
+      ok: true,
+      message: `Proposal sent to ${this.settings.humanName} as a card in the room (${what}). Nothing changes until they apply it; you will see a room line with the outcome.${proposal.warnings.length ? ` Warnings shown on the card: ${proposal.warnings.join("; ")}` : ""}`,
+      key: proposal.key,
+      warnings: proposal.warnings,
+    };
+  }
+
+  async resolveProposal(key: string, accept: boolean): Promise<RoomProposal> {
+    const proposal = this.proposals.get(key);
+    const plan = this.proposalPlans.get(key);
+    if (!proposal || !plan) throw new Error("no such pending proposal");
+    if (proposal.status !== "pending") return proposal;
+    const what = [...proposal.settings.map((c) => c.key), ...proposal.vibemates.map((o) => `${o.op} ${o.name}`)].join(", ");
+    if (!accept) {
+      proposal.status = "rejected";
+      this.proposalPlans.delete(key);
+      this.push({ type: "proposal.resolved", key, status: "rejected" });
+      this.postSystem(`${this.settings.humanName} rejected ${proposal.participantName}'s proposal (${what}).`);
+      return proposal;
+    }
+    const skipped: string[] = [];
+    for (const op of plan.ops) {
+      const known = plan.ids[op.name];
+      const existing = known ? this.participants.get(known) : this.findByName(op.name);
+      if (op.op !== "add" && (!existing || existing.kind !== "agent" || existing.status === "left")) {
+        skipped.push(`${op.op} ${op.name} (no longer in the room)`);
+        continue;
+      }
+      if (op.op === "remove") {
+        if (existing && existing.kind === "agent") await this.removeParticipant(existing.id);
+      } else if (op.op === "update") {
+        if (!existing || existing.kind !== "agent") continue;
+        const target = plan.vibemates.find((v) => v.name === op.name) ?? plan.vibemates.find((v) => op.fields?.some((f) => f.field === "name" && f.to === v.name));
+        const patch: PersonaPatch = {};
+        for (const f of op.fields ?? []) {
+          if (f.field === "name") patch.name = f.to;
+          else if (f.field === "tagline") patch.tagline = target?.tagline ?? f.to;
+          else if (f.field === "role") patch.role = target?.role ?? f.to;
+          else if (f.field === "avatar") patch.avatar = target?.avatar ?? f.to;
+          else if (f.field === "skills") patch.skills = target?.skills ?? [];
+          else if (f.field === "replyDelay") patch.replyDelay = target?.replyDelay ?? null;
+        }
+        this.updatePersona(existing.id, patch);
+      } else {
+        const v = plan.vibemates.find((x) => x.name === op.name);
+        if (!v || this.findByName(op.name)) skipped.push(`add ${op.name} (the name is taken now)`);
+        else this.addUnstaffed({ name: v.name, tagline: v.tagline, role: v.role, avatar: v.avatar, skills: v.skills });
+      }
+    }
+    if (plan.settings.length) {
+      const patch: Record<string, unknown> = {};
+      for (const c of plan.settings) patch[c.key] = c.key === "language" ? (c.to as RoomSettings["language"]) : c.to;
+      this.updateSettings(patch);
+    }
+    proposal.status = "applied";
+    proposal.skipped = skipped;
+    this.proposalPlans.delete(key);
+    this.push({ type: "proposal.resolved", key, status: "applied", skipped });
+    this.postSystem(`${this.settings.humanName} applied ${proposal.participantName}'s proposal (${what}).${skipped.length ? ` Not applied: ${skipped.join("; ")}.` : ""}`);
+    return proposal;
   }
 
   createSkillForAgent(participantId: string, input: AgentSkillInput): { ok: true; message: string; warnings: string[] } {
@@ -2367,10 +2504,14 @@ export class Room extends EventEmitter {
       }
       case "usage_update": {
         const u = update as { used: number; size: number; cost?: { amount: number; currency: string } | null };
+        if (emptyUsageReport(runtime.lastUsed, u.used)) {
+          runtime.log.info(`usage report of 0 after ${runtime.lastUsed} tokens ignored (failed request?)`);
+          return;
+        }
         participant.contextUsed = u.used;
         participant.contextSize = u.size;
         if (u.cost) participant.cost = { amount: u.cost.amount, currency: u.cost.currency };
-        if (runtime.lastUsed > 0 && u.used < runtime.lastUsed * 0.7 && !runtime.briefPending) {
+        if (looksCompacted(runtime.lastUsed, u.used) && !runtime.briefPending) {
           runtime.briefPending = `context shrank from ${runtime.lastUsed} to ${u.used} tokens (compaction?)`;
           runtime.log.info(`usage dropped ${runtime.lastUsed} -> ${u.used}; brief scheduled`);
           participant.contextEvent = { kind: "compacted", at: Date.now(), used: u.used, size: u.size };

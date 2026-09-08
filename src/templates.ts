@@ -65,6 +65,12 @@ export function cleanTemplate(raw: unknown, id: string): RoomTemplate {
   return out;
 }
 
+export function roomSettingsFromTemplate(template: RoomTemplate): Partial<RoomSettings> {
+  const settings: Partial<RoomSettings> = { ...template.settings };
+  if (!settings.emoji && template.emoji) settings.emoji = template.emoji;
+  return settings;
+}
+
 export function templateId(name: string): string {
   const id = name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
   return ID_PATTERN.test(id) ? id : "template";
@@ -115,6 +121,16 @@ export class TemplateLibrary {
     mkdirSync(folder, { recursive: true });
     writeFileAtomic(join(folder, "template.json"), JSON.stringify(clean, null, 2) + "\n");
     this.log.info(`saved template "${clean.name}" (${id})`);
+    return clean;
+  }
+
+  overwrite(id: string, template: Omit<RoomTemplate, "id" | "builtin">): RoomTemplate {
+    if (!ID_PATTERN.test(id)) throw new Error(`bad template id "${id}"`);
+    const own = readTemplates(this.dir, this.log, false).find((t) => t.id === id);
+    if (!own) throw new Error(`no own template "${id}" to overwrite`);
+    const clean = cleanTemplate({ ...template, created: own.created ?? new Date().toISOString() }, id);
+    writeFileAtomic(join(this.dir, id, "template.json"), `${JSON.stringify(clean, null, 2)}\n`);
+    this.log.info(`overwrote template "${clean.name}" (${id})`);
     return clean;
   }
 }

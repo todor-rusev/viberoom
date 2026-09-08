@@ -162,38 +162,18 @@
     return room.messages.some((m) => m.streaming && m.from === p.id) ? "writing" : "thinking";
   }
   const CHAT_EMOJI = ["😀", "😄", "😂", "🙂", "😉", "😍", "🤔", "😎", "🥳", "😅", "😢", "😡", "👍", "👎", "👋", "🙏", "👏", "💪", "🔥", "✨", "🎉", "❤️", "💜", "✅", "❌", "⚠️", "💡", "🚀", "🐛", "🤖", "🤫", "☕"];
-  const ROOM_EMOJI = ["🎭", "🚀", "🧪", "🛠️", "🎨", "📚", "🧠", "💬", "🔬", "🎯", "🐙", "☕", "🌈", "🏗️", "🎮", "🔥", "🧩", "📈", "🗺️", "🎧", "🌱", "🏠", "🛸", "🧭"];
+  const ROOM_EMOJI = [
+    "🎭", "🚀", "🧪", "🛠️", "🎨", "📚", "🧠", "💬", "🔬", "🎯", "🐙", "☕", "🌈", "🏗️", "🎮", "🔥", "🧩", "📈", "🗺️", "🎧", "🌱", "🏠", "🛸", "🧭",
+    "🧑‍💻", "⚒️", "🔨", "🔧", "🔩", "⚙️", "🧰", "🪛", "🧱", "🏭", "🔌", "🖥️", "💻", "⌨️", "🤖", "🐛", "🐞", "⚡", "🔋",
+    "📊", "📉", "🧮", "🔍", "🔭", "🧬", "⚗️", "🧲", "📡", "🛰️", "🗄️", "💾", "🗃️", "🌐", "🔗", "☁️",
+    "✍️", "📝", "📖", "📰", "📜", "📎", "📌", "🗂️", "🏷️", "✉️", "📣", "🗣️", "🤝", "👥",
+    "🖌️", "🖼️", "📷", "🎬", "🎥", "🎵", "🎹", "🎸", "🎤", "🎲", "♟️", "🧸", "🎪", "🎁",
+    "📅", "⏰", "⏳", "🗳️", "⚖️", "🧾", "💰", "📦", "🚚", "🛒", "🏦", "🏢", "🎓", "🏫", "🏁", "🏆", "💎",
+    "🔐", "🔑", "🛡️", "🚨", "🚦", "🧯", "🩺", "🧹", "♻️", "🧑‍🍳", "🧑‍🔬", "🧑‍🎨", "🧑‍🏫", "🧑‍🚀", "🕵️", "🧙",
+    "🦉", "🦊", "🐼", "🐝", "🐢", "🐬", "🦄", "🐲", "🌍", "🌙", "⭐", "🌊", "🏔️", "🏝️", "🌲", "🍀", "🌸", "🍕", "🍎", "✨", "💡", "🔮", "🪄", "❤️",
+  ];
   function emojiGrid(list, current, onPick) {
-    const wrap = document.createElement("div");
-    wrap.className = "avatar-picker";
-    const render = (value) => {
-      wrap.innerHTML = "";
-      if (current !== null && current !== undefined) {
-        const none = document.createElement("button");
-        none.type = "button";
-        none.className = "none" + (!value ? " selected" : "");
-        none.textContent = "—";
-        none.title = "No emoji";
-        none.addEventListener("click", () => {
-          onPick("");
-          render("");
-        });
-        wrap.appendChild(none);
-      }
-      for (const e of list) {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.textContent = e;
-        b.className = e === value ? "selected" : "";
-        b.addEventListener("click", () => {
-          onPick(e);
-          render(e);
-        });
-        wrap.appendChild(b);
-      }
-    };
-    render(current || "");
-    return wrap;
+    return window.Avatars.searchableGrid(list, current, onPick, current !== null && current !== undefined ? { label: "—", title: "No emoji" } : null);
   }
   const CLAMP_CHARS = 700;
 
@@ -627,23 +607,30 @@
   function sectionTitle(iconName, text) {
     return `<h4>${ic(iconName)}${text}</h4>`;
   }
-  function saveRow(id) {
-    return `<div class="save-row"><button class="btn sm primary save" id="${id}" disabled>Save</button></div>`;
-  }
   function geek(id, bodyHtml, hint) {
     return `<details class="geek" id="${id}"><summary>${ic("geek")}for geeks${hint ? `<span class="g-hint">${hint}</span>` : ""}<span class="chev">${ic("down")}</span></summary><div class="geek-body">${bodyHtml}</div></details>`;
   }
+  const SAVED_MARK_MS = 2000;
   const recentlySaved = new Map();
-  function bindSave(container, button, onSave) {
-    if (!container || !button) return;
+  function markSaved(fieldId, ms) {
+    const el = fieldId && document.getElementById(fieldId);
+    const host = el && el.closest(".field, .switch");
+    const label = host && host.querySelector(":scope > .label");
+    if (!label) return;
+    const old = label.querySelector(".fsaved");
+    if (old) old.remove();
+    label.insertAdjacentHTML("beforeend", `<span class="fsaved">${ic("check")}Saved</span>`);
+    const mark = label.lastElementChild;
+    setTimeout(() => mark.remove(), ms == null ? SAVED_MARK_MS : ms);
+  }
+  function bindSave(container, onSave) {
+    if (!container) return;
     let dirty = false;
     let saving = false;
     let again = false;
+    let lastField = null;
     const arm = () => {
       dirty = true;
-      button.disabled = false;
-      button.classList.remove("saved");
-      button.textContent = "Save";
     };
     const save = async () => {
       if (!dirty) return;
@@ -653,18 +640,16 @@
       }
       saving = true;
       dirty = false;
-      button.disabled = true;
-      button.classList.add("loading");
+      const field = lastField;
+      lastField = null;
       try {
         await onSave();
-        button.classList.remove("loading");
-        button.classList.add("saved");
-        button.innerHTML = `${ic("check")} Saved`;
-        if (button.id) recentlySaved.set(button.id, Date.now());
+        if (field) {
+          recentlySaved.set(field, Date.now());
+          markSaved(field);
+        }
       } catch (e) {
         dirty = true;
-        button.classList.remove("loading");
-        button.disabled = false;
         showError(e);
       }
       saving = false;
@@ -673,14 +658,14 @@
         save();
       }
     };
-    if (button.id && Date.now() - (recentlySaved.get(button.id) || 0) < 5000) {
-      button.disabled = true;
-      button.classList.add("saved");
-      button.innerHTML = `${ic("check")} Saved`;
+    for (const [id, at] of recentlySaved) {
+      const left = SAVED_MARK_MS - (Date.now() - at);
+      if (left > 0 && container.querySelector(`#${CSS.escape(id)}`)) markSaved(id, left);
     }
     container.addEventListener("input", arm);
-    container.addEventListener("change", () => {
+    container.addEventListener("change", (e) => {
       arm();
+      if (e.target.id) lastField = e.target.id;
       save();
     });
     container.addEventListener("keydown", (e) => {
@@ -692,11 +677,10 @@
       }
     });
     container.addEventListener("focusout", (e) => {
-      if (e.target.isContentEditable) save();
-    });
-    button.addEventListener("click", () => {
-      dirty = true;
-      save();
+      if (e.target.isContentEditable) {
+        if (e.target.id) lastField = e.target.id;
+        save();
+      }
     });
   }
   function roomHue(room) {
@@ -1144,7 +1128,7 @@
     const rows = new Map([...els.participants.children].map((li) => [li.dataset.id, li]));
     for (const p of ordered) {
       let li = rows.get(p.id);
-      const selected = (state.selection.kind === "participant" && state.selection.id === p.id) || (p.kind === "human" && state.selection.kind === "me" && state.detailsOpen);
+      const selected = state.detailsOpen && ((state.selection.kind === "participant" && state.selection.id === p.id) || (p.kind === "human" && state.selection.kind === "me"));
       const asleep = p.kind === "agent" && (p.status === "offline" || p.status === "left");
       const unstaffed = p.kind === "agent" && p.status === "unstaffed";
       const shown = shownStatus(room, p);
@@ -1156,7 +1140,7 @@
         : asleep
         ? `<span class="zzz" title="${esc(STATUS_LABEL[p.status] || p.status)}">zzz</span>`
         : p.kind === "agent" && p.status !== "idle" ? `<span class="badge status-${shown}">${p.status === "thinking" ? '<span class="dot"></span>' : ""}${STATUS_LABEL[shown] || shown}</span>` : "";
-      const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true });
+      const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true, muted: p.muted });
       const statusClass = p.kind === "agent" ? `avatar-status status-${esc(shown || "idle")}` : "";
       const bodyHtml = `<div class="p-body">
           <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? '<span class="badge muted">muted</span>' : ""}${status}</div>
@@ -1630,6 +1614,7 @@
       if (!placed.has(seq)) placeInList(dividerElement(agents));
     }
     for (const perm of room.permissions) renderPermission(room, perm);
+    for (const prop of room.proposals || []) renderProposal(room, prop);
     refreshSeen(room);
     scrollToBottom();
     renderTimeline();
@@ -1638,6 +1623,10 @@
   function upsertMessage(roomId, m) {
     const room = state.rooms.get(roomId);
     if (!room) return;
+    if (m.from === "human" && !m.pending && !room.messages.some((x) => x.id === m.id)) {
+      const local = room.messages.find((x) => x.pending && x.from === "human" && x.text === m.text);
+      if (local) adoptLocalMessage(roomId, local.id, m.id);
+    }
     const idx = room.messages.findIndex((x) => x.id === m.id);
     const wasFinal = idx >= 0 && !room.messages[idx].streaming;
     if (idx >= 0) {
@@ -1821,6 +1810,64 @@
     card.querySelector(".perm-actions").innerHTML = `<span class="perm-result">${optionId ? `chosen: ${esc(optionId)}` : "dismissed"}</span>`;
   }
 
+  function proposalValue(v) {
+    if (v === null || v === undefined || v === "") return "(empty)";
+    if (typeof v === "object") return v.mode === "fixed" ? v.language : v.mode || JSON.stringify(v);
+    return String(v);
+  }
+  function proposalDiffHtml(p) {
+    const rows = [];
+    for (const c of p.settings || []) {
+      if (c.key === "customRules") {
+        const before = String(c.from || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        const after = String(c.to || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        const lines = [...before.filter((l) => !after.includes(l)).map((l) => `<div class="prop-line del">− ${esc(l)}</div>`), ...after.filter((l) => !before.includes(l)).map((l) => `<div class="prop-line add">+ ${esc(l)}</div>`)];
+        rows.push(`<div class="prop-row"><b>Room rules</b>${lines.join("")}</div>`);
+      } else rows.push(`<div class="prop-row"><b>${esc(c.key)}</b> <span class="prop-from">${esc(proposalValue(c.from))}</span> → <span class="prop-to">${esc(proposalValue(c.to))}</span></div>`);
+    }
+    for (const v of p.vibemates || []) {
+      if (v.op === "update") rows.push(`<div class="prop-row"><b>${esc(v.name)}</b>${(v.fields || []).map((f) => `<div class="prop-line">${esc(f.field)}: <span class="prop-from">${esc(f.from || "(empty)")}</span> → <span class="prop-to">${esc(f.to || "(empty)")}</span></div>`).join("")}</div>`);
+      else rows.push(`<div class="prop-row"><b>${v.op === "add" ? "New vibemate" : "Remove"}</b> ${esc(v.name)}${v.op === "add" ? ' <span class="hint">(you pick its coding agent)</span>' : ""}</div>`);
+    }
+    return rows.join("");
+  }
+  function renderProposal(room, p) {
+    const existing = els.messages.querySelector(`.proposal[data-key="${p.key}"]`);
+    const card = existing || document.createElement("div");
+    card.className = `perm proposal${p.status !== "pending" ? " resolved" : ""}`;
+    card.dataset.key = p.key;
+    card.innerHTML = `
+      <div class="perm-title">${ic("pencil")} ${esc(p.participantName)} proposes changes to the room</div>
+      ${p.why ? `<div class="prop-why">${esc(p.why)}</div>` : ""}
+      <div class="prop-diff">${proposalDiffHtml(p)}</div>
+      ${p.warnings && p.warnings.length ? `<ul class="prop-warn">${p.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+      ${p.touchesOwn ? `<div class="prop-own">${ic("info")} This changes the rules or ${esc(p.participantName)}'s own persona: it decides how ${esc(p.participantName)} itself will behave.</div>` : ""}
+      <div class="perm-actions"></div>`;
+    const actions = card.querySelector(".perm-actions");
+    if (p.status === "pending") {
+      const apply = document.createElement("button");
+      apply.className = "perm-btn kind-allow_once";
+      apply.textContent = "Apply";
+      apply.addEventListener("click", () => post(roomApi(`/proposals/${encodeURIComponent(p.key)}`), { accept: true }).catch(showError));
+      const reject = document.createElement("button");
+      reject.className = "perm-btn kind-reject_once";
+      reject.textContent = "Reject";
+      reject.addEventListener("click", () => post(roomApi(`/proposals/${encodeURIComponent(p.key)}`), { accept: false }).catch(showError));
+      actions.append(apply, reject);
+    } else actions.innerHTML = `<span class="perm-result">${p.status === "applied" ? `applied${p.skipped && p.skipped.length ? ` · not applied: ${esc(p.skipped.join("; "))}` : ""}` : "rejected"}</span>`;
+    if (!existing) {
+      els.messages.appendChild(card);
+      scrollToBottom();
+    }
+  }
+  function resolveProposalCard(room, key, status) {
+    const p = (room.proposals || []).find((x) => x.key === key);
+    if (p) {
+      p.status = status;
+      renderProposal(room, p);
+    }
+  }
+
 
   const DETAILS_MIN = 320;
   const DETAILS_MAX = 760;
@@ -1879,7 +1926,7 @@
     renderRoomPanel(room);
   }
   function profileHeader(p) {
-    return `${avatar(p, 76, { vendor: true, status: true })}
+    return `${avatar(p, 76, { vendor: true, status: true, muted: p.muted })}
         <h3>${esc(p.name)}</h3>
         <div class="tagline">${esc(p.tagline || "no vibersona")}</div>
         <div class="badges"><span class="badge">${esc(p.agentVendor || p.agentType || "vibemate")}</span><span class="badge status-${p.status}">${STATUS_LABEL[p.status] || p.status}</span>${p.muted ? '<span class="badge muted">muted</span>' : ""}</div>`;
@@ -1906,7 +1953,7 @@
       </div>
       <div class="action-row">
         <button class="action" data-act="mention"><span class="ico">${ic("at")}</span>Mention</button>
-        <button class="action" data-act="${p.muted ? "unmute" : "mute"}"><span class="ico">${ic(p.muted ? "bell" : "bell-off")}</span>${p.muted ? "Unmute" : "Mute"}</button>
+        <button class="action" data-act="${p.muted ? "unmute" : "mute"}"><span class="ico">${ic(p.muted ? "mute" : "unmute")}</span>${p.muted ? "Unmute" : "Mute"}</button>
         ${offline ? `<button class="action" data-act="reconnect"><span class="ico">${ic("refresh")}</span>Reconnect</button>` : `<button class="action" data-act="cancel" ${p.status !== "thinking" ? "disabled" : ""}><span class="ico">${ic("stop")}</span>Stop</button>`}
         <button class="action danger" data-act="remove"><span class="ico">${ic("trash")}</span>Remove</button>
       </div>
@@ -1916,25 +1963,23 @@
         ${field("Vibersona", `<input type="text" id="pp-tagline" maxlength="80" value="${esc(p.tagline || "")}" placeholder="a few words under the vibename">`, "Shown under the vibename.", "Everyone in the room sees it: you, and the other vibemates in their roster.")}
         ${field("Vibeface", `<div id="pp-avatar-picker"></div><input type="text" id="pp-avatar" maxlength="8" value="${esc(p.avatar || "")}" placeholder="custom emoji (optional)">`)}
         ${field("Vibio", `<textarea id="pp-role" rows="5" maxlength="4000" placeholder="who it is, how it speaks, what it cares about">${esc(p.role || "")}</textarea>`, "Only this vibemate reads it.", "Reaches the vibemate as refreshed instructions in its brief on its next turn; its memory is kept. The other participants never see it.")}
-        ${saveRow("pp-save")}
       </div>
       ${p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<p class="hint" style="color:var(--danger);margin:0 4px 10px">${esc(p.statusDetail)}</p>` : ""}
+      <div class="section" id="pp-engine">
+        ${sectionTitle("spark", "Coding agent")}
+        <p class="hint">What runs ${esc(p.name)}${rec ? `: ${esc(rec.vendor)}` : ""}. Its model, how hard it thinks, what it may do without asking.${geekTip("These options come from the coding agent itself: the hub lists the ones it offers and sets your pick on its running session, so a change takes effect from the next turn, without restarting it or losing what it remembers.")}</p>
+        <div id="pp-config"></div>
+      </div>
       ${geek(
         "pp-geek",
         `<div class="section" id="pp-skills-section">
         ${sectionTitle("skills", "Skills")}
         <div class="check-list" id="pp-skills"></div>
         <p class="hint" style="margin-top:8px">What this vibemate can load on request.${geekTip(`Listed in this vibemate's brief by name and description; the text arrives when you write /name or when the vibemate loads it. ${esc(skillChannelText(p))}`)}</p>
-        ${saveRow("pp-skills-save")}
       </div>
       <div class="section" id="pp-timing">
         ${sectionTitle("bolt", "Timing")}
         ${field("Reply delay override, seconds", `<input type="number" id="pp-delay" min="0" max="120" step="0.5" value="${p.replyDelay ?? ""}" placeholder="the room's: ${room.settings.replyDelay ?? 4} s">`, `Overrides the room's delay (${room.settings.replyDelay ?? 4} s, used only when two or more vibemates are in) for this vibemate only, even when it is alone. Empty: it follows the room.`, "Before each turn the vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive during the wait land in its backlog, so it can react to them or stay silent.")}
-        ${saveRow("pp-delay-save")}
-      </div>
-      <div class="section">
-        ${sectionTitle("link", "Session")}
-        <div id="pp-config"></div>
       </div>
       <div class="section danger">
         ${sectionTitle("bolt", "Respawn")}
@@ -1956,7 +2001,7 @@
           <span>Adapter</span><span>${esc(rec ? rec.label : p.agentLabel || "")}${p.agentInfo && p.agentInfo.version ? ` ${esc(p.agentInfo.version)}` : ""}</span>
         </div>
       </div>`,
-        "skills, timing, session, stats",
+        "skills, timing, stats",
       )}`;
     wireDetailsClose();
     const respawnBtn = els.detailsInner.querySelector('button[data-act="respawn"]');
@@ -1987,9 +2032,9 @@
       }),
     );
     renderSkillChecks($("#pp-skills"), p.skills || []);
-    bindSave($("#pp-skills-section"), $("#pp-skills-save"), () => post(roomApi(`/participants/${encodeURIComponent(p.id)}/persona`), { skills: checkedSkills($("#pp-skills")) }));
-    bindSave($("#pp-timing"), $("#pp-delay-save"), () => post(roomApi(`/participants/${encodeURIComponent(p.id)}/persona`), { replyDelay: $("#pp-delay").value === "" ? null : Number($("#pp-delay").value) }));
-    bindSave($("#pp-persona"), $("#pp-save"), () => post(roomApi(`/participants/${encodeURIComponent(p.id)}/persona`), { name: $("#pp-name").value, tagline: $("#pp-tagline").value, role: $("#pp-role").value, avatar: $("#pp-avatar").value }));
+    bindSave($("#pp-skills-section"), () => post(roomApi(`/participants/${encodeURIComponent(p.id)}/persona`), { skills: checkedSkills($("#pp-skills")) }));
+    bindSave($("#pp-timing"), () => post(roomApi(`/participants/${encodeURIComponent(p.id)}/persona`), { replyDelay: $("#pp-delay").value === "" ? null : Number($("#pp-delay").value) }));
+    bindSave($("#pp-persona"), () => post(roomApi(`/participants/${encodeURIComponent(p.id)}/persona`), { name: $("#pp-name").value, tagline: $("#pp-tagline").value, role: $("#pp-role").value, avatar: $("#pp-avatar").value }));
     renderConfig($("#pp-config"), p, offline);
   }
 
@@ -2051,7 +2096,6 @@
         ${field("Vibename", `<input type="text" id="me-name" maxlength="24" value="${esc(s.humanName || "")}">`, "How you appear in every room.")}
         ${field("Vibeface", `<div id="me-avatar-picker"></div><input type="text" id="me-avatar" maxlength="8" value="${esc(s.humanAvatar || "")}" placeholder="custom emoji (optional)">`)}
         ${field("Your vibe line", `<textarea id="me-desc" rows="3" maxlength="200" placeholder="e.g. software engineer, curious about agent protocols; likes short answers">${esc(s.humanDescription || "")}</textarea>`, "A sentence or two about you.", "The vibemates get it in every room's brief, unless a room adds its own line or replaces it (below, when you are in a room).")}
-        ${saveRow("me-save")}
       </div>
       ${
         rs
@@ -2059,7 +2103,6 @@
         ${sectionTitle("chat", "In this room")}
         ${field("What vibemates get about you here", `<select id="hp-mode"><option value="inherit"${rs.humanDescriptionMode === "inherit" ? " selected" : ""}>Your vibe line</option><option value="append"${rs.humanDescriptionMode === "append" ? " selected" : ""}>Your vibe line + this room's</option><option value="override"${rs.humanDescriptionMode === "override" ? " selected" : ""}>Only this room's line</option><option value="none"${rs.humanDescriptionMode === "none" ? " selected" : ""}>Nothing about me in this room</option></select>`)}
         ${field("This room's line about you", `<textarea id="hp-desc" rows="3" maxlength="200" placeholder="e.g. host of this session, product owner">${esc(rs.humanDescription || "")}</textarea>`)}
-        ${saveRow("hp-save")}
       </div>`
           : ""
       }
@@ -2075,8 +2118,8 @@
         $("#me-avatar").dispatchEvent(new Event("change", { bubbles: true }));
       }),
     );
-    bindSave($("#me-vibe"), $("#me-save"), () => post("/api/settings", { humanName: $("#me-name").value, humanAvatar: $("#me-avatar").value, humanDescription: $("#me-desc").value }));
-    bindSave($("#me-room"), $("#hp-save"), () => post(roomApi("/settings"), { humanDescriptionMode: $("#hp-mode").value, humanDescription: $("#hp-desc").value }));
+    bindSave($("#me-vibe"), () => post("/api/settings", { humanName: $("#me-name").value, humanAvatar: $("#me-avatar").value, humanDescription: $("#me-desc").value }));
+    bindSave($("#me-room"), () => post(roomApi("/settings"), { humanDescriptionMode: $("#hp-mode").value, humanDescription: $("#hp-desc").value }));
     $("#me-erase").addEventListener("click", openEraseDialog);
   }
 
@@ -2138,7 +2181,7 @@
       </div>`,
         "tools, hops, referee, briefs",
       )}
-      <div class="save-row" style="margin-top:10px"><span class="hint">The vibemates get the changes on their next turn.</span><button class="btn sm primary save" id="rp-save" disabled>Save</button></div>
+      <div class="save-row" style="margin-top:10px"><span class="hint">The vibemates get the changes on their next turn.</span></div>
       </div>
       <div class="section danger" style="margin-top:12px">
         ${sectionTitle("alert", "Danger zone")}
@@ -2151,7 +2194,7 @@
     $("#rp-emoji-picker").appendChild(
       emojiGrid(ROOM_EMOJI, rs.emoji || "", (emoji) => {
         $("#rp-emoji").value = emoji;
-        $("#rp-emoji").dispatchEvent(new Event("input", { bubbles: true }));
+        $("#rp-emoji").dispatchEvent(new Event("change", { bubbles: true }));
       }),
     );
     $("#rp-dir-browse").addEventListener("click", () => openFolderPicker($("#rp-dir").value, (dir) => {
@@ -2159,7 +2202,7 @@
       $("#rp-dir").dispatchEvent(new Event("change", { bubbles: true }));
     }));
     $("#rp-template").addEventListener("click", () => openSaveTemplateDialog(room));
-    bindSave($("#rp-form"), $("#rp-save"), async () => {
+    bindSave($("#rp-form"), async () => {
         const name = $("#rp-name").value;
         if (name.trim() !== room.name) await post(roomApi("/rename"), { name });
         const dir = $("#rp-dir").value.trim();
@@ -2220,7 +2263,7 @@
       installed.map((r) => `<div class="vendor-row">${logo(r)}<span class="vc-name">${esc(r.vendor)}<span class="hint" title="${esc(r.installedAt || "")}">${esc(r.installedAt || "bundled")}</span></span><span class="badge status-idle"><span class="dot"></span>installed</span></div>`).join("") +
       missing.map((r) => `<div class="vendor-row" style="opacity:.75">${logo(r)}<span class="vc-name">${esc(r.vendor)}<span class="hint">${esc(r.installHint || r.unavailableReason || "")}</span></span><span class="badge status-offline">not installed</span></div>`).join("");
     els.pageInner.innerHTML = `
-      <div class="page-head"><div><h1>Settings</h1><div class="hint">${state.version ? `${esc(state.version.name)} ${esc(state.version.version)} · hub built ${esc(new Date(state.version.build).toLocaleString())}` : "hub build unknown (older hub process; run viberoom again to replace it)"}</div></div><div class="row-btns"><button class="btn primary save" id="sp-save" disabled>Save</button></div></div>
+      <div class="page-head"><div><h1>Settings</h1><div class="hint">${state.version ? `${esc(state.version.name)} ${esc(state.version.version)} · hub built ${esc(new Date(state.version.build).toLocaleString())}` : "hub build unknown (older hub process; run viberoom again to replace it)"}</div></div></div>
       <div id="sp-form">
       <div class="page-cols">
         <div>
@@ -2314,7 +2357,7 @@
         editorSection.querySelectorAll(".editor-modes .chip-btn").forEach((x) => x.classList.toggle("on", x === b));
         const input = $("#sp-editor-mode");
         input.value = b.dataset.mode;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
         showEditorCmd();
       }),
     );
@@ -2337,7 +2380,7 @@
         diagramSection.querySelectorAll(".diagram-presets .chip-btn").forEach((x) => x.classList.toggle("on", x === b));
         const input = $("#sp-diagram-preset");
         input.value = b.dataset.preset;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
         redrawPreview();
       }),
     );
@@ -2368,7 +2411,7 @@
       b.disabled = false;
       b.classList.remove("loading");
     });
-    bindSave($("#sp-form"), $("#sp-save"), async () => {
+    bindSave($("#sp-form"), async () => {
         const vendorPresets = {};
         els.pageInner.querySelectorAll("input[data-vendor]").forEach((inp) => {
           vendorPresets[inp.dataset.vendor] = vendorPresets[inp.dataset.vendor] || { model: null, effort: null, mode: null };
@@ -3358,6 +3401,18 @@
         room.permissions = room.permissions.filter((p) => p.key !== event.key);
         if (showing) resolvePermissionCard(event.key, event.optionId);
         return;
+      case "proposal":
+        room.proposals = [...(room.proposals || []), event.proposal];
+        if (showing) renderProposal(room, event.proposal);
+        else toast(`${esc(event.proposal.participantName)} proposes changes to "${room.name}".`, "warn");
+        return;
+      case "proposal.resolved": {
+        const p = (room.proposals || []).find((x) => x.key === event.key);
+        if (p) p.skipped = event.skipped;
+        if (showing) resolveProposalCard(room, event.key, event.status);
+        else if (p) p.status = event.status;
+        return;
+      }
       case "room":
         room.hopLimit = event.hopLimit;
         room.hops = event.hops;
@@ -3700,13 +3755,14 @@
     autosize();
     const local = { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, seq: 0, from: "human", fromName: (state.settings || {}).humanName || "You", to: [], toNames: [], text, ts: Date.now(), kind: "chat", pending: true };
     if (shots.length) local.images = shots.map((shot) => ({ file: "", name: shot.name, mimeType: shot.mimeType, bytes: 0, n: shot.n, url: shot.data }));
+    const localId = local.id;
     upsertMessage(room.id, local);
     try {
       const r = await post(roomApi("/send"), { text, images: shots });
-      if (r.command) removeMessage(room.id, local.id);
-      else adoptLocalMessage(room.id, local.id, r.id);
+      if (r.command) removeMessage(room.id, localId);
+      else adoptLocalMessage(room.id, localId, r.id);
     } catch (error) {
-      removeMessage(room.id, local.id);
+      removeMessage(room.id, localId);
       showError(error);
       els.input.value = text;
       pendingShots = shots;
@@ -3715,7 +3771,7 @@
   });
   function adoptLocalMessage(roomId, localId, realId) {
     const room = state.rooms.get(roomId);
-    if (!room || !realId) return;
+    if (!room || !realId || localId === realId) return;
     if (room.messages.some((m) => m.id === realId)) return removeMessage(roomId, localId);
     const m = room.messages.find((x) => x.id === localId);
     if (!m) return;
@@ -3723,6 +3779,11 @@
     delete m.pending;
     const el = els.messages.querySelector(`.msg[data-id="${localId}"]`);
     if (el) el.dataset.id = realId;
+    const note = doneNotes.find((n) => n.id === localId);
+    if (note) {
+      note.id = realId;
+      renderDoneNotes();
+    }
   }
 
 
@@ -4347,10 +4408,10 @@
     let shown = 0;
     for (const b of buttons) {
       const draft = room.messages.find((x) => x.from === b.dataset.id && x.streaming);
-      const head = draft && els.messages.querySelector(`.msg[data-id="${draft.id}"] .head`);
+      const el = draft && els.messages.querySelector(`.msg[data-id="${draft.id}"]`);
       let show = false;
-      if (head) {
-        const r = head.getBoundingClientRect();
+      if (el) {
+        const r = el.getBoundingClientRect();
         show = !(r.bottom > box.top && r.top < box.bottom);
       }
       b.hidden = !show;

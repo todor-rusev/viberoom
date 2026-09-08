@@ -233,6 +233,16 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (req.method === "GET" && path === "/api/mcp/room") {
+      const target = hub.resolveMcpToken(url.searchParams.get("token") ?? "");
+      if (!target) {
+        sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+        return;
+      }
+      sendJson(res, 200, target.room.describeRoomForAgent(target.participantId));
+      return;
+    }
+
     if (req.method === "GET" && path === "/api/mcp/skill") {
       const target = hub.resolveMcpToken(url.searchParams.get("token") ?? "");
       if (!target) {
@@ -349,6 +359,57 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     const skillApprove = path.match(/^\/api\/skills\/([^/]+)\/approve$/);
     if (skillApprove) {
       sendJson(res, 200, { ok: true, skill: hub.approveSkill(decodeURIComponent(skillApprove[1])) });
+      return;
+    }
+
+    if (path === "/api/mcp/design/lint" || path === "/api/mcp/templates") {
+      const target = hub.resolveMcpToken(String(body.token ?? ""));
+      if (!target) {
+        sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+        return;
+      }
+      const design = {
+        name: optionalString(body.name) ?? undefined,
+        description: optionalString(body.description) ?? undefined,
+        emoji: optionalString(body.emoji) ?? undefined,
+        settings: body.settings && typeof body.settings === "object" && !Array.isArray(body.settings) ? (body.settings as Record<string, unknown>) : undefined,
+        vibemates: Array.isArray(body.vibemates) ? (body.vibemates as Record<string, unknown>[]).map((v) => ({ ...v, name: String(v?.name ?? "") }) as import("./templates.js").TemplateVibemate) : undefined,
+      };
+      if (path === "/api/mcp/design/lint") {
+        sendJson(res, 200, target.room.lintDesignForAgent(target.participantId, body.kind === "room" ? "room" : "template", design));
+        return;
+      }
+      sendJson(res, 200, target.room.createTemplateForAgent(target.participantId, design, body.replace === true || body.replace === "true"));
+      return;
+    }
+
+    if (path === "/api/mcp/propose") {
+      const target = hub.resolveMcpToken(String(body.token ?? ""));
+      if (!target) {
+        sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+        return;
+      }
+      const vib = body.vibemates && typeof body.vibemates === "object" ? (body.vibemates as Record<string, unknown>) : {};
+      const list = (v: unknown) => (Array.isArray(v) ? (v as Record<string, unknown>[]).map((x) => ({ ...x, name: String(x?.name ?? "") })) : undefined);
+      sendJson(
+        res,
+        200,
+        target.room.proposeRoomChanges(target.participantId, String(body.why ?? ""), {
+          settings: body.settings && typeof body.settings === "object" && !Array.isArray(body.settings) ? (body.settings as Record<string, unknown>) : undefined,
+          vibemates: {
+            add: list(vib.add) as import("./templates.js").TemplateVibemate[] | undefined,
+            update: list(vib.update) as ({ name: string } & Partial<import("./templates.js").TemplateVibemate> & { newName?: string })[] | undefined,
+            remove: Array.isArray(vib.remove) ? (vib.remove as unknown[]).map((x) => String(x)) : undefined,
+          },
+        }),
+      );
+      return;
+    }
+
+    const proposal = path.match(/^\/api\/rooms\/([^/]+)\/proposals\/([^/]+)$/);
+    if (proposal) {
+      const room = hub.getRoom(decodeURIComponent(proposal[1]));
+      sendJson(res, 200, await room.resolveProposal(decodeURIComponent(proposal[2]), body.accept === true || body.accept === "true"));
       return;
     }
 

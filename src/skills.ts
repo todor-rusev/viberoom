@@ -8,6 +8,8 @@ import { isReservedSkillName, RESERVED_SKILL_NAMES } from "./commands.js";
 
 export const SKILL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
 export const SKILL_FILE = "SKILL.md";
+import { ROOM_DESIGNER_NAME } from "./persona.js";
+
 export const BUILTIN_AUTHOR = "viberoom";
 export const HUMAN_AUTHOR = "human";
 const DESCRIPTION_MAX = 300;
@@ -135,6 +137,30 @@ export const SKILL_WRITER: SkillDraft = {
   draft: false,
 };
 
+export const ROOM_DESIGNER: SkillDraft = {
+  name: ROOM_DESIGNER_NAME,
+  description: "How to design a good viberoom room: rules, vibemates and settings, as a template or as a change to this room. Load it before lint_room_design, create_template or propose_room_changes.",
+  argumentHint: "",
+  body: [
+    "A room is a protocol between one human and a few vibemates. The hub already tells every vibemate the mechanics (who it is, @Name addressing, the [silent] reply, tools, language, Markdown); your design adds only what the mechanics do not say. Facts about the settings (keys, bounds, defaults, current values) come from the describe_room tool; do not guess them.",
+    "",
+    "Rules are the protocol; roles are the people. Write how the vibemates work together once, in the room rules, where all of them read it. A role says who this one is and which way it leans, then ends with \"Everything else is in the room rules\". Two roles that each restate the protocol drift apart.",
+    "",
+    "Every rule answers a question that will come up: a task arrives with no @; both want to answer; one disagrees; the human asks \"is it done?\"; one finishes work the other depends on. For two makers a full protocol answers: who takes an unaddressed task, who answers an unaddressed question, when the other stays silent, who reports to the human, what a report contains (what changed, how to verify, what was not verified, what is left), when work is reviewed and by whom, how to disagree (with an argument; never concede to be agreeable). A rule that answers no foreseeable question is weight the vibemate carries on every turn.",
+    "",
+    "Explain, do not enumerate: a rule with its reason generalises (\"Reply only when addressed: every message to agents costs a turn\"); a list of cases fails at the first case not on it. Silence is a design tool: the most useful rule in a multi-mate room is the one that keeps a vibemate at [silent] when a message does not concern it. Pair it with the settings: agentsWakeEachOther off and a low hopLimit for rooms that report to the human; on and higher (about three times the number of vibemates) for rooms that work things out among themselves. Each vibemate works only on its own task and never touches the other's; when a report changes something the other relies on, it is addressed to the other with one line saying what is wanted.",
+    "",
+    "Names: short, distinct first letters, ideally a hint of the leaning that survives translation. The tagline is the one line the others see in the roster: what this one leans to and what it does when asked. Keep the whole thing short: eight to twelve rules, one per line, is a full protocol; a role is a few sentences; if a rule needs a paragraph it is a skill, not a rule. Do not pin an agent or model in a template: the human picks from what the machine has.",
+    "",
+    "Before you write anything: describe_room for the facts, then lint_room_design with your draft and read its warnings and the brief preview (that is exactly what the vibemates will read). Play the risky cases against the rules: an unaddressed task, both starting at once, one finding a bug in the other's work unasked, a question in the middle of a task. Then create_template (a file the human picks from; no effect on any room) or propose_room_changes (a card the human applies or rejects; nothing changes without the click). Say in the room what you made and why, in a few lines.",
+  ].join("\n"),
+  userInvocable: true,
+  agentInvocable: true,
+  author: BUILTIN_AUTHOR,
+  reviewed: true,
+  draft: false,
+};
+
 interface CacheEntry {
   mtime: number;
   skill: Skill;
@@ -207,8 +233,11 @@ export function renderSkillBody(body: string, args: string): string {
     .trim();
 }
 
+export const BUILTIN_SKILLS: SkillDraft[] = [SKILL_WRITER, ROOM_DESIGNER];
+
 export function isBuiltinSkill(name: string): boolean {
-  return name.trim().toLowerCase() === SKILL_WRITER.name;
+  const lower = name.trim().toLowerCase();
+  return BUILTIN_SKILLS.some((b) => b.name === lower);
 }
 
 export class SkillLibrary {
@@ -308,7 +337,7 @@ export class SkillLibrary {
   }
 
   seedBuiltins(): void {
-    for (const builtin of [SKILL_WRITER]) {
+    for (const builtin of BUILTIN_SKILLS) {
       const folder = this.folderFor(builtin.name);
       const current = folder ? this.load(folder) : undefined;
       if (current && current.description === builtin.description && current.body === builtin.body && (current.argumentHint ?? "") === (builtin.argumentHint ?? "")) continue;

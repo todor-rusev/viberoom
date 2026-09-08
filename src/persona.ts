@@ -21,6 +21,8 @@ export interface SkillsForPrompt {
 }
 
 export const SKILL_WRITER_NAME = "skill-writer";
+export const ROOM_DESIGNER_NAME = "room-designer";
+export const NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}_-]{0,23}$/u;
 
 export interface RoomSettings {
   name: string;
@@ -47,40 +49,113 @@ export interface RoomSettings {
   replyDelay: number;
 }
 
-export const DEFAULT_ROOM_SETTINGS: Omit<RoomSettings, "name" | "humanName"> = {
-  topic: "",
-  humanDescription: "",
-  language: { mode: "follow-human" },
-  tools: "on-request",
-  maxSentences: null,
-  hopLimit: 100,
-  fullBriefEveryTurns: 8,
-  fullBriefEveryTokens: 20_000,
-  headerRules: true,
-  replayAfterRestart: 10,
-  backlogCap: 50,
-  showVendorInRoster: false,
-  customRules: "",
-  emoji: "",
-  humanDescriptionMode: "inherit",
-  refereeAction: "next-header",
-  turnTaking: "parallel",
-  replyDelay: 4,
-  waitWhileHumanTypes: true,
-  agentsWakeEachOther: true,
+export type SettingSpec = { doc: string; brief: boolean; agent: boolean } & (
+  | { kind: "integer"; min: number; max: number; default: number }
+  | { kind: "integer-or-null"; min: number; max: number; default: number | null }
+  | { kind: "number"; min: number; max: number; default: number }
+  | { kind: "boolean"; default: boolean }
+  | { kind: "enum"; values: readonly string[]; default: string }
+  | { kind: "text"; max: number; default: string }
+  | { kind: "language"; default: RoomSettings["language"] }
+  | { kind: "own-path" }
+);
+
+export const ROOM_SETTINGS_SPEC: Record<keyof RoomSettings, SettingSpec> = {
+  name: { kind: "own-path", brief: true, agent: false, doc: "The room's name; changed with rename." },
+  humanName: { kind: "own-path", brief: true, agent: false, doc: "The human's name; a program-level setting." },
+  topic: { kind: "text", max: 2000, default: "", brief: true, agent: true, doc: "One line about what the room is for; the brief repeats it to every vibemate." },
+  emoji: { kind: "text", max: 8, default: "", brief: false, agent: true, doc: "The room's emoji, shown in its title and tile." },
+  humanDescription: { kind: "text", max: 200, default: "", brief: true, agent: false, doc: "This room's description of the human, composed with the program-level one by humanDescriptionMode." },
+  humanDescriptionMode: { kind: "enum", values: ["inherit", "override", "append", "none"], default: "inherit", brief: true, agent: false, doc: "How the human's description is composed: the program-level text, this room's, both, or nothing." },
+  language: { kind: "language", default: { mode: "follow-human" }, brief: true, agent: true, doc: "follow-human: reply in the language of the human's latest message; or a fixed language name." },
+  tools: { kind: "enum", values: ["on-request", "never"], default: "on-request", brief: true, agent: true, doc: "on-request: tools only when a participant explicitly asks for something that needs them; never: a talk-only room." },
+  maxSentences: { kind: "integer-or-null", min: 1, max: 100, default: null, brief: true, agent: true, doc: "A hard length rule for every reply, in sentences; empty for no rule." },
+  hopLimit: { kind: "integer", min: 0, max: 10_000, default: 100, brief: false, agent: true, doc: "Agent-to-agent turns allowed before the hub waits for the human; a chain of three vibemates needs about three times its length." },
+  fullBriefEveryTurns: { kind: "integer", min: 1, max: 10_000, default: 8, brief: false, agent: true, doc: "The full brief is re-sent to a vibemate after this many of its turns." },
+  fullBriefEveryTokens: { kind: "integer", min: 1000, max: 10_000_000, default: 20_000, brief: false, agent: true, doc: "The full brief is re-sent once a vibemate's context grew by this many tokens." },
+  headerRules: { kind: "boolean", default: true, brief: false, agent: true, doc: "The per-turn header repeats the three core rules (addressing, silent, character)." },
+  replayAfterRestart: { kind: "integer", min: 0, max: 200, default: 10, brief: false, agent: true, doc: "Messages replayed to a vibemate whose session restarts." },
+  backlogCap: { kind: "integer", min: 1, max: 1000, default: 50, brief: false, agent: true, doc: "Most missed messages a vibemate reads on its next turn; older ones are dropped with a note." },
+  showVendorInRoster: { kind: "boolean", default: false, brief: true, agent: true, doc: "The roster in the brief names each vibemate's vendor (Claude, Codex, ...)." },
+  customRules: { kind: "text", max: 4000, default: "", brief: true, agent: true, doc: "The room rules, one per line; every vibemate gets them under 'Room rules (set by the human)'. @Name inside a rule is a live reference." },
+  refereeAction: { kind: "enum", values: ["next-header", "retry-hidden"], default: "next-header", brief: false, agent: true, doc: "On a mechanical violation (wrong language, too long): remind in the next header, or hold the reply and ask for a corrected one in a hidden turn." },
+  turnTaking: { kind: "enum", values: ["parallel", "one-at-a-time"], default: "parallel", brief: false, agent: true, doc: "parallel: every addressed vibemate answers at once; one-at-a-time: one speaks, the others queue and see the earlier replies first." },
+  waitWhileHumanTypes: { kind: "boolean", default: true, brief: false, agent: true, doc: "A vibemate about to start a turn waits while the human is typing." },
+  agentsWakeEachOther: { kind: "boolean", default: true, brief: true, agent: true, doc: "A vibemate's message without @ wakes the others, as the human's does; off: only @Name wakes a vibemate." },
+  replyDelay: { kind: "number", min: 0, max: 120, default: 4, brief: false, agent: true, doc: "Seconds (a random 0..N) every vibemate waits before a turn, so replies cross less; a vibemate's own delay overrides it." },
 };
 
-export const BRIEF_AFFECTING_SETTINGS: (keyof RoomSettings)[] = [
-  "topic",
-  "humanDescription",
-  "humanDescriptionMode",
-  "language",
-  "tools",
-  "maxSentences",
-  "showVendorInRoster",
-  "customRules",
-  "agentsWakeEachOther",
-];
+function defaultsFromSpec(): Omit<RoomSettings, "name" | "humanName"> {
+  const out: Record<string, unknown> = {};
+  for (const [key, spec] of Object.entries(ROOM_SETTINGS_SPEC)) if (spec.kind !== "own-path") out[key] = spec.default;
+  return out as Omit<RoomSettings, "name" | "humanName">;
+}
+
+export const DEFAULT_ROOM_SETTINGS: Omit<RoomSettings, "name" | "humanName"> = defaultsFromSpec();
+
+export const BRIEF_AFFECTING_SETTINGS: (keyof RoomSettings)[] = (Object.keys(ROOM_SETTINGS_SPEC) as (keyof RoomSettings)[]).filter((key) => ROOM_SETTINGS_SPEC[key].brief);
+
+export const AGENT_SETTINGS: (keyof RoomSettings)[] = (Object.keys(ROOM_SETTINGS_SPEC) as (keyof RoomSettings)[]).filter((key) => ROOM_SETTINGS_SPEC[key].agent);
+
+export function coerceSetting<K extends keyof RoomSettings>(key: K, raw: unknown): RoomSettings[K] {
+  const spec = ROOM_SETTINGS_SPEC[key];
+  switch (spec.kind) {
+    case "own-path":
+      throw new Error(`${key} is not a settings field`);
+    case "integer": {
+      const value = Number(raw);
+      if (!Number.isInteger(value) || value < spec.min || value > spec.max) throw new Error(`${key} must be an integer between ${spec.min} and ${spec.max}`);
+      return value as RoomSettings[K];
+    }
+    case "integer-or-null": {
+      const value = raw === null || raw === "" ? null : Number(raw);
+      if (value !== null && (!Number.isInteger(value) || value < spec.min || value > spec.max)) throw new Error(`${key} must be ${spec.min}-${spec.max} or empty`);
+      return value as RoomSettings[K];
+    }
+    case "number": {
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < spec.min || value > spec.max) throw new Error(`${key} must be between ${spec.min} and ${spec.max} seconds`);
+      return value as RoomSettings[K];
+    }
+    case "boolean":
+      return (raw === true || raw === "true") as RoomSettings[K];
+    case "enum": {
+      const value = String(raw);
+      if (!spec.values.includes(value)) throw new Error(`${key} must be ${spec.values.join(" or ")}`);
+      return value as RoomSettings[K];
+    }
+    case "text":
+      return String(raw).slice(0, spec.max) as RoomSettings[K];
+    case "language": {
+      if (raw && typeof raw === "object") {
+        const o = raw as { mode?: unknown; language?: unknown };
+        if (o.mode === "fixed" && typeof o.language === "string" && o.language.trim()) return { mode: "fixed", language: o.language.trim() } as RoomSettings[K];
+        return { mode: "follow-human" } as RoomSettings[K];
+      }
+      const text = String(raw ?? "").trim();
+      return (!text || text === "follow-human" ? { mode: "follow-human" } : { mode: "fixed", language: text }) as RoomSettings[K];
+    }
+  }
+}
+
+export function describeSettings(current: RoomSettings): { key: string; doc: string; kind: string; range?: string; default: unknown; value: unknown; affectsBrief: boolean }[] {
+  return AGENT_SETTINGS.map((key) => {
+    const spec = ROOM_SETTINGS_SPEC[key];
+    const range =
+      spec.kind === "integer" || spec.kind === "number"
+        ? `${spec.min}..${spec.max}`
+        : spec.kind === "integer-or-null"
+          ? `${spec.min}..${spec.max} or null`
+          : spec.kind === "enum"
+            ? spec.values.join(" | ")
+            : spec.kind === "text"
+              ? `up to ${spec.max} characters`
+              : spec.kind === "language"
+                ? '"follow-human" or a language name'
+                : undefined;
+    return { key, doc: spec.doc, kind: spec.kind, range, default: spec.kind === "own-path" ? undefined : spec.default, value: current[key], affectsBrief: spec.brief };
+  });
+}
 
 export interface Persona {
   name: string;
@@ -204,6 +279,9 @@ function skillsSection(skills: SkillsForPrompt): string[] {
   if (skills.canCreate) {
     lines.push(
       `You may also create skills for the shared library when a procedure is worth reusing (by you later, or by other agents): first load the built-in skill "${SKILL_WRITER_NAME}" with the viberoom ${SKILL_TOOL_NAME} tool for the rules of a good skill, then call the viberoom tools create_skill (name, description, instructions) and attach_skill to give it to yourself or to other agents. These are MCP tools of the "viberoom" server, not your own skill commands. The human sees every new skill in Settings.`,
+    );
+    lines.push(
+      `You may also design rooms: load the built-in skill "${ROOM_DESIGNER_NAME}" first, then describe_room for the facts, lint_room_design to check a draft (it previews the brief the vibemates would read), create_template to save a template the human can pick under New room, and propose_room_changes to suggest a change to this room: it becomes a card the human applies or rejects, so nothing here changes without their click.`,
     );
   } else if (skills.items.length) {
     lines.push("Skills are created by the human or by agents that have the hub's tools; if you want a new one, describe it in the room.");

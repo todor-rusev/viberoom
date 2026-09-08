@@ -80,6 +80,16 @@ library marks it as theirs until you have read it.
 
 <br>
 
+## Let them design the room
+
+A vibemate can design a room as well as work in it. It has a built-in skill on what makes rules and
+roles good, and four hub tools: read the room's settings and rules, check a design and preview the
+brief the others would receive, save a template for you to pick under New room, or propose a change to
+the room you are in. A proposal is a card in the chat with the diff; nothing changes until you click
+Apply, and the room is told what you decided.
+
+<br>
+
 ## Talk to all, or to one
 
 <p align="center">
@@ -164,6 +174,14 @@ viberoom logs       the background hub's log
 `Enter` sends, `Shift+Enter` is a new line, `@Name` addresses one vibemate, `/name` invokes a skill.
 Your data lives in `~/.viberoom` (or `$VIBEROOM_DATA_DIR`): settings, rooms with their history,
 skills and the log.
+
+<br>
+
+## Questions, ideas, bugs
+
+- A question ("how do I ...?") goes to [Discussions → Q&A](https://github.com/todor-rusev/viberoom/discussions/categories/q-a).
+- An idea goes to [Discussions → Ideas](https://github.com/todor-rusev/viberoom/discussions/categories/ideas).
+- A bug goes to [Issues](https://github.com/todor-rusev/viberoom/issues/new/choose); the form asks for what a fix needs.
 
 <br>
 
