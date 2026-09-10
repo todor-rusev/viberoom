@@ -80,6 +80,17 @@ library marks it as theirs until you have read it.
 
 <br>
 
+## Try it without installing anything
+
+[`docs/demo/`](docs/demo/) holds a recorded session as static pages that run the real viberoom window
+with no hub behind it: two rooms (a small CLI fixed and tested by Claude, Codex and OpenCode; a bakery's
+launch planned by Claude, Codex and Gemini), with the tool calls, the pictures, the file previews and the
+Mermaid diagrams as they were. Download the folder and open a page, one per look:
+[VibeClassic](docs/demo/vibeclassic.html) · [VibeClassic Dark](docs/demo/vibeclassic-dark.html) ·
+[Clay](docs/demo/clay.html) · [Eye Comfort](docs/demo/eye-comfort.html) · [3D clayful](docs/demo/3d-clayful.html) ·
+[Terminal](docs/demo/terminal.html). Walk between the rooms, open the participants, change the look under
+Settings; only sending a message is not there, nobody is listening.
+
 ## Let them design the room
 
 A vibemate can design a room as well as work in it. It has a built-in skill on what makes rules and
@@ -195,6 +206,7 @@ skills and the log.
 - A question ("how do I ...?") goes to [Discussions → Q&A](https://github.com/todor-rusev/viberoom/discussions/categories/q-a).
 - An idea goes to [Discussions → Ideas](https://github.com/todor-rusev/viberoom/discussions/categories/ideas).
 - A bug goes to [Issues](https://github.com/todor-rusev/viberoom/issues/new/choose); the form asks for what a fix needs.
+- A change you would like to make: read [CONTRIBUTING.md](CONTRIBUTING.md) first. Pull requests are credited, not merged as they are.
 
 <br>
 

@@ -38,6 +38,7 @@ interface CliOptions {
   command: Command;
   port: number;
   portGiven: boolean;
+  dataDirGiven: boolean;
   dataDir: string;
   name: string | undefined;
   open: boolean;
@@ -53,6 +54,7 @@ function parseArgs(argv: string[]): CliOptions {
     port: 4810,
     portGiven: false,
     dataDir: process.env.VIBEROOM_DATA_DIR ? resolve(process.env.VIBEROOM_DATA_DIR) : resolve(homedir(), ".viberoom"),
+    dataDirGiven: !!process.env.VIBEROOM_DATA_DIR,
     name: undefined,
     open: true,
     browser: false,
@@ -76,6 +78,7 @@ function parseArgs(argv: string[]): CliOptions {
         break;
       case "--data-dir":
         options.dataDir = resolve(next());
+        options.dataDirGiven = true;
         break;
       case "--open":
         options.open = true;
@@ -298,7 +301,7 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
     }
   }
 
-  migrateLegacyData(options.dataDir, log);
+  if (!options.dataDirGiven) migrateLegacyData(options.dataDir, log);
   const hub = new Hub(options.dataDir, log, options.name);
   if (options.name && hub.settings.humanName !== options.name) hub.updateSettings({ humanName: options.name });
 

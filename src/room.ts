@@ -241,8 +241,11 @@ export type RoomEvent =
   | { type: "room"; hopLimit: number; hops: number; settings: RoomSettings; customRulesText: string; focused: boolean; name: string; dir: string }
   | { type: "notice"; text: string; level: "info" | "warn" | "error"; ts: number };
 
+export type BriefTextCheck = "refuse" | "notice" | "keep";
+
 export interface InviteOptions {
   id?: string;
+  textCheck?: BriefTextCheck;
   color?: string;
   agentType: string;
   name: string;
@@ -488,7 +491,7 @@ export class Room extends EventEmitter {
   restore(stored: StoredParticipant[]): void {
     for (const s of stored) {
       if (!s.agentType) {
-        this.addUnstaffed({ name: s.name, tagline: s.tagline, role: s.role, avatar: s.avatar, skills: s.skills, color: s.color, id: s.id });
+        this.addUnstaffed({ name: s.name, tagline: s.tagline, role: s.role, avatar: s.avatar, skills: s.skills, color: s.color, id: s.id, textCheck: "keep" });
         continue;
       }
       const recipe = getRecipe(s.agentType);
@@ -1023,7 +1026,7 @@ export class Room extends EventEmitter {
       if (patch[key] === undefined || ROOM_SETTINGS_SPEC[key].kind === "own-path") continue;
       let value: RoomSettings[typeof key] = coerceSetting(key, patch[key]);
       if (key === "customRules") {
-        const resolved = this.resolveRuleReferences(value as string);
+        const resolved = this.resolveRuleReferences(this.guardBriefText("The room rules text", value as string, "refuse", next.briefTextLimit));
         unknownRefs = resolved.unknown;
         value = resolved.stored;
       }
@@ -1044,6 +1047,13 @@ export class Room extends EventEmitter {
       this.notice(`Room rules mention ${missing.map((n) => `@${n}`).join(", ")}, who ${missing.length > 1 ? "are" : "is"} not in the room; left as plain text.`, "warn");
     }
     return this.settings;
+  }
+
+  private guardBriefText(what: string, text: string, check: BriefTextCheck = "refuse", limit = this.settings.briefTextLimit): string {
+    if (check === "keep" || text.length <= limit) return text;
+    if (check === "refuse") throw new Error(`${what} is ${text.length} characters; this room's limit is ${limit} (the briefTextLimit setting). Shorten it, move the instructions into a skill, or raise the limit.`);
+    this.postSystem(`${what} is ${text.length} characters, over this room's limit of ${limit}; kept as it is, but the next edit has to fit (shorten it or raise briefTextLimit).`, "human", false, { tone: "attention" });
+    return text;
   }
 
   updatePersona(id: string, patch: PersonaPatch): Participant {
@@ -1070,7 +1080,7 @@ export class Room extends EventEmitter {
       changed.push("tagline");
     }
     if (patch.role !== undefined && patch.role.trim() !== (participant.role ?? "")) {
-      participant.role = patch.role.trim().slice(0, 4000);
+      participant.role = this.guardBriefText(`${participant.name}'s vibio`, patch.role.trim());
       changed.push("role");
     }
     if (patch.avatar !== undefined) {
@@ -1196,7 +1206,7 @@ export class Room extends EventEmitter {
       turns: 0,
       color: options.color ?? COLORS[this.colorIndex++ % COLORS.length],
       tagline: (options.tagline ?? "").trim().slice(0, 80),
-      role: (options.role ?? "").trim().slice(0, 4000),
+      role: this.guardBriefText(`${name}'s vibio`, (options.role ?? "").trim(), options.textCheck),
       avatar: (options.avatar ?? "").trim().slice(0, 8) || undefined,
       replyDelay: options.replyDelay === undefined || options.replyDelay === null ? undefined : Math.max(0, Math.min(120, Number(options.replyDelay) || 0)),
       skills: normalizeSkillList(options.skills ?? undefined),
@@ -1211,7 +1221,7 @@ export class Room extends EventEmitter {
     return participant;
   }
 
-  addUnstaffed(input: { name: string; tagline?: string; role?: string; avatar?: string; skills?: string[]; color?: string; id?: string }): Participant {
+  addUnstaffed(input: { name: string; tagline?: string; role?: string; avatar?: string; skills?: string[]; color?: string; id?: string; textCheck?: BriefTextCheck }): Participant {
     const name = input.name.trim();
     if (!NAME_PATTERN.test(name)) throw new Error("name must be 1-24 letters, digits, _ or - (no spaces)");
     if (this.findByName(name)) throw new Error(`name "${name}" is already taken`);
@@ -1225,7 +1235,7 @@ export class Room extends EventEmitter {
       turns: 0,
       color: input.color ?? COLORS[this.colorIndex++ % COLORS.length],
       tagline: (input.tagline ?? "").trim().slice(0, 80),
-      role: (input.role ?? "").trim().slice(0, 4000),
+      role: this.guardBriefText(`${name}'s vibio`, (input.role ?? "").trim(), input.textCheck),
       avatar: (input.avatar ?? "").trim().slice(0, 8) || undefined,
       skills: normalizeSkillList(input.skills),
       violations: 0,
@@ -1677,6 +1687,7 @@ export class Room extends EventEmitter {
       humanName: this.settings.humanName,
       roomName: this.settings.name,
       base: kind === "room" ? { ...this.settings, customRules: this.renderRuleReferences(this.settings.customRules) } : undefined,
+      briefTextLimit: this.settings.briefTextLimit,
       knownSkills: this.skills ? this.skills.library.list().map((s) => s.name) : undefined,
     };
   }

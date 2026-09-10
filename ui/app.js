@@ -685,28 +685,34 @@
     }
     if (!found.size) return;
     const paths = await Promise.all([...found.keys()].map((token) => resolveInRoom(room.id, token)));
-    let linked = false;
+    const resolved = new Map();
     [...found.keys()].forEach((token, i) => {
       const full = paths[i] && paths[i].path;
-      if (!full) return;
-      const byNode = new Map();
-      for (const hit of found.get(token)) byNode.set(hit.node, [...(byNode.get(hit.node) || []), hit]);
-      for (const [node, hits] of byNode) {
-        if (!node.isConnected) continue;
-        for (const hit of hits.sort((a, b) => b.index - a.index)) {
-          const after = node.splitText(hit.index);
-          after.nodeValue = after.nodeValue.slice(hit.length);
-          const link = document.createElement("a");
-          link.className = "open-link";
-          link.href = "#";
-          link.dataset.open = `${full}${hit.line}`;
-          link.title = `${full} (relative to the room's folder)`;
-          link.textContent = `${token}${hit.line}`;
-          node.parentNode.insertBefore(link, after);
-          linked = true;
-        }
-      }
+      if (full) resolved.set(token, full);
     });
+    if (!resolved.size) return;
+    const byNode = new Map();
+    for (const [token, hits] of found) {
+      if (!resolved.has(token)) continue;
+      for (const hit of hits) byNode.set(hit.node, [...(byNode.get(hit.node) || []), { ...hit, token }]);
+    }
+    let linked = false;
+    for (const [node, hits] of byNode) {
+      if (!node.isConnected) continue;
+      for (const hit of hits.sort((a, b) => b.index - a.index)) {
+        const full = resolved.get(hit.token);
+        const after = node.splitText(hit.index);
+        after.nodeValue = after.nodeValue.slice(hit.length);
+        const link = document.createElement("a");
+        link.className = "open-link";
+        link.href = "#";
+        link.dataset.open = `${full}${hit.line}`;
+        link.title = `${full} (relative to the room's folder)`;
+        link.textContent = `${hit.token}${hit.line}`;
+        node.parentNode.insertBefore(link, after);
+        linked = true;
+      }
+    }
     if (linked) renderPreviews(textEl, m);
   }
   function csvTable(rows) {
@@ -1106,8 +1112,8 @@
       const field = lastField;
       lastField = null;
       try {
-        await onSave();
-        if (field) {
+        const outcome = await onSave();
+        if (field && outcome !== false) {
           recentlySaved.set(field, Date.now());
           markSaved(field);
         }
@@ -1309,6 +1315,9 @@
     }, 190);
   }
   function confirmDialog(text, opts) {
+    return choiceDialog(text, opts).then((choice) => choice === "ok");
+  }
+  function choiceDialog(text, opts) {
     const o = opts || {};
     const dialog = $("#confirm-dialog");
     $("#cf-title").textContent = o.title || "Are you sure?";
@@ -1316,16 +1325,48 @@
     const ok = $("#cf-ok");
     ok.textContent = o.okLabel || "OK";
     ok.className = `btn ${o.danger ? "danger solid" : "primary"}`;
+    $("#cf-cancel").textContent = o.cancelLabel || "Cancel";
+    const alt = $("#cf-alt");
+    alt.textContent = o.altLabel || "";
+    alt.hidden = !o.altLabel;
     return new Promise((resolve) => {
       const done = () => {
         dialog.removeEventListener("close", done);
-        resolve(dialog.returnValue === "ok");
+        resolve(dialog.returnValue === "ok" ? "ok" : dialog.returnValue === "alt" ? "alt" : "cancel");
       };
       dialog.addEventListener("close", done);
       dialog.returnValue = "";
       openDialog(dialog);
       ok.focus();
     });
+  }
+
+  const BRIEF_TEXT_MAX = 32000;
+  function briefTextLimit(room) {
+    const r = room || currentRoom();
+    return (r && r.settings && Number(r.settings.briefTextLimit)) || 8000;
+  }
+  function bindCount(el, countEl, limitOf) {
+    if (!el || !countEl) return;
+    const tick = () => {
+      const n = (el.isContentEditable ? rulesText(el) : el.value).length;
+      const limit = limitOf();
+      countEl.textContent = `${n} / ${limit}`;
+      countEl.classList.toggle("over", n > limit);
+    };
+    el.addEventListener("input", tick);
+    tick();
+  }
+  async function fitBriefText(text, what, limit, limitInput) {
+    if (text.length <= limit) return text;
+    const needed = Math.min(BRIEF_TEXT_MAX, Math.ceil(text.length / 500) * 500);
+    const canRaise = text.length <= BRIEF_TEXT_MAX;
+    const choice = await choiceDialog(`${what} is ${text.length} characters; this room's limit is ${limit}. Cut it at the limit, or raise the limit for this room?${canRaise ? "" : ` ${BRIEF_TEXT_MAX} is the most a room can allow.`}`, { title: "Over the room's limit", okLabel: `Cut at ${limit}`, altLabel: canRaise ? `Raise the limit to ${needed}` : "", cancelLabel: "Go back" });
+    if (choice === "ok") return text.slice(0, limit);
+    if (choice !== "alt") return null;
+    if (limitInput) limitInput.value = String(needed);
+    else await post(roomApi("/settings"), { briefTextLimit: needed });
+    return text;
   }
   function remember(key, value) {
     try {
@@ -2733,7 +2774,7 @@
         ${field("Vibename", `<input type="text" id="pp-name" maxlength="24" value="${esc(p.name)}">`)}
         ${field("Vibersona", `<input type="text" id="pp-tagline" maxlength="80" value="${esc(p.tagline || "")}" placeholder="a few words under the vibename">`, "Shown under the vibename.", "Everyone in the room sees it: you, and the other vibemates in their roster.")}
         ${field("Vibeface", `<div id="pp-avatar-picker"></div><input type="text" id="pp-avatar" maxlength="8" value="${esc(p.avatar || "")}" placeholder="custom emoji (optional)">`)}
-        ${field("Vibio", `<textarea id="pp-role" rows="5" maxlength="4000" placeholder="who it is, how it speaks, what it cares about">${esc(p.role || "")}</textarea>`, "Only this vibemate reads it.", "Reaches the vibemate as refreshed instructions in its brief on its next turn; its memory is kept. The other participants never see it.")}
+        ${field("Vibio", `<textarea id="pp-role" rows="5" placeholder="who it is, how it speaks, what it cares about">${esc(p.role || "")}</textarea>`, `Only this vibemate reads it.<span class="count" id="pp-role-count"></span>`, "Reaches the vibemate as refreshed instructions in its brief on its next turn; its memory is kept. The other participants never see it. A vibio and the room rules go into every brief, so the room has a limit for them (the room's settings, for geeks); text over it is never cut in silence.")}
       </div>
       ${p.trouble ? `<div class="trouble"><b>${esc(p.trouble.what)}</b><span>${esc(p.trouble.advice)}</span></div>` : ""}
       ${p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<p class="hint" style="color:var(--danger);margin:0 4px 10px">${esc(p.statusDetail)}</p>` : ""}
@@ -2806,7 +2847,13 @@
     renderSkillChecks($("#pp-skills"), p.skills || []);
     bindSave($("#pp-skills-section"), () => post(roomApi(`/participants/${encodeURIComponent(p.id)}/persona`), { skills: checkedSkills($("#pp-skills")) }));
     bindSave($("#pp-timing"), () => post(roomApi(`/participants/${encodeURIComponent(p.id)}/persona`), { replyDelay: $("#pp-delay").value === "" ? null : Number($("#pp-delay").value) }));
-    bindSave($("#pp-persona"), () => post(roomApi(`/participants/${encodeURIComponent(p.id)}/persona`), { name: $("#pp-name").value, tagline: $("#pp-tagline").value, role: $("#pp-role").value, avatar: $("#pp-avatar").value }));
+    bindCount($("#pp-role"), $("#pp-role-count"), () => briefTextLimit(currentRoom()));
+    bindSave($("#pp-persona"), async () => {
+      const role = await fitBriefText($("#pp-role").value, `${p.name}'s vibio`, briefTextLimit(currentRoom()));
+      if (role === null) return false;
+      await post(roomApi(`/participants/${encodeURIComponent(p.id)}/persona`), { name: $("#pp-name").value, tagline: $("#pp-tagline").value, role, avatar: $("#pp-avatar").value });
+      return true;
+    });
     renderConfig($("#pp-config"), p, offline);
   }
 
@@ -2907,7 +2954,7 @@
         ${field("Emoji", `<div id="rp-emoji-picker"></div><input type="text" id="rp-emoji" maxlength="8" value="${esc(rs.emoji || "")}" placeholder="custom emoji (optional)">`, "A face for the room, next to its name.")}
         ${field("Topic", `<input type="text" id="rp-topic" maxlength="2000" value="${esc(rs.topic || "")}" placeholder="what this room is about (optional)">`)}
         ${field("Folder", `<span class="dir-row"><input type="text" id="rp-dir" maxlength="1000" value="${esc(room.dir)}" spellcheck="false">${UI.html("button", { label: "Browse", icon: "folder", kind: "ghost", id: "rp-dir-browse", title: "Choose a folder", hook: "browse-btn" })}</span>`, "Where the vibemates read and write. Changing it restarts them in the new folder; they replay the last messages.")}
-        <div class="field mention-host"><span class="label">Room rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">One rule per line; type @ to reference a participant.</span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></div>
+        <div class="field mention-host"><span class="label">Room rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">One rule per line; type @ to reference a participant.<span class="count" id="rp-rules-count"></span></span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></div>
         ${field("Language", `<input type="text" id="rp-lang" value="${esc(lang)}" placeholder="follow the human (default), or e.g. English">`)}
       </div>
       <div class="section">
@@ -2950,6 +2997,7 @@
         <label class="switch"><span class="label">Show vendor and model to other vibemates</span><input type="checkbox" id="rp-vendor" ${rs.showVendorInRoster ? "checked" : ""}></label>
         ${field("Replay last N chat messages after a reconnect", `${UI.html("number-field", { id: "rp-replay", value: String(rs.replayAfterRestart), min: 0, max: 200 })}`)}
         ${field("Missed messages a vibemate reads at most on its next turn", `${UI.html("number-field", { id: "rp-backlog", value: String(rs.backlogCap), min: 1, max: 1000 })}`, "Everything posted since its last turn counts, including while it was muted; older messages are dropped with a note in its prompt.")}
+        ${field("Most characters in a vibio or in the room rules", `${UI.html("number-field", { id: "rp-text-limit", value: String(rs.briefTextLimit ?? 8000), min: 500, max: 32000, step: 500 })}`, "Both go into every brief. Text over the limit is refused with the numbers, never cut.")}
       </div>`,
         "tools, hops, referee, briefs",
       )}
@@ -2963,6 +3011,8 @@
     wireDetailsClose();
     rulesToNodes($("#rp-rules"), room.customRulesText != null ? room.customRulesText : rs.customRules || "", room);
     attachRichMentions($("#rp-rules"), $("#rp-rules-menu"));
+    bindCount($("#rp-rules"), $("#rp-rules-count"), () => Number($("#rp-text-limit").value) || briefTextLimit(room));
+    $("#rp-text-limit").addEventListener("input", () => $("#rp-rules").dispatchEvent(new Event("input")));
     $("#rp-emoji-picker").appendChild(
       emojiGrid(ROOM_EMOJI, rs.emoji || "", (emoji) => {
         $("#rp-emoji").value = emoji;
@@ -2979,10 +3029,13 @@
         if (name.trim() !== room.name) await post(roomApi("/rename"), { name });
         const dir = $("#rp-dir").value.trim();
         if (dir && dir !== room.dir) await post(roomApi("/dir"), { dir });
+        const rules = await fitBriefText(rulesText($("#rp-rules")), "The room rules text", Number($("#rp-text-limit").value) || briefTextLimit(room), $("#rp-text-limit"));
+        if (rules === null) return false;
         await post(roomApi("/settings"), {
           emoji: $("#rp-emoji").value,
           topic: $("#rp-topic").value,
-          customRules: rulesText($("#rp-rules")).slice(0, 4000),
+          customRules: rules,
+          briefTextLimit: Number($("#rp-text-limit").value),
           language: $("#rp-lang").value.trim() || "follow-human",
           tools: $("#rp-tools").value,
           maxSentences: $("#rp-maxlen").value === "" ? null : Number($("#rp-maxlen").value),
@@ -3131,6 +3184,7 @@
             ${field("Hop limit", `${UI.html("number-field", { id: "sp-hops", value: String(d.hopLimit), min: 0, max: 10000 })}`, "How many vibemate-to-vibemate replies may follow one message of yours before the room waits for you again.")}
             ${field("Full brief every N turns", `${UI.html("number-field", { id: "sp-brief-turns", value: String(d.fullBriefEveryTurns), min: 1, max: 10000 })}`, "How often a vibemate gets the whole room brief again instead of the short header.")}
             ${field("Full brief every N tokens", `${UI.html("number-field", { id: "sp-brief-tokens", value: String(d.fullBriefEveryTokens), min: 1000, max: 10000000, step: 1000 })}`, "…or after this much new context since its last full brief, whichever comes first.")}
+            ${field("Most characters in a vibio or in the room rules", `${UI.html("number-field", { id: "sp-text-limit", value: String(d.briefTextLimit ?? 8000), min: 500, max: 32000, step: 500 })}`, "Both go into every brief. Over the limit, the text is refused with the numbers, never cut; each room can raise or lower its own.")}
             <label class="switch"><span class="label">Repeat core rules in every header<span class="hint">The short header before each turn repeats the room's core rules (who is here, how to address, how long to write).</span></span><input type="checkbox" id="sp-header-rules" ${d.headerRules ? "checked" : ""}></label>
             ${field("Tools", `<select id="sp-tools"><option value="on-request"${d.tools === "on-request" ? " selected" : ""}>Only when asked</option><option value="never"${d.tools === "never" ? " selected" : ""}>Never</option></select>`, "Whether vibemates may use their own tools (files, shell, web) without being asked to.")}
           </div>
@@ -3386,6 +3440,7 @@
             hopLimit: Number($("#sp-hops").value),
             fullBriefEveryTurns: Number($("#sp-brief-turns").value),
             fullBriefEveryTokens: Number($("#sp-brief-tokens").value),
+            briefTextLimit: Number($("#sp-text-limit").value),
             headerRules: $("#sp-header-rules").checked,
             tools: $("#sp-tools").value,
           },
@@ -4093,6 +4148,7 @@
       ${stpField("…or every N tokens", `${UI.html("number-field", { id: "stp-brief-tokens", value: String(st.fullBriefEveryTokens ?? 20000), min: 1000, max: 10000000, step: 1000 })}`)}
       ${stpField("Replay after a reconnect", `${UI.html("number-field", { id: "stp-replay", value: String(st.replayAfterRestart ?? 10), min: 0, max: 200 })}`)}
       ${stpField("Missed messages read at most", `${UI.html("number-field", { id: "stp-backlog", value: String(st.backlogCap ?? 50), min: 1, max: 1000 })}`)}
+      ${stpField("Most characters in a vibio or the rules", `${UI.html("number-field", { id: "stp-text-limit", value: String(st.briefTextLimit ?? 8000), min: 500, max: 32000, step: 500 })}`)}
       ${stpSwitch("Core rules in every header", "stp-header-rules", st.headerRules !== false)}
       ${stpSwitch("Show vendor and model to other vibemates", "stp-vendor", !!st.showVendorInRoster)}
     </div>`;
@@ -4114,7 +4170,7 @@
       </div></div>`).join("");
     return `
       <div class="stp-section"><h5>Room</h5>${room}</div>
-      <div class="stp-section"><h5>Room rules</h5><textarea id="stp-rules" rows="5" maxlength="4000" placeholder="one rule per line">${esc(st.customRules || "")}</textarea></div>
+      <div class="stp-section"><h5>Room rules</h5><textarea id="stp-rules" rows="5" placeholder="one rule per line">${esc(st.customRules || "")}</textarea></div>
       <div class="stp-section"><h5>Folder</h5><span class="dir-row"><input type="text" id="stp-dir" maxlength="1000" value="${esc(t.dir || "")}" spellcheck="false">${UI.html("button", { label: "Browse", icon: "folder", kind: "ghost", hook: "browse-btn", data: { stpBrowse: true } })}</span></div>
       <div class="stp-section"><h5>Vibemates · <span id="stp-vm-count">${(t.vibemates || []).length}</span></h5>${vms || '<span class="hint">none</span>'}</div>`;
   }
@@ -4139,7 +4195,8 @@
       backlogCap: num("#stp-backlog"),
       headerRules: $("#stp-header-rules").checked,
       showVendorInRoster: $("#stp-vendor").checked,
-      customRules: $("#stp-rules").value.slice(0, 4000),
+      customRules: $("#stp-rules").value,
+      briefTextLimit: num("#stp-text-limit"),
     };
     const vibemates = [...stpEls.preview.querySelectorAll(".stp-vm")].map((row) => {
       const v = {};

@@ -41,6 +41,7 @@ export interface RoomSettings {
   replayAfterRestart: number;
   backlogCap: number;
   showVendorInRoster: boolean;
+  briefTextLimit: number;
   customRules: string;
   humanDescriptionMode: "inherit" | "override" | "append" | "none";
   refereeAction: "next-header" | "retry-hidden";
@@ -78,7 +79,8 @@ export const ROOM_SETTINGS_SPEC: Record<keyof RoomSettings, SettingSpec> = {
   replayAfterRestart: { kind: "integer", min: 0, max: 200, default: 10, brief: false, agent: true, doc: "Messages replayed to a vibemate whose session restarts." },
   backlogCap: { kind: "integer", min: 1, max: 1000, default: 50, brief: false, agent: true, doc: "Most missed messages a vibemate reads on its next turn; older ones are dropped with a note." },
   showVendorInRoster: { kind: "boolean", default: false, brief: true, agent: true, doc: "The roster in the brief names each vibemate's vendor (Claude, Codex, ...)." },
-  customRules: { kind: "text", max: 4000, default: "", brief: true, agent: true, doc: "The room rules, one per line; every vibemate gets them under 'Room rules (set by the human)'. @Name inside a rule is a live reference." },
+  briefTextLimit: { kind: "integer", min: 500, max: 32_000, default: 8000, brief: false, agent: true, doc: "Most characters a vibio (a vibemate's role) or the room rules may have; both go into every brief. Text over it is refused with the numbers, never cut." },
+  customRules: { kind: "text", max: 32_000, default: "", brief: true, agent: true, doc: "The room rules, one per line, at most briefTextLimit characters; every vibemate gets them under 'Room rules (set by the human)'. @Name inside a rule is a live reference." },
   refereeAction: { kind: "enum", values: ["next-header", "retry-hidden"], default: "next-header", brief: false, agent: true, doc: "On a mechanical violation (wrong language, too long): remind in the next header, or hold the reply and ask for a corrected one in a hidden turn." },
   turnTaking: { kind: "enum", values: ["parallel", "one-at-a-time"], default: "parallel", brief: false, agent: true, doc: "parallel: every addressed vibemate answers at once; one-at-a-time: one speaks, the others queue and see the earlier replies first." },
   waitWhileHumanTypes: { kind: "boolean", default: true, brief: false, agent: true, doc: "A vibemate about to start a turn waits while the human is typing." },
@@ -125,8 +127,11 @@ export function coerceSetting<K extends keyof RoomSettings>(key: K, raw: unknown
       if (!spec.values.includes(value)) throw new Error(`${key} must be ${spec.values.join(" or ")}`);
       return value as RoomSettings[K];
     }
-    case "text":
-      return String(raw).slice(0, spec.max) as RoomSettings[K];
+    case "text": {
+      const value = String(raw);
+      if (value.length > spec.max) throw new Error(`${key} is ${value.length} characters; at most ${spec.max}`);
+      return value as RoomSettings[K];
+    }
     case "language": {
       if (raw && typeof raw === "object") {
         const o = raw as { mode?: unknown; language?: unknown };

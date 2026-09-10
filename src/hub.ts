@@ -488,7 +488,7 @@ export class Hub extends EventEmitter {
       });
       if (!choice.agentType) {
         try {
-          room.addUnstaffed({ name: choice.name || tv.name, tagline: tv.tagline, role: tv.role, avatar: tv.avatar, skills });
+          room.addUnstaffed({ name: choice.name || tv.name, tagline: tv.tagline, role: tv.role, avatar: tv.avatar, skills, textCheck: "notice" });
         } catch (error) {
           notices.push(`${choice.name || tv.name} could not be added: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -506,11 +506,13 @@ export class Hub extends EventEmitter {
           model: choice.model ?? tv.model,
           effort: choice.effort ?? tv.effort,
           mode: choice.mode ?? tv.mode,
+          textCheck: "notice",
         });
       } catch (error) {
         notices.push(`${choice.name || tv.name} could not be summoned: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    if (room.settings.customRules.length > room.settings.briefTextLimit) notices.push(`The room rules from the template are ${room.settings.customRules.length} characters, over this room's limit of ${room.settings.briefTextLimit}; kept as they are, but the next edit has to fit.`);
     this.saveRooms();
     return { room, notices };
   }

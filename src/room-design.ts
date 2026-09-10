@@ -5,11 +5,11 @@ import type { LintIssue, LintResult } from "./skills.js";
 import type { TemplateVibemate } from "./templates.js";
 
 export const TAGLINE_MAX = 80;
-export const ROLE_MAX = 4000;
+export const ROLE_MAX = 8000;
 export const AVATAR_MAX = 8;
 export const RULES_SOFT_MAX = 12;
 export const ROLE_SOFT_MAX = 1200;
-export const RULES_NEAR_LIMIT = 3000;
+export const RULES_NEAR_LIMIT = 0.75;
 
 export interface RoomDesign {
   name?: string;
@@ -24,6 +24,7 @@ export interface RoomDesignContext {
   humanName: string;
   roomName?: string;
   base?: RoomSettings;
+  briefTextLimit?: number;
   knownSkills?: string[];
   changedVibemates?: string[];
   skills?: { library: { name: string; description: string }[]; channel: SkillsForPrompt["channel"]; canCreate: boolean };
@@ -84,6 +85,7 @@ export function lintRoomDesign(design: RoomDesign, context: RoomDesignContext): 
     if (!vibemates.length) error("template-no-vibemates", "a template needs at least one vibemate");
   }
 
+  const roleMax = raw.briefTextLimit !== undefined ? settings.briefTextLimit : context.briefTextLimit ?? settings.briefTextLimit ?? ROLE_MAX;
   const seen = new Map<string, number>();
   const touched = context.changedVibemates ? new Set(context.changedVibemates.map((n) => n.trim().toLowerCase())) : null;
   for (const [i, v] of vibemates.entries()) {
@@ -100,7 +102,7 @@ export function lintRoomDesign(design: RoomDesign, context: RoomDesignContext): 
     }
     if ((v?.tagline ?? "").length > TAGLINE_MAX) error("tagline-too-long", `${who}: the tagline is at most ${TAGLINE_MAX} characters (it is the one line the others see)`);
     else if (soft && !(v?.tagline ?? "").trim()) warn("vibemate-no-tagline", `${who} has no tagline: the others read it in the roster to know what this one leans to`);
-    if ((v?.role ?? "").length > ROLE_MAX) error("role-too-long", `${who}: the role is at most ${ROLE_MAX} characters`);
+    if ((v?.role ?? "").length > roleMax) error("role-too-long", `${who}: the role is ${v.role!.length} characters; the limit is ${roleMax} (the briefTextLimit setting)`);
     else if (soft && !(v?.role ?? "").trim()) warn("vibemate-no-role", `${who} has no role: without one it is the agent's default self, not a character`);
     else if (soft && (v.role ?? "").length > ROLE_SOFT_MAX) warn("role-restates-rules", `${who}: a role of ${v.role!.length} characters is probably restating the protocol; a role says who this one is and which way it leans, the rules say how they work together`);
     if ((v?.avatar ?? "").length > AVATAR_MAX) error("avatar-too-long", `${who}: the avatar is one emoji`);
@@ -120,7 +122,8 @@ export function lintRoomDesign(design: RoomDesign, context: RoomDesignContext): 
 
   const rules = ruleLines(settings.customRules);
   if (rules.length > RULES_SOFT_MAX) warn("too-many-rules", `${rules.length} rules: every vibemate carries them on every turn; ${RULES_SOFT_MAX} is a full protocol, longer belongs in a skill`);
-  if (settings.customRules.length > RULES_NEAR_LIMIT) warn("rules-near-limit", `the rules are ${settings.customRules.length} characters; the hub stores at most 4000`);
+  if (settings.customRules.length > roleMax) error("rules-too-long", `the rules are ${settings.customRules.length} characters; the limit is ${roleMax} (the briefTextLimit setting)`);
+  else if (settings.customRules.length > roleMax * RULES_NEAR_LIMIT) warn("rules-near-limit", `the rules are ${settings.customRules.length} characters; the limit is ${roleMax}`);
   for (const rule of rules) {
     for (const m of BRIEF_MECHANICS) if (m.pattern.test(rule)) warn("rule-repeats-brief", `the brief already explains ${m.what}; the rule "${rule.slice(0, 60)}${rule.length > 60 ? "…" : ""}" repeats it`);
   }
