@@ -2,18 +2,21 @@
 
 import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { Logger } from "./log.js";
 import type { Hub, HubEvent } from "./hub.js";
-import { existsSync as fileExists } from "node:fs";
+import { createReadStream, existsSync as fileExists } from "node:fs";
+import { createInterface } from "node:readline";
 import { classifyOpenTarget, describeOpen, detectEditor, editorCommand, isExecutablePath, openCommand, type DetectedEditor } from "./open.js";
-import { parseCsv, viewerKind, VIEWER_MAX_BYTES } from "./viewer.js";
+import { imageMediaType, languageOf, looksBinary, parseCsv, sliceLines, viewerKind, IMAGE_VIEW_MAX_BYTES, STREAM_MAX_BYTES, VIEWER_MAX_BYTES, WINDOW_MAX_LINES } from "./viewer.js";
 import { createFolder, homeFolder, listFolders, listRoots } from "./fsbrowse.js";
 import { contentTypeOf, isStoredFileName, IMAGE_MAX_BYTES, IMAGES_PER_MESSAGE, type ImageInput } from "./files.js";
+import { QUOTES_PER_MESSAGE, type QuoteInput } from "./quotes.js";
 import { commandTarget, parseRoomCommand } from "./commands.js";
+import { acceptUpgrade, type WebSocketPeer } from "./ws.js";
 
 let editorFound: DetectedEditor | null | undefined;
 function currentEditor(): DetectedEditor | null {
@@ -23,12 +26,6 @@ function currentEditor(): DetectedEditor | null {
 
 const STATIC_FILES: Record<string, { file: string; type: string; dir?: "ui" | "assets" | "node_modules" }> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
-  "/index.html": { file: "index.html", type: "text/html; charset=utf-8" },
-  "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
-  "/avatars.js": { file: "avatars.js", type: "text/javascript; charset=utf-8" },
-  "/icons.js": { file: "icons.js", type: "text/javascript; charset=utf-8" },
-  "/theme.css": { file: "theme.css", type: "text/css; charset=utf-8" },
-  "/app.css": { file: "app.css", type: "text/css; charset=utf-8" },
   "/styleguide": { file: "styleguide.html", type: "text/html; charset=utf-8" },
   "/manifest.json": { file: "manifest.json", type: "application/manifest+json; charset=utf-8" },
   "/icon.svg": { file: "icon.svg", type: "image/svg+xml", dir: "assets" },
@@ -43,6 +40,20 @@ const STATIC_FILES: Record<string, { file: string; type: string; dir?: "ui" | "a
   "/vendor-icons/copilot.svg": { file: "vendors/copilot.svg", type: "image/svg+xml", dir: "assets" },
   "/vendor/mermaid.min.js": { file: "mermaid/dist/mermaid.min.js", type: "text/javascript; charset=utf-8", dir: "node_modules" },
   "/vendor/marked.umd.js": { file: "marked/lib/marked.umd.js", type: "text/javascript; charset=utf-8", dir: "node_modules" },
+  "/vendor/prism.js": { file: "prismjs/prism.js", type: "text/javascript; charset=utf-8", dir: "node_modules" },
+};
+
+const PRISM_LANGUAGE = /^\/vendor\/prism-lang\/([a-z0-9-]{1,32})\.js$/;
+
+const UI_FILE = /^\/([a-z0-9_-]+\.(js|css|html|svg|json|png|ico))$/i;
+const UI_TYPES: Record<string, string> = {
+  js: "text/javascript; charset=utf-8",
+  css: "text/css; charset=utf-8",
+  html: "text/html; charset=utf-8",
+  svg: "image/svg+xml",
+  json: "application/json; charset=utf-8",
+  png: "image/png",
+  ico: "image/x-icon",
 };
 
 export interface RunningServer {
@@ -57,9 +68,10 @@ export interface BuildInfo {
   name: string;
   version: string;
   build: string;
+  staleSource?: string | null;
 }
 
-export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo, onShutdownRequest: () => void): Promise<RunningServer> {
+export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo, onShutdownRequest: () => void, onRestartRequest?: () => void): Promise<RunningServer> {
   const uiDir = fileURLToPath(new URL("../ui/", import.meta.url));
   const assetsDir = fileURLToPath(new URL("../assets/", import.meta.url));
   const resolveModule = createRequire(import.meta.url).resolve;
@@ -70,16 +82,23 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     return join(packageDir(entry.file.slice(0, slash)), entry.file.slice(slash + 1));
   };
   const clients = new Set<ServerResponse>();
-  const snapshot = (): unknown => ({ ...(hub.snapshot() as Record<string, unknown>), version: info });
+  const sockets = new Set<WebSocketPeer>();
+  const snapshot = (): unknown => ({ ...(hub.snapshot() as Record<string, unknown>), version: { ...info, pid: process.pid } });
 
   const broadcast = (event: HubEvent): void => {
-    const payload = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+    const json = JSON.stringify(event);
+    const payload = `event: ${event.type}\ndata: ${json}\n\n`;
     for (const res of clients) res.write(payload);
+    for (const peer of sockets) peer.send(json);
   };
   hub.on("event", broadcast);
 
   const heartbeat = setInterval(() => {
     for (const res of clients) res.write(": ping\n\n");
+    for (const peer of sockets) {
+      if (!peer.alive) peer.close(1001, "no pong");
+      else peer.ping();
+    }
   }, 20_000);
 
   const server = createServer(async (req, res) => {
@@ -91,6 +110,20 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       if (!res.headersSent) sendJson(res, 400, { error: message });
       else res.end();
     }
+  });
+
+  server.on("upgrade", (req, socket, head) => {
+    const path = new URL(req.url ?? "/", "http://localhost").pathname;
+    if (path !== "/ws") {
+      socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    const peer = acceptUpgrade(req, socket, head);
+    if (!peer) return;
+    sockets.add(peer);
+    peer.onClose(() => sockets.delete(peer));
+    peer.send(JSON.stringify({ type: "snapshot", snapshot: snapshot() }));
   });
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -109,10 +142,36 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    const prismLanguage = req.method === "GET" && path.match(PRISM_LANGUAGE);
+    if (prismLanguage) {
+      try {
+        const body = await readFile(staticPath({ file: `prismjs/components/prism-${prismLanguage[1]}.min.js`, dir: "node_modules" }));
+        res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "public, max-age=3600" });
+        res.end(body);
+      } catch {
+        sendJson(res, 404, { error: `no highlighting for "${prismLanguage[1]}"` });
+      }
+      return;
+    }
+
     if (req.method === "GET" && STATIC_FILES[path]) {
       const entry = STATIC_FILES[path];
       const body = await readFile(staticPath(entry));
       res.writeHead(200, { "Content-Type": entry.type, "Cache-Control": entry.dir === "ui" || !entry.dir ? "no-cache" : "public, max-age=3600" });
+      res.end(body);
+      return;
+    }
+
+    const uiFile = req.method === "GET" && path.match(UI_FILE);
+    if (uiFile) {
+      let body: Buffer;
+      try {
+        body = await readFile(`${uiDir}${uiFile[1]}`);
+      } catch {
+        sendJson(res, 404, { error: `no such file: ${uiFile[1]}` });
+        return;
+      }
+      res.writeHead(200, { "Content-Type": UI_TYPES[uiFile[2].toLowerCase()], "Cache-Control": "no-cache" });
       res.end(body);
       return;
     }
@@ -146,11 +205,30 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
-    if (req.method === "GET" && path === "/api/file") {
-      const target = classifyOpenTarget(url.searchParams.get("path") ?? "");
-      if (!target || target.kind !== "path") throw new Error("only absolute paths can be viewed");
-      const kind = viewerKind(target.value);
-      if (!kind) throw new Error("only Markdown and CSV files can be viewed in the room");
+    if (req.method === "GET" && path === "/api/resolve") {
+      const asked = url.searchParams.get("path") ?? "";
+      const inRoom = await resolveInRoom(hub, url.searchParams.get("room"), asked);
+      const target = inRoom ?? (classifyOpenTarget(asked)?.kind === "path" ? classifyOpenTarget(asked)!.value : null);
+      if (!target) {
+        sendJson(res, 404, { error: "not a file of this room's folder" });
+        return;
+      }
+      try {
+        const info = await stat(target);
+        sendJson(res, 200, { ok: true, path: target, kind: info.isFile() ? "file" : info.isDirectory() ? "dir" : "other" });
+      } catch {
+        sendJson(res, 404, { error: `no such file or folder: ${target}` });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && path === "/api/image") {
+      const asked = url.searchParams.get("path") ?? "";
+      const inRoom = await resolveInRoom(hub, url.searchParams.get("room"), asked);
+      const target = classifyOpenTarget(inRoom ?? asked);
+      if (!target || target.kind !== "path") throw new Error("only absolute paths, or a path inside the room's folder, can be shown");
+      const media = imageMediaType(target.value);
+      if (!media) throw new Error("not a picture the room can show");
       let info;
       try {
         info = await stat(target.value);
@@ -159,9 +237,56 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         return;
       }
       if (!info.isFile()) throw new Error(`not a file: ${target.value}`);
-      if (info.size > VIEWER_MAX_BYTES) throw new Error(`too big to view here (${Math.round(info.size / 1024)} kB); open it in an editor`);
-      const text = await readFile(target.value, "utf8");
-      sendJson(res, 200, kind === "csv" ? { ok: true, kind, path: target.value, rows: parseCsv(text) } : { ok: true, kind, path: target.value, text });
+      if (info.size > IMAGE_VIEW_MAX_BYTES) throw new Error(`too big to show here (${Math.round(info.size / 1024 / 1024)} MB); it opens with the default app`);
+      res.writeHead(200, { "Content-Type": media, "Content-Length": String(info.size), "Cache-Control": "no-cache" });
+      createReadStream(target.value).pipe(res);
+      return;
+    }
+
+    if (req.method === "GET" && path === "/api/file") {
+      const asked = url.searchParams.get("path") ?? "";
+      const relative = await resolveInRoom(hub, url.searchParams.get("room"), asked);
+      const target = classifyOpenTarget(relative ?? asked);
+      if (!target || target.kind !== "path") throw new Error("only absolute paths, or a path inside the room's folder, can be viewed");
+      const kind = viewerKind(target.value);
+      let info;
+      try {
+        info = await stat(target.value);
+      } catch {
+        sendJson(res, 404, { error: `no such file: ${target.value}` });
+        return;
+      }
+      if (!info.isFile()) throw new Error(`not a file: ${target.value}`);
+      const asNumber = (name: string): number | undefined => {
+        const raw = url.searchParams.get(name);
+        if (raw === null || raw === "") return undefined;
+        const value = Number(raw);
+        if (!Number.isFinite(value)) throw new Error(`${name} must be a line number`);
+        return Math.max(1, Math.floor(value));
+      };
+      const from = asNumber("from");
+      const to = asNumber("to");
+      const language = languageOf(target.value);
+      if (info.size > VIEWER_MAX_BYTES) {
+        if (kind !== "text") throw new Error(`too big to view here (${Math.round(info.size / 1024)} kB); open it in an editor`);
+        const window = await readLineWindow(target.value, from ?? 1, to);
+        if (window.binary) throw new Error("not a text file; opening it with the default app instead");
+        sendJson(res, 200, { ok: true, kind, path: target.value, language, text: window.text, from: window.from, to: window.to, lines: window.lines, more: true, bytes: info.size });
+        return;
+      }
+      const buffer = await readFile(target.value);
+      if (looksBinary(buffer.subarray(0, 8192))) throw new Error("not a text file; opening it with the default app instead");
+      const text = buffer.toString("utf8");
+      if (kind === "csv") {
+        sendJson(res, 200, { ok: true, kind, path: target.value, rows: parseCsv(text) });
+        return;
+      }
+      if (kind === "markdown" && from === undefined) {
+        sendJson(res, 200, { ok: true, kind, path: target.value, text, lines: text.split(/\r?\n/).length });
+        return;
+      }
+      const window = sliceLines(text, from, to);
+      sendJson(res, 200, { ok: true, kind, path: target.value, language, ...window, bytes: info.size });
       return;
     }
 
@@ -213,7 +338,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     }
 
     if (req.method === "GET" && path === "/api/version") {
-      sendJson(res, 200, info);
+      sendJson(res, 200, { ...info, dataDir: hub.dataDir, pid: process.pid });
       return;
     }
 
@@ -240,6 +365,18 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         return;
       }
       sendJson(res, 200, target.room.describeRoomForAgent(target.participantId));
+      return;
+    }
+
+    if (req.method === "GET" && path === "/api/mcp/message") {
+      const target = hub.resolveMcpToken(url.searchParams.get("token") ?? "");
+      if (!target) {
+        sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+        return;
+      }
+      const seq = Number(url.searchParams.get("seq"));
+      if (!Number.isInteger(seq)) throw new Error("seq must be the message number, the N of #N");
+      sendJson(res, 200, target.room.readMessageForAgent(target.participantId, seq, Number(url.searchParams.get("around") ?? 0)));
       return;
     }
 
@@ -456,6 +593,17 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (path === "/api/restart") {
+      if (!onRestartRequest) {
+        sendJson(res, 400, { error: "this hub cannot restart itself" });
+        return;
+      }
+      log.info("restart requested from the window");
+      sendJson(res, 200, { ok: true });
+      setTimeout(onRestartRequest, 50);
+      return;
+    }
+
     if (path === "/api/shutdown") {
       log.info("shutdown requested over the API");
       sendJson(res, 200, { ok: true });
@@ -506,7 +654,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
           sendJson(res, 200, { ok: true, command: command.name, participant: target.name });
           return;
         }
-        const message = room.postHumanMessage(text, imageList(body.images));
+        const message = room.postHumanMessage(text, imageList(body.images), quoteList(body.quotes));
         sendJson(res, 200, { ok: true, id: message.id });
       } else if (action === "template-preview") {
         sendJson(res, 200, { template: { name: room.name, emoji: room.settings.emoji || "", ...room.templateOf() } });
@@ -588,8 +736,10 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       const room = hub.getRoom(decodeURIComponent(participantAction[1]));
       const id = decodeURIComponent(participantAction[2]);
       const action = participantAction[3];
-      if (action === "cancel") room.cancelTurn(id);
-      else if (action === "respawn") {
+      if (action === "cancel") {
+        sendJson(res, 200, { ok: true, stopped: room.cancelTurn(id) });
+        return;
+      } else if (action === "respawn") {
         const replay = body.replay === undefined || body.replay === null || body.replay === "" ? undefined : Number(body.replay);
         await room.respawnAgent(id, { memory: body.memory === true || body.memory === "true", replay: replay !== undefined && Number.isFinite(replay) ? Math.max(0, Math.min(500, Math.round(replay))) : undefined });
       }
@@ -620,14 +770,16 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       else if (action === "mute") room.setMuted(id, true);
       else if (action === "unmute") room.setMuted(id, false);
       else if (action === "persona") {
-        room.updatePersona(id, {
+        const patch = {
           name: body.name === undefined ? undefined : String(body.name),
           tagline: body.tagline === undefined ? undefined : String(body.tagline),
           role: body.role === undefined ? undefined : String(body.role),
           avatar: body.avatar === undefined ? undefined : String(body.avatar),
           replyDelay: body.replyDelay === undefined ? undefined : body.replyDelay === null || body.replyDelay === "" ? null : Number(body.replyDelay),
           skills: stringList(body.skills),
-        });
+        };
+        if (body.restart === true || body.restart === "true") await room.restartWithPersona(id, patch);
+        else room.updatePersona(id, patch);
       } else await room.setConfig(id, String(body.configId ?? ""), body.value as string | boolean);
       hub.saveRooms();
       sendJson(res, 200, { ok: true });
@@ -657,6 +809,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         close: () => {
           clearInterval(heartbeat);
           for (const res of clients) res.end();
+          for (const peer of sockets) peer.close(1001, "hub closing");
           server.close();
         },
       });
@@ -682,6 +835,64 @@ function imageList(value: unknown): ImageInput[] {
     const image = (entry ?? {}) as Record<string, unknown>;
     const n = Number(image.n);
     return { name: optionalString(image.name) ?? undefined, mimeType: String(image.mimeType ?? ""), data: String(image.data ?? ""), n: Number.isInteger(n) && n > 0 ? n : undefined };
+  });
+}
+
+function inside(child: string, root: string): boolean {
+  const [c, r] = process.platform === "linux" ? [child, root] : [child.toLowerCase(), root.toLowerCase()];
+  return c === r || c.startsWith(r.endsWith(sep) ? r : r + sep);
+}
+
+async function resolveInRoom(hub: Hub, roomId: string | null, asked: string): Promise<string | null> {
+  const text = String(asked ?? "").trim();
+  if (!roomId || !text || isAbsolute(text) || /^[a-z]:[\\/]/i.test(text) || /^[a-z][a-z0-9+.-]*:/i.test(text) || text.startsWith("~")) return null;
+  const room = hub.getRoom(roomId);
+  const dir = room?.dir;
+  if (!dir) return null;
+  const full = resolve(dir, text);
+  const root = resolve(dir);
+  if (!inside(full, root)) return null;
+  try {
+    const realFull = await realpath(full);
+    const realRoot = await realpath(root);
+    return inside(realFull, realRoot) ? full : null;
+  } catch {
+    return full;
+  }
+}
+
+async function readLineWindow(path: string, from: number, to?: number): Promise<{ text: string; from: number; to: number; lines: number; binary: boolean }> {
+  const end = Math.max(from, Math.min(to ?? from + WINDOW_MAX_LINES - 1, from + WINDOW_MAX_LINES - 1));
+  const stream = createReadStream(path, { encoding: "utf8", highWaterMark: 256 * 1024 });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  const kept: string[] = [];
+  let n = 0;
+  let bytes = 0;
+  let binary = false;
+  try {
+    for await (const line of lines) {
+      n++;
+      bytes += line.length + 1;
+      if (n === 1 && looksBinary(Buffer.from(line.slice(0, 4096), "utf8"))) {
+        binary = true;
+        break;
+      }
+      if (n >= from && n <= end) kept.push(line);
+      if (n >= end || bytes > STREAM_MAX_BYTES) break;
+    }
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+  return { text: kept.join("\n"), from, to: Math.min(end, n), lines: n, binary };
+}
+
+function quoteList(value: unknown): QuoteInput[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, QUOTES_PER_MESSAGE).map((entry) => {
+    const quote = (entry ?? {}) as Record<string, unknown>;
+    const n = Number(quote.n);
+    return { seq: Number(quote.seq), text: String(quote.text ?? ""), n: Number.isInteger(n) && n > 0 ? n : undefined };
   });
 }
 

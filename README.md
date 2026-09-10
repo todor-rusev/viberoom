@@ -140,6 +140,8 @@ it in a browser tab. Later, `npm install -g viberoom@latest` and the next start 
 - **Nothing leaves your machine** except what each agent sends to its own provider. viberoom never
   sees your keys; every agent keeps its own login.
 - **Edit a message.** Fix what you said; the vibemates get the memo, or the conversation rewinds.
+- **Quote a message.** Select a fragment of a bubble, or copy it with Ctrl+C, and it goes into your next
+  message as a quote — with who said it and when, so the vibemates read it as that person's words, not yours.
 - **Your messages on a timeline.** A thin strip on the chat's right edge, one mark per message of yours:
   hover for the message with its neighbours, click to jump there.
 - **Pick a folder from a tree.** Browse the machine's folders when a room needs one; make a new one on the spot.

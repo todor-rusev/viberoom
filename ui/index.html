@@ -11,6 +11,7 @@
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#6d5dfc">
   <link rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="/components.css">
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -42,19 +43,19 @@
       </div>
       <div class="side-room" id="side-room" hidden>
         <div class="side-head room">
-          <button class="icon-btn ghost sm" id="back-to-rooms" title="All rooms"><span data-icon="back"></span></button>
+          <button data-ui="icon-button" data-kind="ghost" data-size="sm" id="back-to-rooms" title="All rooms"><span data-icon="back"></span></button>
           <div class="side-room-title"><h2><span id="side-room-name">Room</span> <span id="side-room-emoji"></span></h2><div class="hint" id="side-room-sub"></div></div>
-          <button class="icon-btn ghost sm" id="room-settings-btn" title="Room settings"><span data-icon="settings"></span></button>
-          <button class="icon-btn ghost sm" id="side-toggle" title="Fold this column"><span data-icon="collapse"></span></button>
+          <button data-ui="icon-button" data-kind="ghost" data-size="sm" id="room-settings-btn" title="Room settings"><span data-icon="settings"></span></button>
+          <button data-ui="icon-button" data-kind="ghost" data-size="sm" id="side-toggle" title="Fold this column"><span data-icon="collapse"></span></button>
         </div>
         <div class="side-actions">
-          <button id="invite-btn" class="btn primary cta full"><span class="cta-ico" data-icon="spark"></span><span class="label">Summon a Vibemate</span></button>
+          <button id="invite-btn" data-ui="button" data-kind="primary" data-size="cta" data-full><span class="cta-ico" data-icon="spark"></span><span class="label">Summon a Vibemate</span></button>
         </div>
         <div class="side-label">In this room</div>
         <ul id="participants" class="side-list participants"></ul>
         <div class="side-foot">
-          <button id="reconnect-all-btn" class="btn wake full" hidden title="Bring offline vibemates back"><span data-icon="refresh"></span><span class="label">Wake everyone up</span></button>
-          <button id="focus-btn" class="btn hush full" title="Stop every running reply; vibemates stay quiet until you speak again"><span class="hush-face">🤫</span><span class="label">Hush the room</span></button>
+          <button id="reconnect-all-btn" data-ui="button" data-full class="wake" hidden title="Bring offline vibemates back"><span data-icon="refresh"></span><span class="label">Wake everyone up</span></button>
+          <button id="focus-btn" data-ui="button" data-full class="hush" title="Stop every running reply; vibemates stay quiet until you speak again"><span class="hush-face">🤫</span><span class="label">Hush the room</span></button>
         </div>
       </div>
     </aside>
@@ -74,9 +75,9 @@
             <div class="chat-sub" id="chat-room-sub"></div>
           </div>
           <div class="chat-actions">
-            <button id="pins-btn" class="chip pins-chip" type="button" hidden title="Pinned messages"></button>
+            <button id="pins-btn" data-ui="chip" data-button type="button" hidden title="Pinned messages"></button>
             <label class="search"><span class="search-icon" data-icon="search"></span><input id="search" type="search" placeholder="Search in this room…" autocomplete="off"></label>
-            <button id="chat-info-btn" class="icon-btn" title="Room settings"><span data-icon="settings"></span></button>
+            <button id="chat-info-btn" data-ui="icon-button" title="Room settings"><span data-icon="settings"></span></button>
           </div>
         </header>
         <div id="cast-banner" class="cast-banner" hidden></div>
@@ -87,7 +88,7 @@
           <div class="tl-ticks"></div>
           <div class="tl-pop" hidden></div>
         </div>
-        <button type="button" id="jump-latest" class="jump-latest" title="Back to the latest messages" hidden><span data-icon="arrow-down"></span>Latest</button>
+        <button type="button" id="jump-latest" class="jump-latest" title="Back to the latest messages" hidden><span data-icon="chevrons-down"></span></button>
         <div id="done-notes" class="done-notes" hidden></div>
         <div id="timeline" class="timeline" hidden>
           <div class="tl-view"></div>
@@ -100,6 +101,7 @@
           <div class="composer-grip" id="composer-grip" title="Drag to make the box taller; double-click to reset"></div>
           <button type="button" class="smile-btn" id="emoji-btn" title="Add an emoji"><span data-icon="smile"></span></button>
           <div class="composer-box">
+            <div class="quotes-tray" id="quotes-tray" hidden></div>
             <div class="shots-tray" id="shots-tray" hidden></div>
             <textarea id="input" rows="1" placeholder="Message the room… @Name or /skill" title="Enter sends, Shift+Enter is a new line; paste or drop an image"></textarea>
           </div>
@@ -128,14 +130,14 @@
       <label>Your vibe line <span class="hint">(a sentence or two about you)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The vibemates get this line in every room's brief, so they know who they are talking to. A room can add its own line or replace it (Your vibe, in the room).</span>
         <textarea id="pf-desc" rows="3" maxlength="200" placeholder="e.g. software engineer, curious about agent protocols; likes short answers"></textarea></label>
       <p class="error" id="pf-error" hidden></p>
-      <div class="actions"><button type="submit" class="btn primary lg">Start vibing</button></div>
+      <div class="actions"><button type="submit" data-ui="button" data-kind="primary" data-size="lg">Start vibing</button></div>
     </form>
   </dialog>
   <dialog id="confirm-dialog" class="dialog narrow">
     <form method="dialog">
       <h3 id="cf-title">Are you sure?</h3>
       <p class="lead" id="cf-text"></p>
-      <div class="actions"><button class="btn ghost" value="cancel" type="submit">Cancel</button><button class="btn primary" id="cf-ok" value="ok" type="submit">OK</button></div>
+      <div class="actions"><button data-ui="button" data-kind="ghost" value="cancel" type="submit">Cancel</button><button data-ui="button" data-kind="primary" id="cf-ok" value="ok" type="submit">OK</button></div>
     </form>
   </dialog>
   <dialog id="room-dialog" class="dialog">
@@ -144,9 +146,9 @@
       <p class="lead">A room is a shared space for you and the vibemates you summon. Give it a name.</p>
       <label>Room name<input id="room-name" type="text" maxlength="60" required placeholder="e.g. Architecture review"></label>
       <label>Working directory <span class="hint">(optional)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The folder the vibemates work in (their cwd). Leave it empty and the hub keeps a folder per room. Instruction files in it (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules) are read by the vibemates by their own conventions; the hub tells you if it finds any.</span>
-        <span class="dir-row"><input id="room-dir" type="text" placeholder="C:\projects\my-app"><button type="button" class="btn ghost browse-btn" id="room-dir-browse" title="Choose a folder"><span data-icon="folder"></span>Browse</button></span></label>
+        <span class="dir-row"><input id="room-dir" type="text" placeholder="C:\projects\my-app"><button type="button" data-ui="button" data-kind="ghost" class="browse-btn" id="room-dir-browse" title="Choose a folder"><span data-icon="folder"></span>Browse</button></span></label>
       <p class="error" id="room-error" hidden></p>
-      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">Open the room</button></div>
+      <div class="actions"><button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button><button type="submit" data-ui="button" data-kind="primary">Open the room</button></div>
     </form>
   </dialog>
   <dialog id="template-dialog" class="dialog wide">
@@ -154,14 +156,14 @@
       <h3><span class="h-ico" data-icon="rooms"></span>Start from a template</h3>
       <p class="lead">A template is a room's rules and its vibemates, ready to summon. Pick one, choose who runs each vibemate, name the room.</p>
       <div class="tpl-layout">
-        <div class="tpl-list" id="tpl-list"></div>
-        <div class="tpl-detail" id="tpl-detail"></div>
+        <div class="tpl-pane"><div class="tpl-list" id="tpl-list"></div></div>
+        <div class="tpl-pane"><div class="tpl-detail" id="tpl-detail"></div></div>
       </div>
       <label>Room name<input id="tpl-room-name" type="text" maxlength="60" required placeholder="e.g. Payments refactor"></label>
       <label>Working directory <span class="hint">(optional)</span>
-        <span class="dir-row"><input id="tpl-room-dir" type="text" placeholder="C:\projects\my-app"><button type="button" class="btn ghost browse-btn" id="tpl-dir-browse" title="Choose a folder"><span data-icon="folder"></span>Browse</button></span></label>
+        <span class="dir-row"><input id="tpl-room-dir" type="text" placeholder="C:\projects\my-app"><button type="button" data-ui="button" data-kind="ghost" class="browse-btn" id="tpl-dir-browse" title="Choose a folder"><span data-icon="folder"></span>Browse</button></span></label>
       <p class="error" id="tpl-error" hidden></p>
-      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary" id="tpl-create">Create the room</button></div>
+      <div class="actions"><button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button><button type="submit" data-ui="button" data-kind="primary" id="tpl-create">Create the room</button></div>
     </form>
   </dialog>
   <dialog id="save-template-dialog" class="dialog wide">
@@ -172,7 +174,7 @@
       <label>Description <span class="hint">(optional)</span><textarea id="stp-desc" rows="2" maxlength="400" placeholder="what this setup is good for"></textarea></label>
       <div class="stp-preview" id="stp-preview"></div>
       <p class="error" id="stp-error" hidden></p>
-      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary" id="stp-create">Create the template</button></div>
+      <div class="actions"><button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button><button type="submit" data-ui="button" data-kind="primary" id="stp-create">Create the template</button></div>
     </form>
   </dialog>
   <dialog id="invite-dialog" class="dialog wide">
@@ -204,17 +206,27 @@
           <p class="hint" id="inv-where"></p>
           <p class="hint" id="inv-note"></p>
           <p class="hint accent" id="inv-status"></p>
-          <div class="row-btns start"><button type="button" id="inv-refresh" class="btn ghost sm" title="Ask the vibemate again what it offers"><span data-icon="refresh"></span>Ask the vibemate again what it offers</button></div>
+          <div class="row-btns start"><button type="button" id="inv-refresh" data-ui="button" data-kind="ghost" data-size="sm" title="Ask the vibemate again what it offers"><span data-icon="refresh"></span>Ask the vibemate again what it offers</button></div>
         </div>
       </details>
       <p class="error" id="inv-error" hidden></p>
       <div class="actions">
-        <button type="button" class="btn ghost" data-close>Cancel</button>
-        <button type="submit" id="inv-submit" class="btn primary">Summon</button>
+        <button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button>
+        <button type="submit" id="inv-submit" data-ui="button" data-kind="primary">Summon</button>
       </div>
     </form>
   </dialog>
   <div id="lightbox" class="lightbox" hidden><img alt=""></div>
+  <div id="diagram-view" class="diagram-view" hidden>
+    <div class="dv-stage" id="dv-stage"></div>
+    <div class="dv-bar" id="dv-bar">
+      <button type="button" class="dv-btn" id="dv-out" title="Zoom out (−)"><span data-icon="zoom-out"></span></button>
+      <button type="button" class="dv-level" id="dv-level" title="Fit the diagram to the window">100%</button>
+      <button type="button" class="dv-btn" id="dv-in" title="Zoom in (+)"><span data-icon="zoom-in"></span></button>
+      <span class="dv-hint">drag to move · double-click to fit</span>
+      <button type="button" class="dv-btn" id="dv-close" title="Close (Esc)"><span data-icon="minimize"></span></button>
+    </div>
+  </div>
   <dialog id="edit-dialog" class="dialog">
     <form id="edit-form" method="dialog">
       <h3><span class="h-ico" data-icon="pencil"></span>Edit your message</h3>
@@ -225,9 +237,9 @@
       </div>
       <p class="error" id="ed-error" hidden></p>
       <div class="actions">
-        <button type="button" class="btn ghost" data-close>Cancel</button>
-        <button type="button" id="ed-rewrite" class="btn danger">Rewrite from here</button>
-        <button type="button" id="ed-notify" class="btn primary" autofocus>Notify vibemates</button>
+        <button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button>
+        <button type="button" id="ed-rewrite" data-ui="button" data-kind="danger">Rewrite from here</button>
+        <button type="button" id="ed-notify" data-ui="button" data-kind="primary" autofocus>Notify vibemates</button>
       </div>
     </form>
   </dialog>
@@ -236,14 +248,14 @@
       <h3><span class="h-ico" data-icon="refresh"></span>Welcome back</h3>
       <p class="lead" id="rc-intro"></p>
       <div class="choice-list">
-        <label class="choice"><input type="radio" name="rc-mode" value="replay" checked> <span><strong>Replay the last</strong> <input id="rc-replay" type="number" min="0" max="500" value="10" class="rc-num"> <strong>chat messages</strong> — a fresh start with the recent history.<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>A new vibemate session that reads the recent room history (room events in between come along), like a person coming back from a break. Cheap and works for every vibemate.</span></span></label>
-        <label class="choice"><input type="radio" name="rc-mode" value="load"> <span><strong>Restore the full session</strong> — the vibemate comes back with everything it knew.<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>ACP <code>session/load</code>: the vibemate reloads its own stored conversation, with tool results and reasoning. Its next turn pays for the whole history again. Falls back to replay if the vibemate cannot load it.</span></span></label>
+        <label class="choice"><input type="radio" name="rc-mode" value="replay" checked> <span><strong>Replay the last</strong> <input id="rc-replay" type="number" min="0" max="500" value="10" class="rc-num"> <strong>chat messages</strong> — a fresh start with the recent history.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="replay" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>A new vibemate session that reads the recent room history (room events in between come along), like a person coming back from a break. Cheap and works for every vibemate.</span></span></label>
+        <label class="choice"><input type="radio" name="rc-mode" value="load"> <span><strong>Restore the full session</strong> — the vibemate comes back with everything it knew.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="load" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>ACP <code>session/load</code>: the vibemate reloads its own stored conversation, with tool results and reasoning. Its next turn pays for the whole history again. Falls back to replay if the vibemate cannot load it.</span></span></label>
       </div>
       <table class="rc-table" id="rc-table"></table>
       <p class="error" id="rc-error" hidden></p>
       <div class="actions">
-        <button type="button" class="btn ghost" data-close>Later</button>
-        <button type="submit" id="rc-submit" class="btn primary">Reconnect</button>
+        <button type="button" data-ui="button" data-kind="ghost" data-close>Later</button>
+        <button type="submit" id="rc-submit" data-ui="button" data-kind="primary">Reconnect</button>
       </div>
     </form>
   </dialog>
@@ -253,7 +265,7 @@
       <p class="lead">This wipes <strong>everything</strong> in this viberoom: your vibe, all rooms and their history, every vibemate session, your skills (the built-in ones come back). The next start asks you to set a vibe again.</p>
       <label>Type <code>erase</code> to confirm<input id="erase-word" type="text" autocomplete="off" placeholder="erase"></label>
       <p class="error" id="erase-error" hidden></p>
-      <div class="actions"><button type="button" class="btn ghost" data-close>Keep my vibe</button><button type="submit" id="erase-submit" class="btn danger solid" disabled>Erase everything</button></div>
+      <div class="actions"><button type="button" data-ui="button" data-kind="ghost" data-close>Keep my vibe</button><button type="submit" id="erase-submit" data-ui="button" data-kind="danger-solid" disabled>Erase everything</button></div>
     </form>
   </dialog>
   <dialog id="folder-dialog" class="dialog wide folder-dialog">
@@ -261,8 +273,8 @@
       <h3><span class="h-ico" data-icon="folder"></span>Choose a folder</h3>
       <div class="fp-bar">
         <input id="fp-path" type="text" spellcheck="false" placeholder="Type a path and press Enter, or pick one below">
-        <button type="button" class="btn ghost" id="fp-home" title="Your home folder"><span data-icon="user"></span>Home</button>
-        <button type="button" class="btn ghost" id="fp-new" title="New folder inside the selected one"><span data-icon="plus"></span>New folder</button>
+        <button type="button" data-ui="button" data-kind="ghost" id="fp-home" title="Your home folder"><span data-icon="user"></span>Home</button>
+        <button type="button" data-ui="button" data-kind="ghost" id="fp-new" title="New folder inside the selected one"><span data-icon="plus"></span>New folder</button>
       </div>
       <div class="fp-recent" id="fp-recent"></div>
     </div>
@@ -272,23 +284,33 @@
     <p class="error" id="fp-error" hidden></p>
     <div class="actions">
       <span class="fp-selected" id="fp-selected"></span>
-      <button type="button" class="btn ghost" data-close>Cancel</button>
-      <button type="button" class="btn primary" id="fp-choose">Choose this folder</button>
+      <button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button>
+      <button type="button" data-ui="button" data-kind="primary" id="fp-choose">Choose this folder</button>
     </div>
   </dialog>
-  <dialog id="file-dialog" class="dialog wide file-dialog">
+  <dialog id="file-dialog" class="dialog wide file-dialog light-dismiss">
     <div class="file-head">
       <h3><span class="h-ico" data-icon="link"></span><span id="fv-title">File</span></h3>
       <p class="lead" id="fv-path"></p>
+      <div class="fv-tools" id="fv-tools" hidden>
+        <label class="search fv-find"><span class="search-icon" data-icon="search"></span><input id="fv-search" type="search" placeholder="Find in this file…" autocomplete="off"></label>
+        <span class="fv-hits" id="fv-hits"></span>
+        <label class="fv-goto">line <input id="fv-line" type="number" min="1" step="1" placeholder="1"></label>
+        <label class="fv-wrap"><input id="fv-wrap" type="checkbox"> wrap</label>
+        <span class="fv-count" id="fv-count"></span>
+      </div>
     </div>
     <div id="fv-body" class="file-view"></div>
     <div class="actions">
-      <button type="button" id="fv-open" class="btn ghost">Open in editor</button>
-      <button type="button" class="btn primary" data-close>Close</button>
+      <button type="button" id="fv-open" data-ui="button" data-kind="ghost">Open in editor</button>
+      <button type="button" data-ui="button" data-kind="primary" data-close>Close</button>
     </div>
   </dialog>
   <script src="/vendor/marked.umd.js"></script>
+  <script src="/tokens.js"></script>
   <script src="/icons.js"></script>
+  <script src="/ui.js"></script>
+  <script src="/components.js"></script>
   <script src="/avatars.js"></script>
   <script src="/app.js"></script>
 </body>

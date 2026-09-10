@@ -30,6 +30,12 @@
     fvPath: $("#fv-path"),
     fvBody: $("#fv-body"),
     fvOpen: $("#fv-open"),
+    fvTools: $("#fv-tools"),
+    fvSearch: $("#fv-search"),
+    fvHits: $("#fv-hits"),
+    fvLine: $("#fv-line"),
+    fvWrap: $("#fv-wrap"),
+    fvCount: $("#fv-count"),
     rail: $("#rail"),
     railRooms: $("#rail-rooms"),
     railRoomsWrap: $("#rail-rooms-wrap"),
@@ -68,6 +74,7 @@
     sideRoomEmoji: $("#side-room-emoji"),
     composer: $("#composer"),
     shotsTray: $("#shots-tray"),
+    quotesTray: $("#quotes-tray"),
     lightbox: $("#lightbox"),
     input: $("#input"),
     pageView: $("#page-view"),
@@ -128,6 +135,32 @@
     eraseSubmit: $("#erase-submit"),
   };
 
+  const slowTasks = [];
+  function busyLabel() {
+    try {
+      const room = currentRoom();
+      const parts = [];
+      const streaming = room ? room.messages.filter((m) => m.streaming).length : 0;
+      if (streaming) parts.push(`${streaming} reply streaming`);
+      if (document.activeElement === els.input) parts.push("composer focused");
+      if (room) parts.push(`${room.messages.length} messages`);
+      return parts.join(" \u00b7 ");
+    } catch {
+      return "";
+    }
+  }
+  function noteSlow(name, ms) {
+    if (!(ms >= 8)) return;
+    slowTasks.push({ at: Date.now(), ms: Math.round(ms), name, busy: busyLabel() });
+    if (slowTasks.length > 60) slowTasks.splice(0, slowTasks.length - 40);
+  }
+  try {
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) noteSlow("browser task", e.duration);
+    }).observe({ entryTypes: ["longtask"] });
+  } catch {
+  }
+
   const FONTS = {
     text: {
       nunito: { label: "Nunito (default)", stack: '"Nunito", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
@@ -144,12 +177,16 @@
     },
   };
   const STATUS_LABEL = { unstaffed: "needs a coding agent", starting: "starting…", idle: "ready", queued: "waiting…", thinking: "thinking…", writing: "writing…", error: "error", offline: "offline", left: "left" };
-  const FALLBACK_COLOR = "#9ca3af";
+  const STATUS_TONE = { idle: "ready", queued: "waiting", starting: "waiting", thinking: "thinking", writing: "writing", error: "error", offline: "asleep", left: "asleep", unstaffed: "attention" };
+  const TOOL_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
+  const TOKENS = globalThis.VIBEROOM_TOKENS;
+  const FALLBACK_COLOR = TOKENS.current.elements.participant.fallback;
   const WORKING_SVG = '<svg class="working" viewBox="0 0 44 35" aria-hidden="true" title="working…">'
     + '<g class="body">'
     + '<circle cx="20" cy="6.5" r="5.6" fill="currentColor"/>'
     + '<path d="M6 35L13.7 16.5a4 4 0 0 1 8 0L14 35z" fill="currentColor"/>'
     + '</g>'
+    + '<g class="forearm far"><path d="M22 25.6h10.5" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/></g>'
     + '<path d="M19 19.5L23 27" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/>'
     + '<g class="forearm"><path d="M23 27h10.5" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/></g>'
     + '<rect x="26" y="30.2" width="15.5" height="3" rx="1" fill="currentColor"/>'
@@ -187,7 +224,7 @@
     const timer = setTimeout(() => {
       if (Date.now() - stallNoticeAt > 30000) {
         stallNoticeAt = Date.now();
-        toast("Still waiting for the hub… If several viberoom tabs are open, close the others: the browser allows only 6 connections to the hub and each tab keeps one.", "warn");
+        toast("Still waiting for the hub… It may be busy or restarting; this window reconnects on its own.", "warn");
       }
     }, 8000);
     return promise.finally(() => clearTimeout(timer));
@@ -285,7 +322,7 @@
     return `<div class="csv-block"><div class="mm-out">${csvTable(rows)}</div><pre class="mm-code" hidden>${code}</pre><div class="mm-bar"><button type="button" class="mm-src">source</button></div></div>`;
   }
   function mermaidBlock(code) {
-    return `<div class="mermaid-block" data-src="${code}"><div class="mm-out"><pre>${code}</pre></div><pre class="mm-code" hidden>${code}</pre><div class="mm-bar"><button type="button" class="mm-src">source</button></div></div>`;
+    return `<div class="mermaid-block" data-src="${code}"><div class="mm-out"><pre>${code}</pre></div><pre class="mm-code" hidden>${code}</pre><div class="mm-bar"><button type="button" class="mm-src">source</button><button type="button" class="mm-expand" title="See it big (zoom and drag)">${ic("maximize")}</button></div></div>`;
   }
   function mentions(room, html) {
     return html.replace(/(?<![\w.\/:])@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu, (m, name) => {
@@ -297,6 +334,21 @@
   const md = window.marked ? new window.marked.Marked({ gfm: true, breaks: true }) : null;
   if (md) {
     md.use({
+      extensions: [
+        {
+          name: "loneTilde",
+          level: "inline",
+          start(src) {
+            return src.indexOf("~");
+          },
+          tokenizer(src) {
+            return /^~(?!~)/.test(src) ? { type: "loneTilde", raw: "~", text: "~" } : undefined;
+          },
+          renderer() {
+            return "~";
+          },
+        },
+      ],
       renderer: {
         html(token) {
           return esc(token.text != null ? token.text : token.raw || "");
@@ -305,7 +357,9 @@
           const lang = token.lang || "";
           if (/^\s*(csv|tsv)\b/i.test(lang)) return csvBlock(String(token.text || ""));
           const code = esc(String(token.text || "")).trim();
-          return /^\s*mermaid\b/i.test(lang) ? mermaidBlock(code) : `<pre>${code}</pre>`;
+          if (/^\s*mermaid\b/i.test(lang)) return mermaidBlock(code);
+          const id = prismLanguageOf(String(lang).trim().split(/\s+/)[0]);
+          return id ? `<pre><code data-lang="${esc(id)}">${code}</code></pre>` : `<pre>${code}</pre>`;
         },
         link(token) {
           const inner = this.parser.parseInline(token.tokens || []);
@@ -332,9 +386,27 @@
     }
     return out;
   }
-  function renderText(room, text, images) {
-    const html = md ? decorate(room, md.parse(String(text == null ? "" : text))) : renderTextLight(room, text);
-    return images && images.length ? imageRefs(html, images) : html;
+  function renderText(room, text, images, quotes) {
+    let html = md ? decorate(room, md.parse(String(text == null ? "" : text))) : renderTextLight(room, text);
+    if (images && images.length) html = imageRefs(html, images);
+    if (quotes && quotes.length) html = quoteRefs(html, quotes);
+    return html;
+  }
+  function quoteRefs(html, quotes) {
+    const byN = new Map(quotes.map((q, i) => [q.n || i + 1, q]));
+    const placed = new Set();
+    const out = html.replace(/\[quote (\d+)\]/gi, (whole, n) => {
+      const q = byN.get(Number(n));
+      if (!q || placed.has(q)) return whole;
+      placed.add(q);
+      return quoteCard(q);
+    });
+    const orphans = quotes.filter((q) => !placed.has(q));
+    return orphans.length ? out + orphans.map(quoteCard).join("") : out;
+  }
+  function quoteCard(q) {
+    const head = `${ic("quote")}<b>${esc(q.fromName || "")}</b><span class="q-when">#${esc(String(q.seq))}${q.ts ? ` · ${esc(time(q.ts))}` : ""}</span>`;
+    return `<span class="quote" data-seq="${esc(String(q.seq))}" role="button" tabindex="0" title="Go to the message this comes from"><span class="q-head">${head}</span><span class="q-text">${esc(q.text || "")}</span></span>`;
   }
   function imageRefs(html, images) {
     const numbers = new Set(images.map((image, i) => image.n || i + 1));
@@ -358,8 +430,298 @@
     return html;
   }
 
+  let prismLoading = null;
+  function loadPrism() {
+    if (window.Prism && window.Prism.highlight) return Promise.resolve(window.Prism);
+    if (!prismLoading) {
+      window.Prism = window.Prism || {};
+      window.Prism.manual = true;
+      prismLoading = new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "/vendor/prism.js";
+        s.onload = () => resolve(window.Prism);
+        s.onerror = () => reject(new Error("the code colouring script could not be loaded"));
+        document.head.appendChild(s);
+      });
+    }
+    return prismLoading;
+  }
+  const PRISM_NEEDS = { tsx: ["jsx", "typescript"], jsx: [], cpp: ["c"], php: ["markup-templating"], twig: ["markup-templating"], scss: [], docker: [] };
+  const prismLanguages = new Map();
+  function loadLanguage(id) {
+    if (!id) return Promise.resolve(null);
+    if (window.Prism && window.Prism.languages && window.Prism.languages[id]) return Promise.resolve(id);
+    if (!prismLanguages.has(id)) {
+      const load = loadPrism()
+        .then(() => Promise.all((PRISM_NEEDS[id] || []).map((need) => loadLanguage(need))))
+        .then(
+          () =>
+            new Promise((resolve) => {
+              if (window.Prism.languages[id]) return resolve(id);
+              const s = document.createElement("script");
+              s.src = `/vendor/prism-lang/${encodeURIComponent(id)}.js`;
+              s.onload = () => resolve(window.Prism.languages[id] ? id : null);
+              s.onerror = () => resolve(null);
+              document.head.appendChild(s);
+            }),
+        )
+        .catch(() => null);
+      prismLanguages.set(id, load);
+    }
+    return prismLanguages.get(id);
+  }
+  const LANGUAGE_ALIASES = {
+    ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx", mjs: "javascript", cjs: "javascript", node: "javascript",
+    py: "python", rb: "ruby", rs: "rust", golang: "go", sh: "bash", shell: "bash", zsh: "bash", console: "bash",
+    ps: "powershell", ps1: "powershell", "c++": "cpp", cxx: "cpp", "c#": "csharp", cs: "csharp", yml: "yaml",
+    html: "markup", xml: "markup", svg: "markup", vue: "markup", md: "markdown", dockerfile: "docker", make: "makefile",
+  };
+  function prismLanguageOf(word) {
+    const id = String(word || "").toLowerCase();
+    if (!id || id === "text" || id === "txt" || id === "plain") return null;
+    return LANGUAGE_ALIASES[id] || (/^[a-z0-9-]{1,32}$/.test(id) ? id : null);
+  }
+  const highlighted = new Map();
+  const HIGHLIGHT_CACHE = 200;
+  async function highlight(code, language) {
+    const key = `${language}::${code}`;
+    if (highlighted.has(key)) return highlighted.get(key);
+    const id = await loadLanguage(language);
+    let html;
+    try {
+      html = id ? window.Prism.highlight(code, window.Prism.languages[id], id) : esc(code);
+    } catch {
+      html = esc(code);
+    }
+    if (highlighted.size >= HIGHLIGHT_CACHE) highlighted.delete(highlighted.keys().next().value);
+    highlighted.set(key, html);
+    return html;
+  }
+  async function highlightBlocks(root) {
+    const blocks = [...root.querySelectorAll("pre code[data-lang]:not([data-coloured])")];
+    for (const block of blocks) {
+      block.dataset.coloured = "1";
+      const html = await highlight(block.textContent, block.dataset.lang);
+      block.innerHTML = html;
+    }
+  }
+  function codeWithGutter(code, language, firstLine) {
+    const lines = code.split("\n");
+    const start = firstLine || 1;
+    const gutter = lines.map((_, i) => `<span>${start + i}</span>`).join("");
+    return `<div class="code-view"><div class="gutter" aria-hidden="true">${gutter}</div><pre class="code-body"><code data-lang="${esc(language || "")}">${esc(code)}</code></pre></div>`;
+  }
+
 
   const VIEWABLE_RE = /\.(md|markdown|csv|tsv)$/i;
+  const NOT_VIEWABLE_RE = /\.(exe|dll|so|dylib|bin|zip|gz|tgz|rar|7z|pdf|mp[34]|mov|avi|wav|ogg|ttf|otf|woff2?|class|jar|pyc|node|msi|iso|db|sqlite3?)$/i;
+  const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|avif|ico|svg)$/i;
+  const LINE_RE = /:(\d+)(?:-(\d+))?$/;
+  const previewCache = new Map();
+
+  function readableInRoom(target) {
+    if (!target || /^(https?:|mailto:)/i.test(target)) return false;
+    const spec = splitLine(target);
+    const file = spec ? spec.path : target;
+    if (NOT_VIEWABLE_RE.test(file) || IMAGE_RE.test(file)) return false;
+    return /[\\/]/.test(file);
+  }
+  function imageUrl(path) {
+    const room = currentRoom();
+    const roomPart = room && room.id ? `&room=${encodeURIComponent(room.id)}` : "";
+    return `/api/image?path=${encodeURIComponent(path)}${roomPart}`;
+  }
+  function splitLine(target) {
+    const m = LINE_RE.exec(target || "");
+    if (!m) return null;
+    const from = Number(m[1]);
+    const to = m[2] ? Number(m[2]) : 0;
+    return { path: target.slice(0, m.index), from, to: to && to >= from ? to : 0 };
+  }
+
+  const PREVIEW_CONTEXT = 3;
+  const PREVIEW_PLAIN_LINES = 40;
+  const fileName = (path) => String(path).split(/[\\/]/).pop();
+
+  function previewCard(key, spec, data, error) {
+    const range = data && data.from ? (data.to > data.from ? `lines ${data.from}–${data.to}` : `line ${data.from}`) : "";
+    const el = UI.el("file-card", { name: fileName(spec.path), lines: range, body: error ? undefined : codeWithGutter(data.text, data.language, data.from || 1), error: error || undefined, data: { key } });
+    const body = el.querySelector(".body");
+    if (!error && spec.from) {
+      const marked = body.querySelectorAll(".gutter span")[spec.from - (data.from || 1)];
+      if (marked) marked.classList.add("line-mark");
+    }
+    el.querySelector('[data-act="open-file"]').addEventListener("click", () => viewFile(spec.path, spec.from || 0).catch(showError));
+    if (!error) highlightBlocks(body);
+    return el;
+  }
+
+  async function fetchPreview(key, spec, from, to) {
+    if (previewCache.has(key)) return previewCache.get(key);
+    const promise = get(`/api/file?path=${encodeURIComponent(spec.path)}&from=${from}&to=${to}`)
+      .then((r) => ({ ok: true, data: r }))
+      .catch((e) => ({ ok: false, error: e && e.message ? e.message : String(e) }));
+    previewCache.set(key, promise);
+    return promise;
+  }
+
+  const INLINE_TAGS = new Set(["CODE", "EM", "STRONG", "B", "I", "U", "S", "SPAN", "SMALL", "MARK", "SUB", "SUP", "A", "DEL", "INS", "ABBR", "Q"]);
+  function placeFragmentCard(textEl, link, card) {
+    let anchor = link;
+    while (anchor.parentElement && anchor.parentElement !== textEl && INLINE_TAGS.has(anchor.parentElement.tagName)) anchor = anchor.parentElement;
+    const table = anchor.closest("table");
+    if (table && textEl.contains(table) && table !== textEl) anchor = table;
+    if (anchor.parentElement) anchor.after(card);
+    else textEl.appendChild(card);
+  }
+
+  function imageCard(key, path) {
+    const el = UI.el("file-card", { name: fileName(path), kind: "image", openTitle: "Open it big", body: String(UI.h("img", { alt: fileName(path), loading: "lazy", src: imageUrl(path) })), data: { key } });
+    const body = el.querySelector(".body");
+    const img = body.querySelector("img");
+    img.addEventListener("error", async () => {
+      let why = "";
+      try {
+        const res = await fetch(img.src);
+        const text = await res.text();
+        try {
+          why = JSON.parse(text).error || "";
+        } catch {
+          why = res.status === 404 ? "this hub does not serve pictures yet; restart it with the new build" : `the hub answered ${res.status}`;
+        }
+      } catch {
+        why = "the hub did not answer";
+      }
+      body.innerHTML = `<div class="note">${esc(fileName(path))} could not be shown here${why ? `: ${esc(why)}` : ""}.</div>`;
+    });
+    img.addEventListener("load", () => {
+      el.querySelector(".lines").textContent = `${img.naturalWidth}×${img.naturalHeight}`;
+    });
+    const big = () => openLightbox(img.src, fileName(path));
+    el.querySelector('[data-act="open-file"]').addEventListener("click", big);
+    img.addEventListener("click", big);
+    return el;
+  }
+
+  function renderPreviews(textEl, m) {
+    if (!textEl || m.streaming) return;
+    for (const link of textEl.querySelectorAll(".open-link[data-open]:not([data-previewed])")) {
+      const target = link.dataset.open;
+      if (/^(https?:|mailto:)/i.test(target) || NOT_VIEWABLE_RE.test(target)) continue;
+      const spec = splitLine(target);
+      link.dataset.previewed = "1";
+      if (IMAGE_RE.test(target) && /[\\/]/.test(target)) {
+        const key = `img|${target}`;
+        if (textEl.querySelector(`[data-ui="file-card"][data-key="${cssEscape(key)}"]`)) continue;
+        placeFragmentCard(textEl, link, imageCard(key, target));
+      } else if (spec && /[\\/]/.test(spec.path)) {
+        const from = Math.max(1, spec.from - PREVIEW_CONTEXT);
+        const to = (spec.to || spec.from) + PREVIEW_CONTEXT;
+        const key = `${spec.path}|${from}|${to}`;
+        if (textEl.querySelector(`[data-ui="file-card"][data-key="${cssEscape(key)}"]`)) continue;
+        const place = (result) => {
+          if (!textEl.isConnected || textEl.querySelector(`[data-ui="file-card"][data-key="${cssEscape(key)}"]`)) return;
+          placeFragmentCard(textEl, link, previewCard(key, spec, result.data, result.ok ? null : result.error));
+        };
+        fetchPreview(key, spec, from, to).then(place);
+      } else if (readableInRoom(target)) {
+        const room = currentRoom();
+        resolveInRoom(room ? room.id : "", target).then((found) => {
+          if (!found || found.kind !== "file" || !link.isConnected || link.nextElementSibling?.dataset.act === "preview") return;
+          const chip = UI.el("icon-button", { icon: "eye", title: `Preview: show the first ${PREVIEW_PLAIN_LINES} lines here`, kind: "inline", size: "xs", act: "preview" });
+          const key = `${target}|1|${PREVIEW_PLAIN_LINES}`;
+          const shown = () => textEl.querySelector(`[data-ui="file-card"][data-key="${cssEscape(key)}"]`);
+          const label = () => {
+            const open = !!shown();
+            chip.innerHTML = open ? ic("close") : ic("eye");
+            chip.title = open ? "Close the preview" : `Preview: show the first ${PREVIEW_PLAIN_LINES} lines here`;
+            chip.setAttribute("aria-label", open ? "Close the preview" : "Preview");
+            UI.setState(chip, open ? "on" : null);
+          };
+          chip.addEventListener("click", async () => {
+            const card = shown();
+            if (card) {
+              card.remove();
+              label();
+              return;
+            }
+            chip.disabled = true;
+            const result = await fetchPreview(key, { path: target, from: 0, to: 0 }, 1, PREVIEW_PLAIN_LINES);
+            chip.disabled = false;
+            if (!shown()) placeFragmentCard(textEl, link, previewCard(key, { path: target, from: 0, to: 0 }, result.data, result.ok ? null : result.error));
+            label();
+          });
+          link.after(chip);
+        });
+      }
+    }
+  }
+  const cssEscape = (value) => (window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/["\\]/g, "\\$&"));
+
+  const RELATIVE_RE = /(?<![\p{L}\p{N}./\\:~_-])((?:\.{1,2}[\\/])?[\p{L}\p{N}_.-]+(?:[\\/][\p{L}\p{N}_.-]+)+\.[\p{L}\p{N}]{1,10})(:\d+(?:-\d+)?)?(?![\p{L}\p{N}/\\_-])/gu;
+  const resolved = new Map();
+  function resolveInRoom(roomId, path) {
+    const key = `${roomId}|${path}`;
+    if (!resolved.has(key)) {
+      resolved.set(
+        key,
+        get(`/api/resolve?room=${encodeURIComponent(roomId)}&path=${encodeURIComponent(path)}`)
+          .then((r) => (r.path ? { path: r.path, kind: r.kind || "file" } : null))
+          .catch(() => null),
+      );
+    }
+    return resolved.get(key);
+  }
+  function textNodesOf(root) {
+    const out = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) =>
+        node.parentElement && node.parentElement.closest('a, pre, .quote, [data-ui="file-card"], [data-ui="tool-call"], .mermaid-block, .csv-block')
+          ? NodeFilter.FILTER_REJECT
+          : NodeFilter.FILTER_ACCEPT,
+    });
+    while (walker.nextNode()) out.push(walker.currentNode);
+    return out;
+  }
+  async function linkRelativePaths(textEl, m) {
+    const room = currentRoom();
+    if (!textEl || m.streaming || !room || !room.dir) return;
+    const nodes = textNodesOf(textEl);
+    const found = new Map();
+    for (const node of nodes) {
+      for (const match of String(node.nodeValue).matchAll(RELATIVE_RE)) {
+        if (NOT_VIEWABLE_RE.test(match[1])) continue;
+        const hits = found.get(match[1]) || [];
+        hits.push({ node, index: match.index, length: match[0].length, line: match[2] || "" });
+        found.set(match[1], hits);
+      }
+    }
+    if (!found.size) return;
+    const paths = await Promise.all([...found.keys()].map((token) => resolveInRoom(room.id, token)));
+    let linked = false;
+    [...found.keys()].forEach((token, i) => {
+      const full = paths[i] && paths[i].path;
+      if (!full) return;
+      const byNode = new Map();
+      for (const hit of found.get(token)) byNode.set(hit.node, [...(byNode.get(hit.node) || []), hit]);
+      for (const [node, hits] of byNode) {
+        if (!node.isConnected) continue;
+        for (const hit of hits.sort((a, b) => b.index - a.index)) {
+          const after = node.splitText(hit.index);
+          after.nodeValue = after.nodeValue.slice(hit.length);
+          const link = document.createElement("a");
+          link.className = "open-link";
+          link.href = "#";
+          link.dataset.open = `${full}${hit.line}`;
+          link.title = `${full} (relative to the room's folder)`;
+          link.textContent = `${token}${hit.line}`;
+          node.parentNode.insertBefore(link, after);
+          linked = true;
+        }
+      }
+    });
+    if (linked) renderPreviews(textEl, m);
+  }
   function csvTable(rows) {
     if (!rows.length) return '<p class="lead">Empty file.</p>';
     const cell = (tag, v) => `<${tag}>${esc(v)}</${tag}>`;
@@ -368,35 +730,98 @@
     const pad = (r) => r.concat(Array(Math.max(0, width - r.length)).fill(""));
     return `<div class="csv-wrap"><table class="csv"><thead><tr>${pad(head).map((v) => cell("th", v)).join("")}</tr></thead><tbody>${body.map((r) => `<tr>${pad(r).map((v) => cell("td", v)).join("")}</tr>`).join("")}</tbody></table></div><p class="csv-count">${body.length} row${body.length === 1 ? "" : "s"} · ${width} column${width === 1 ? "" : "s"}</p>`;
   }
-  async function viewFile(path) {
-    const r = await get(`/api/file?path=${encodeURIComponent(path)}`);
+  let fileView = null;
+  async function viewFile(path, line) {
+    const at = Number(line) || 0;
+    const window = at > 1 ? `&from=${Math.max(1, at - 40)}&to=${at + 200}` : "";
+    const r = await get(`/api/file?path=${encodeURIComponent(path)}${window}`);
+    fileView = { path: r.path, kind: r.kind, language: r.language || null, from: r.from || 1, lines: r.lines || 0, more: !!r.more };
     els.fvTitle.textContent = r.path.split(/[\\/]/).pop();
     els.fvPath.textContent = r.path;
     els.fvBody.className = `file-view ${r.kind}`;
-    els.fvBody.innerHTML = r.kind === "csv" ? csvTable(r.rows) : renderText(currentRoom(), r.text);
+    els.fvTools.hidden = r.kind !== "text";
+    els.fvBody.innerHTML =
+      r.kind === "csv" ? csvTable(r.rows) : r.kind === "markdown" ? renderText(currentRoom(), r.text) : codeWithGutter(r.text, r.language, r.from || 1);
     els.fvOpen.dataset.path = r.path;
     els.fvBody.scrollTop = 0;
+    els.fvSearch.value = "";
+    els.fvHits.textContent = "";
+    els.fvLine.value = at > 1 ? String(at) : "";
+    if (r.kind === "text") {
+      els.fvCount.textContent = `${r.lines}${r.more ? "+" : ""} lines${r.language ? ` · ${r.language}` : ""}${r.more ? " · shown in windows" : ""}`;
+      els.fvBody.classList.toggle("wrap", els.fvWrap.checked);
+    }
     openDialog(els.fileDialog);
     if (r.kind === "markdown") renderDiagrams(els.fvBody);
+    if (r.kind === "text") {
+      await highlightBlocks(els.fvBody);
+      if (at > 1) markLine(at);
+    }
   }
+  function markLine(line) {
+    const first = fileView ? fileView.from : 1;
+    const index = line - first;
+    const rows = els.fvBody.querySelectorAll(".gutter span");
+    const row = rows[index];
+    if (!row) return;
+    els.fvBody.querySelectorAll(".line-mark").forEach((el) => el.classList.remove("line-mark"));
+    row.classList.add("line-mark");
+    const body = els.fvBody.querySelector(".code-body");
+    if (body) {
+      const lineHeight = row.getBoundingClientRect().height || 18;
+      els.fvBody.scrollTop = Math.max(0, index * lineHeight - els.fvBody.clientHeight / 2);
+    }
+  }
+  function findInFile(query) {
+    const code = els.fvBody.querySelector(".code-body code");
+    if (!code) return;
+    if (code.dataset.plain === undefined) code.dataset.plain = "1";
+    els.fvBody.querySelectorAll(".find-hit").forEach((el) => el.replaceWith(document.createTextNode(el.textContent)));
+    els.fvBody.querySelectorAll(".code-body code").forEach((c) => c.normalize());
+    if (!query) {
+      els.fvHits.textContent = "";
+      return;
+    }
+    const needle = query.toLowerCase();
+    let hits = 0;
+    const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+    const texts = [];
+    while (walker.nextNode()) texts.push(walker.currentNode);
+    for (const node of texts) {
+      const value = node.nodeValue;
+      const lower = value.toLowerCase();
+      if (!lower.includes(needle)) continue;
+      const frag = document.createDocumentFragment();
+      let at = 0;
+      for (;;) {
+        const i = lower.indexOf(needle, at);
+        if (i < 0) break;
+        frag.appendChild(document.createTextNode(value.slice(at, i)));
+        const mark = document.createElement("mark");
+        mark.className = "find-hit";
+        mark.textContent = value.slice(i, i + query.length);
+        frag.appendChild(mark);
+        at = i + query.length;
+        hits++;
+      }
+      frag.appendChild(document.createTextNode(value.slice(at)));
+      node.replaceWith(frag);
+    }
+    els.fvHits.textContent = hits ? `${hits} hit${hits === 1 ? "" : "s"}` : "nothing found";
+    const first = els.fvBody.querySelector(".find-hit");
+    if (first) first.scrollIntoView({ block: "center" });
+  }
+  els.fvSearch.addEventListener("input", () => findInFile(els.fvSearch.value.trim()));
+  els.fvWrap.addEventListener("change", () => els.fvBody.classList.toggle("wrap", els.fvWrap.checked));
+  els.fvLine.addEventListener("change", async () => {
+    const line = Number(els.fvLine.value);
+    if (!fileView || !line) return;
+    if (line < fileView.from || !els.fvBody.querySelectorAll(".gutter span")[line - fileView.from]) await viewFile(fileView.path, line);
+    else markLine(line);
+  });
 
 
-  const POP_PALETTE = [
-    { fill: "#e4e6fb", stroke: "#5b5bf0" },
-    { fill: "#d9f7e8", stroke: "#1d8f6a" },
-    { fill: "#fff3cc", stroke: "#b8860b" },
-    { fill: "#ffe4d6", stroke: "#d2691e" },
-    { fill: "#ffe3ec", stroke: "#d6336c" },
-    { fill: "#dcefff", stroke: "#2a6fbf" },
-    { fill: "#f1e3fb", stroke: "#8a3fb8" },
-  ];
-  const DIAGRAM_PRESETS = {
-    pop: { label: "Pop", palette: POP_PALETTE, primaryColor: "#e4e6fb", primaryBorderColor: "#5b5bf0", primaryTextColor: "#1c1b33", lineColor: "#8f8fb0", secondaryColor: "#d9f7e8", secondaryBorderColor: "#1d8f6a", tertiaryColor: "#fff3cc", tertiaryBorderColor: "#b8860b", textColor: "#1c1b33", clusterBkg: "#f8f8fd", clusterBorder: "#d9dbf5", edgeLabelBackground: "#ffffff", noteBkgColor: "#fff3cc", noteBorderColor: "#b8860b" },
-    lavender: { label: "Lavender", primaryColor: "#ece9ff", primaryBorderColor: "#6d5dfc", primaryTextColor: "#24223d", lineColor: "#5a4be0", secondaryColor: "#e3f8f2", secondaryBorderColor: "#39c6a3", tertiaryColor: "#fff4d6", tertiaryBorderColor: "#f5a524", textColor: "#24223d", clusterBkg: "#f7f6fc", clusterBorder: "#d6d1f5", edgeLabelBackground: "#ffffff" },
-    mint: { label: "Mint", primaryColor: "#e3f8f2", primaryBorderColor: "#39c6a3", primaryTextColor: "#0f3d33", lineColor: "#2a9d84", secondaryColor: "#ece9ff", secondaryBorderColor: "#6d5dfc", tertiaryColor: "#fff4d6", tertiaryBorderColor: "#f5a524", textColor: "#1b3a33", clusterBkg: "#f3fbf8", clusterBorder: "#b4ecdc", edgeLabelBackground: "#ffffff" },
-    sunset: { label: "Sunset", primaryColor: "#ffe9d6", primaryBorderColor: "#f5a524", primaryTextColor: "#4a2b00", lineColor: "#d97706", secondaryColor: "#ffe9ec", secondaryBorderColor: "#ef5b6b", tertiaryColor: "#ece9ff", tertiaryBorderColor: "#6d5dfc", textColor: "#3b2a1a", clusterBkg: "#fff8f0", clusterBorder: "#fde1c2", edgeLabelBackground: "#ffffff" },
-    slate: { label: "Slate", primaryColor: "#e9edf3", primaryBorderColor: "#64748b", primaryTextColor: "#1e293b", lineColor: "#475569", secondaryColor: "#f1f5f9", secondaryBorderColor: "#94a3b8", tertiaryColor: "#e2e8f0", tertiaryBorderColor: "#64748b", textColor: "#1e293b", clusterBkg: "#f8fafc", clusterBorder: "#cbd5e1", edgeLabelBackground: "#ffffff" },
-  };
+  const DIAGRAM_PRESETS = TOKENS.diagrams.presets;
   function diagramSettings(d) {
     return d || (state.settings && state.settings.diagrams) || {};
   }
@@ -421,14 +846,14 @@
   }
   const MERMAID_CSS = [
     ".node rect, .node .label-container, .node .basic, .cluster rect, rect.actor { rx: 12px; ry: 12px; }",
-    ".node .label-container, .node .basic, .node rect, .node circle, .node ellipse, rect.actor { stroke-width: 1.8px; filter: drop-shadow(0 2px 0 rgba(28, 27, 51, 0.10)); }",
+    `.node .label-container, .node .basic, .node rect, .node circle, .node ellipse, rect.actor { stroke-width: 1.8px; filter: drop-shadow(0 2px 0 ${TOKENS.current.elements.diagram.nodeShadow}); }`,
     ".edgePath .path, .flowchart-link, .messageLine0, .messageLine1, .transition, .relation { stroke-width: 2px; }",
     ".edgeLabel, .edgeLabel p { font-weight: 700; }",
     ".cluster rect { stroke-dasharray: 4 3; stroke-width: 1.5px; }",
     ".cluster-label, .cluster-label p { font-weight: 800; }",
   ].join(" ");
   function paintDiagram(root, palette) {
-    const ink = "#1c1b33";
+    const ink = TOKENS.current.elements.diagram.nodeInk;
     const byKey = new Map();
     const pick = (key) => {
       if (!byKey.has(key)) byKey.set(key, palette[byKey.size % palette.length]);
@@ -493,11 +918,13 @@
       const out = block.querySelector(".mm-out");
       const src = block.dataset.src || "";
       try {
+        const t0 = performance.now();
         const { svg } = await mermaid.render(`mm-${++mermaidSeq}`, src);
         out.innerHTML = svg;
         if (palette) paintDiagram(out, palette);
         block.classList.add("ok");
         block.classList.remove("failed");
+        noteSlow("diagram drawn", performance.now() - t0);
       } catch (e) {
         block.classList.add("failed");
         out.innerHTML = `<pre>${esc(src)}</pre><div class="hint error">Mermaid: ${esc(String((e && e.message) || e).split("\n")[0])}</div>`;
@@ -566,7 +993,26 @@
   }
   function meAvatarData() {
     const s = state.settings || {};
-    return { name: s.humanName || "You", color: "#1f1d3a", avatar: s.humanAvatar, kind: "human" };
+    return { name: s.humanName || "You", color: TOKENS.current.elements.participant.humanInk, avatar: s.humanAvatar, kind: "human" };
+  }
+  function copyableHtml(el) {
+    const clone = (el.querySelector(".text > .words") || el.querySelector(".text")).cloneNode(true);
+    for (const node of clone.querySelectorAll('[data-ui="file-card"], [data-ui="icon-button"], .live-tail, .mermaid-block svg, .mm-bar')) node.remove();
+    for (const link of clone.querySelectorAll("a.open-link, .img-ref")) link.replaceWith(document.createTextNode(link.textContent));
+    clone.classList.remove("clamped");
+    return clone.innerHTML.trim();
+  }
+  async function copyMessage(el, m) {
+    const html = copyableHtml(el);
+    const text = String(m.text || "");
+    try {
+      if (navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([text], { type: "text/plain" }) })]);
+      } else await navigator.clipboard.writeText(text);
+      toast("Copied: the words, formatted; the tool calls stayed here.");
+    } catch (error) {
+      showError(error);
+    }
   }
   function toast(text, level) {
     const el = document.createElement("div");
@@ -603,6 +1049,17 @@
   }
   function vendorLogo(r) {
     return `<span class="vc-logo">${r.icon ? `<img src="${esc(r.icon)}" alt="" onerror="this.replaceWith(document.createTextNode('${esc(r.vendor[0])}'))">` : esc(r.vendor[0])}</span>`;
+  }
+  function slowTasksHtml() {
+    if (!slowTasks.length) return '<p class="hint">Nothing over 8 ms so far in this window.</p>';
+    const rows = [...slowTasks]
+      .reverse()
+      .slice(0, 25)
+      .map((t) => `<tr><td>${esc(new Date(t.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</td><td><b>${t.ms} ms</b></td><td>${esc(t.name)}</td><td class="hint">${esc(t.busy)}</td></tr>`);
+    return `<table class="slow-table">${rows.join("")}</table>`;
+  }
+  function slowTasksText() {
+    return [...slowTasks].reverse().map((t) => `${new Date(t.at).toLocaleTimeString()} - ${t.ms} ms - ${t.name}${t.busy ? ` - ${t.busy}` : ""}`).join("\n");
   }
   function sectionTitle(iconName, text) {
     return `<h4>${ic(iconName)}${text}</h4>`;
@@ -691,9 +1148,9 @@
   function roomMark(room, lg) {
     const hue = roomHue(room);
     const emoji = (room.settings && room.settings.emoji) || "";
-    if (emoji) return `<span class="room-mark emoji${lg ? " lg" : ""}" style="background:hsl(${hue} 70% 93%)">${esc(emoji)}</span>`;
+    if (emoji) return `<span class="room-mark emoji${lg ? " lg" : ""}" style="--room-hue:${hue}">${esc(emoji)}</span>`;
     const letter = (room.name.trim()[0] || "?").toUpperCase();
-    return `<span class="room-mark${lg ? " lg" : ""}" style="background:linear-gradient(135deg, hsl(${hue} 72% 66%), hsl(${(hue + 30) % 360} 68% 52%))">${esc(letter)}</span>`;
+    return `<span class="room-mark${lg ? " lg" : ""}" style="--room-hue:${hue};--room-hue-2:${(hue + 30) % 360}">${esc(letter)}</span>`;
   }
   function roomTitle(room) {
     const emoji = (room.settings && room.settings.emoji) || "";
@@ -709,11 +1166,120 @@
     }, 2200);
   }
 
+  function attachScrollHints(box) {
+    if (!box || box.dataset.hinted) return;
+    const frame = box.parentElement;
+    if (!frame) return;
+    box.dataset.hinted = "1";
+    if (getComputedStyle(frame).position === "static") frame.style.position = "relative";
+    const make = (dir) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `scroll-hint ${dir}`;
+      b.title = dir === "up" ? "There is more above" : "There is more below";
+      b.innerHTML = ic(dir === "up" ? "chevrons-up" : "chevrons-down");
+      b.hidden = true;
+      b.addEventListener("click", () => box.scrollBy({ top: (dir === "up" ? -1 : 1) * Math.max(120, box.clientHeight * 0.85), behavior: "smooth" }));
+      frame.appendChild(b);
+      return b;
+    };
+    const up = make("up");
+    const down = make("down");
+    const update = () => {
+      const hidden = box.scrollHeight - box.clientHeight;
+      up.hidden = !(hidden > 8 && box.scrollTop > 8);
+      down.hidden = !(hidden > 8 && box.scrollTop < hidden - 8);
+    };
+    box.addEventListener("scroll", update, { passive: true });
+    new ResizeObserver(update).observe(box);
+    new MutationObserver(update).observe(box, { childList: true, subtree: true });
+    update();
+  }
+
   function openDialog(dialog) {
     if (dialog.open) return;
     dialog.classList.remove("closing");
+    restoreDialogSize(dialog);
     dialog.showModal();
+    if (dialog.classList.contains("light-dismiss") && !dialog.lightDismissWired) {
+      dialog.lightDismissWired = true;
+      dialog.addEventListener("click", (e) => {
+        if (e.target !== dialog) return;
+        const r = dialog.getBoundingClientRect();
+        if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) closeDialog(dialog);
+      });
+    }
+    dialog.querySelectorAll(".scrolls").forEach(attachScrollHints);
+    watchDialogSize(dialog);
   }
+
+  const DIALOG_MIN_W = 320;
+  const DIALOG_MIN_H = 220;
+  const dialogSizeKey = (dialog) => `dialog.${dialog.id || "unnamed"}.size`;
+  const dialogFits = (w, h) => ({
+    w: Math.max(DIALOG_MIN_W, Math.min(w, Math.round(window.innerWidth * 0.94))),
+    h: Math.max(DIALOG_MIN_H, Math.min(h, Math.round(window.innerHeight * 0.92))),
+  });
+  function restoreDialogSize(dialog) {
+    const saved = recall(dialogSizeKey(dialog));
+    if (!saved) return;
+    const [w, h] = String(saved).split("x").map(Number);
+    if (!w || !h) return;
+    const size = dialogFits(w, h);
+    dialog.style.width = `${size.w}px`;
+    dialog.style.height = `${size.h}px`;
+    dialog.classList.add("sized");
+  }
+  function resetDialogSize(dialog) {
+    dialog.style.width = "";
+    dialog.style.height = "";
+    dialog.classList.remove("sized");
+    remember(dialogSizeKey(dialog), "");
+    try {
+      localStorage.removeItem(`viberoom.${dialogSizeKey(dialog)}`);
+    } catch {
+    }
+  }
+  let dialogSizes = null;
+  function watchDialogSize(dialog) {
+    if (!window.ResizeObserver) return;
+    if (!dialogSizes) {
+      dialogSizes = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const el = entry.target;
+          if (!el.open || !el.style.width) continue;
+          const box = entry.borderBoxSize && entry.borderBoxSize[0];
+          const w = Math.round(box ? box.inlineSize : entry.contentRect.width);
+          const h = Math.round(box ? box.blockSize : entry.contentRect.height);
+          if (w >= DIALOG_MIN_W && h >= DIALOG_MIN_H) remember(dialogSizeKey(el), `${w}x${h}`);
+        }
+      });
+    }
+    if (!dialog.dataset.sized) {
+      dialog.dataset.sized = "1";
+      dialog.addEventListener("pointerdown", (e) => {
+        const r = dialog.getBoundingClientRect();
+        if (e.clientX > r.right - 22 && e.clientY > r.bottom - 22 && !dialog.style.width) {
+          dialog.style.width = `${Math.round(r.width)}px`;
+          dialog.style.height = `${Math.round(r.height)}px`;
+          dialog.classList.add("sized");
+        }
+      });
+      dialog.addEventListener("dblclick", (e) => {
+        const r = dialog.getBoundingClientRect();
+        if (e.clientX > r.right - 22 && e.clientY > r.bottom - 22) resetDialogSize(dialog);
+      });
+      dialogSizes.observe(dialog);
+    }
+  }
+  window.addEventListener("resize", () => {
+    for (const dialog of document.querySelectorAll("dialog[open]")) {
+      if (!dialog.style.width) continue;
+      const size = dialogFits(parseInt(dialog.style.width, 10), parseInt(dialog.style.height, 10));
+      dialog.style.width = `${size.w}px`;
+      dialog.style.height = `${size.h}px`;
+    }
+  });
   function closeDialog(dialog) {
     if (!dialog.open) return;
     dialog.classList.add("closing");
@@ -821,8 +1387,8 @@
     pop.id = "update-pop";
     pop.className = "update-pop";
     pop.dataset.version = u.latest;
-    pop.innerHTML = `<div class="up-main"><div class="up-text"><b>viberoom ${esc(u.latest)}</b> is out. You have ${esc(u.current)}.</div><button type="button" class="btn sm primary up-go">Update now and restart</button></div>
-      <div class="up-side"><button type="button" class="icon-btn sm up-x" title="Not now">${ic("close")}</button><button type="button" class="icon-btn sm up-settings" title="Update settings">${ic("settings")}</button></div>`;
+    pop.innerHTML = `<div class="up-main"><div class="up-text"><b>viberoom ${esc(u.latest)}</b> is out. You have ${esc(u.current)}.</div>${UI.html("button", { label: "Update now and restart", kind: "primary", size: "sm", hook: "up-go" })}</div>
+      <div class="up-side">${UI.html("icon-button", { icon: "close", title: "Not now", size: "sm", hook: "up-x" })}${UI.html("icon-button", { icon: "settings", title: "Update settings", size: "sm", hook: "up-settings" })}</div>`;
     pop.querySelector(".up-x").addEventListener("click", () => {
       remember("updateDismissed", u.latest);
       pop.remove();
@@ -836,16 +1402,16 @@
     const text = pop.querySelector(".up-text");
     pop.dataset.busy = "1";
     go.disabled = true;
-    go.classList.add("loading");
+    UI.setState(go, "loading");
     text.innerHTML = `Installing <b>viberoom ${esc(version)}</b>… this takes a moment.`;
     try {
       await post("/api/update/install", {});
-      go.classList.remove("loading");
+      UI.setState(go, null);
       text.innerHTML = `<b>viberoom ${esc(version)}</b> is installed. Restarting…`;
       go.hidden = true;
     } catch (e) {
       delete pop.dataset.busy;
-      go.classList.remove("loading");
+      UI.setState(go, null);
       go.disabled = false;
       go.textContent = "Try again";
       text.innerHTML = `<span class="error">${esc(e.message || String(e))}</span>`;
@@ -958,7 +1524,7 @@
       const li = document.createElement("li");
       li.className = state.skillsRoom === room.id ? "selected" : "";
       const selected = state.skillsRoom === room.id;
-      li.innerHTML = `${roomMark(room)}<div class="p-body"><div class="p-name"><span>${esc(room.name)}</span></div><div class="p-preview">${held.size ? `${held.size} skill${held.size === 1 ? "" : "s"} in use` : "no skills attached"}</div></div>${selected ? `<div class="p-actions"><button class="icon-btn sm goto-room" title="Go to the room">${ic("forward")}</button></div>` : ""}`;
+      li.innerHTML = `${roomMark(room)}<div class="p-body"><div class="p-name"><span>${esc(room.name)}</span></div><div class="p-preview">${held.size ? `${held.size} skill${held.size === 1 ? "" : "s"} in use` : "no skills attached"}</div></div>${selected ? `<div class="p-actions">${UI.html("icon-button", { icon: "forward", title: "Go to the room", size: "sm", hook: "goto-room" })}</div>` : ""}`;
       li.addEventListener("click", (e) => {
         if (e.target.closest(".goto-room")) return selectRoom(room.id);
         state.skillsRoom = room.id;
@@ -1022,7 +1588,7 @@
             <h1>${state.freshVibe ? "Welcome" : "Welcome back"}, ${esc(name)} 👋</h1>
             <p>One chat, many coding agents. Summon your vibemates into a room, talk to all of them at once, and let them talk to each other.</p>
             <div class="hero-actions">
-              <button class="btn cta hero-cta" id="home-open-room">${ic("rooms")}Open room</button>
+              ${UI.html("button", { label: "Open room", icon: "rooms", size: "cta", id: "home-open-room", hook: "hero-cta" })}
             </div>
           </div>
           <div class="hero-art" aria-hidden="true">
@@ -1136,25 +1702,24 @@
       const sub = p.kind === "human" ? "you, the human" : [p.tagline ? `"${p.tagline}"` : "", p.agentVendor || p.agentLabel, p.model].filter(Boolean).join(" · ");
       const warn = p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>` : "";
       const status = unstaffed
-        ? `<span class="badge status-unstaffed" title="Click to summon this vibemate: pick the coding agent that runs it">summon</span>`
+        ? UI.html("badge", { label: "summon", tone: "attention", title: "Click to summon this vibemate: pick the coding agent that runs it" })
         : asleep
         ? `<span class="zzz" title="${esc(STATUS_LABEL[p.status] || p.status)}">zzz</span>`
-        : p.kind === "agent" && p.status !== "idle" ? `<span class="badge status-${shown}">${p.status === "thinking" ? '<span class="dot"></span>' : ""}${STATUS_LABEL[shown] || shown}</span>` : "";
+        : p.kind === "agent" && p.status !== "idle" ? UI.html("badge", { label: STATUS_LABEL[shown] || shown, tone: STATUS_TONE[shown] || "plain", dot: p.status === "thinking" }) : "";
       const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true, muted: p.muted });
       const statusClass = p.kind === "agent" ? `avatar-status status-${esc(shown || "idle")}` : "";
       const bodyHtml = `<div class="p-body">
-          <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? '<span class="badge muted">muted</span>' : ""}${status}</div>
+          <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? UI.html("badge", { label: "muted", tone: "muted" }) : ""}${status}</div>
           <div class="p-sub">${esc(sub)}</div>
           ${warn}
         </div>
         <div class="p-actions">
-          ${p.kind === "agent" && p.status === "thinking" ? `<button class="icon-btn sm stop-btn" title="Stop this reply">${ic("stop")}</button>` : ""}
-          ${p.kind === "agent" && p.status === "offline" ? `<button class="icon-btn sm reconnect-btn" title="Reconnect">${ic("refresh")}</button>` : ""}
+          ${p.kind === "agent" && p.status === "offline" ? UI.html("row-button", { icon: "refresh", title: `Wake ${p.name} up: reconnect it to the room`, act: "wake" }) : ""}
         </div>`;
       if (!li) {
         li = document.createElement("li");
         li.dataset.id = p.id;
-        li.innerHTML = avatarHtml + bodyHtml + (p.kind === "agent" ? `<button type="button" class="icon-btn sm p-gear" title="Open ${esc(p.name)}'s panel">${ic("settings")}</button>` : "");
+        li.innerHTML = avatarHtml + bodyHtml + (p.kind === "agent" ? UI.html("row-button", { icon: "settings", title: `Open ${p.name}'s panel`, act: "panel" }) + UI.html("row-button", { icon: "last-reply", title: `Go to ${p.name}'s last reply`, act: "last-reply" }) : "");
         li.dataset.avatar = avatarHtml;
         if (statusClass) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="${statusClass}"></span>`);
         li.dataset.body = bodyHtml;
@@ -1226,14 +1791,14 @@
     els.chatRoomSub.innerHTML =
       `<span>${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}${st.agents.length ? ` · ${st.online} online` : ""}${st.waiting ? ` · ${st.waiting} waiting` : ""}</span>` +
       (room.settings.topic ? `<span>· ${esc(room.settings.topic)}</span>` : "") +
-      `<span class="chip dir-chip" title="working directory of the vibemates: ${esc(room.dir)}">${ic("folder")}${esc(room.dir.split(/[\\/]/).filter(Boolean).slice(-1)[0] || room.dir)}</span>`;
+      UI.html("chip", { label: room.dir.split(/[\\/]/).filter(Boolean).slice(-1)[0] || room.dir, icon: "folder", title: `working directory of the vibemates: ${room.dir}`, hook: "dir-chip" });
   }
 
 
   function messageMatches(m) {
     if (!state.search) return true;
     const q = state.search.toLowerCase();
-    return m.text.toLowerCase().includes(q) || (m.fromName || "").toLowerCase().includes(q);
+    return m.text.toLowerCase().includes(q) || (m.fromName || "").toLowerCase().includes(q) || (m.quotes || []).some((x) => (x.text || "").toLowerCase().includes(q));
   }
 
   function renderHidden(el, m) {
@@ -1273,23 +1838,17 @@
       return el;
     }
     if (m.kind === "system") {
-      el.className = "msg system";
-      if (m.audience === "human") {
-        el.className = "msg system done";
-        const who = m.details && m.details.agentId ? findById(room, m.details.agentId) : null;
-        el.innerHTML = `<button type="button" class="done-row" data-ref="${esc((m.details && m.details.refId) || "")}" title="${esc(fullTime(m.ts))} · go to the reply">${who ? avatar(who, 20, {}) : ""}<span>${esc(m.text)}</span></button>`;
-        return el;
-      }
       if (m.audience === "agents") {
         el.className = "msg hidden";
         el.innerHTML = `<details class="hidden-turn"><summary>${ic("info")} hub → vibemates · ${esc(m.text.split(":")[0])}</summary><div class="hidden-body"><div class="hidden-label">What the vibemates were told</div><div class="hidden-text">${esc(m.text)}</div></div></details>`;
         return el;
       }
-      const hush = /^(Hush|Focus):/.test(m.text);
-      const warn = !hush && /could not answer|reported an error|Hop limit|was stopped/.test(m.text);
-      el.innerHTML = hush
-        ? `<div class="focus-pill" title="${esc(fullTime(m.ts))}"><span class="hush-face">🤫</span>${esc(m.text.replace(/^Focus:/, "Hush:"))}</div>`
-        : `<div class="sys${warn ? " warn" : ""}" title="${esc(fullTime(m.ts))}">${esc(m.text)}</div>`;
+      const details = m.details || {};
+      const who = details.agentId ? findById(room, details.agentId) : null;
+      const tone = ["attention", "error", "hush"].includes(details.tone) ? details.tone : "news";
+      const face = who ? avatar(who, 20, {}) : tone === "hush" ? '<span class="hush-face">🤫</span>' : "";
+      el.className = "msg system";
+      el.innerHTML = UI.html("hub-row", { text: m.text, tone, ref: details.refId || undefined, face: face ? UI.raw(face) : undefined, title: details.refId ? `${fullTime(m.ts)} · go to the reply` : fullTime(m.ts) });
       return el;
     }
     const p = findById(room, m.from) || { name: m.fromName, color: FALLBACK_COLOR, kind: m.from === "human" ? "human" : "agent" };
@@ -1297,7 +1856,7 @@
     el.className = "msg " + (mine ? "mine" : "agent");
     el.innerHTML = `
       <div class="bubble-col">
-        <div class="head"><span class="head-av">${avatar(mine ? Object.assign(meAvatarData(), { color: p.color }) : p, 32, { vendor: true })}</span><span class="name" style="color:${p.color}">${esc(m.fromName)}</span><span class="edited" hidden></span>${mine ? `<button type="button" class="edit-btn" title="Edit this message">${ic("pencil")}</button>` : ""}<button type="button" class="pin-btn" title="Pin this message">${ic("pin")}</button><span class="time" title="${esc(fullTime(m.ts))}">${time(m.ts)}</span></div>
+        <div class="head"><span class="head-av">${avatar(mine ? Object.assign(meAvatarData(), { color: p.color }) : p, 32, { vendor: true })}</span><span class="name" style="color:${p.color}">${esc(m.fromName)}</span><span class="edited" hidden></span>${mine ? UI.html("icon-button", { icon: "pencil", title: "Edit this message", kind: "ghost", size: "xs", act: "edit" }) : ""}${UI.html("icon-button", { icon: "quote", title: "Quote this message in your next one", kind: "ghost", size: "xs", act: "quote" })}${UI.html("icon-button", { icon: "pin", title: "Pin this message", kind: "ghost", size: "xs", act: "pin" })}${UI.html("icon-button", { icon: "copy", title: "Copy this message, formatted; the tool calls stay here", kind: "ghost", size: "xs", act: "copy" })}<span class="time" title="${esc(fullTime(m.ts))}">${time(m.ts)}</span></div>
         <div class="bubble">
           ${m.skill ? `<div class="skill-invoke" title="skill invocation: the vibemates that have this skill got its instructions with this message">${ic("skills")} skill <b>${esc(m.skill.name)}</b></div>` : ""}
           <div class="edit-box" hidden></div>
@@ -1307,20 +1866,23 @@
           <div class="plan" hidden></div>
           <div class="text"></div>
           <div class="shots"></div>
-          <button class="more" hidden></button>
+          ${UI.html("button", { label: "Show more", kind: "link", act: "more", hidden: true })}
+          <div class="stop-note"></div>
           <div class="perms"></div>
           <div class="waiting" hidden></div>
         </div>
         <div class="meta"></div>
       </div>`;
-    el.querySelector(".more").addEventListener("click", () => {
+    el.querySelector('[data-act="more"]').addEventListener("click", () => {
       if (state.expanded.has(m.id)) state.expanded.delete(m.id);
       else state.expanded.add(m.id);
       updateMessageElement(el, room, m);
     });
-    const editBtn = el.querySelector(".edit-btn");
+    const editBtn = el.querySelector('[data-act="edit"]');
     if (editBtn) editBtn.addEventListener("click", () => openInlineEditor(el, room, m));
-    el.querySelector(".pin-btn").addEventListener("click", async () => {
+    el.querySelector('[data-act="quote"]').addEventListener("click", () => addQuote(m, ""));
+    el.querySelector('[data-act="copy"]').addEventListener("click", () => copyMessage(el, (currentRoom() || room).messages.find((x) => x.id === m.id) || m));
+    el.querySelector('[data-act="pin"]').addEventListener("click", async () => {
       if (m.pending) return;
       try {
         await post(`/api/rooms/${encodeURIComponent(room.id)}/messages/${encodeURIComponent(m.id)}/pin`, { pinned: !m.pinned });
@@ -1360,11 +1922,111 @@
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !els.lightbox.hidden) closeLightbox();
   });
+
+  const dv = { el: $("#diagram-view"), stage: $("#dv-stage"), level: $("#dv-level"), scale: 1, x: 0, y: 0, fit: 1, dragging: false, moved: false };
+  const DV_MIN = 0.1;
+  const DV_MAX = 8;
+  const DV_FIT_MAX = 3;
+  const DV_BAR_SPACE = 120;
+  function dvApply() {
+    dv.stage.style.transform = `translate(${Math.round(dv.x)}px, ${Math.round(dv.y)}px) scale(${dv.scale})`;
+    dv.level.textContent = `${Math.round((dv.scale / dv.fit) * 100)}%`;
+  }
+  function dvFit() {
+    const svg = dv.stage.firstElementChild;
+    if (!svg) return;
+    const box = dv.el.getBoundingClientRect();
+    const w = Number(svg.dataset.w) || svg.getBoundingClientRect().width || 1;
+    const h = Number(svg.dataset.h) || svg.getBoundingClientRect().height || 1;
+    dv.fit = Math.max(DV_MIN, Math.min((box.width - 80) / w, (box.height - DV_BAR_SPACE - 32) / h, DV_FIT_MAX));
+    dv.scale = dv.fit;
+    dv.x = (box.width - w * dv.scale) / 2;
+    dv.y = Math.max(16, (box.height - DV_BAR_SPACE - h * dv.scale) / 2);
+    dvApply();
+  }
+  function dvZoom(factor, cx, cy) {
+    const next = Math.min(DV_MAX, Math.max(DV_MIN, dv.scale * factor));
+    const box = dv.el.getBoundingClientRect();
+    const px = (cx ?? box.left + box.width / 2) - box.left;
+    const py = (cy ?? box.top + box.height / 2) - box.top;
+    dv.x = px - ((px - dv.x) / dv.scale) * next;
+    dv.y = py - ((py - dv.y) / dv.scale) * next;
+    dv.scale = next;
+    dvApply();
+  }
+  function openDiagram(block) {
+    const svg = block && block.querySelector(".mm-out svg");
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const clone = svg.cloneNode(true);
+    clone.dataset.w = String(rect.width || 800);
+    clone.dataset.h = String(rect.height || 600);
+    clone.style.maxWidth = "none";
+    clone.style.width = `${rect.width || 800}px`;
+    clone.style.height = `${rect.height || 600}px`;
+    dv.stage.replaceChildren(clone);
+    dv.el.hidden = false;
+    dvFit();
+  }
+  function closeDiagram() {
+    dv.el.hidden = true;
+    dv.stage.replaceChildren();
+  }
+  $("#dv-close").addEventListener("click", closeDiagram);
+  $("#dv-in").addEventListener("click", () => dvZoom(1.25));
+  $("#dv-out").addEventListener("click", () => dvZoom(0.8));
+  dv.level.addEventListener("click", dvFit);
+  dv.el.addEventListener("dblclick", (e) => {
+    if (!e.target.closest("#dv-bar")) dvFit();
+  });
+  dv.el.addEventListener(
+    "wheel",
+    (e) => {
+      if (e.target.closest("#dv-bar")) return;
+      e.preventDefault();
+      dvZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+    },
+    { passive: false },
+  );
+  dv.el.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("#dv-bar")) return;
+    dv.dragging = true;
+    dv.moved = false;
+    dv.el.setPointerCapture(e.pointerId);
+    dv.el.classList.add("dragging");
+  });
+  dv.el.addEventListener("pointermove", (e) => {
+    if (!dv.dragging) return;
+    if (e.movementX || e.movementY) dv.moved = true;
+    dv.x += e.movementX;
+    dv.y += e.movementY;
+    dvApply();
+  });
+  for (const type of ["pointerup", "pointercancel"]) {
+    dv.el.addEventListener(type, (e) => {
+      if (!dv.dragging) return;
+      dv.dragging = false;
+      dv.el.classList.remove("dragging");
+      if (type === "pointerup" && !dv.moved && !e.target.closest("#dv-bar") && e.target === dv.el) closeDiagram();
+    });
+  }
+  window.addEventListener("resize", () => {
+    if (!dv.el.hidden) dvFit();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (dv.el.hidden) return;
+    if (e.key === "Escape") return void closeDiagram();
+    if (e.key === "+" || e.key === "=") return void dvZoom(1.25);
+    if (e.key === "-") return void dvZoom(0.8);
+    if (e.key === "0") dvFit();
+  });
   els.messages.addEventListener("click", (e) => {
-    const done = e.target.closest(".done-row");
-    if (done) return void jumpToMessage(els.messages.querySelector(`.msg[data-id="${done.dataset.ref}"]`));
+    const hubRow = e.target.closest('[data-ui="hub-row"][data-ref]');
+    if (hubRow) return void jumpToMessage(els.messages.querySelector(`.msg[data-id="${hubRow.dataset.ref}"]`));
     const shot = e.target.closest(".shot");
     if (shot) return void openLightbox(shot.dataset.src, shot.title);
+    const quote = e.target.closest(".quote");
+    if (quote) return void jumpToMessage(els.messages.querySelector(`.msg[data-seq="${quote.dataset.seq}"]`));
     const ref = e.target.closest(".img-ref");
     if (!ref) return;
     const msg = ref.closest(".msg");
@@ -1388,8 +2050,8 @@
     const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
     const verb = names.length === 1 ? "is" : "are";
     const stopLabel = names.length === 1 ? `Stop ${names[0]} and send now` : "Stop them and send now";
-    box.innerHTML = `<span class="waiting-text">${ic("clock")} ${esc(who)} ${verb} still working — this arrives when the current turn ends.</span><button type="button" class="waiting-stop">${esc(stopLabel)}</button>`;
-    box.querySelector(".waiting-stop").addEventListener("click", async (e) => {
+    box.innerHTML = `<span class="waiting-text">${ic("clock")} ${esc(who)} ${verb} still working — this arrives when the current turn ends.</span>${UI.html("button", { label: stopLabel, kind: "inverse", size: "sm", act: "stop-and-send" })}`;
+    box.querySelector('[data-act="stop-and-send"]').addEventListener("click", async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true;
       btn.textContent = "Stopping…";
@@ -1404,8 +2066,33 @@
   }
 
   const openTools = new Set();
+  const openToolGroups = new Set();
   els.messages.addEventListener("click", (e) => {
-    const chip = e.target.closest(".tool > .chip");
+    const stop = e.target.closest('.live-tail [data-act="stop"]');
+    if (stop) {
+      const msgEl = stop.closest(".msg");
+      const from = msgEl && msgEl.dataset.from;
+      if (!from) return;
+      stop.disabled = true;
+      stop.textContent = "Stopping…";
+      return void post(roomApi(`/participants/${encodeURIComponent(from)}/cancel`))
+        .then((r) => {
+          if (r && r.stopped === "nothing") resyncStream();
+        })
+        .catch((error) => {
+          showError(error);
+          stop.disabled = false;
+          stop.textContent = "Stop";
+        });
+    }
+    const choice = e.target.closest('[data-ui="ask-card"] [data-ui="button"][data-act]');
+    if (choice) {
+      const card = choice.closest('[data-ui="ask-card"]');
+      if (choice.dataset.act === "permit") post(roomApi(`/permissions/${encodeURIComponent(card.dataset.key)}`), { optionId: choice.dataset.option || null }).catch(showError);
+      else if (choice.dataset.act === "decide") post(roomApi(`/proposals/${encodeURIComponent(card.dataset.key)}`), { accept: choice.dataset.answer === "apply" }).catch(showError);
+      return;
+    }
+    const chip = e.target.closest('[data-ui="tool-call"] > [data-ui="chip"]');
     if (!chip) return;
     const msgEl = chip.closest(".msg");
     const room = currentRoom();
@@ -1419,7 +2106,7 @@
     el.classList.toggle("hidden-by-search", !messageMatches(m));
     const wasPinned = el.classList.contains("pinned");
     el.classList.toggle("pinned", !!m.pinned);
-    const pinBtn = el.querySelector(".pin-btn");
+    const pinBtn = el.querySelector('[data-act="pin"]');
     if (pinBtn) pinBtn.title = m.pinned ? "Unpin this message" : "Pin this message";
     if (wasPinned !== !!m.pinned) renderTimeline();
     const editedEl = el.querySelector(".edited");
@@ -1438,15 +2125,39 @@
     }
     if (m.kind === "system") return;
     const text = el.querySelector(".text");
-    const more = el.querySelector(".more");
+    const more = el.querySelector('[data-act="more"]');
     const long = !m.streaming && m.text.length > CLAMP_CHARS;
     const expanded = state.expanded.has(m.id);
-    text.innerHTML = renderText(room, m.text, m.images) + (m.streaming ? WORKING_SVG : "");
-    if (!m.streaming) renderDiagrams(text);
-    if (m.streaming && !m.text) text.innerHTML = '<span class="pending" title="thinking…"><i></i><i></i><i></i></span>';
+    let words = text.querySelector(":scope > .words");
+    if (!words) {
+      words = document.createElement("div");
+      words.className = "words";
+      text.replaceChildren(words);
+    }
+    words.innerHTML = renderText(room, m.text, m.images, m.quotes);
+    if (!m.streaming) {
+      renderDiagrams(words);
+      highlightBlocks(words);
+      renderPreviews(words, m);
+      linkRelativePaths(words, m);
+    }
+    if (m.streaming && !m.text) words.innerHTML = '<span class="pending" title="thinking…"><i></i><i></i><i></i></span>';
+    if (m.streaming) {
+      let tail = el.liveTail;
+      if (!tail) {
+        tail = document.createElement("span");
+        tail.className = "live-tail";
+        tail.innerHTML = `${WORKING_SVG}${UI.html("button", { label: "Stop", kind: "ghost", size: "xs", act: "stop", title: "Stop this reply; what is written stays in the room" })}`;
+        el.liveTail = tail;
+      }
+      tail.classList.toggle("no-figure", !m.text);
+      if (tail.parentElement !== text) text.appendChild(tail);
+    } else if (el.liveTail && el.liveTail.parentElement) el.liveTail.remove();
     text.classList.toggle("clamped", long && !expanded);
     more.hidden = !long;
     more.textContent = expanded ? "Show less" : "Show more";
+    const stopNote = el.querySelector(".stop-note");
+    if (stopNote) stopNote.innerHTML = !m.streaming && m.stopReason === "cancelled" ? UI.html("reply-note", { text: `Stopped by ${m.stoppedBy || (state.settings || {}).humanName || "you"}`, tone: "attention", icon: "stop" }) : "";
     renderShots(el.querySelector(".shots"), room, m);
     renderWaiting(el, room, m);
     const thought = el.querySelector(".thought");
@@ -1454,20 +2165,25 @@
       thought.hidden = false;
       thought.querySelector(".thought-text").textContent = m.thought;
     }
-    el.querySelector(".agent-notices").innerHTML = (m.notices || []).map((n) => `<div class="agent-notice">${ic("info")} ${renderText(room, n)}</div>`).join("");
+    el.querySelector(".agent-notices").innerHTML = (m.notices || []).map((n) => UI.html("reply-note", { text: n, tone: "attention" })).join("");
     const tools = el.querySelector(".tools");
     tools.innerHTML = "";
-    for (const call of m.toolCalls || []) {
-      const open = openTools.has(call.toolCallId);
-      const box = document.createElement("div");
-      box.className = `tool${open ? " open" : ""}`;
+    const calls = m.toolCalls || [];
+    const folded = !m.streaming && calls.length > 0;
+    let host = tools;
+    if (folded) {
+      const group = UI.el("tool-fold", { count: calls.length, failed: calls.filter((c) => c.status === "failed").length, open: openToolGroups.has(m.id) });
+      group.addEventListener("toggle", () => {
+        if (group.open) openToolGroups.add(m.id);
+        else openToolGroups.delete(m.id);
+        group.querySelector("summary").title = group.open ? "Fold the tool calls away" : "Show every tool call";
+      });
+      tools.appendChild(group);
+      host = group.querySelector(".list");
+    }
+    for (const call of calls) {
       const input = call.rawInput === undefined ? "" : typeof call.rawInput === "string" ? call.rawInput : JSON.stringify(call.rawInput, null, 1);
-      box.innerHTML =
-        `<button type="button" class="chip chip-${esc(call.status || "pending")}" data-tool="${esc(call.toolCallId)}" title="${open ? "Collapse" : "Expand"}">${ic("tool")}${esc(`${call.title}${call.kind ? ` · ${call.kind}` : ""} · ${call.status || "pending"}`)}</button>` +
-        (open
-          ? `<div class="tool-body"><div class="tool-sec"><b>call</b><pre>${esc(call.title)}</pre></div>${input ? `<div class="tool-sec"><b>input</b><pre>${esc(input.slice(0, 4000))}</pre></div>` : ""}${call.output ? `<div class="tool-sec"><b>output</b><pre>${esc(call.output)}</pre></div>` : `<div class="tool-sec muted">no output recorded</div>`}</div>`
-          : "");
-      tools.appendChild(box);
+      host.appendChild(UI.el("tool-call", { id: call.toolCallId, title: call.title, kind: call.kind || undefined, status: TOOL_STATUSES.has(call.status) ? call.status : "pending", open: openTools.has(call.toolCallId), input: input || undefined, output: call.output || undefined }));
     }
     const plan = el.querySelector(".plan");
     if (m.plan && m.plan.length) {
@@ -1477,13 +2193,34 @@
     const meta = el.querySelector(".meta");
     if (!m.streaming && m.from !== "human") {
       const parts = [];
-      if (m.stopReason && m.stopReason !== "end_turn") parts.push(`<span>${esc(m.stopReason)}</span>`);
+      if (m.stopReason && m.stopReason !== "end_turn" && m.stopReason !== "cancelled") parts.push(`<span>${esc(m.stopReason)}</span>`);
       if (m.durationMs) parts.push(`<span title="how long the reply took">${ic("clock")} ${(m.durationMs / 1000).toFixed(1)} s</span>`);
       if (m.usage) parts.push(`<span title="tokens in">${ic("arrow-down")} ${fmtTokens(m.usage.inputTokens)}</span><span title="tokens out">${ic("arrow-up")} ${fmtTokens(m.usage.outputTokens)}</span>${m.usage.cachedWriteTokens ? `<span title="tokens written to the cache">${ic("database")} ${fmtTokens(m.usage.cachedWriteTokens)}</span>` : ""}`);
-      meta.innerHTML = parts.join("<span class=\"sep\">·</span>");
+      meta.innerHTML = parts.length ? `<span class="stats">${parts.join('<span class="sep">·</span>')}</span>` : "";
       fillSeen(el, room, m);
     } else if (m.from === "human") fillSeen(el, room, m);
-    else meta.textContent = "";
+    else meta.innerHTML = liveMetaHtml(m) ? `<span class="stats">${liveMetaHtml(m)}</span>` : "";
+  }
+
+  function elapsedLabel(ms) {
+    const total = Math.max(0, Math.round(ms / 1000));
+    if (total < 60) return `${total} s`;
+    const seconds = String(total % 60).padStart(2, "0");
+    const minutes = Math.floor(total / 60) % 60;
+    const hours = Math.floor(total / 3600);
+    return hours ? `${hours}h ${String(minutes).padStart(2, "0")}m ${seconds}s` : `${minutes}m ${seconds}s`;
+  }
+  function liveMetaHtml(m) {
+    if (!m.streaming || !m.ts) return "";
+    const calls = (m.toolCalls || []).length;
+    const tools = !m.text && calls ? `<span class="sep">·</span><span title="tool calls so far">${ic("tool")} ${calls}</span>` : "";
+    return `<span class="live" data-since="${m.ts}" title="how long this reply has been coming">${ic("clock")} ${elapsedLabel(Date.now() - m.ts)}</span>${tools}`;
+  }
+  function tickLive() {
+    for (const span of els.messages.querySelectorAll(".meta .live")) {
+      const since = Number(span.dataset.since);
+      if (since) span.innerHTML = `${ic("clock")} ${elapsedLabel(Date.now() - since)}`;
+    }
   }
 
   function lastHumanMessage(room) {
@@ -1580,6 +2317,7 @@
   }
 
   function renderMessages() {
+    const t0 = performance.now();
     const room = currentRoom();
     els.messages.innerHTML = "";
     els.messages.classList.toggle("searching", !!state.search);
@@ -1618,6 +2356,7 @@
     refreshSeen(room);
     scrollToBottom();
     renderTimeline();
+    noteSlow("full render of the list", performance.now() - t0);
   }
 
   function upsertMessage(roomId, m) {
@@ -1671,6 +2410,10 @@
 
   const dirty = new Map();
   let flushScheduled = false;
+  let lastTypedAt = 0;
+  const TYPING_FLUSH_MS = 100;
+  const TYPING_WINDOW_MS = 1500;
+  const watchingTheBottom = () => stuck;
   function patchMessage(roomId, id, fn) {
     const room = state.rooms.get(roomId);
     if (!room) return;
@@ -1681,10 +2424,12 @@
     dirty.set(id, room);
     if (flushScheduled) return;
     flushScheduled = true;
-    requestAnimationFrame(flushPatches);
+    if (Date.now() - lastTypedAt < TYPING_WINDOW_MS || !watchingTheBottom()) setTimeout(() => requestAnimationFrame(flushPatches), TYPING_FLUSH_MS);
+    else requestAnimationFrame(flushPatches);
   }
   function flushPatches() {
     flushScheduled = false;
+    const t0 = performance.now();
     const batch = [...dirty];
     dirty.clear();
     let touched = false;
@@ -1698,6 +2443,7 @@
     }
     if (touched && stuck) scrollToBottom();
     if (touched) updateWorkingNow();
+    if (touched) noteSlow("streamed frame", performance.now() - t0);
   }
 
 
@@ -1705,7 +2451,7 @@
     const box = el.querySelector(".edit-box");
     const text = el.querySelector(".text");
     if (!box.hidden) return;
-    box.innerHTML = `<textarea class="edit-area" rows="3"></textarea><div class="row-btns"><button type="button" class="btn sm ghost edit-cancel">Cancel</button><button type="button" class="btn sm primary edit-save">Save</button></div>`;
+    box.innerHTML = `<textarea class="edit-area" rows="3"></textarea><div class="row-btns">${UI.html("button", { label: "Cancel", kind: "ghost", size: "sm", hook: "edit-cancel" })}${UI.html("button", { label: "Save", kind: "primary", size: "sm", hook: "edit-save" })}</div>`;
     const area = box.querySelector(".edit-area");
     area.value = m.text;
     box.hidden = false;
@@ -1784,30 +2530,13 @@
     if (anchor) anchor.insertAdjacentElement("afterend", card);
     else els.messages.appendChild(card);
   }
+  const OPTION_TONE = { allow_once: "ok", allow_always: "ok", reject_once: "no", reject_always: "no" };
   function renderPermission(room, perm) {
     const p = findById(room, perm.participantId);
-    const card = document.createElement("div");
-    card.className = "perm";
-    card.dataset.key = perm.key;
     const tc = perm.toolCall || {};
-    card.innerHTML = `
-      <div class="perm-title">${ic("lock")} ${esc(p ? p.name : perm.participantId)} asks for permission: <strong>${esc(tc.title || tc.toolCallId || "tool call")}</strong>${tc.kind ? ` <span class="kind">${esc(tc.kind)}</span>` : ""}</div>
-      ${tc.rawInput ? `<pre class="perm-input">${esc(JSON.stringify(tc.rawInput, null, 1).slice(0, 1200))}</pre>` : ""}
-      <div class="perm-actions"></div>`;
-    const actions = card.querySelector(".perm-actions");
-    for (const option of perm.options || []) {
-      const btn = document.createElement("button");
-      btn.className = `perm-btn kind-${option.kind}`;
-      btn.textContent = option.name;
-      btn.title = option.kind;
-      btn.addEventListener("click", () => post(roomApi(`/permissions/${encodeURIComponent(perm.key)}`), { optionId: option.optionId }).catch(showError));
-      actions.appendChild(btn);
-    }
-    const cancel = document.createElement("button");
-    cancel.className = "perm-btn";
-    cancel.textContent = "Dismiss (cancelled)";
-    cancel.addEventListener("click", () => post(roomApi(`/permissions/${encodeURIComponent(perm.key)}`), { optionId: null }).catch(showError));
-    actions.appendChild(cancel);
+    const choices = (perm.options || []).map((option) => ({ label: option.name, tone: OPTION_TONE[option.kind] || "plain", act: "permit", title: option.kind, data: { option: option.optionId } }));
+    choices.push({ label: "Dismiss (cancelled)", act: "permit" });
+    const card = UI.el("ask-card", { kind: "permission", who: p ? p.name : perm.participantId, subject: tc.title || tc.toolCallId || "tool call", subjectKind: tc.kind || undefined, input: tc.rawInput ? JSON.stringify(tc.rawInput, null, 1) : undefined, choices, data: { key: perm.key } });
     const draft = [...room.messages].reverse().find((m) => m.streaming && m.from === perm.participantId);
     const host = draft ? els.messages.querySelector(`.msg[data-id="${draft.id}"] .perms`) : null;
     if (host) host.appendChild(card);
@@ -1815,10 +2544,10 @@
     if (stuck) scrollToBottom();
   }
   function resolvePermissionCard(key, optionId) {
-    const card = document.querySelector(`.perm[data-key="${key}"]`);
+    const card = document.querySelector(`[data-ui="ask-card"][data-kind="permission"][data-key="${CSS.escape(key)}"]`);
     if (!card) return;
-    card.classList.add("resolved");
-    card.querySelector(".perm-actions").innerHTML = `<span class="perm-result">${optionId ? `chosen: ${esc(optionId)}` : "dismissed"}</span>`;
+    UI.setState(card, "resolved");
+    card.querySelector(".choices").replaceChildren(Object.assign(document.createElement("span"), { className: "outcome", textContent: optionId ? `chosen: ${optionId}` : "dismissed" }));
   }
 
   function proposalValue(v) {
@@ -1843,30 +2572,16 @@
     return rows.join("");
   }
   function renderProposal(room, p) {
-    const existing = els.messages.querySelector(`.proposal[data-key="${p.key}"]`);
-    const card = existing || document.createElement("div");
-    card.className = `perm proposal${p.status !== "pending" ? " resolved" : ""}`;
-    card.dataset.key = p.key;
-    card.innerHTML = `
-      <div class="perm-title">${ic("pencil")} ${esc(p.participantName)} proposes changes to the room</div>
-      ${p.why ? `<div class="prop-why">${esc(p.why)}</div>` : ""}
-      <div class="prop-diff">${proposalDiffHtml(p)}</div>
-      ${p.warnings && p.warnings.length ? `<ul class="prop-warn">${p.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
-      ${p.touchesOwn ? `<div class="prop-own">${ic("info")} This changes the rules or ${esc(p.participantName)}'s own persona: it decides how ${esc(p.participantName)} itself will behave.</div>` : ""}
-      <div class="perm-actions"></div>`;
-    const actions = card.querySelector(".perm-actions");
-    if (p.status === "pending") {
-      const apply = document.createElement("button");
-      apply.className = "perm-btn kind-allow_once";
-      apply.textContent = "Apply";
-      apply.addEventListener("click", () => post(roomApi(`/proposals/${encodeURIComponent(p.key)}`), { accept: true }).catch(showError));
-      const reject = document.createElement("button");
-      reject.className = "perm-btn kind-reject_once";
-      reject.textContent = "Reject";
-      reject.addEventListener("click", () => post(roomApi(`/proposals/${encodeURIComponent(p.key)}`), { accept: false }).catch(showError));
-      actions.append(apply, reject);
-    } else actions.innerHTML = `<span class="perm-result">${p.status === "applied" ? `applied${p.skipped && p.skipped.length ? ` · not applied: ${esc(p.skipped.join("; "))}` : ""}` : "rejected"}</span>`;
-    if (!existing) {
+    const existing = els.messages.querySelector(`[data-ui="ask-card"][data-kind="proposal"][data-key="${CSS.escape(p.key)}"]`);
+    const body =
+      (p.why ? `<div class="prop-why">${esc(p.why)}</div>` : "") +
+      `<div class="prop-diff">${proposalDiffHtml(p)}</div>` +
+      (p.warnings && p.warnings.length ? `<ul class="prop-warn">${p.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : "") +
+      (p.touchesOwn ? `<div class="prop-own">${ic("info")} This changes the rules or ${esc(p.participantName)}'s own persona: it decides how ${esc(p.participantName)} itself will behave.</div>` : "");
+    const outcome = p.status === "pending" ? undefined : p.status === "applied" ? `applied${p.skipped && p.skipped.length ? ` · not applied: ${p.skipped.join("; ")}` : ""}` : "rejected";
+    const card = UI.el("ask-card", { kind: "proposal", who: p.participantName, body, outcome, choices: [{ label: "Apply", tone: "ok", act: "decide", data: { answer: "apply" } }, { label: "Reject", tone: "no", act: "decide", data: { answer: "reject" } }], data: { key: p.key } });
+    if (existing) existing.replaceWith(card);
+    else {
       placeCard(card, room, p.ts || Date.now());
       if (stuck) scrollToBottom();
     }
@@ -1940,14 +2655,14 @@
     return `${avatar(p, 76, { vendor: true, status: true, muted: p.muted })}
         <h3>${esc(p.name)}</h3>
         <div class="tagline">${esc(p.tagline || "no vibersona")}</div>
-        <div class="badges"><span class="badge">${esc(p.agentVendor || p.agentType || "vibemate")}</span><span class="badge status-${p.status}">${STATUS_LABEL[p.status] || p.status}</span>${p.muted ? '<span class="badge muted">muted</span>' : ""}</div>`;
+        <div class="badges">${UI.html("badge", { label: p.agentVendor || p.agentType || "vibemate" })}${UI.html("badge", { label: STATUS_LABEL[p.status] || p.status, tone: STATUS_TONE[p.status] || "plain" })}${p.muted ? UI.html("badge", { label: "muted", tone: "muted" }) : ""}</div>`;
   }
   function refreshDetailsHeader(p) {
     const header = els.detailsInner.querySelector(".profile");
     if (header) header.innerHTML = profileHeader(p);
   }
   function panelTitle(title, sub) {
-    return `<div class="panel-title"><div><h3>${title}</h3>${sub ? `<div class="hint">${sub}</div>` : ""}</div><button class="icon-btn sm ghost" id="details-close" title="Close">${ic("close")}</button></div>`;
+    return `<div class="panel-title"><div><h3>${title}</h3>${sub ? `<div class="hint">${sub}</div>` : ""}</div>${UI.html("icon-button", { icon: "close", title: "Close", kind: "ghost", size: "sm", id: "details-close" })}</div>`;
   }
   function wireDetailsClose() {
     const b = $("#details-close");
@@ -1965,7 +2680,7 @@
       <div class="action-row">
         <button class="action" data-act="mention"><span class="ico">${ic("at")}</span>Mention</button>
         <button class="action" data-act="${p.muted ? "unmute" : "mute"}"><span class="ico">${ic(p.muted ? "mute" : "unmute")}</span>${p.muted ? "Unmute" : "Mute"}</button>
-        ${offline ? `<button class="action" data-act="reconnect"><span class="ico">${ic("refresh")}</span>Reconnect</button>` : `<button class="action" data-act="cancel" ${p.status !== "thinking" ? "disabled" : ""}><span class="ico">${ic("stop")}</span>Stop</button>`}
+        ${offline ? `<button class="action" data-act="reconnect"><span class="ico">${ic("refresh")}</span>Reconnect</button>` : `<button class="action" data-act="cancel" ${p.status !== "thinking" && p.status !== "queued" ? "disabled" : ""}><span class="ico">${ic("stop")}</span>Stop</button>`}
         <button class="action danger" data-act="remove"><span class="ico">${ic("trash")}</span>Remove</button>
       </div>
       <div class="section" id="pp-persona">
@@ -1975,6 +2690,7 @@
         ${field("Vibeface", `<div id="pp-avatar-picker"></div><input type="text" id="pp-avatar" maxlength="8" value="${esc(p.avatar || "")}" placeholder="custom emoji (optional)">`)}
         ${field("Vibio", `<textarea id="pp-role" rows="5" maxlength="4000" placeholder="who it is, how it speaks, what it cares about">${esc(p.role || "")}</textarea>`, "Only this vibemate reads it.", "Reaches the vibemate as refreshed instructions in its brief on its next turn; its memory is kept. The other participants never see it.")}
       </div>
+      ${p.trouble ? `<div class="trouble"><b>${esc(p.trouble.what)}</b><span>${esc(p.trouble.advice)}</span></div>` : ""}
       ${p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<p class="hint" style="color:var(--danger);margin:0 4px 10px">${esc(p.statusDetail)}</p>` : ""}
       <div class="section" id="pp-engine">
         ${sectionTitle("spark", "Coding agent")}
@@ -1995,7 +2711,7 @@
       <div class="section danger">
         ${sectionTitle("bolt", "Respawn")}
         <p class="hint">${esc(p.name)} comes back with an empty head: it forgets this conversation entirely. The room's history stays and you still see everything.${geekTip("A session's context cannot be erased, so the vibemate's process and session are closed and it starts a new one with no replay. Its stored session is dropped too, or a later reconnect would bring the old context back. Same thing as typing /respawn @Name in the composer.")}</p>
-        <div class="row-btns start"><button class="btn danger sm" data-act="respawn">${ic("bolt")}Respawn ${esc(p.name)}</button><label class="lp-with"><button type="button" class="btn sm" data-act="respawn-mem">With the last</button><input type="number" id="pp-respawn-n" min="0" max="500" value="${room.settings.replayAfterRestart ?? 10}"> messages</label></div>
+        <div class="row-btns start">${UI.html("button", { label: `Respawn ${p.name}`, icon: "bolt", kind: "danger", size: "sm", act: "respawn" })}<label class="lp-with">${UI.html("button", { label: "With the last", size: "sm", act: "respawn-mem" })}<input type="number" id="pp-respawn-n" min="0" max="500" value="${room.settings.replayAfterRestart ?? 10}"> messages</label></div>
         <p class="hint">With memory: a new session that gets only ${p.notes ? "its own notes and " : ""}the last N messages of this room; the rest is gone.</p>
       </div>
       <div class="section">
@@ -2029,7 +2745,7 @@
               await post(roomApi(`/participants/${encodeURIComponent(p.id)}/remove`));
               closeDetails();
             }
-          } else if (act === "reconnect") openReconnectDialog(room);
+          } else if (act === "reconnect") openReconnectDialog(room, p);
           else await post(roomApi(`/participants/${encodeURIComponent(p.id)}/${act}`));
         } catch (e) {
           showError(e);
@@ -2120,7 +2836,7 @@
       <div class="section danger">
         ${sectionTitle("alert", "Danger zone")}
         <p class="field-note">Erases everything in this viberoom: your vibe, all rooms and their history, vibemate sessions, your skills. Not undoable.</p>
-        <div class="row-btns start"><button class="btn danger sm" id="me-erase">${ic("bolt")}Erase my vibe</button></div>
+        <div class="row-btns start">${UI.html("button", { label: "Erase my vibe", icon: "bolt", kind: "danger", size: "sm", id: "me-erase" })}</div>
       </div>`;
     wireDetailsClose();
     $("#me-avatar-picker").appendChild(
@@ -2145,7 +2861,7 @@
         ${field("Name", `<input type="text" id="rp-name" maxlength="60" value="${esc(room.name)}">`)}
         ${field("Emoji", `<div id="rp-emoji-picker"></div><input type="text" id="rp-emoji" maxlength="8" value="${esc(rs.emoji || "")}" placeholder="custom emoji (optional)">`, "A face for the room, next to its name.")}
         ${field("Topic", `<input type="text" id="rp-topic" maxlength="2000" value="${esc(rs.topic || "")}" placeholder="what this room is about (optional)">`)}
-        ${field("Folder", `<span class="dir-row"><input type="text" id="rp-dir" maxlength="1000" value="${esc(room.dir)}" spellcheck="false"><button type="button" class="btn ghost browse-btn" id="rp-dir-browse" title="Choose a folder">${ic("folder")}Browse</button></span>`, "Where the vibemates read and write. Changing it restarts them in the new folder; they replay the last messages.")}
+        ${field("Folder", `<span class="dir-row"><input type="text" id="rp-dir" maxlength="1000" value="${esc(room.dir)}" spellcheck="false">${UI.html("button", { label: "Browse", icon: "folder", kind: "ghost", id: "rp-dir-browse", title: "Choose a folder", hook: "browse-btn" })}</span>`, "Where the vibemates read and write. Changing it restarts them in the new folder; they replay the last messages.")}
         <div class="field mention-host"><span class="label">Room rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">One rule per line; type @ to reference a participant.</span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></div>
         ${field("Language", `<input type="text" id="rp-lang" value="${esc(lang)}" placeholder="follow the human (default), or e.g. English">`)}
       </div>
@@ -2159,7 +2875,7 @@
       <div class="section template">
         ${sectionTitle("rooms", "Turn this room into a template")}
         <p class="field-note">Its settings, rules, folder and vibemates (with the coding agent each runs on) become one of your templates, listed first under "Start from a template". You see everything it will contain, and can change any of it, before you create it.</p>
-        <div class="row-btns start stp-row"><button type="button" class="btn sm primary" id="rp-template">${ic("rooms")}Preview and create template</button></div>
+        <div class="row-btns start stp-row">${UI.html("button", { label: "Preview and create template", icon: "rooms", kind: "primary", size: "sm", id: "rp-template" })}</div>
       </div>
       ${geek(
         "rp-geek",
@@ -2197,7 +2913,7 @@
       <div class="section danger" style="margin-top:12px">
         ${sectionTitle("alert", "Danger zone")}
         <p class="field-note">Closes every vibemate in this room and removes it from the list. Its history and files move to the trash folder of your viberoom data; a new room with the same name starts empty.</p>
-        <div class="row-btns start"><button class="btn danger sm" id="rp-delete">${ic("trash")}Close this room for good</button></div>
+        <div class="row-btns start">${UI.html("button", { label: "Close this room for good", icon: "trash", kind: "danger", size: "sm", id: "rp-delete" })}</div>
       </div>`;
     wireDetailsClose();
     rulesToNodes($("#rp-rules"), room.customRulesText != null ? room.customRulesText : rs.customRules || "", room);
@@ -2260,7 +2976,7 @@
       .map((r) => {
         const v = (s.vendorPresets || {})[r.id] || {};
         return `<div class="vendor-card">
-          <div class="vc-head"><span class="vc-logo">${r.icon ? `<img src="${esc(r.icon)}" alt="" onerror="this.replaceWith(document.createTextNode('${esc(r.vendor[0])}'))">` : esc(r.vendor[0])}</span><span class="vc-name">${esc(r.vendor)}</span><span class="badge status-idle"><span class="dot"></span>installed</span></div>
+          <div class="vc-head"><span class="vc-logo">${r.icon ? `<img src="${esc(r.icon)}" alt="" onerror="this.replaceWith(document.createTextNode('${esc(r.vendor[0])}'))">` : esc(r.vendor[0])}</span><span class="vc-name">${esc(r.vendor)}</span>${UI.html("badge", { label: "installed", tone: "ready", dot: true })}</div>
           <div class="vc-fields">
             ${field("Model", `<input type="text" data-vendor="${r.id}" data-key="model" value="${esc(v.model || "")}" placeholder="${esc(r.defaultModel || "vibemate default")}">`)}
             ${field("Effort", `<input type="text" data-vendor="${r.id}" data-key="effort" value="${esc(v.effort || "")}" placeholder="${esc(r.defaultEffort || "vibemate default")}">`)}
@@ -2271,8 +2987,14 @@
       .join("");
     const logo = (r) => `<span class="vc-logo">${r.icon ? `<img src="${esc(r.icon)}" alt="" onerror="this.replaceWith(document.createTextNode('${esc(r.vendor[0])}'))">` : esc(r.vendor[0])}</span>`;
     const machine =
-      installed.map((r) => `<div class="vendor-row">${logo(r)}<span class="vc-name">${esc(r.vendor)}<span class="hint" title="${esc(r.installedAt || "")}">${esc(r.installedAt || "bundled")}</span></span><span class="badge status-idle"><span class="dot"></span>installed</span></div>`).join("") +
-      missing.map((r) => `<div class="vendor-row" style="opacity:.75">${logo(r)}<span class="vc-name">${esc(r.vendor)}<span class="hint">${esc(r.installHint || r.unavailableReason || "")}</span></span><span class="badge status-offline">not installed</span></div>`).join("");
+      installed
+        .map((r) => {
+          const out = r.loginState === "missing";
+          const where = out ? `not logged in — run <code>${esc(r.loginCommand)}</code>` : esc(r.installedAt || "bundled");
+          return `<div class="vendor-row">${logo(r)}<span class="vc-name">${esc(r.vendor)}<span class="hint" title="${esc(r.installedAt || "")}">${where}</span></span>${UI.html("badge", { label: out ? "no login" : "installed", tone: out ? "thinking" : "ready", dot: true })}</div>`;
+        })
+        .join("") +
+      missing.map((r) => `<div class="vendor-row" style="opacity:.75">${logo(r)}<span class="vc-name">${esc(r.vendor)}<span class="hint">${esc(r.installHint || r.unavailableReason || "")}</span></span>${UI.html("badge", { label: "not installed", tone: "asleep" })}</div>`).join("");
     els.pageInner.innerHTML = `
       <div class="page-head"><div><h1>Settings</h1><div class="hint">${state.version ? `${esc(state.version.name)} ${esc(state.version.version)} · hub built ${esc(new Date(state.version.build).toLocaleString())}` : "hub build unknown (older hub process; run viberoom again to replace it)"}</div></div></div>
       <div id="sp-form">
@@ -2289,18 +3011,18 @@
           </div>
           <div class="section" id="sp-appearance">
             ${sectionTitle("eye", "Appearance")}
-            ${field("Text size, px", `<input type="number" id="sp-chat-fs" min="12" max="24" step="0.5" value="${esc(String((s.appearance || {}).chatFontSize || 14.5))}">`, "The size of the chat text; 14.5 is the default. Everything else in the window scales with it.")}
+            ${field("Text size, px", `<input type="number" id="sp-chat-fs" min="12" max="24" step="0.5" value="${esc(String((s.appearance || {}).chatFontSize || 14.5))}">`, "The size of the chat text; 14.5 is the default. Only the text changes size with it: the boxes, buttons and panels stay as they are.")}
             ${field("Font", `<select id="sp-font">${Object.entries(FONTS.text).map(([id, f]) => `<option value="${id}"${((s.appearance || {}).font || "nunito") === id ? " selected" : ""}>${esc(f.label)}</option>`).join("")}</select>`, "Nunito, Inter and Noto Sans come with viberoom and look the same on every OS; the system entries use what this machine has.")}
             ${field("Code font", `<select id="sp-mono">${Object.entries(FONTS.mono).map(([id, f]) => `<option value="${id}"${((s.appearance || {}).mono || "jetbrains-mono") === id ? " selected" : ""}>${esc(f.label)}</option>`).join("")}</select>`, "For code blocks, paths and tool output.")}
-            <div class="bubble" id="sp-chat-sample" style="display:inline-block;font-size:${((s.appearance || {}).chatFontSize || 14.5) / zoomFactor()}px">Messages will read like this, with <code>code</code> a step smaller.</div>
+            <div class="bubble" id="sp-chat-sample" style="display:inline-block;font-size:${(s.appearance || {}).chatFontSize || 14.5}px">Messages will read like this, with <code>code</code> a step smaller.</div>
           </div>
           <div class="section" id="sp-editor">
             ${sectionTitle("pencil", "Open files at a line")}
             <label class="field"><span class="label">A click on a path like main.ts:375 opens the file in${geekTip("Only an editor can jump to a line; the OS default app just opens the file. Auto looks for VS Code, Cursor, Windsurf, Zed, Sublime Text, Notepad++ and the JetBrains IDEs, in that order, on PATH and in their usual folders. Custom: a command with {file}, {line} and {column} placeholders, e.g. code --goto {file}:{line}.")}</span>
               <div class="chips editor-modes">
-                <button type="button" class="chip-btn${(s.editor || {}).mode === "custom" ? "" : (s.editor || {}).mode === "default-app" ? "" : " on"}" data-mode="auto">Auto <span class="hint" id="sp-editor-auto">…</span></button>
-                <button type="button" class="chip-btn${(s.editor || {}).mode === "default-app" ? " on" : ""}" data-mode="default-app">The default app</button>
-                <button type="button" class="chip-btn${(s.editor || {}).mode === "custom" ? " on" : ""}" data-mode="custom">My own command</button>
+                ${UI.html("choice", { label: "Auto", on: !["custom", "default-app"].includes((s.editor || {}).mode), data: { mode: "auto" }, trail: UI.raw('<span class="hint" id="sp-editor-auto">…</span>') })}
+                ${UI.html("choice", { label: "The default app", on: (s.editor || {}).mode === "default-app", data: { mode: "default-app" } })}
+                ${UI.html("choice", { label: "My own command", on: (s.editor || {}).mode === "custom", data: { mode: "custom" } })}
               </div>
               <input type="hidden" id="sp-editor-mode" value="${esc((s.editor || {}).mode || "auto")}">
             </label>
@@ -2309,11 +3031,11 @@
           <div class="section" id="sp-diagrams">
             ${sectionTitle("wand", "Diagrams")}
             <div class="field"><span class="label">Colours of the boxes${geekTip("Vibemates draw diagrams as Mermaid (a ```mermaid block in a message); the room renders them here, with these colours. Mermaid derives the shades of borders and text from the box colour.")}</span>
-              <div class="chips diagram-presets">${Object.entries(DIAGRAM_PRESETS).map(([id, p]) => `<button type="button" class="chip-btn${dg.preset === id ? " on" : ""}" data-preset="${id}"><span class="swatch" style="${p.palette ? `background:linear-gradient(90deg, ${p.palette.map((c) => c.fill).join(", ")});border-color:${p.palette[0].stroke}` : `background:${p.primaryColor};border-color:${p.primaryBorderColor}`}"></span>${p.label}</button>`).join("")}</div>
+              <div class="chips diagram-presets">${Object.entries(DIAGRAM_PRESETS).map(([id, p]) => UI.html("choice", { label: p.label, on: dg.preset === id, data: { preset: id }, lead: UI.raw(`<span class="swatch" style="${p.palette ? `background:linear-gradient(90deg, ${p.palette.map((c) => c.fill).join(", ")});border-color:${p.palette[0].stroke}` : `background:${p.primaryColor};border-color:${p.primaryBorderColor}`}"></span>`) })).join("")}</div>
               <input type="hidden" id="sp-diagram-preset" value="${esc(dg.preset)}">
             </div>
             <label class="switch"><span class="label">My own colour for the boxes</span><input type="checkbox" id="sp-diagram-custom" ${dg.primary ? "checked" : ""}></label>
-            <div class="field row" id="sp-diagram-color-row" ${dg.primary ? "" : "hidden"}><span class="label">Box colour</span><input type="color" id="sp-diagram-color" value="${esc(dg.primary || "#ece9ff")}" style="width:46px;height:30px;padding:2px"></div>
+            <div class="field row" id="sp-diagram-color-row" ${dg.primary ? "" : "hidden"}><span class="label">Box colour</span><input type="color" id="sp-diagram-color" value="${esc(dg.primary || TOKENS.diagrams.customBoxDefault)}" style="width:46px;height:30px;padding:2px"></div>
             ${mermaidBlock("graph LR\n  A[You] --> B(Vibemate)\n  B --> C{Agreed?}\n  C -->|yes| D[Done]\n  C -->|no| B").replace('class="mermaid-block"', 'class="mermaid-block preview"')}
           </div>
         </div>
@@ -2322,7 +3044,13 @@
             ${sectionTitle("refresh", "Updates")}
             <label class="switch"><span class="label">Check for updates once a day<span class="hint">At start, one request to the npm registry for the latest viberoom version; nothing else leaves this machine. A newer version shows as a bubble over your avatar.</span></span><input type="checkbox" id="sp-updates" ${s.checkForUpdates !== false ? "checked" : ""}></label>
             <p class="hint" id="sp-update-status">${updateStatusText()}</p>
-            <button type="button" class="btn sm" id="sp-update-check">Check now</button>
+            ${UI.html("button", { label: "Check now", size: "sm", id: "sp-update-check" })}
+          </div>
+          <div class="section" id="sp-restart">
+            ${sectionTitle("refresh", "Restart")}
+            <p class="hint" style="margin-bottom:10px">Starts the hub again with what is on disk. The vibemates' sessions end and they come back through "Welcome back"; this window reconnects on its own. Closing the window does not do this: the hub keeps running in the background, which is why it can stay on an older build than the one you have.</p>
+            ${state.version && state.version.staleSource ? `<p class="hint warn" style="margin-bottom:10px">This hub is older than the code on disk: <code>${esc(state.version.staleSource)}</code> changed after it was built. Restart takes what is built; in a source checkout run <code>node scripts/update.mjs</code>, which builds first.</p>` : ""}
+            ${UI.html("button", { label: "Restart viberoom", size: "sm", id: "sp-restart-now" })}
           </div>
           <div class="section">
             ${sectionTitle("spark", "Vibemates on this machine")}
@@ -2349,6 +3077,12 @@
           </div>
         </div>
         <div>
+          <div class="section" id="sp-slow">
+            ${sectionTitle("clock", "Rendering in this window")}
+            <p class="hint" style="margin-bottom:10px">Everything this window spent more than 8 ms on, newest first: the moment, the cost, what it was, and what the room was doing then. Anything over 50 ms the browser reports by itself, ours or not. When something feels slow, copy the list into the room: it says where to look, which a measurement from outside cannot.</p>
+            ${slowTasksHtml()}
+            ${UI.html("button", { label: "Copy the list", size: "sm", id: "sp-slow-copy" })}
+          </div>
           <div class="section">
             ${sectionTitle("settings", "Presets per vibemate")}
             <p class="hint" style="margin-bottom:10px">Used when you summon one; leave a field empty for the built-in suggestion. The summon dialog always shows what the vibemate really offers. Bypass modes: Claude bypassPermissions, Codex agent-full-access, Gemini yolo, Cursor agent, OpenCode build, Copilot agent + allow_all.</p>
@@ -2356,16 +3090,16 @@
           </div>
         </div>
       </div>`,
-        "room defaults, presets per vibemate, vibemate skills",
+        "room defaults, presets per vibemate, vibemate skills, rendering",
       )}
       </div>`;
     const editorSection = $("#sp-editor");
     const editorCmdRow = $("#sp-editor-cmd").closest(".field");
     const showEditorCmd = () => (editorCmdRow.hidden = $("#sp-editor-mode").value !== "custom");
     showEditorCmd();
-    editorSection.querySelectorAll(".editor-modes .chip-btn").forEach((b) =>
+    editorSection.querySelectorAll('.editor-modes [data-ui="choice"]').forEach((b) =>
       b.addEventListener("click", () => {
-        editorSection.querySelectorAll(".editor-modes .chip-btn").forEach((x) => x.classList.toggle("on", x === b));
+        editorSection.querySelectorAll('.editor-modes [data-ui="choice"]').forEach((x) => UI.setState(x, x === b ? "on" : null));
         const input = $("#sp-editor-mode");
         input.value = b.dataset.mode;
         input.dispatchEvent(new Event("change", { bubbles: true }));
@@ -2386,9 +3120,9 @@
       block.querySelector(".mm-out").innerHTML = `<pre>${esc(block.dataset.src)}</pre>`;
       renderDiagrams(diagramSection, previewTheme());
     };
-    diagramSection.querySelectorAll(".diagram-presets .chip-btn").forEach((b) =>
+    diagramSection.querySelectorAll('.diagram-presets [data-ui="choice"]').forEach((b) =>
       b.addEventListener("click", () => {
-        diagramSection.querySelectorAll(".diagram-presets .chip-btn").forEach((x) => x.classList.toggle("on", x === b));
+        diagramSection.querySelectorAll('.diagram-presets [data-ui="choice"]').forEach((x) => UI.setState(x, x === b ? "on" : null));
         const input = $("#sp-diagram-preset");
         input.value = b.dataset.preset;
         input.dispatchEvent(new Event("change", { bubbles: true }));
@@ -2404,14 +3138,39 @@
     const sample = $("#sp-chat-sample");
     $("#sp-chat-fs").addEventListener("input", () => {
       const px = Number($("#sp-chat-fs").value);
-      if (px >= 12 && px <= 24) sample.style.fontSize = `${px / zoomFactor()}px`;
+      if (px >= 12 && px <= 24) sample.style.fontSize = `${px}px`;
     });
     $("#sp-font").addEventListener("change", () => (sample.style.fontFamily = FONTS.text[$("#sp-font").value].stack));
     $("#sp-mono").addEventListener("change", () => sample.querySelectorAll("code").forEach((c) => (c.style.fontFamily = FONTS.mono[$("#sp-mono").value].stack)));
+    $("#sp-slow-copy").addEventListener("click", async () => {
+      const b = $("#sp-slow-copy");
+      try {
+        await navigator.clipboard.writeText(slowTasksText() || "nothing over 8 ms in this window");
+        b.textContent = "Copied";
+        setTimeout(() => (b.textContent = "Copy the list"), 1500);
+      } catch (e) {
+        showError(e);
+      }
+    });
+    $("#sp-restart-now").addEventListener("click", async () => {
+      const ok = await confirmDialog('Every vibemate loses its session and comes back through "Welcome back". This window reconnects on its own.', { title: "Restart viberoom?", okLabel: "Restart" });
+      if (!ok) return;
+      const button = $("#sp-restart-now");
+      button.disabled = true;
+      button.textContent = "Restarting…";
+      try {
+        await post("/api/restart");
+        toast("viberoom is restarting; the window reconnects on its own.", "success");
+      } catch (error) {
+        showError(error);
+        button.disabled = false;
+        button.textContent = "Restart viberoom";
+      }
+    });
     $("#sp-update-check").addEventListener("click", async () => {
       const b = $("#sp-update-check");
       b.disabled = true;
-      b.classList.add("loading");
+      UI.setState(b, "loading");
       try {
         state.update = await get("/api/update?check=1");
         $("#sp-update-status").textContent = updateStatusText();
@@ -2420,7 +3179,7 @@
         showError(e);
       }
       b.disabled = false;
-      b.classList.remove("loading");
+      UI.setState(b, null);
     });
     bindSave($("#sp-form"), async () => {
         const vendorPresets = {};
@@ -2461,13 +3220,13 @@
 
   function skillBadges(sk) {
     const out = [];
-    if (sk.userInvocable === false) out.push('<span class="badge">vibemate only</span>');
-    if (sk.agentInvocable === false) out.push('<span class="badge">human only</span>');
-    if (sk.author && sk.author !== "human") out.push(`<span class="badge outline">${esc(sk.author === "viberoom" ? "built-in" : `by ${sk.author.replace(/^agent:/, "").replace(/@.*$/, "")} (agent)`)}</span>`);
-    if (sk.draft) out.push('<span class="badge status-queued">draft: awaiting your approval</span>');
-    else if (sk.reviewed === false) out.push('<span class="badge status-thinking">unreviewed</span>');
-    if ((sk.problems || []).length) out.push(`<span class="badge status-error">${esc(sk.problems.join("; "))}</span>`);
-    if ((sk.warnings || []).length) out.push(`<span class="badge status-thinking" title="${esc(sk.warnings.join("; "))}">${sk.warnings.length} warning${sk.warnings.length > 1 ? "s" : ""}</span>`);
+    if (sk.userInvocable === false) out.push(UI.html("badge", { label: "vibemate only" }));
+    if (sk.agentInvocable === false) out.push(UI.html("badge", { label: "human only" }));
+    if (sk.author && sk.author !== "human") out.push(UI.html("badge", { label: sk.author === "viberoom" ? "built-in" : `by ${sk.author.replace(/^agent:/, "").replace(/@.*$/, "")} (agent)`, tone: "outline" }));
+    if (sk.draft) out.push(UI.html("badge", { label: "draft: awaiting your approval", tone: "waiting" }));
+    else if (sk.reviewed === false) out.push(UI.html("badge", { label: "unreviewed", tone: "thinking" }));
+    if ((sk.problems || []).length) out.push(UI.html("badge", { label: sk.problems.join("; "), tone: "error" }));
+    if ((sk.warnings || []).length) out.push(UI.html("badge", { label: `${sk.warnings.length} warning${sk.warnings.length > 1 ? "s" : ""}`, tone: "thinking", title: sk.warnings.join("; ") }));
     return out.join(" ");
   }
 
@@ -2485,7 +3244,7 @@
           <div class="hint">${esc(sk.description)}</div>
           ${room ? `<div class="hint sk-holders">${ic("user")}${esc(holdersOf(sk.name).map((p) => p.name).join(", "))}</div>` : ""}
         </div>
-        <span class="skill-actions">${sk.draft ? `<button class="btn sm primary" data-approve-skill="${esc(sk.name)}">Approve</button>` : ""}<button class="icon-btn sm ghost" data-edit-skill="${esc(sk.name)}" title="Edit this skill">${ic("pencil")}</button></span>
+        <span class="skill-actions">${sk.draft ? UI.html("button", { label: "Approve", kind: "primary", size: "sm", data: { approveSkill: sk.name } }) : ""}${UI.html("icon-button", { icon: "pencil", title: "Edit this skill", kind: "ghost", size: "sm", data: { editSkill: sk.name } })}</span>
       </li>`;
     const list = shown.length
       ? `<ul class="skill-list">${shown.map(item).join("")}</ul>`
@@ -2501,14 +3260,14 @@
           <label class="switch"><span class="label">Vibemates may load it themselves</span><input type="checkbox" id="sk-agent" ${ed.agentInvocable === false ? "" : "checked"}></label>
           <p class="error" id="sk-error" hidden></p>
           ${editing && editing.author === "viberoom" ? `<p class="field-note">${ic("lock")} Built-in skill: it comes with viberoom, the hub keeps it up to date, and it is read-only. Copy the text into a new skill to make your own version.</p>` : ""}
-          <div class="row-btns">${editing && editing.author !== "viberoom" ? '<button class="btn sm danger" id="sk-delete">Delete</button>' : ""}<span class="saved" id="sk-saved"></span><button class="btn sm ghost" id="sk-cancel">${editing && editing.author === "viberoom" ? "Close" : "Cancel"}</button>${editing && editing.author === "viberoom" ? "" : '<button class="btn sm primary" id="sk-save">Save skill</button>'}</div>
+          <div class="row-btns">${editing && editing.author !== "viberoom" ? UI.html("button", { label: "Delete", kind: "danger", size: "sm", id: "sk-delete" }) : ""}<span class="saved" id="sk-saved"></span>${UI.html("button", { label: editing && editing.author === "viberoom" ? "Close" : "Cancel", kind: "ghost", size: "sm", id: "sk-cancel" })}${editing && editing.author === "viberoom" ? "" : UI.html("button", { label: "Save skill", kind: "primary", size: "sm", id: "sk-save" })}</div>
         </div>`
       : "";
     const about = ed
       ? ""
       : `<p class="hint sk-about">A skill is a folder <code>skills/&lt;name&gt;/SKILL.md</code> in the hub's data folder: a description (what triggers it) and the instructions. Attach skills to vibemates in their panels; invoke one with <code>/name</code> in the composer. Vibemates with the hub's tools can create skills too (they load <code>skill-writer</code> first).</p>`;
     els.pageInner.innerHTML = `
-      <div class="page-head"><div><h1>${room ? `Skills in ${esc(room.name)}` : "Skills"}</h1><div class="hint">${room ? `${shown.length} of ${skills.length} in the library are attached to a vibemate here` : `${skills.length} skill${skills.length === 1 ? "" : "s"} in the library`}</div></div><div class="row-btns">${room ? `<button class="btn ghost" id="sk-all">${ic("skills")}All skills</button>` : ""}<button class="btn ghost" id="sk-reload" title="Re-read the skills folder">${ic("refresh")}Reload</button><button class="btn primary cta" id="sk-new"><span class="cta-ico">${ic("plus")}</span><span class="label">New skill</span></button></div></div>
+      <div class="page-head"><div><h1>${room ? `Skills in ${esc(room.name)}` : "Skills"}</h1><div class="hint">${room ? `${shown.length} of ${skills.length} in the library are attached to a vibemate here` : `${skills.length} skill${skills.length === 1 ? "" : "s"} in the library`}</div></div><div class="row-btns">${room ? UI.html("button", { label: "All skills", icon: "skills", kind: "ghost", id: "sk-all" }) : ""}${UI.html("button", { label: "Reload", icon: "refresh", kind: "ghost", id: "sk-reload", title: "Re-read the skills folder" })}${UI.html("button", { label: "New skill", icon: "plus", kind: "primary", size: "cta", id: "sk-new" })}</div></div>
       <div class="${ed ? "page-cols" : ""}"><div>${list}${about}</div>${editor}</div>`;
     const all = $("#sk-all");
     if (all)
@@ -2591,14 +3350,14 @@
       const row = document.createElement("label");
       row.className = "check-row";
       const broken = (s.problems && s.problems.length) || s.draft;
-      row.innerHTML = `<input type="checkbox" value="${esc(s.name)}" ${chosen.has(s.name.toLowerCase()) ? "checked" : ""} ${broken ? "disabled" : ""}><span><b>/${esc(s.name)}</b> <span class="hint">${esc(s.description)}</span>${s.draft ? '<span class="badge status-queued">draft</span>' : ""}${s.problems && s.problems.length ? `<span class="badge status-error">${esc(s.problems.join("; "))}</span>` : ""}</span>`;
+      row.innerHTML = `<input type="checkbox" value="${esc(s.name)}" ${chosen.has(s.name.toLowerCase()) ? "checked" : ""} ${broken ? "disabled" : ""}><span><b>/${esc(s.name)}</b> <span class="hint">${esc(s.description)}</span>${s.draft ? UI.html("badge", { label: "draft", tone: "waiting" }) : ""}${s.problems && s.problems.length ? UI.html("badge", { label: s.problems.join("; "), tone: "error" }) : ""}</span>`;
       container.appendChild(row);
     }
     for (const name of selected || []) {
       if (known.has(name.toLowerCase())) continue;
       const row = document.createElement("label");
       row.className = "check-row";
-      row.innerHTML = `<input type="checkbox" value="${esc(name)}" checked><span><b>/${esc(name)}</b> <span class="badge status-error">missing from the library</span></span>`;
+      row.innerHTML = `<input type="checkbox" value="${esc(name)}" checked><span><b>/${esc(name)}</b> ${UI.html("badge", { label: "missing from the library", tone: "error" })}</span>`;
       container.appendChild(row);
     }
     if (!container.children.length) container.innerHTML = '<span class="hint">No skills in the library yet (Skills in the menu).</span>';
@@ -2725,11 +3484,7 @@
       return;
     }
     for (const o of options) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = `chip-btn${o.selected ? " on" : ""}${o.value === "" ? " none" : ""}`;
-      b.textContent = o.textContent;
-      if (o.title) b.title = o.title;
+      const b = UI.el("choice", { label: o.textContent, on: !!o.selected, quiet: o.value === "", title: o.title || undefined });
       b.addEventListener("click", () => {
         select.value = o.value;
         select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -2796,8 +3551,13 @@
     const bypassOn = (state.settings || {}).bypassPermissionsByDefault !== false;
     els.invNote.textContent = (recipe.unavailableReason ? `${recipe.note} — ${recipe.unavailableReason}` : recipe.note) + (bypassOn && recipe.bypassMode ? ` Mode defaults to "${recipe.bypassMode}" (acts without asking; change it here or in Settings).` : "");
     els.invSubmit.disabled = !!recipe.unavailableReason;
-    els.invWhere.textContent = recipe.unavailableReason ? `Not installed on this machine. To install: ${recipe.installHint || ""}` : `Found on this machine: ${recipe.installedAt || "bundled"}`;
-    els.invWhere.className = recipe.unavailableReason ? "hint error" : "hint";
+    const noLogin = !recipe.unavailableReason && recipe.loginState === "missing";
+    els.invWhere.textContent = recipe.unavailableReason
+      ? `Not installed on this machine. To install: ${recipe.installHint || ""}`
+      : noLogin
+        ? `Found at ${recipe.installedAt || "bundled"}, but no login of ${recipe.vendor} was found here. Run ${recipe.loginCommand} in a terminal first, or summon it and see.`
+        : `Found on this machine: ${recipe.installedAt || "bundled"}`;
+    els.invWhere.className = recipe.unavailableReason ? "hint error" : noLogin ? "hint warn" : "hint";
     fillSelect(els.invModel, recipe.modelPresets, preset.model, "vibemate default");
     fillSelect(els.invEffort, recipe.effortPresets, preset.effort, "vibemate default");
     fillSelect(els.invMode, recipe.modePresets, preset.mode, "vibemate default");
@@ -2820,7 +3580,7 @@
     els.invAgents.innerHTML = state.recipes
       .map(
         (r) =>
-          `<button type="button" class="agent-tile${r.unavailableReason ? " off" : ""}" data-agent="${esc(r.id)}" title="${esc(r.unavailableReason ? `Not installed on this machine. ${r.installHint || ""}` : `Found at ${r.installedAt || "bundled"}`)}"><span class="at-logo">${vendorLogo(r)}</span><span class="at-name">${esc(r.vendor)}</span><span class="at-sub">${r.unavailableReason ? "not installed" : "installed"}</span></button>`,
+          `<button type="button" class="agent-tile${r.unavailableReason ? " off" : ""}" data-agent="${esc(r.id)}" title="${esc(r.unavailableReason ? `Not installed on this machine. ${r.installHint || ""}` : r.loginState === "missing" ? `Found at ${r.installedAt || "bundled"}, but not logged in: run ${r.loginCommand}` : `Found at ${r.installedAt || "bundled"}`)}"><span class="at-logo">${vendorLogo(r)}</span><span class="at-name">${esc(r.vendor)}</span><span class="at-sub">${r.unavailableReason ? "not installed" : r.loginState === "missing" ? "no login" : "installed"}</span></button>`,
       )
       .join("");
     els.invAgents.querySelectorAll(".agent-tile:not(.off)").forEach((b) =>
@@ -2883,7 +3643,7 @@
       return;
     }
     els.invSubmit.disabled = true;
-    els.invSubmit.classList.add("loading");
+    UI.setState(els.invSubmit, "loading");
     els.invError.hidden = true;
     try {
       if (staffing.id) {
@@ -2919,20 +3679,45 @@
       els.invError.hidden = false;
     } finally {
       els.invSubmit.disabled = false;
-      els.invSubmit.classList.remove("loading");
+      UI.setState(els.invSubmit, null);
     }
   }
 
 
   const reconnectPrompted = new Set();
-  function openReconnectDialog(room) {
-    const offline = offlineAgents(room);
+  function renderReconnectDefault() {
+    const mode = (state.settings || {}).reconnectMode === "load" ? "load" : "replay";
+    for (const choice of els.rcForm.querySelectorAll(".choice")) {
+      const value = choice.querySelector('input[name="rc-mode"]').value;
+      choice.querySelector(".rc-is-default").hidden = value !== mode;
+      choice.querySelector(".rc-default").hidden = value === mode;
+    }
+    return mode;
+  }
+  els.rcForm.addEventListener("click", async (e) => {
+    const button = e.target.closest(".rc-default");
+    if (!button) return;
+    const mode = button.dataset.mode;
+    try {
+      await post("/api/settings", { reconnectMode: mode });
+      if (state.settings) state.settings.reconnectMode = mode;
+      els.rcForm.querySelector(`input[name="rc-mode"][value="${mode}"]`).checked = true;
+      renderReconnectDefault();
+      toast(mode === "load" ? "Welcome back will offer the full session first." : "Welcome back will offer the replay first.", "success");
+    } catch (error) {
+      showError(error);
+    }
+  });
+  function openReconnectDialog(room, only) {
+    const offline = offlineAgents(room).filter((p) => !only || p.id === only.id);
     if (!offline.length) return;
-    reconnectPrompted.add(room.id);
+    if (!only) reconnectPrompted.add(room.id);
     els.rcError.hidden = true;
     els.rcReplay.value = room.settings.replayAfterRestart ?? 10;
-    els.rcForm.querySelector('input[name="rc-mode"][value="replay"]').checked = true;
-    els.rcIntro.textContent = `${offline.length} vibemate${offline.length > 1 ? "s are" : " is"} offline in "${room.name}" (their sessions ended with the previous hub run). Choose how they come back:`;
+    els.rcForm.querySelector(`input[name="rc-mode"][value="${renderReconnectDefault()}"]`).checked = true;
+    els.rcIntro.textContent = only
+      ? `${only.name} is offline in "${room.name}" (its session ended with the previous hub run). Choose how it comes back:`
+      : `${offline.length} vibemate${offline.length > 1 ? "s are" : " is"} offline in "${room.name}" (their sessions ended with the previous hub run). Choose how they come back:`;
     els.rcTable.innerHTML = offline
       .map(
         (p) => `<tr data-id="${esc(p.id)}">
@@ -2952,7 +3737,7 @@
     const replay = Number(els.rcReplay.value);
     const rows = [...els.rcTable.querySelectorAll("tr")].map((tr) => ({ id: tr.dataset.id, choice: tr.querySelector(".rc-per").value || globalMode }));
     els.rcSubmit.disabled = true;
-    els.rcSubmit.classList.add("loading");
+    UI.setState(els.rcSubmit, "loading");
     els.rcError.hidden = true;
     const failures = [];
     for (const row of rows) {
@@ -2964,7 +3749,7 @@
       }
     }
     els.rcSubmit.disabled = false;
-    els.rcSubmit.classList.remove("loading");
+    UI.setState(els.rcSubmit, null);
     if (failures.length) {
       els.rcError.textContent = failures.join(" · ");
       els.rcError.hidden = false;
@@ -3002,10 +3787,10 @@
     tplEls.list.innerHTML = tpl.items
       .map((t) => {
         const on = tpl.current && t.id === tpl.current.id;
-        const faces = t.vibemates.slice(0, 4).map((v) => avatar({ name: v.name, avatar: v.avatar, color: "#9ca3af" }, 20, {})).join("");
+        const faces = t.vibemates.slice(0, 4).map((v) => avatar({ name: v.name, avatar: v.avatar, color: FALLBACK_COLOR }, 20, {})).join("");
         return `<button type="button" class="tpl-item${on ? " on" : ""}" data-id="${esc(t.id)}" role="radio" aria-checked="${on ? "true" : "false"}">
           <span class="tpl-emoji">${esc(t.emoji || "🧩")}</span>
-          <span class="tpl-body"><b>${esc(t.name)}${t.builtin ? "" : '<span class="badge tpl-mine">your template</span>'}${t.recommended ? '<span class="badge tpl-rec">recommended</span>' : ""}</b><span class="tpl-meta">${t.vibemates.length} vibemate${t.vibemates.length === 1 ? "" : "s"}${t.builtin ? " · built in" : ""}</span><span class="avatar-stack">${faces}</span></span>
+          <span class="tpl-body"><b>${esc(t.name)}${t.builtin ? "" : UI.html("badge", { label: "your template", size: "xs" })}${t.recommended ? UI.html("badge", { label: "recommended", tone: "attention", size: "xs" }) : ""}</b><span class="tpl-meta">${t.vibemates.length} vibemate${t.vibemates.length === 1 ? "" : "s"}${t.builtin ? " · built in" : ""}</span><span class="avatar-stack">${faces}</span></span>
           <span class="tpl-check">${ic("check")}</span>
         </button>`;
       })
@@ -3069,7 +3854,7 @@
     if (!v.agentType) return "";
     const rec = state.recipes.find((r) => r.id === v.agentType);
     const parts = [rec ? rec.vendor : v.agentType, v.model, v.effort, v.mode].filter(Boolean);
-    return `<div class="chips tpl-runs">${parts.map((x) => `<span class="chip">${esc(x)}</span>`).join("")}${rec && rec.unavailableReason ? '<span class="badge status-offline">not installed here</span>' : ""}</div>`;
+    return `<div class="chips tpl-runs">${parts.map((x) => UI.html("chip", { label: x })).join("")}${rec && rec.unavailableReason ? UI.html("badge", { label: "not installed here", tone: "asleep" }) : ""}</div>`;
   }
 
   const stpEls = { dialog: $("#save-template-dialog"), form: $("#save-template-form"), name: $("#stp-name"), desc: $("#stp-desc"), preview: $("#stp-preview"), error: $("#stp-error"), create: $("#stp-create") };
@@ -3125,8 +3910,8 @@
       ${stpSwitch("Show vendor and model to other vibemates", "stp-vendor", !!st.showVendorInRoster)}
     </div>`;
     const agentOptions = [["", "none yet: cast when the room opens"], ...state.recipes.map((r) => [r.id, r.vendor + (r.unavailableReason ? " (not installed here)" : "")])];
-    const vms = (t.vibemates || []).map((v, i) => `<div class="stp-vm" data-i="${i}">${avatar({ name: v.name, avatar: v.avatar, color: "#9ca3af" }, 36, {})}<div>
-        <div class="stp-vm-top"><b>${esc(v.name)}</b><button type="button" class="icon-btn sm ghost" title="Leave this vibemate out of the template" data-stp-remove>${ic("close")}</button></div>
+    const vms = (t.vibemates || []).map((v, i) => `<div class="stp-vm" data-i="${i}">${avatar({ name: v.name, avatar: v.avatar, color: FALLBACK_COLOR }, 36, {})}<div>
+        <div class="stp-vm-top"><b>${esc(v.name)}</b>${UI.html("icon-button", { icon: "close", title: "Leave this vibemate out of the template", kind: "ghost", size: "sm", data: { stpRemove: true } })}</div>
         <div class="stp-vm-fields">
           ${stpField("Vibename", `<input type="text" data-k="name" maxlength="40" value="${esc(v.name)}" required>`)}
           ${stpField("Vibersona", `<input type="text" data-k="tagline" maxlength="80" value="${esc(v.tagline || "")}">`)}
@@ -3143,7 +3928,7 @@
     return `
       <div class="stp-section"><h5>Room</h5>${room}</div>
       <div class="stp-section"><h5>Room rules</h5><textarea id="stp-rules" rows="5" maxlength="4000" placeholder="one rule per line">${esc(st.customRules || "")}</textarea></div>
-      <div class="stp-section"><h5>Folder</h5><span class="dir-row"><input type="text" id="stp-dir" maxlength="1000" value="${esc(t.dir || "")}" spellcheck="false"><button type="button" class="btn ghost browse-btn" data-stp-browse>${ic("folder")}Browse</button></span></div>
+      <div class="stp-section"><h5>Folder</h5><span class="dir-row"><input type="text" id="stp-dir" maxlength="1000" value="${esc(t.dir || "")}" spellcheck="false">${UI.html("button", { label: "Browse", icon: "folder", kind: "ghost", hook: "browse-btn", data: { stpBrowse: true } })}</span></div>
       <div class="stp-section"><h5>Vibemates · <span id="stp-vm-count">${(t.vibemates || []).length}</span></h5>${vms || '<span class="hint">none</span>'}</div>`;
   }
   function readTemplateForm() {
@@ -3263,7 +4048,7 @@
   els.eraseForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      els.eraseSubmit.classList.add("loading");
+      UI.setState(els.eraseSubmit, "loading");
       await post("/api/profile/erase", { confirm: els.eraseWord.value.trim().toLowerCase() });
       try {
         localStorage.clear();
@@ -3271,7 +4056,7 @@
       }
       location.href = "/";
     } catch (error) {
-      els.eraseSubmit.classList.remove("loading");
+      UI.setState(els.eraseSubmit, null);
       els.eraseError.textContent = error.message;
       els.eraseError.hidden = false;
     }
@@ -3299,13 +4084,20 @@
   function applyAppearance() {
     const a = (state.settings || {}).appearance || {};
     const root = document.documentElement;
-    root.style.zoom = String((a.chatFontSize || 14.5) / 14.5);
+    root.style.setProperty("--fs-scale", String((a.chatFontSize || 14.5) / 14.5));
     root.style.setProperty("--font", (FONTS.text[a.font] || FONTS.text.nunito).stack);
     root.style.setProperty("--mono", (FONTS.mono[a.mono] || FONTS.mono["jetbrains-mono"]).stack);
   }
-  const zoomFactor = () => Number(document.documentElement.style.zoom) || 1;
 
+  let hubIdentity = null;
   function loadSnapshot(snapshot) {
+    const v = snapshot.version;
+    const identity = v && v.build ? `${v.version} ${v.build} ${v.pid ?? ""}` : null;
+    if (identity && hubIdentity && identity !== hubIdentity) {
+      location.reload();
+      return;
+    }
+    if (identity) hubIdentity = identity;
     state.settings = snapshot.settings;
     applyAppearance();
     state.update = snapshot.update || null;
@@ -3450,34 +4242,23 @@
     }
   }
 
-  let stream = null;
-  let releaseTimer = null;
-  function connect() {
-    if (stream) return;
-    const es = new EventSource("/events");
-    stream = es;
-    es.onopen = () => els.conn.classList.add("ok");
-    es.onerror = () => els.conn.classList.remove("ok");
-    es.addEventListener("snapshot", (e) => loadSnapshot(JSON.parse(e.data).snapshot));
-    es.addEventListener("room.event", (e) => {
-      const { roomId, event } = JSON.parse(e.data);
-      onRoomEvent(roomId, event);
-    });
-    es.addEventListener("room.created", (e) => {
-      const { room } = JSON.parse(e.data);
-      state.rooms.set(room.id, room);
+  const HUB_EVENTS = {
+    snapshot: (m) => loadSnapshot(m.snapshot),
+    "room.event": (m) => onRoomEvent(m.roomId, m.event),
+    "room.created": (m) => {
+      state.rooms.set(m.room.id, m.room);
       if ((state.view === "rooms" || state.view === "home")) {
         renderSideRooms();
         renderRoomsGrid();
       }
       renderRail();
-    });
-    es.addEventListener("rooms.opened", (e) => {
-      state.openRooms = JSON.parse(e.data).roomIds || [];
+    },
+    "rooms.opened": (m) => {
+      state.openRooms = m.roomIds || [];
       renderRail();
-    });
-    es.addEventListener("room.removed", (e) => {
-      const { roomId } = JSON.parse(e.data);
+    },
+    "room.removed": (m) => {
+      const { roomId } = m;
       state.rooms.delete(roomId);
       state.openRooms = state.openRooms.filter((id) => id !== roomId);
       if (state.currentRoomId === roomId) {
@@ -3490,34 +4271,67 @@
         renderRoomsGrid();
       }
       renderRail();
-    });
-    es.addEventListener("skills", (e) => {
-      state.skills = JSON.parse(e.data).skills || [];
+    },
+    skills: (m) => {
+      state.skills = m.skills || [];
       if (state.view === "skills" && !editingInDetails()) renderSkillsPage();
       if (state.detailsOpen && !editingInDetails()) renderDetails();
-    });
-    es.addEventListener("settings", (e) => {
-      state.settings = JSON.parse(e.data).settings;
+    },
+    settings: (m) => {
+      state.settings = m.settings;
       applyAppearance();
       rerenderDiagrams();
       renderRail();
       if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
       if (state.detailsOpen && state.selection.kind === "me" && !editingInDetails()) renderDetails();
       if (state.view === "room") renderSideRoom();
-    });
-    es.addEventListener("update", (e) => {
-      state.update = JSON.parse(e.data).update;
+    },
+    update: (m) => {
+      state.update = m.update;
       renderUpdatePop();
       if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
-    });
-    es.addEventListener("reset", () => location.href = "/");
+    },
+    reset: () => (location.href = "/"),
+  };
+  let stream = null;
+  let releaseTimer = null;
+  let retryTimer = null;
+  let retryDelay = 1000;
+  function connect() {
+    if (stream) return;
+    clearTimeout(retryTimer);
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+    stream = ws;
+    ws.onopen = () => {
+      retryDelay = 1000;
+      els.conn.classList.add("ok");
+    };
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      const handle = HUB_EVENTS[m.type];
+      if (handle) handle(m);
+    };
+    ws.onerror = () => els.conn.classList.remove("ok");
+    ws.onclose = () => {
+      els.conn.classList.remove("ok");
+      if (stream !== ws) return;
+      stream = null;
+      retryTimer = setTimeout(connect, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 10000);
+    };
   }
   function releaseStream() {
     if (!stream) return;
-    stream.close();
+    const ws = stream;
     stream = null;
+    ws.close();
     els.conn.classList.remove("ok");
     els.conn.title = "Paused while this tab is in the background; resumes when you come back";
+  }
+  function resyncStream() {
+    releaseStream();
+    els.conn.title = "Connection to the hub";
+    connect();
   }
   document.addEventListener("visibilitychange", () => {
     clearTimeout(releaseTimer);
@@ -3563,14 +4377,14 @@
     let drag = null;
     grip.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
-      drag = { y: e.clientY / zoomFactor(), h: els.input.offsetHeight };
+      drag = { y: e.clientY, h: els.input.offsetHeight };
       grip.setPointerCapture(e.pointerId);
       els.composer.classList.add("resizing");
       e.preventDefault();
     });
     grip.addEventListener("pointermove", (e) => {
       if (!drag) return;
-      composerMin = Math.round(Math.min(composerCeiling(), Math.max(36, drag.h + drag.y - e.clientY / zoomFactor())));
+      composerMin = Math.round(Math.min(composerCeiling(), Math.max(36, drag.h + drag.y - e.clientY)));
       autosize();
     });
     const stop = () => {
@@ -3596,11 +4410,12 @@
 
   const composerClear = $("#composer-clear");
   function updateComposerClear() {
-    composerClear.hidden = !(els.input.value.trim() || pendingShots.length);
+    composerClear.hidden = !(els.input.value.trim() || pendingShots.length || pendingQuotes.length);
   }
   composerClear.addEventListener("click", () => {
     els.input.value = "";
     clearShots();
+    clearQuotes();
     autosize();
     updateComposerClear();
     els.input.focus();
@@ -3620,7 +4435,7 @@
     renderShotsTray();
   }
 
-  function insertShotMarker(n) {
+  function insertMarker(text) {
     const el = els.input;
     const value = el.value;
     const start = el.selectionStart ?? value.length;
@@ -3629,16 +4444,15 @@
     const after = value.slice(end);
     const lead = before && !/\s$/.test(before) ? " " : "";
     const tail = after && !/^\s/.test(after) ? " " : "";
-    const marker = `${lead}${shotMarker(n)}${tail}`;
+    const marker = `${lead}${text}${tail}`;
     el.value = before + marker + after;
     const caret = before.length + marker.length;
     el.setSelectionRange(caret, caret);
     autosize();
   }
 
-  function removeShotMarker(n) {
+  function removeMarker(pattern) {
     const el = els.input;
-    const pattern = new RegExp(` ?\\[img ${n}\\]`, "gi");
     const caret = el.selectionStart ?? el.value.length;
     const removedBefore = (el.value.slice(0, caret).match(pattern) || []).join("").length;
     el.value = el.value.replace(pattern, "");
@@ -3663,7 +4477,7 @@
         const n = ++shotSeq;
         pendingShots.push({ n, name, mimeType: file.type, data: String(reader.result) });
         renderShotsTray();
-        insertShotMarker(n);
+        insertMarker(shotMarker(n));
       };
       reader.onerror = () => showError(new Error(`could not read ${name || "the image"}`));
       reader.readAsDataURL(file);
@@ -3679,14 +4493,146 @@
     const drop = e.target.closest(".shot-drop");
     if (!drop) return;
     const [shot] = pendingShots.splice(Number(drop.dataset.i), 1);
-    if (shot) removeShotMarker(shot.n);
+    if (shot) removeMarker(new RegExp(` ?\\[img ${shot.n}\\]`, "gi"));
     renderShotsTray();
   });
+
+  const QUOTES_MAX = 6;
+  let pendingQuotes = [];
+  let quoteSeq = 0;
+  const quoteMarker = (n) => `[quote ${n}]`;
+  const CHIP_CHARS = 70;
+
+  function renderQuotesTray() {
+    updateComposerClear();
+    els.quotesTray.hidden = !pendingQuotes.length;
+    els.quotesTray.innerHTML = pendingQuotes
+      .map(
+        (q, i) =>
+          `<span class="quote-chip" title="${esc(q.text)}"><span class="qc-n">${q.n}</span><b>${esc(q.fromName)}</b><span class="qc-text">${esc(q.text.replace(/\s+/g, " ").slice(0, CHIP_CHARS))}${q.text.length > CHIP_CHARS ? "…" : ""}</span><button type="button" class="qc-drop" data-i="${i}" title="Remove this quote">×</button></span>`,
+      )
+      .join("");
+  }
+
+  function clearQuotes() {
+    pendingQuotes = [];
+    quoteSeq = 0;
+    renderQuotesTray();
+  }
+
+  function addQuote(m, text) {
+    if (!m || m.kind !== "chat" || m.pending) return void showError(new Error("only a message the room has can be quoted"));
+    if (pendingQuotes.length >= QUOTES_MAX) return void showError(new Error(`up to ${QUOTES_MAX} quotes per message`));
+    const fragment = String(text || "").trim() || String(m.text || "").trim();
+    if (!fragment) return void showError(new Error("there is no text to quote in that message"));
+    const n = ++quoteSeq;
+    pendingQuotes.push({ n, seq: m.seq, from: m.from, fromName: m.fromName, ts: m.ts, text: fragment });
+    renderQuotesTray();
+    insertMarker(quoteMarker(n));
+    els.input.focus();
+  }
+
+  els.quotesTray.addEventListener("click", (e) => {
+    const drop = e.target.closest(".qc-drop");
+    if (!drop) return;
+    const [quote] = pendingQuotes.splice(Number(drop.dataset.i), 1);
+    if (quote) removeMarker(new RegExp(` ?\\[quote ${quote.n}\\]`, "gi"));
+    renderQuotesTray();
+  });
+
+  function messageOfNode(node) {
+    const el = node && (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement);
+    const msg = el && el.closest && el.closest(".msg[data-id]");
+    const room = currentRoom();
+    if (!msg || !room) return null;
+    const m = room.messages.find((x) => x.id === msg.dataset.id);
+    return m && m.kind === "chat" ? m : null;
+  }
+
+  function bubbleSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+    const text = sel.toString().trim();
+    if (!text) return null;
+    const range = sel.getRangeAt(0);
+    const m = messageOfNode(range.startContainer);
+    if (!m || m !== messageOfNode(range.endContainer)) return null;
+    if (!range.startContainer.parentElement || !range.startContainer.parentElement.closest(".bubble .text")) return null;
+    return { m, text, rect: range.getBoundingClientRect() };
+  }
+
+  const quotePop = document.createElement("button");
+  quotePop.type = "button";
+  quotePop.className = "quote-pop";
+  quotePop.hidden = true;
+  quotePop.innerHTML = `${ic("quote")}Quote`;
+  document.body.appendChild(quotePop);
+  let quotePopFor = null;
+  function placeQuotePop() {
+    const found = bubbleSelection();
+    if (!found) {
+      quotePop.hidden = true;
+      quotePopFor = null;
+      return;
+    }
+    quotePopFor = found;
+    quotePop.hidden = false;
+    const top = Math.max(8, found.rect.top - 36);
+    quotePop.style.top = `${top}px`;
+    quotePop.style.left = `${Math.min(window.innerWidth - 96, Math.max(8, found.rect.left + found.rect.width / 2 - 40))}px`;
+  }
+  els.messages.addEventListener("mouseup", () => setTimeout(placeQuotePop, 0));
+  els.messages.addEventListener("keyup", (e) => {
+    if (e.shiftKey || e.key === "Shift") setTimeout(placeQuotePop, 0);
+  });
+  document.addEventListener("selectionchange", () => {
+    if (!quotePop.hidden && !bubbleSelection()) {
+      quotePop.hidden = true;
+      quotePopFor = null;
+    }
+  });
+  quotePop.addEventListener("mousedown", (e) => e.preventDefault());
+  quotePop.addEventListener("click", () => {
+    if (quotePopFor) addQuote(quotePopFor.m, quotePopFor.text);
+    quotePop.hidden = true;
+    quotePopFor = null;
+    window.getSelection().removeAllRanges();
+  });
+
+  els.messages.addEventListener("copy", (e) => {
+    const found = bubbleSelection();
+    if (!found || !e.clipboardData) return;
+    e.clipboardData.setData("text/plain", found.text);
+    e.clipboardData.setData(
+      "text/html",
+      `<blockquote data-viberoom-seq="${found.m.seq}" data-viberoom-room="${esc(currentRoom().id)}" data-viberoom-from="${esc(found.m.fromName)}" cite="viberoom">${esc(found.text)}</blockquote>`,
+    );
+    e.preventDefault();
+  });
+
+  function pastedQuotes(transfer) {
+    const room = currentRoom();
+    const html = transfer && room ? transfer.getData("text/html") : "";
+    if (!html || !html.includes("data-viberoom-seq")) return [];
+    const box = document.createElement("div");
+    box.innerHTML = html;
+    return [...box.querySelectorAll("[data-viberoom-seq]")]
+      .filter((node) => node.dataset.viberoomRoom === room.id)
+      .map((node) => ({ m: room.messages.find((x) => x.seq === Number(node.dataset.viberoomSeq)), text: node.textContent }))
+      .filter((q) => q.m);
+  }
+
   els.input.addEventListener("paste", (e) => {
     const files = imageFilesFrom(e.clipboardData);
-    if (!files.length) return;
+    if (files.length) {
+      e.preventDefault();
+      addShotFiles(files);
+      return;
+    }
+    const quotes = pastedQuotes(e.clipboardData);
+    if (!quotes.length) return;
     e.preventDefault();
-    addShotFiles(files);
+    for (const q of quotes) addQuote(q.m, q.text);
   });
   for (const target of [els.composer, els.messages]) {
     target.addEventListener("dragover", (e) => {
@@ -3706,6 +4652,7 @@
   }
   let typingSentAt = 0;
   els.input.addEventListener("input", () => {
+    lastTypedAt = Date.now();
     if (!currentRoom() || !els.input.value.trim()) return;
     const now = Date.now();
     if (now - typingSentAt < 2000) return;
@@ -3724,9 +4671,19 @@
       else closeLifePop();
       return;
     }
-    if (e.target.closest(".p-gear")) return openDetails({ kind: "participant", id: p.id });
-    if (e.target.closest(".stop-btn")) return void post(roomApi(`/participants/${encodeURIComponent(p.id)}/cancel`)).catch(showError);
-    if (e.target.closest(".reconnect-btn")) return openReconnectDialog(room);
+    const action = e.target.closest('[data-ui="row-button"]');
+    if (action) {
+      const act = action.dataset.act;
+      if (act === "panel") return openDetails({ kind: "participant", id: p.id });
+      if (act === "last-reply") {
+        const last = [...els.messages.querySelectorAll(`.msg.agent[data-from="${cssEscape(p.id)}"]`)].pop();
+        if (last) jumpToMessage(last);
+        else toast(`${p.name} has not replied in this room yet`);
+        return;
+      }
+      if (act === "wake") return openReconnectDialog(room, p);
+      return;
+    }
     if (e.target.closest("button")) return;
     if (p.kind === "human") openDetails({ kind: "me" });
     else if (p.status === "unstaffed") openStaffDialog(p);
@@ -3758,18 +4715,21 @@
     event.preventDefault();
     const text = els.input.value.trim();
     const room = currentRoom();
-    if ((!text && !pendingShots.length) || !room) return;
+    if ((!text && !pendingShots.length && !pendingQuotes.length) || !room) return;
     const shots = pendingShots;
+    const quotes = pendingQuotes;
     els.input.value = "";
     clearShots();
+    clearQuotes();
     typingSentAt = 0;
     autosize();
     const local = { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, seq: 0, from: "human", fromName: (state.settings || {}).humanName || "You", to: [], toNames: [], text, ts: Date.now(), kind: "chat", pending: true };
     if (shots.length) local.images = shots.map((shot) => ({ file: "", name: shot.name, mimeType: shot.mimeType, bytes: 0, n: shot.n, url: shot.data }));
+    if (quotes.length) local.quotes = quotes.map((q) => ({ ...q }));
     const localId = local.id;
     upsertMessage(room.id, local);
     try {
-      const r = await post(roomApi("/send"), { text, images: shots });
+      const r = await post(roomApi("/send"), { text, images: shots, quotes: quotes.map((q) => ({ n: q.n, seq: q.seq, text: q.text })) });
       if (r.command) removeMessage(room.id, localId);
       else adoptLocalMessage(room.id, localId, r.id);
     } catch (error) {
@@ -3777,7 +4737,9 @@
       showError(error);
       els.input.value = text;
       pendingShots = shots;
+      pendingQuotes = quotes;
       renderShotsTray();
+      renderQuotesTray();
     }
   });
   function adoptLocalMessage(roomId, localId, realId) {
@@ -4089,10 +5051,18 @@
   }
   els.sideToggle.addEventListener("click", () => setSideOpen(els.app.classList.contains("side-collapsed")));
   let lastScrollTop = 0;
+  let lastUserScrollAt = 0;
+  for (const type of ["wheel", "touchmove", "keydown", "mousedown"]) {
+    els.messages.addEventListener(type, () => (lastUserScrollAt = Date.now()), { passive: true });
+  }
   els.messages.addEventListener("scroll", () => {
     const top = els.messages.scrollTop;
-    if (nearBottom()) stuck = true;
-    else if (top < lastScrollTop - 1) stuck = false;
+    const byHand = Date.now() - lastUserScrollAt < 700;
+    if (byHand) {
+      if (top < lastScrollTop) stuck = false;
+      else if (els.messages.scrollHeight - top - els.messages.clientHeight < 12) stuck = true;
+    } else if (nearBottom()) stuck = true;
+    else if (top < lastScrollTop) stuck = false;
     lastScrollTop = top;
     els.jumpLatest.hidden = stuck;
     updateTimelineView();
@@ -4134,7 +5104,9 @@
   document.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => closeDialog(b.closest("dialog"))));
   els.fvOpen.addEventListener("click", async () => {
     try {
-      const r = await post("/api/open", { target: `${els.fvOpen.dataset.path}:1` });
+      const marked = els.fvBody.querySelector(".gutter span.line-mark");
+      const line = marked ? Number(marked.textContent) : fileView ? fileView.from : 1;
+      const r = await post("/api/open", { target: `${els.fvOpen.dataset.path}:${line || 1}` });
       toast(r.message, "info");
     } catch (err) {
       showError(err);
@@ -4194,9 +5166,19 @@
       e.preventDefault();
       try {
         const target = link.dataset.open;
-        if (!/^(https?:|mailto:)/i.test(target) && VIEWABLE_RE.test(target)) {
-          await viewFile(target);
+        if (IMAGE_RE.test(target) && !/^(https?:|mailto:)/i.test(target) && /[\\/]/.test(target)) {
+          openLightbox(imageUrl(target), target.split(/[\\/]/).pop());
           return;
+        }
+        if (readableInRoom(target)) {
+          const spec = splitLine(target);
+          const file = spec ? spec.path : target;
+          const room = currentRoom();
+          const found = await resolveInRoom(room ? room.id : "", file);
+          if (!found || found.kind === "file") {
+            await viewFile(file, spec && !VIEWABLE_RE.test(file) ? spec.from : 0);
+            return;
+          }
         }
         const r = await post("/api/open", { target });
         if (r.action !== "open-url") toast(r.message, "info");
@@ -4210,7 +5192,10 @@
       const code = src.closest(".mermaid-block, .csv-block").querySelector(".mm-code");
       code.hidden = !code.hidden;
       src.textContent = code.hidden ? "source" : "hide source";
+      return;
     }
+    const expand = e.target.closest && e.target.closest(".mm-expand");
+    if (expand) openDiagram(expand.closest(".mermaid-block"));
   });
   els.roomSettingsBtn.addEventListener("click", () => openDetails({ kind: "room" }));
   els.chatInfoBtn.addEventListener("click", () => openDetails({ kind: "room" }));
@@ -4266,13 +5251,14 @@
       const pinned = el.classList.contains("pinned");
       return `<div class="tl-row ${cls}${pinned ? " pinned" : ""}" data-i="${k}">${av}<span class="tl-text">${esc(timelineText(el))}</span>${pinned ? `<span class="tl-pin" title="Pinned">${ic("pin")}</span>` : ""}</div>`;
     }
-    function showPop(i) {
+    function showPop(i, keepPlace) {
       const rows = [[i - 2, "faded far"], [i - 1, "faded"], [i, "current"], [i + 1, "faded"], [i + 2, "faded far"]].filter(([k]) => t.items[k]);
       t.pop.innerHTML = rows.map(([k, c]) => rowHtml(k, c)).join("");
       t.pop.hidden = false;
       t.ticks.querySelectorAll(".tl-tick.active").forEach((x) => x.classList.remove("active"));
       const tick = t.ticks.children[i];
       if (tick) tick.classList.add("active");
+      if (keepPlace) return;
       const current = t.pop.querySelector(".tl-row.current");
       let top = (tick ? tick.offsetTop : 0) - (current ? current.offsetTop + current.offsetHeight / 2 : 20) + TICK_H / 2;
       top = Math.max(0, Math.min(top, t.el.clientHeight - t.pop.offsetHeight));
@@ -4300,6 +5286,24 @@
       const row = e.target.closest(".tl-row");
       if (row) jumpToMessage(t.items[Number(row.dataset.i)]);
     });
+    const WHEEL_STEP = 30;
+    let wheelAcc = 0;
+    t.pop.addEventListener(
+      "wheel",
+      (e) => {
+        if (t.pop.hidden || !t.items.length) return;
+        e.preventDefault();
+        wheelAcc += e.deltaY;
+        if (Math.abs(wheelAcc) < WHEEL_STEP) return;
+        const step = Math.sign(wheelAcc);
+        wheelAcc = 0;
+        const row = t.pop.querySelector(".tl-row.current");
+        const current = row ? Number(row.dataset.i) : 0;
+        const next = Math.max(0, Math.min(t.items.length - 1, current + step));
+        if (next !== current) showPop(next, true);
+      },
+      { passive: false },
+    );
     return { render, updateView };
   }
   function timelineText(el) {
@@ -4342,7 +5346,7 @@
     if (room.id !== state.currentRoomId || state.view !== "room") return;
     requestAnimationFrame(() => {
       if (bubbleInView(m.id)) return;
-      const p = findById(room, m.from) || { name: m.fromName, color: "#9ca3af", kind: "agent" };
+      const p = findById(room, m.from) || { name: m.fromName, color: FALLBACK_COLOR, kind: "agent" };
       pushNote({ id: m.id, kind: "done", p, text: `${p.name} finished`, sub: `started ${time(m.ts)}${m.durationMs ? ` · ${spanText(m.durationMs)}` : ""}` });
     });
   }
@@ -4350,7 +5354,7 @@
     if (room.id !== state.currentRoomId || state.view !== "room") return;
     requestAnimationFrame(() => {
       if (bubbleInView(m.id)) return;
-      const p = findById(room, m.from) || { name: m.fromName, color: "#9ca3af", kind: "agent" };
+      const p = findById(room, m.from) || { name: m.fromName, color: FALLBACK_COLOR, kind: "agent" };
       pushNote({ id: m.id, kind: "new", p, text: `${p.name} wrote below`, sub: time(m.ts) });
     });
   }
@@ -4387,16 +5391,20 @@
   const timelines = [
     createTimeline($("#timeline"), () => [...els.messages.querySelectorAll(".msg.mine:not(.hidden-by-search)")], {}),
     createTimeline($("#timeline-left"), () => [...els.messages.querySelectorAll(".msg.agent:not(.hidden-by-search)")], {
-      colorOf: (room, el) => (authorOf(room, el) || {}).color || "#9ca3af",
+      colorOf: (room, el) => (authorOf(room, el) || {}).color || FALLBACK_COLOR,
       avatarOf: (room, el) => { const p = authorOf(room, el); return p ? avatar(p, 16, {}) : ""; },
     }),
   ];
   function renderTimeline() {
+    const t0 = performance.now();
     for (const t of timelines) t.render();
     renderPins();
+    noteSlow("timeline strips", performance.now() - t0);
   }
   function updateTimelineView() { for (const t of timelines) t.updateView(); }
-  const composerFollowers = [$("#timeline"), $("#timeline-left"), els.mentionMenu, els.emojiMenu];
+  attachScrollHints(els.pageInner);
+  attachScrollHints(els.detailsInner);
+  const composerFollowers = [$("#timeline"), $("#timeline-left"), els.mentionMenu, els.emojiMenu, els.jumpLatest];
   new ResizeObserver(() => {
     const h = `${els.composer.offsetHeight}px`;
     for (const el of composerFollowers) el.style.setProperty("--composer-h", h);
@@ -4540,15 +5548,15 @@
           <span>Last reply</span><span>${last ? `<span title="tokens in">${ic("arrow-down")} ${fmtTokens(last.usage.inputTokens)}</span> <span title="tokens out">${ic("arrow-up")} ${fmtTokens(last.usage.outputTokens)}</span>` : "—"}</span>
           <span>Cost (estimate)</span><span>${fmtCost(p.cost) || "—"}</span>
           <span>Briefs sent</span><span>${p.briefsSent ?? 0}</span>
-          <span>Notes</span><span>${p.notes ? `taken at ${fmtTokens(p.notesAt || 0)} tokens` : "none yet"}${p.status === "offline" || p.status === "unstaffed" ? "" : ` · <button type="button" class="link-btn lp-take" title="A hidden turn: the vibemate writes 10 lines for a future restart; nothing is posted">${p.notes ? "refresh" : "take now"}</button>`}${p.notes ? ` · <button type="button" class="link-btn lp-edit">edit</button>` : ""}</span>
+          <span>Notes</span><span>${p.notes ? `taken at ${fmtTokens(p.notesAt || 0)} tokens` : "none yet"}${p.notesTurn ? ` · <span class="taking" title="The hidden turn is running; nothing is posted">taking notes<i></i><i></i><i></i></span>` : `${p.status === "offline" || p.status === "unstaffed" ? "" : ` · <button type="button" class="link-btn lp-take" title="A hidden turn: the vibemate writes 10 lines for a future restart; nothing is posted">${p.notes ? "refresh" : "take now"}</button>`}${p.notes ? ` · <button type="button" class="link-btn lp-edit">edit</button>` : ""}`}</span>
         </div>
-        ${p.notes ? `<pre class="lp-notes">${esc(p.notes)}</pre><div class="lp-editor" hidden><textarea class="lp-notes-area" rows="6" maxlength="4000">${esc(p.notes)}</textarea><div class="row-btns"><button type="button" class="btn sm ghost lp-notes-clear">Clear</button><button type="button" class="btn sm primary lp-notes-save">Save</button></div></div>` : ""}
+        ${p.notes ? `<pre class="lp-notes">${esc(p.notes)}</pre><div class="lp-editor" hidden><textarea class="lp-notes-area" rows="6" maxlength="4000">${esc(p.notes)}</textarea><div class="row-btns">${UI.html("button", { label: "Clear", kind: "ghost", size: "sm", hook: "lp-notes-clear" })}${UI.html("button", { label: "Save", kind: "primary", size: "sm", hook: "lp-notes-save" })}</div></div>` : ""}
         <div class="lp-respawn">
-          <button type="button" class="btn sm danger lp-empty" title="A new session that knows nothing of this conversation">${ic("bolt")}Respawn, empty head</button>
-          <label class="lp-with"><button type="button" class="btn sm lp-mem" title="A new session that re-reads only the last N messages${p.notes ? " and its own notes" : ""}">Respawn with the last</button><input type="number" class="lp-n" min="0" max="500" value="${n}"> messages</label>
+          ${UI.html("button", { label: "Respawn, empty head", icon: "bolt", kind: "danger", size: "sm", hook: "lp-empty", title: "A new session that knows nothing of this conversation" })}
+          <label class="lp-with">${UI.html("button", { label: "Respawn with the last", size: "sm", hook: "lp-mem", title: `A new session that re-reads only the last N messages${p.notes ? " and its own notes" : ""}` })}<input type="number" class="lp-n" min="0" max="500" value="${n}"> messages</label>
         </div>
       </div>
-      <div class="lp-side"><button type="button" class="icon-btn sm lp-x" title="Close">${ic("close")}</button><button type="button" class="icon-btn sm lp-more" title="Open this vibemate's panel">${ic("settings")}</button></div>`;
+      <div class="lp-side">${UI.html("icon-button", { icon: "close", title: "Close", size: "sm", hook: "lp-x" })}${UI.html("icon-button", { icon: "settings", title: "Open this vibemate's panel", size: "sm", hook: "lp-more" })}</div>`;
     el.querySelector(".lp-x").addEventListener("click", closeLifePop);
     el.querySelector(".lp-more").addEventListener("click", () => {
       closeLifePop();
@@ -4589,10 +5597,9 @@
     if (save) save.addEventListener("click", () => saveNotes(el.querySelector(".lp-notes-area").value));
     const clear = el.querySelector(".lp-notes-clear");
     if (clear) clear.addEventListener("click", () => saveNotes(""));
-    const z = zoomFactor();
     const r = lifePop.anchor.getBoundingClientRect();
-    el.style.left = `${Math.round((r.right + 12) / z)}px`;
-    el.style.top = `${Math.round(Math.max(8, Math.min(r.top / z - 10, window.innerHeight / z - el.offsetHeight - 8)))}px`;
+    el.style.left = `${Math.round(r.right + 12)}px`;
+    el.style.top = `${Math.round(Math.max(8, Math.min(r.top - 10, window.innerHeight - el.offsetHeight - 8)))}px`;
   }
   async function respawnWith(p, n) {
     const text =
@@ -4749,11 +5756,7 @@
     for (const room of state.rooms.values()) if (room.dir && !dirs.some((d) => sameFolder(d, room.dir))) dirs.push(room.dir);
     fpEls.recent.innerHTML = "";
     for (const d of dirs.slice(0, 6)) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "chip-btn";
-      b.title = d;
-      b.textContent = d.split(/[\\/]/).filter(Boolean).slice(-1)[0] || d;
+      const b = UI.el("choice", { label: d.split(/[\\/]/).filter(Boolean).slice(-1)[0] || d, title: d });
       b.addEventListener("click", () => fpGoTo(d));
       fpEls.recent.appendChild(b);
     }
@@ -4873,6 +5876,8 @@
     setInterval(scheduleReport, 3000);
     window.addEventListener("pagehide", () => report(true));
   }
+
+  setInterval(tickLive, 1000);
 
   connect();
 })();

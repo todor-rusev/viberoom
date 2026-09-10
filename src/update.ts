@@ -1,7 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface UpdateInfo {
@@ -84,6 +84,32 @@ export async function checkForUpdate(dataDir: string, current: string, options: 
 export function runsFromSourceCheckout(mainModuleUrl: string): boolean {
   const path = decodeURIComponent(new URL(mainModuleUrl).pathname);
   return !/\/node_modules\/viberoom\//.test(path);
+}
+
+export function newerSourceThanBuild(mainModuleUrl: string): string | null {
+  if (!runsFromSourceCheckout(mainModuleUrl)) return null;
+  const root = fileURLToPath(new URL("../", mainModuleUrl));
+  const src = join(root, "src");
+  if (!existsSync(src)) return null;
+  let built: number;
+  try {
+    built = statSync(fileURLToPath(mainModuleUrl)).mtimeMs;
+  } catch {
+    return null;
+  }
+  let newest: { path: string; mtime: number } | null = null;
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.name.endsWith(".ts")) {
+        const mtime = statSync(path).mtimeMs;
+        if (mtime > built + 1000 && (!newest || mtime > newest.mtime)) newest = { path, mtime };
+      }
+    }
+  };
+  walk(src);
+  return newest ? relative(root, (newest as { path: string }).path).split("\\").join("/") : null;
 }
 
 export function installCommandLine(version: string): string {

@@ -2,6 +2,8 @@
 (() => {
   "use strict";
 
+  const tokens = () => globalThis.VIBEROOM_TOKENS.current.elements.participant;
+
   function hash(text) {
     let h = 2166136261;
     for (const ch of String(text)) {
@@ -36,8 +38,8 @@
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${s} ${s}" width="${s}" height="${s}" role="img" aria-label="${escapeAttr(name)}">
   <defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs>
   <circle cx="${s / 2}" cy="${s / 2}" r="${s / 2}" fill="url(#${id})"/>
-  <circle cx="${s / 2}" cy="${s * 0.36}" r="${s * 0.34}" fill="#ffffff" opacity="0.10"/>
-  <text x="50%" y="53%" dominant-baseline="middle" text-anchor="middle" font-family="system-ui, 'Segoe UI Emoji', sans-serif" font-size="${fontSize}" font-weight="700" fill="#ffffff">${escapeText(label)}</text>
+  <circle cx="${s / 2}" cy="${s * 0.36}" r="${s * 0.34}" fill="${tokens().avatarGloss}" opacity="0.10"/>
+  <text x="50%" y="53%" dominant-baseline="middle" text-anchor="middle" font-family="system-ui, 'Segoe UI Emoji', sans-serif" font-size="${fontSize}" font-weight="700" fill="${tokens().avatarLabelInk}">${escapeText(label)}</text>
 </svg>`;
   }
 
@@ -50,13 +52,13 @@
 
   function avatarHtml(participant, size, options) {
     const opts = options || {};
-    const color = participant.color || "#5b5bf0";
+    const color = participant.color || tokens().avatarDefault;
     const s = size || 40;
     const emoji = participant.avatar;
     const label = emoji ? emoji : initials(participant.name);
     const fontSize = Math.round(emoji ? s * 0.56 : s * 0.38);
     const radius = Math.round(s * 0.32);
-    const svg = `<span class="av-tile" role="img" aria-label="${escapeAttr(participant.name)}" style="background:color-mix(in srgb, ${escapeAttr(color)} 16%, #ffffff);color:${escapeAttr(color)};font-size:${fontSize}px;border-radius:${radius}px">${escapeText(label)}</span>`;
+    const svg = `<span class="av-tile" role="img" aria-label="${escapeAttr(participant.name)}" style="background:color-mix(in srgb, ${escapeAttr(color)} 16%, ${tokens().avatarBlend});color:${escapeAttr(color)};font-size:${fontSize}px;border-radius:${radius}px">${escapeText(label)}</span>`;
     const status = opts.status ? `<span class="avatar-status status-${escapeAttr(participant.status || "idle")}"></span>` : "";
     let badge = "";
     if (opts.vendor && participant.kind === "agent") {

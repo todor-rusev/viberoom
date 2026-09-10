@@ -5,12 +5,16 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { writeFileAtomic } from "./atomic.js";
 import { NOTES_ONLY_PROMPT, NOTES_REQUEST, crossedThreshold, emptyUsageReport, extractNotes, isBareContextFullError, isContextFullError, looksCompacted, overThreshold, visibleChunk } from "./context.js";
+import { formatDuration } from "./duration.js";
 import { affectedByEdit, editNotice, partitionHistory, rewriteNotice, type AgentReadState, type EditMode } from "./edit.js";
 import { saveImages, type Attachment, type ImageInput } from "./files.js";
+import { agentReadableWindow, resolveQuotes, type Quote, type QuoteInput } from "./quotes.js";
 import { join, resolve } from "node:path";
 import { AcpAgent } from "./acp-client.js";
 import { RemoteError } from "./jsonrpc.js";
 import { getRecipe, listRecipes } from "./recipes.js";
+import { classifyStartFailure, type Trouble } from "./agent-health.js";
+import { legacyRowTone } from "./rows.js";
 import { composeSkillBlock, skillPull, SKILL_TOOL_NAME, type SkillsForPrompt } from "./persona.js";
 import {
   BUILTIN_AUTHOR,
@@ -43,6 +47,7 @@ import {
   ensureDir,
   type BacklogImage,
   type BacklogLine,
+  type BacklogQuote,
   type Persona,
   type PromptPart,
   type RoomSettings,
@@ -84,6 +89,7 @@ export interface Participant {
   agentInfo?: { name?: string | null; version?: string | null };
   status: ParticipantStatus;
   statusDetail?: string;
+  trouble?: Trouble;
   model?: string;
   effort?: string;
   mode?: string;
@@ -106,6 +112,7 @@ export interface Participant {
   notes?: string;
   notesAt?: number;
   notesSeq?: number;
+  notesTurn?: boolean;
   contextEvent?: { kind: "threshold" | "compacted" | "full"; at: number; used?: number; size?: number };
   autoRespawnAt?: number;
   briefsSent?: number;
@@ -173,11 +180,12 @@ export interface ChatMessage {
   text: string;
   ts: number;
   kind: "chat" | "system" | "hidden";
-  details?: { original?: string; corrections?: string[]; outcome?: string; skill?: string; via?: "tool" | "marker"; refId?: string; agentId?: string };
+  details?: { original?: string; corrections?: string[]; outcome?: string; skill?: string; via?: "tool" | "marker"; refId?: string; agentId?: string; tone?: "attention" | "error" | "hush" };
   skill?: { name: string; args: string };
   edited?: { ts: number; previous: string };
   pinned?: true;
   images?: Attachment[];
+  quotes?: Quote[];
   audience?: "agents" | "human";
   wakes?: true;
   streaming?: boolean;
@@ -186,6 +194,7 @@ export interface ChatMessage {
   toolCalls?: ToolCallView[];
   plan?: PlanEntry[];
   stopReason?: StopReason;
+  stoppedBy?: string;
   usage?: Usage | null;
   durationMs?: number;
 }
@@ -442,6 +451,10 @@ export class Room extends EventEmitter {
     for (const line of lines) {
       try {
         const message = JSON.parse(line) as ChatMessage;
+        if (message.kind === "system" && !message.details?.tone) {
+          const tone = legacyRowTone(message.text);
+          if (tone) message.details = { ...(message.details ?? {}), tone };
+        }
         this.messages.push(message);
         if (message.seq > this.seq) this.seq = message.seq;
       } catch {
@@ -554,6 +567,18 @@ export class Room extends EventEmitter {
     this.push({ type: "message", message });
   }
 
+  private messagesWithLiveDrafts(): ChatMessage[] {
+    const live = [...this.runtimes.values()].filter((r) => r.turn?.published).map((r) => r.turn!.message);
+    if (!live.length) return [...this.messages];
+    const out = [...this.messages];
+    for (const draft of live) {
+      let at = out.length;
+      while (at > 0 && out[at - 1].ts > draft.ts) at--;
+      out.splice(at, 0, draft);
+    }
+    return out;
+  }
+
 
   get humanName(): string {
     return this.settings.humanName;
@@ -577,7 +602,7 @@ export class Room extends EventEmitter {
       settings: this.settings,
       customRulesText: this.renderRuleReferences(this.settings.customRules),
       participants: [...this.participants.values()],
-      messages: [...this.messages, ...this.drafts.values()],
+      messages: this.messagesWithLiveDrafts(),
       permissions: [...this.permissions.values()].map(({ resolve: _r, ...p }) => p),
       proposals: [...this.proposals.values()],
       recipes: listRecipes().map(({ build: _b, ...r }) => r),
@@ -640,11 +665,12 @@ export class Room extends EventEmitter {
     return [...this.participants.values()].filter((p) => p.kind === "agent" && p.status === "unstaffed");
   }
 
-  postHumanMessage(text: string, images: ImageInput[] = []): ChatMessage {
+  postHumanMessage(text: string, images: ImageInput[] = [], quotes: QuoteInput[] = []): ChatMessage {
     const waiting = this.unstaffed();
     if (waiting.length) throw new Error(`${waiting.map((p) => p.name).join(", ")} ${waiting.length === 1 ? "has" : "have"} no coding agent yet: summon ${waiting.length === 1 ? "it" : "them"} from the roster to start the conversation`);
     const trimmed = text.trim();
-    if (!trimmed && !images.length) throw new Error("empty message");
+    if (!trimmed && !images.length && !quotes.length) throw new Error("empty message");
+    const quoted = quotes.length ? resolveQuotes(quotes, this.messages) : [];
     const attachments = images.length ? saveImages(ensureDir(this.filesDir()), images) : [];
     this.humanTypingUntil = 0;
     const human = this.participants.get("human")!;
@@ -660,6 +686,7 @@ export class Room extends EventEmitter {
       kind: "chat",
     };
     if (attachments.length) message.images = attachments;
+    if (quoted.length) message.quotes = quoted;
     this.decorateHumanMessage(message);
     human.turns += 1;
     if (this.focused) {
@@ -794,13 +821,14 @@ export class Room extends EventEmitter {
     return { restarted, removed: removed.length };
   }
 
-  async respawnAgent(id: string, options: { memory?: boolean; replay?: number } = {}): Promise<Participant> {
+  async respawnAgent(id: string, options: { memory?: boolean; replay?: number; reason?: string } = {}): Promise<Participant> {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
     const online = this.runtimes.has(id);
     const memory = !!options.memory;
     const replay = memory ? Math.max(0, options.replay ?? this.settings.replayAfterRestart) : 0;
     const withNotes = memory && !!participant.notes;
+    const why = options.reason ?? "its context was cleared";
     this.dropScheduledTurn(id);
     this.cancelPermissionsOf(id);
     if (this.speaking === id) this.speaking = null;
@@ -809,17 +837,35 @@ export class Room extends EventEmitter {
     this.restoredSeen.set(id, this.seq);
     this.push({ type: "participant", participant });
     if (!online) {
-      participant.statusDetail = withNotes ? "its context was cleared; a reconnect starts it with its notes" : "its context was cleared; a reconnect starts it with an empty head";
-      this.postSystem(withNotes ? `${participant.name} was respawned while offline: it comes back with its notes.` : `${participant.name} was respawned while offline: it comes back knowing nothing from before.`);
+      participant.statusDetail = withNotes ? `${why}; a reconnect starts it with its notes` : `${why}; a reconnect starts it with an empty head`;
+      const comesBack = withNotes ? "it comes back with its notes" : "it comes back knowing nothing from before";
+      this.postSystem(options.reason ? `${participant.name} was respawned while offline (${why}): ${comesBack}.` : `${participant.name} was respawned while offline: ${comesBack}.`);
       this.push({ type: "participant", participant });
       this.log.info(`respawn of ${participant.name} (offline): stored session dropped`);
       return participant;
     }
     await this.reconnect(id, memory
-      ? { mode: "replay", replay, memory: withNotes, reason: `its context was cleared; it comes back with ${withNotes ? "its notes and " : ""}the last ${replay} messages` }
-      : { mode: "replay", replay: 0, reason: "its context was cleared, it remembers nothing from before" });
+      ? { mode: "replay", replay, memory: withNotes, reason: `${why}; it comes back with ${withNotes ? "its notes and " : ""}the last ${replay} messages` }
+      : { mode: "replay", replay: 0, reason: `${why}, it remembers nothing from before` });
     this.log.info(`respawn of ${participant.name}: fresh session, ${memory ? `${withNotes ? "notes + " : ""}replay ${replay}` : "no replay"}`);
     return participant;
+  }
+
+  async restartWithPersona(id: string, patch: PersonaPatch): Promise<Participant> {
+    const participant = this.participants.get(id);
+    if (!participant || participant.kind !== "agent") throw new Error("no such agent");
+    const runtime = this.runtimes.get(id);
+    const online = !!runtime && runtime.agent.alive;
+    if (online && runtime.turnActive) throw new Error(`${participant.name} is in the middle of a reply; try again when it is idle`);
+    if (online) {
+      try {
+        await this.takeNotes(id);
+      } catch (error) {
+        this.log.warn(`${participant.name}: notes before the restart failed (${describeError(error)}); it restarts with the notes it had`);
+      }
+    }
+    this.updatePersona(id, patch);
+    return this.respawnAgent(id, { memory: true, reason: "its role changed" });
   }
 
   updateNotes(id: string, notes: string): Participant {
@@ -841,7 +887,14 @@ export class Room extends EventEmitter {
     if (runtime.turnActive) throw new Error(`${participant.name} is in the middle of a reply; try again when it is idle`);
     const header = buildHeader(this.effectiveSettings(), this.personaOf(participant), this.roster(), this.hops, ["hidden turn: notes only, nothing is posted"]);
     runtime.log.info("notes: hidden turn");
-    await this.executeTurn(participant, runtime, [{ type: "text", text: `${header}\n\n${NOTES_ONLY_PROMPT}` }], null, true);
+    participant.notesTurn = true;
+    this.push({ type: "participant", participant });
+    try {
+      await this.executeTurn(participant, runtime, [{ type: "text", text: `${header}\n\n${NOTES_ONLY_PROMPT}` }], null, true);
+    } finally {
+      participant.notesTurn = undefined;
+      this.push({ type: "participant", participant });
+    }
     return participant;
   }
 
@@ -864,14 +917,14 @@ export class Room extends EventEmitter {
       participant.status = "error";
       participant.statusDetail = "its context filled up again right after a respawn; it needs you (respawn it by hand, with fewer replayed messages)";
       this.push({ type: "participant", participant });
-      this.postSystem(`${participant.name} ran out of context again (${detail.slice(0, 120)}); it was respawned once already and now needs you.`, "human");
+      this.postSystem(`${participant.name} ran out of context again (${detail.slice(0, 120)}); it was respawned once already and now needs you.`, "human", false, { tone: "error" });
       runtime.log.warn(`context full again within 10 minutes: no automatic respawn`);
       return;
     }
     participant.autoRespawnAt = Date.now();
     this.push({ type: "participant", participant });
     const memory = !!participant.notes;
-    this.postSystem(`${participant.name} ran out of context (${detail.slice(0, 120)}); it is respawned ${memory ? `with its notes and the last ${this.settings.replayAfterRestart} messages` : `with the last ${this.settings.replayAfterRestart} messages (it had no notes)`}.`, "human");
+    this.postSystem(`${participant.name} ran out of context (${detail.slice(0, 120)}); it is respawned ${memory ? `with its notes and the last ${this.settings.replayAfterRestart} messages` : `with the last ${this.settings.replayAfterRestart} messages (it had no notes)`}.`, "human", false, { tone: "error" });
     runtime.log.warn(`context full: ${detail}; respawn with ${memory ? "notes" : "no notes"}`);
     setImmediate(() => {
       void (memory ? this.respawnAgent(participant.id, { memory: true }) : this.reconnectAfterFull(participant.id)).catch((error) => this.notice(`${participant.name}: respawn after a full context failed: ${describeError(error)}`, "error"));
@@ -926,7 +979,7 @@ export class Room extends EventEmitter {
     }
     this.focused = true;
     this.push(this.roomEvent());
-    this.postSystem(`Hush: ${stopped ? `${stopped} repl${stopped > 1 ? "ies" : "y"} stopped; ` : ""}everyone waits until ${this.humanName} writes again.`);
+    this.postSystem(`Hush: ${stopped ? `${stopped} repl${stopped > 1 ? "ies" : "y"} stopped; ` : ""}everyone waits until ${this.humanName} writes again.`, undefined, false, { tone: "hush" });
   }
 
   rename(name: string): void {
@@ -1205,6 +1258,8 @@ export class Room extends EventEmitter {
     const transcript = new Transcript(join(this.dataDir, "transcripts"), name);
     log.info(`spawning ${spec.command} ${spec.args.join(" ")} (cwd ${cwd}); transcript ${transcript.path}`);
 
+    const stderrTail: string[] = [];
+
     let agent: AcpAgent;
     try {
       agent = new AcpAgent(
@@ -1212,15 +1267,18 @@ export class Room extends EventEmitter {
         {
           onSessionUpdate: (_sessionId, update) => this.onSessionUpdate(id, update),
           onPermissionRequest: (params) => this.onPermissionRequest(id, params),
-          onStderr: (line) => log.info(`stderr: ${line}`),
+          onStderr: (line) => {
+            log.info(`stderr: ${line}`);
+            stderrTail.push(line);
+            if (stderrTail.length > 10) stderrTail.shift();
+          },
           onExit: (code, signal) => this.onAgentExit(id, code, signal, agent),
           onRaw: (direction, message) => transcript.record(direction, message),
           onProtocolError: (text) => log.warn(`protocol: ${text}`),
         },
       );
     } catch (error) {
-      this.failStart(participant, error, fresh);
-      throw error;
+      throw this.failStart(participant, error, fresh, stderrTail);
     }
 
     try {
@@ -1311,6 +1369,7 @@ export class Room extends EventEmitter {
 
       participant.status = "idle";
       participant.statusDetail = undefined;
+      participant.trouble = undefined;
       this.push({ type: "participant", participant });
       if (fresh) {
         const detail = this.settings.showVendorInRoster ? `${recipe.label}${participant.model ? `, model ${participant.model}` : ""}` : "agent";
@@ -1338,8 +1397,7 @@ export class Room extends EventEmitter {
     } catch (error) {
       agent.kill();
       this.forgetRuntime(id);
-      this.failStart(participant, error, fresh);
-      throw error;
+      throw this.failStart(participant, error, fresh, stderrTail);
     }
   }
 
@@ -1376,14 +1434,24 @@ export class Room extends EventEmitter {
     }
   }
 
-  cancelTurn(id: string): void {
+  cancelTurn(id: string): "turn" | "queued" | "nothing" {
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
     if (!runtime || !participant) throw new Error("no such agent");
-    if (!runtime.turnActive) return;
-    runtime.agent.cancel(runtime.sessionId);
-    this.cancelPermissionsOf(id);
-    this.notice(`${participant.name}: stop requested.`, "info");
+    if (runtime.turnActive) {
+      runtime.agent.cancel(runtime.sessionId);
+      this.cancelPermissionsOf(id);
+      this.notice(`${participant.name}: stop requested.`, "info");
+      return "turn";
+    }
+    if (runtime.pendingTurn || runtime.delayTimer || this.floorQueue.includes(id)) {
+      this.dropScheduledTurn(id);
+      this.notice(`${participant.name}: stopped before it began; the turn is dropped.`, "info");
+      this.postSystem(`${participant.name} was stopped by ${this.humanName} before it began.`, undefined, false, { tone: "attention" });
+      return "queued";
+    }
+    this.notice(`${participant.name}: nothing to stop, it is not writing.`, "info");
+    return "nothing";
   }
 
   async setConfig(id: string, configId: string, value: string | boolean): Promise<void> {
@@ -1464,7 +1532,7 @@ export class Room extends EventEmitter {
       if (wanted.length) {
         if (this.hops >= this.hopLimit) {
           const who = agentTargets.length ? message.toNames.join(", ") : "the other vibemates";
-          this.postSystem(`Hop limit ${this.hopLimit} reached: ${who} will not be prompted until ${this.humanName} writes again.`);
+          this.postSystem(`Hop limit ${this.hopLimit} reached: ${who} will not be prompted until ${this.humanName} writes again.`, undefined, false, { tone: "attention" });
         } else {
           this.hops += 1;
           targets = this.settings.turnTaking === "one-at-a-time" && !agentTargets.length && wanted.length > 1 ? shuffle(wanted) : wanted;
@@ -1549,6 +1617,25 @@ export class Room extends EventEmitter {
     this.agentInRoom(participantId);
     const result = lintRoomDesign(design, { ...this.designContext(kind), skills: this.skillsForDesign(participantId) });
     return { ok: !result.errors.length, errors: result.errors.map((e) => e.message), warnings: result.warnings.map((w) => w.message), preview: result.preview };
+  }
+
+  readMessageForAgent(participantId: string, seq: number, around: number): Record<string, unknown> {
+    const participant = this.agentInRoom(participantId);
+    const window = agentReadableWindow(this.messages, seq, around);
+    if (!window) throw new Error(`no message #${seq} in this room (or it is one the vibemates do not see)`);
+    const view = (m: ChatMessage): Record<string, unknown> => ({
+      seq: m.seq,
+      from: m.fromName,
+      to: m.toNames,
+      at: new Date(m.ts).toISOString(),
+      text: m.text,
+      ...(m.kind === "system" ? { kind: "system" } : {}),
+      ...(m.edited ? { edited: true } : {}),
+      ...(m.images && m.images.length ? { images: m.images.map((a, i) => ({ ref: `#${m.seq}.${a.n ?? i + 1}`, name: a.name, path: this.imagePath(a) })) } : {}),
+      ...(m.quotes && m.quotes.length ? { quotes: m.quotes.map((q) => ({ n: q.n, seq: q.seq, from: q.fromName, text: q.text })) } : {}),
+    });
+    this.log.info(`read_message: ${participant.name} read #${seq}${around ? ` (around ${around})` : ""}`);
+    return { message: view(window.message), before: window.before.map(view), after: window.after.map(view) };
   }
 
   private designContext(kind: "template" | "room"): RoomDesignContext {
@@ -1640,7 +1727,7 @@ export class Room extends EventEmitter {
     this.proposals.set(proposal.key, proposal);
     this.push({ type: "proposal", proposal });
     const what = [...settingChanges.map((c) => c.key), ...vibes.ops.map((o) => `${o.op} ${o.name}`)].join(", ");
-    this.postSystem(`${participant.name} proposes changes to the room (${what}); apply or reject them on the card.`, "human");
+    this.postSystem(`${participant.name} proposes changes to the room (${what}); apply or reject them on the card.`, "human", false, { tone: "attention" });
     this.log.info(`proposal ${proposal.key} from ${participant.name}: ${what}`);
     return {
       ok: true,
@@ -2084,6 +2171,8 @@ export class Room extends EventEmitter {
       const attached = seesImages && (m.to.length === 0 || m.to.includes(id));
       return m.images.map((a, i) => ({ n: a.n ?? i + 1, ref: `#${m.seq}.${a.n ?? i + 1}`, name: a.name, path: this.imagePath(a), mimeType: a.mimeType, attached, forNames: m.to.length ? m.toNames : [] }));
     };
+    const backlogQuotes = (m: ChatMessage): BacklogQuote[] | undefined =>
+      m.quotes && m.quotes.length ? m.quotes.map((q) => ({ n: q.n, seq: q.seq, fromName: q.fromName, ts: q.ts, text: q.text })) : undefined;
     const prompt = composePrompt({
       brief: briefReason ? buildBrief(settings, persona, roster, runtime.notesForBrief ?? (participant.notes && (participant.notesSeq ?? -1) >= runtime.lastBriefSeq ? participant.notes : undefined), skillsForPrompt) : undefined,
       header: buildHeader(settings, persona, roster, this.hops, notes, skillsForPrompt),
@@ -2097,6 +2186,7 @@ export class Room extends EventEmitter {
               toNames: m.toNames,
               text: m.text,
               images: backlogImages(m),
+              quotes: backlogQuotes(m),
             },
       ),
       omitted,
@@ -2197,7 +2287,7 @@ export class Room extends EventEmitter {
       runtime.log.error(`turn failed: ${failure}`);
       if (retry) this.closeRetry(retry, "the correction turn failed; nothing was posted");
       if (isContextFullError(failure)) this.contextFull(participant, runtime, failure ?? "");
-      else this.postSystem(`${participant.name} could not answer: ${(failure ?? "no result").slice(0, 240)}`);
+      else this.postSystem(`${participant.name} could not answer: ${(failure ?? "no result").slice(0, 240)}`, undefined, false, { tone: "error" });
       return null;
     }
     return this.finalizeTurn(participant, runtime, draft, result, Date.now() - startedAt, retry, published, publishedAt);
@@ -2271,9 +2361,11 @@ export class Room extends EventEmitter {
       if (published) this.push({ type: "message.removed", id: draft.id });
       if (retry) {
         this.closeRetry(retry, cancelled ? "the correction turn was stopped; nothing was posted" : "the agent withdrew the reply");
-        if (cancelled) this.postSystem(`${participant.name} was stopped.`);
+        if (cancelled) this.postSystem(`${participant.name} was stopped by ${this.humanName}.`, undefined, false, { tone: "attention" });
+      } else if (cancelled) {
+        this.postSystem(`${participant.name} was stopped by ${this.humanName}.`, undefined, false, { tone: "attention" });
       } else {
-        this.postSystem(cancelled ? `${participant.name} was stopped.` : `${participant.name} read the room and has nothing to add.`);
+        this.postSystem(`${participant.name} read the room and has nothing to add.`);
       }
       return null;
     }
@@ -2284,7 +2376,7 @@ export class Room extends EventEmitter {
       participant.failedTurns = (participant.failedTurns ?? 0) + 1;
       participant.statusDetail = `agent error: ${text.replace(/\s+/g, " ").slice(0, 120)}${text.length > 120 ? "…" : ""}`;
       this.push({ type: "participant", participant });
-      this.postSystem(`${participant.name}'s agent reported an error instead of a reply: ${text.slice(0, 200)}${text.length > 200 ? "…" : ""}`);
+      this.postSystem(`${participant.name}'s agent reported an error instead of a reply: ${text.slice(0, 200)}${text.length > 200 ? "…" : ""}`, undefined, false, { tone: "error" });
       runtime.log.warn(`adapter error text treated as failed turn: ${text.slice(0, 200)}`);
       if (retry) this.closeRetry(retry, "the agent reported an error instead of a corrected reply");
       if (bareContextFull) this.contextFull(participant, runtime, text);
@@ -2335,6 +2427,7 @@ export class Room extends EventEmitter {
       text,
       streaming: false,
       stopReason: result.stopReason,
+      ...(cancelled ? { stoppedBy: this.humanName } : {}),
       usage: result.usage ?? null,
       durationMs,
     };
@@ -2342,17 +2435,17 @@ export class Room extends EventEmitter {
     if (publishedAt !== null && this.messages.some((x) => x.kind === "chat" && x.id !== message.id && x.ts > publishedAt)) {
       const at = new Date(draft.ts);
       const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
-      this.postSystem(`${participant.name} finished the reply started at ${hhmm} · ${Math.round(durationMs / 1000)} s`, "human", false, { refId: message.id, agentId: participant.id });
+      this.postSystem(`${participant.name} finished the reply started at ${hhmm} · ${formatDuration(durationMs)}`, "human", false, { refId: message.id, agentId: participant.id });
     }
     if (retry) {
       this.closeRetry(retry, corrections.length ? `corrected reply posted, but it still breaks: ${corrections.map((c) => c.replace(/^reminder:\s*/i, "")).join("; ")}` : "corrected reply posted");
     }
     if (cancelled) {
-      this.postSystem(`${participant.name} was stopped mid-reply; the partial reply stays in the log.`);
+      this.postSystem(`${participant.name} was stopped mid-reply by ${this.humanName}; what it had written stays in the room.`, "agents", false, { tone: "attention" });
       return null;
     }
     if (result.stopReason !== "end_turn") {
-      this.postSystem(`${participant.name} stopped with ${result.stopReason}.`);
+      this.postSystem(`${participant.name} stopped with ${result.stopReason}.`, undefined, false, { tone: "attention" });
     }
     this.route(message);
     return null;
@@ -2516,12 +2609,12 @@ export class Room extends EventEmitter {
           runtime.log.info(`usage dropped ${runtime.lastUsed} -> ${u.used}; brief scheduled`);
           participant.contextEvent = { kind: "compacted", at: Date.now(), used: u.used, size: u.size };
           runtime.notesDue = overThreshold(u.used, u.size);
-          this.postSystem(`${participant.name} compacted its context (${Math.round(runtime.lastUsed / 1000)}k → ${Math.round(u.used / 1000)}k tokens); the room rules are re-sent with its next turn${participant.notes ? ", with its notes" : ""}.`, "human");
+          this.postSystem(`${participant.name} compacted its context (${Math.round(runtime.lastUsed / 1000)}k → ${Math.round(u.used / 1000)}k tokens); the room rules are re-sent with its next turn${participant.notes ? ", with its notes" : ""}.`, "human", false, { tone: "attention" });
         }
         if (crossedThreshold(runtime.lastUsed, u.used, u.size)) {
           runtime.notesDue = true;
           participant.contextEvent = { kind: "threshold", at: Date.now(), used: u.used, size: u.size };
-          this.postSystem(`${participant.name} is at ${Math.round((100 * u.used) / u.size)}% of its context; it will leave notes with its next reply. You can respawn it with memory from its panel.`, "human");
+          this.postSystem(`${participant.name} is at ${Math.round((100 * u.used) / u.size)}% of its context; it will leave notes with its next reply. You can respawn it with memory from its panel.`, "human", false, { tone: "attention" });
           runtime.log.info(`context at ${u.used}/${u.size}: notes due`);
         }
         runtime.lastUsed = u.used;
@@ -2685,8 +2778,17 @@ export class Room extends EventEmitter {
     participant.mode = pick("mode") ?? participant.mode;
   }
 
-  private failStart(participant: Participant, error: unknown, fresh: boolean): void {
+  private failStart(participant: Participant, error: unknown, fresh: boolean, stderr: string[] = []): Error {
     participant.statusDetail = error instanceof Error ? error.message : String(error);
+    const recipe = getRecipe(participant.agentType ?? "");
+    participant.trouble = classifyStartFailure({
+      error: participant.statusDetail,
+      stderr,
+      vendor: recipe?.vendor ?? participant.agentVendor ?? "The coding agent",
+      loginCommand: recipe?.loginCommand || undefined,
+      installHint: recipe?.installHint || undefined,
+      loginState: recipe?.loginState,
+    });
     this.notice(`${participant.name}: failed to start: ${participant.statusDetail}`, "error");
     if (fresh) {
       participant.status = "error";
@@ -2697,6 +2799,7 @@ export class Room extends EventEmitter {
       participant.status = "offline";
       this.push({ type: "participant", participant });
     }
+    return new Error(`${participant.trouble.what} ${participant.trouble.advice} (${participant.statusDetail})`);
   }
 
   private cancelPermissionsOf(id: string): void {

@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loginState, type LoginProbe, type LoginState } from "./agent-health.js";
 
 export type AgentTypeId = "claude" | "codex" | "gemini" | "cursor" | "opencode" | "copilot" | "fake";
 
@@ -31,6 +32,9 @@ export interface AgentRecipe {
   unavailableReason: string | null;
   installedAt: string | null;
   installHint: string;
+  loginCommand: string;
+  login?: LoginProbe;
+  loginState: LoginState;
   modelAtLaunch?: boolean;
   bypassMode: string | null;
   bypassConfig?: Record<string, string>;
@@ -196,6 +200,9 @@ const recipes: AgentRecipe[] = [
     unavailableReason: claudeExe ? null : "Claude Code not found",
     installedAt: claudeExe,
     installHint: "install Claude Code (npm install -g @anthropic-ai/claude-code, or the native installer) and log in with `claude`",
+    loginCommand: "claude",
+    login: { env: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"], files: [".claude/.credentials.json"], command: "claude", fileless: ["darwin"] },
+    loginState: "unknown",
     build: ({ model }) => ({
       command: process.execPath,
       args: [claudeAdapter],
@@ -219,6 +226,9 @@ const recipes: AgentRecipe[] = [
     unavailableReason: codexExe ? null : "Codex CLI not found",
     installedAt: codexExe,
     installHint: "install Codex (npm install -g @openai/codex) and log in with `codex login`",
+    loginCommand: "codex login",
+    login: { env: ["CODEX_API_KEY", "OPENAI_API_KEY"], files: [".codex/auth.json"], command: "codex login" },
+    loginState: "unknown",
     build: () => ({
       command: process.execPath,
       args: [codexAdapter],
@@ -242,6 +252,9 @@ const recipes: AgentRecipe[] = [
     unavailableReason: geminiEntry ? null : "Gemini CLI not found",
     installedAt: geminiEntry,
     installHint: "npm install -g @google/gemini-cli, then sign in once (gemini)",
+    loginCommand: "gemini",
+    login: { env: ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"], files: [".gemini/google_accounts.json", ".gemini/oauth_creds.json"], command: "gemini" },
+    loginState: "unknown",
     modelAtLaunch: true,
     build: ({ model }) => ({
       command: process.execPath,
@@ -266,6 +279,9 @@ const recipes: AgentRecipe[] = [
     unavailableReason: cursorAgent ? null : "Cursor CLI not found",
     installedAt: cursorAgent?.index ?? null,
     installHint: "install cursor-agent (cursor.com/cli), then agent login",
+    loginCommand: "cursor-agent login",
+    login: { env: ["CURSOR_API_KEY"], files: [], command: "cursor-agent login" },
+    loginState: "unknown",
     build: () => ({
       command: cursorAgent?.node ?? "",
       args: [cursorAgent?.index ?? "", "acp"],
@@ -289,6 +305,9 @@ const recipes: AgentRecipe[] = [
     unavailableReason: openCodeExe ? null : "OpenCode not found",
     installedAt: openCodeExe,
     installHint: "npm install -g opencode-ai (or curl -fsSL https://opencode.ai/install | bash), then opencode providers",
+    loginCommand: "opencode auth login",
+    login: { env: [], files: [".local/share/opencode/auth.json", "AppData/Local/opencode/auth.json", ".config/opencode/auth.json"], command: "opencode auth login" },
+    loginState: "unknown",
     build: () => ({
       command: openCodeExe ?? "",
       args: ["acp"],
@@ -315,6 +334,9 @@ const recipes: AgentRecipe[] = [
     unavailableReason: copilotExe ? null : "GitHub Copilot CLI not found",
     installedAt: copilotExe,
     installHint: "winget install GitHub.Copilot / brew install copilot-cli / npm install -g @github/copilot, then copilot login",
+    loginCommand: "copilot",
+    login: { env: ["GITHUB_TOKEN", "GH_TOKEN", "COPILOT_API_KEY"], files: [], command: "copilot" },
+    loginState: "unknown",
     modelAtLaunch: true,
     build: ({ model }) => ({
       command: copilotExe ?? "",
@@ -341,15 +363,23 @@ if (fakeAgent) {
     unavailableReason: null,
     installedAt: fakeAgent,
     installHint: "",
+    loginCommand: "",
+    loginState: "ok",
     bypassMode: null,
     build: () => ({ command: process.execPath, args: [fakeAgent], env: {} }),
   });
 }
 
+function loginEvidence(): { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; exists: (relative: string) => boolean } {
+  return { env: process.env, platform: process.platform, exists: (relative) => existsSync(join(homedir(), ...relative.split("/"))) };
+}
+
 export function listRecipes(): AgentRecipe[] {
+  const evidence = loginEvidence();
+  for (const recipe of recipes) recipe.loginState = recipe.unavailableReason ? "unknown" : loginState(recipe.login, evidence);
   return recipes;
 }
 
 export function getRecipe(id: string): AgentRecipe | undefined {
-  return recipes.find((r) => r.id === id);
+  return listRecipes().find((r) => r.id === id);
 }

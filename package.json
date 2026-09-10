@@ -1,6 +1,6 @@
 {
   "name": "viberoom",
-  "version": "0.5.9",
+  "version": "0.5.10",
   "description": "viberoom: group chat rooms for a human and several coding agents over the Agent Client Protocol",
   "type": "module",
   "engines": {
@@ -33,6 +33,7 @@
     "@agentclientprotocol/sdk": "1.4.0",
     "marked": "^16.4.2",
     "mermaid": "^11.17.2",
+    "prismjs": "^1.30.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

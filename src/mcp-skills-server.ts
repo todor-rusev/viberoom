@@ -135,6 +135,20 @@ const TOOLS = [
       required: ["why"],
     },
   },
+  {
+    name: "read_message",
+    description:
+      "One message of this room by its number: the whole of a message that was quoted to you as \"> Name (#N, time): …\", or any message whose #N you have seen. Returns who wrote it, to whom, when, its text, its images as file paths and, with around > 0, up to that many messages before and after it. Read-only; the human sees the call like any other tool call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        seq: { type: "integer", description: "the message number, the N of #N" },
+        around: { type: "integer", minimum: 0, maximum: 5, description: "optional: how many neighbouring messages to include on each side (default 0, at most 5)" },
+      },
+      required: ["seq"],
+    },
+    annotations: { readOnlyHint: true },
+  },
 ];
 
 interface JsonRpcMessage {
@@ -274,6 +288,15 @@ async function handle(message: JsonRpcMessage): Promise<void> {
         });
         if (!res.ok) return errorResult("the proposal could not be made", res);
         reply(id, { content: [{ type: "text", text: String(res.body.message ?? "proposed") }] });
+        return;
+      }
+      if (name === "read_message") {
+        const seq = Number(args.seq);
+        if (!Number.isInteger(seq)) return fail(id, -32602, "read_message needs seq: the message number, the N of #N");
+        const around = Number(args.around);
+        const res = await hub(`/api/mcp/message?token=${encodeURIComponent(TOKEN)}&seq=${seq}${Number.isInteger(around) && around > 0 ? `&around=${around}` : ""}`);
+        if (!res.ok) return errorResult("the message could not be read", res);
+        reply(id, { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] });
         return;
       }
       fail(id, -32602, `unknown tool: ${name}`);

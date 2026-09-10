@@ -172,6 +172,16 @@ export interface RosterEntry {
 }
 
 export const IMAGE_MARKER_PATTERN = /\[img\s+(\d+)\]/gi;
+export const QUOTE_MARKER_PATTERN = /\[quote\s+(\d+)\]/gi;
+const MARKER_PATTERN = /\[(img|quote)\s+(\d+)\]/gi;
+
+export interface BacklogQuote {
+  n: number;
+  seq: number;
+  fromName: string;
+  ts: number;
+  text: string;
+}
 
 export interface BacklogImage {
   n: number;
@@ -189,6 +199,7 @@ export interface BacklogLine {
   toNames?: string[];
   text: string;
   images?: BacklogImage[];
+  quotes?: BacklogQuote[];
 }
 
 export type PromptPart = { type: "text"; text: string } | { type: "image"; image: BacklogImage };
@@ -203,6 +214,19 @@ function imageMarker(image: BacklogImage): string {
   return `[img ${image.n} · ${image.ref}${who} · ${image.path}]`;
 }
 
+export function formatQuoteTime(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+export function quoteBlock(quote: BacklogQuote): string {
+  const head = `> ${quote.fromName} (#${quote.seq}, ${formatQuoteTime(quote.ts)}):`;
+  const lines = quote.text.split(/\r?\n/);
+  if (lines.length === 1) return `${head} ${lines[0]}`;
+  return [head, ...lines.map((l) => `> ${l}`)].join("\n");
+}
+
 function messageParts(line: BacklogLine): PromptPart[] {
   const parts: PromptPart[] = [];
   let text = "";
@@ -210,29 +234,59 @@ function messageParts(line: BacklogLine): PromptPart[] {
     if (text) parts.push({ type: "text", text });
     text = "";
   };
-  const place = (image: BacklogImage): void => {
-    text += imageMarker(image);
+  const images = line.images ?? [];
+  const quotes = line.quotes ?? [];
+  const placedImages = new Set<number>();
+  const placedQuotes = new Set<number>();
+  let breakAfterQuote = false;
+  const append = (s: string): void => {
+    if (!s) return;
+    if (breakAfterQuote) {
+      if (!s.startsWith("\n")) text += "\n";
+      s = s.replace(/^[ \t]+/, "");
+      breakAfterQuote = false;
+    }
+    text += s;
+  };
+  const placeImage = (image: BacklogImage): void => {
+    append(imageMarker(image));
     if (image.attached) {
       flush();
       parts.push({ type: "image", image });
     }
   };
-  const images = line.images ?? [];
-  const placed = new Set<number>();
+  const placeQuote = (quote: BacklogQuote): void => {
+    if (breakAfterQuote) text += "\n";
+    text = text.replace(/[ \t]+$/, "");
+    if (text && !text.endsWith("\n")) text += "\n";
+    text += quoteBlock(quote);
+    breakAfterQuote = true;
+  };
   let last = 0;
-  for (const match of line.text.matchAll(IMAGE_MARKER_PATTERN)) {
-    const image = images.find((i) => i.n === Number(match[1]));
-    if (!image || placed.has(image.n)) continue;
-    placed.add(image.n);
-    text += line.text.slice(last, match.index);
-    place(image);
+  for (const match of line.text.matchAll(MARKER_PATTERN)) {
+    const n = Number(match[2]);
+    if (match[1].toLowerCase() === "img") {
+      const image = images.find((i) => i.n === n);
+      if (!image || placedImages.has(n)) continue;
+      placedImages.add(n);
+      append(line.text.slice(last, match.index));
+      placeImage(image);
+    } else {
+      const quote = quotes.find((q) => q.n === n);
+      if (!quote || placedQuotes.has(n)) continue;
+      placedQuotes.add(n);
+      append(line.text.slice(last, match.index));
+      placeQuote(quote);
+    }
     last = (match.index ?? 0) + match[0].length;
   }
-  text += line.text.slice(last);
+  append(line.text.slice(last));
+  for (const quote of quotes) if (!placedQuotes.has(quote.n)) placeQuote(quote);
+  breakAfterQuote = false;
   for (const image of images) {
-    if (placed.has(image.n)) continue;
+    if (placedImages.has(image.n)) continue;
     if (!text.endsWith("\n") && (text || parts.length)) text += "\n";
-    place(image);
+    placeImage(image);
   }
   flush();
   return parts;
@@ -341,6 +395,13 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
   lines.push("");
   lines.push(
     `How prompts look: <room-header> (who you are, who is here, the hop counter, hub notes), then <messages> (everything posted since your previous turn, oldest first, as "Name -> @Target: text"; room events as "· text"), then "Reply as ${persona.name}." Your own earlier messages are not repeated. Reply with the text of your message only.`,
+  );
+  lines.push(
+    `A line "> Name (#N, date time): …" inside a message quotes an earlier message of this room, pasted by the writer: those are Name's words, not the writer's, and #N is the hub's number of that message. ${
+      skills?.channel === "tool"
+        ? "When the fragment is not enough, the viberoom tool read_message takes the number and returns the whole message (around: N adds its neighbours)."
+        : "When the fragment is not enough, ask in the room for the whole message."
+    }`,
   );
   if (previousNotes && previousNotes.trim()) {
     lines.push("");

@@ -1,7 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { join, posix, win32 } from "node:path";
+import { join, posix, resolve, win32 } from "node:path";
 
 export type Command = "run" | "serve" | "start" | "stop" | "status" | "open" | "logs" | "doctor" | "help";
 
@@ -30,6 +30,7 @@ export interface PidRecord {
   port: number;
   build: string;
   startedAt: number;
+  foreground?: boolean;
 }
 
 export function writePidFile(dataDir: string, record: PidRecord): void {
@@ -41,7 +42,7 @@ export function readPidFile(dataDir: string): PidRecord | null {
     const raw = readFileSync(pidFilePath(dataDir), "utf8");
     const parsed = JSON.parse(raw) as Partial<PidRecord>;
     if (typeof parsed.pid !== "number") return null;
-    return { pid: parsed.pid, port: Number(parsed.port ?? 0), build: String(parsed.build ?? ""), startedAt: Number(parsed.startedAt ?? 0) };
+    return { pid: parsed.pid, port: Number(parsed.port ?? 0), build: String(parsed.build ?? ""), startedAt: Number(parsed.startedAt ?? 0), ...(parsed.foreground ? { foreground: true } : {}) };
   } catch {
     return null;
   }
@@ -54,6 +55,30 @@ export function isProcessAlive(pid: number): boolean {
   } catch (error) {
     return (error as { code?: string }).code === "EPERM";
   }
+}
+
+export interface HubIdentity {
+  build: string | null;
+  dataDir: string | null;
+  pid: number | null;
+}
+
+export function sameDataDir(a: string, b: string): boolean {
+  const norm = (p: string): string => {
+    const r = resolve(p).replace(/[\\/]+$/, "");
+    return process.platform === "win32" ? r.toLowerCase() : r;
+  };
+  return norm(a) === norm(b);
+}
+
+export function hubPortFor(port: number, portGiven: boolean, liveRecord: PidRecord | null): number {
+  if (portGiven || !liveRecord || !liveRecord.port) return port;
+  return liveRecord.port;
+}
+
+export function foreignHub(identity: HubIdentity | null, dataDir: string): string | null {
+  if (!identity || !identity.dataDir) return null;
+  return sameDataDir(identity.dataDir, dataDir) ? null : identity.dataDir;
 }
 
 const LOG_ROTATE_BYTES = 5 * 1024 * 1024;

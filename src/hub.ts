@@ -33,6 +33,7 @@ export interface ProgramSettings {
   editor: EditorSettings;
   appearance: AppearanceSettings;
   checkForUpdates: boolean;
+  reconnectMode: "replay" | "load";
 }
 
 export interface AppearanceSettings {
@@ -196,6 +197,7 @@ export class Hub extends EventEmitter {
       editor: { ...DEFAULT_EDITOR_SETTINGS },
       appearance: { ...DEFAULT_APPEARANCE },
       checkForUpdates: true,
+      reconnectMode: "replay",
       roomDefaults: {},
       vendorPresets: {},
     };
@@ -255,6 +257,12 @@ export class Hub extends EventEmitter {
       next.diagrams = { preset, primary };
     }
     if (!next.diagrams) next.diagrams = { preset: "pop", primary: null };
+    if (patch.reconnectMode !== undefined) {
+      const mode = String(patch.reconnectMode);
+      if (mode !== "replay" && mode !== "load") throw new Error("reconnectMode must be replay or load");
+      next.reconnectMode = mode;
+    }
+    if (next.reconnectMode !== "load") next.reconnectMode = "replay";
     if (patch.editor !== undefined && typeof patch.editor === "object" && patch.editor) {
       const e = patch.editor as Record<string, unknown>;
       const mode = String(e.mode ?? next.editor?.mode ?? "auto");
