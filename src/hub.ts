@@ -13,6 +13,7 @@ import { DEFAULT_ROOM_SETTINGS, type RoomSettings } from "./persona.js";
 import { Room, type DiscoveredOptions, type RoomEvent, type SkillsBridge, type StoredParticipant } from "./room.js";
 import { SkillLibrary, type SkillDraft, type SkillMeta } from "./skills.js";
 import { TemplateLibrary, roomSettingsFromTemplate, type RoomTemplate } from "./templates.js";
+import { LookLibrary, checkLookSpec, loadTokens, type LookCheck, type LookSpec } from "./looks.js";
 
 export interface VendorPreset {
   model: string | null;
@@ -85,6 +86,7 @@ export type HubEvent =
   | { type: "settings"; settings: ProgramSettings }
   | { type: "skills"; skills: SkillMeta[] }
   | { type: "templates" }
+  | { type: "looks"; looks: LookSpec[] }
   | { type: "reset" };
 
 interface McpTokenEntry {
@@ -95,11 +97,50 @@ interface McpTokenEntry {
 const ROOM_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const INSTRUCTION_FILES = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules"];
 
+export function nextAppearance(current: AppearanceSettings, a: Record<string, unknown>): AppearanceSettings {
+  const chatFontSize = Number(a.chatFontSize ?? current.chatFontSize ?? DEFAULT_APPEARANCE.chatFontSize);
+  if (!Number.isFinite(chatFontSize) || chatFontSize < 12 || chatFontSize > 24) throw new Error("appearance.chatFontSize must be between 12 and 24");
+  const font = String(a.font ?? current.font ?? DEFAULT_APPEARANCE.font);
+  if (!TEXT_FONTS.includes(font)) throw new Error(`appearance.font must be one of ${TEXT_FONTS.join(", ")}`);
+  const mono = String(a.mono ?? current.mono ?? DEFAULT_APPEARANCE.mono);
+  if (!MONO_FONTS.includes(mono)) throw new Error(`appearance.mono must be one of ${MONO_FONTS.join(", ")}`);
+  const look = String(a.look ?? current.look ?? DEFAULT_APPEARANCE.look);
+  if (!/^[a-z][a-z0-9-]{0,30}$/.test(look)) throw new Error("appearance.look must be a short lower-case id");
+  const custom: Record<string, Partial<Record<Adjustable, string>>> = { ...(current.custom ?? {}) };
+  if (a.custom !== undefined && typeof a.custom === "object" && a.custom) {
+    for (const [lookId, values] of Object.entries(a.custom as Record<string, unknown>)) {
+      if (!/^[a-z][a-z0-9-]{0,30}$/.test(lookId)) throw new Error("appearance.custom: a look id is a short lower-case id");
+      if (values === null) {
+        delete custom[lookId];
+        continue;
+      }
+      if (typeof values !== "object") throw new Error("appearance.custom: each look takes an object of adjustments");
+      const clean: Partial<Record<Adjustable, string>> = {};
+      for (const [key, value] of Object.entries(values as Record<string, unknown>)) {
+        const kind = (ADJUSTABLE as Record<string, string | undefined>)[key];
+        if (!kind) throw new Error(`appearance.custom: "${key}" is not adjustable (${Object.keys(ADJUSTABLE).join(", ")})`);
+        if (kind === "colour") {
+          if (typeof value !== "string" || !/^#[0-9a-fA-F]{6}$/.test(value)) throw new Error(`appearance.custom.${key} must be a colour like #1a2b3c`);
+          clean[key as Adjustable] = value.toLowerCase();
+        } else {
+          const n = typeof value === "string" || typeof value === "number" ? Number(value) : NaN;
+          if (!Number.isFinite(n) || n < 0 || n > 2) throw new Error(`appearance.custom.${key} must be a number between 0 and 2`);
+          clean[key as Adjustable] = String(Math.round(n * 100) / 100);
+        }
+      }
+      if (Object.keys(clean).length) custom[lookId] = clean;
+      else delete custom[lookId];
+    }
+  }
+  return { chatFontSize: Math.round(chatFontSize * 2) / 2, font, mono, look, custom };
+}
+
 export class Hub extends EventEmitter {
   readonly dataDir: string;
   readonly rooms = new Map<string, Room>();
   readonly skills: SkillLibrary;
   readonly templates: TemplateLibrary;
+  readonly looks: LookLibrary;
   settings: ProgramSettings;
   private readonly log: Logger;
   private readonly optionCache = new Map<string, DiscoveredOptions>();
@@ -114,6 +155,7 @@ export class Hub extends EventEmitter {
     mkdirSync(join(this.dataDir, "rooms"), { recursive: true });
     this.skills = new SkillLibrary(join(this.dataDir, "skills"), log.child("skills"));
     this.templates = new TemplateLibrary(join(this.dataDir, "templates"), log.child("templates"));
+    this.looks = new LookLibrary(join(this.dataDir, "looks"), log.child("looks"));
     try {
       this.skills.seedBuiltins();
     } catch (error) {
@@ -125,6 +167,29 @@ export class Hub extends EventEmitter {
       hubUrl: () => this.hubUrl,
       templates: this.templates,
       templatesChanged: () => this.emit("event", { type: "templates" } satisfies HubEvent),
+      looks: {
+        list: () => this.looks.list(),
+        describe: () => this.looks.describe(),
+        check: (raw) => checkLookSpec(raw),
+        save: (raw, options) => this.saveLook(raw, options),
+      },
+      appearance: {
+        current: () => ({ ...this.settings.appearance, custom: { ...(this.settings.appearance.custom ?? {}) } }),
+        preview: (patch) => nextAppearance(this.settings.appearance, patch),
+        apply: (patch) => {
+          this.updateSettings({ appearance: patch });
+        },
+        ownAdjustments: async (lookId) => {
+          const tokens = await loadTokens();
+          let look = tokens.looks[lookId];
+          if (!look) {
+            const spec = this.looks.get(lookId);
+            if (!spec) return null;
+            look = tokens.make(spec as unknown as Record<string, unknown>);
+          }
+          return { label: look.label, values: Object.fromEntries(tokens.adjustables.map((f) => [f.key, String(f.of(look))])) };
+        },
+      },
       needApproval: () => this.settings.agentSkillsNeedApproval === true,
       save: (draft) => {
         const { body: _b, ...meta } = this.saveSkillInternal(draft);
@@ -279,42 +344,7 @@ export class Hub extends EventEmitter {
       next.editor = { mode, command };
     }
     if (patch.appearance !== undefined && typeof patch.appearance === "object" && patch.appearance) {
-      const a = patch.appearance as Record<string, unknown>;
-      const chatFontSize = Number(a.chatFontSize ?? next.appearance?.chatFontSize ?? DEFAULT_APPEARANCE.chatFontSize);
-      if (!Number.isFinite(chatFontSize) || chatFontSize < 12 || chatFontSize > 24) throw new Error("appearance.chatFontSize must be between 12 and 24");
-      const font = String(a.font ?? next.appearance?.font ?? DEFAULT_APPEARANCE.font);
-      if (!TEXT_FONTS.includes(font)) throw new Error(`appearance.font must be one of ${TEXT_FONTS.join(", ")}`);
-      const mono = String(a.mono ?? next.appearance?.mono ?? DEFAULT_APPEARANCE.mono);
-      if (!MONO_FONTS.includes(mono)) throw new Error(`appearance.mono must be one of ${MONO_FONTS.join(", ")}`);
-      const look = String(a.look ?? next.appearance?.look ?? DEFAULT_APPEARANCE.look);
-      if (!/^[a-z][a-z0-9-]{0,30}$/.test(look)) throw new Error("appearance.look must be a short lower-case id");
-      const custom: Record<string, Partial<Record<Adjustable, string>>> = { ...(next.appearance?.custom ?? {}) };
-      if (a.custom !== undefined && typeof a.custom === "object" && a.custom) {
-        for (const [lookId, values] of Object.entries(a.custom as Record<string, unknown>)) {
-          if (!/^[a-z][a-z0-9-]{0,30}$/.test(lookId)) throw new Error("appearance.custom: a look id is a short lower-case id");
-          if (values === null) {
-            delete custom[lookId];
-            continue;
-          }
-          if (typeof values !== "object") throw new Error("appearance.custom: each look takes an object of adjustments");
-          const clean: Partial<Record<Adjustable, string>> = {};
-          for (const [key, value] of Object.entries(values as Record<string, unknown>)) {
-            const kind = (ADJUSTABLE as Record<string, string | undefined>)[key];
-            if (!kind) throw new Error(`appearance.custom: "${key}" is not adjustable (${Object.keys(ADJUSTABLE).join(", ")})`);
-            if (kind === "colour") {
-              if (typeof value !== "string" || !/^#[0-9a-fA-F]{6}$/.test(value)) throw new Error(`appearance.custom.${key} must be a colour like #1a2b3c`);
-              clean[key as Adjustable] = value.toLowerCase();
-            } else {
-              const n = typeof value === "string" || typeof value === "number" ? Number(value) : NaN;
-              if (!Number.isFinite(n) || n < 0 || n > 2) throw new Error(`appearance.custom.${key} must be a number between 0 and 2`);
-              clean[key as Adjustable] = String(Math.round(n * 100) / 100);
-            }
-          }
-          if (Object.keys(clean).length) custom[lookId] = clean;
-          else delete custom[lookId];
-        }
-      }
-      next.appearance = { chatFontSize: Math.round(chatFontSize * 2) / 2, font, mono, look, custom };
+      next.appearance = nextAppearance(next.appearance, patch.appearance as Record<string, unknown>);
     }
     next.appearance = { ...DEFAULT_APPEARANCE, ...(next.appearance ?? {}) };
     if (!next.editor) next.editor = { ...DEFAULT_EDITOR_SETTINGS };
@@ -546,12 +576,29 @@ export class Hub extends EventEmitter {
     this.emit("event", { type: "update", update } satisfies HubEvent);
   }
 
+  async saveLook(raw: unknown, options: { author: string; replace?: boolean }): Promise<LookCheck> {
+    const saved = await this.looks.save(raw, options);
+    this.emit("event", { type: "looks", looks: this.looks.list() } satisfies HubEvent);
+    return saved;
+  }
+
+  removeLook(id: string): boolean {
+    const removed = this.looks.remove(id);
+    if (!removed) return false;
+    if (this.settings.appearance?.look === id || this.settings.appearance?.custom?.[id]) {
+      this.updateSettings({ appearance: { look: this.settings.appearance.look === id ? DEFAULT_APPEARANCE.look : this.settings.appearance.look, custom: { [id]: null } } });
+    }
+    this.emit("event", { type: "looks", looks: this.looks.list() } satisfies HubEvent);
+    return true;
+  }
+
   snapshot(): unknown {
     return {
       settings: this.settings,
       update: this.update,
       recipes: listRecipes().map(({ build: _b, ...r }) => r),
       skills: this.skills.list(),
+      looks: this.looks.list(),
       roomDefaults: { ...DEFAULT_ROOM_SETTINGS, ...this.settings.roomDefaults },
       rooms: [...this.rooms.values()].map((room) => room.snapshot()),
       openRooms: [...this.openRooms],
@@ -571,6 +618,7 @@ export class Hub extends EventEmitter {
     rmSync(join(this.dataDir, "rooms"), { recursive: true, force: true });
     rmSync(this.roomsPath(), { force: true });
     rmSync(this.skills.dir, { recursive: true, force: true });
+    rmSync(this.looks.dir, { recursive: true, force: true });
     mkdirSync(join(this.dataDir, "rooms"), { recursive: true });
     mkdirSync(this.skills.dir, { recursive: true });
     this.skills.list();

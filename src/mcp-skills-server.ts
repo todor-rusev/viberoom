@@ -44,6 +44,20 @@ const DESIGN_FIELDS = {
   },
 };
 
+const LOOK_SPEC_FIELDS = {
+  id: { type: "string", description: "short lower-case id (letters, digits, hyphens; 1-31 characters, starting with a letter): the file's name; never the id of a look viberoom ships" },
+  label: { type: "string", description: "the name the picker shows (1-40 characters)" },
+  extends: { type: "string", description: "the shipped look it starts from (describe_looks lists them: classic is VibeClassic, light; classic-dark; clay; comfort; plush is 3D; terminal); classic when omitted" },
+  scheme: { type: "string", enum: ["light", "dark"], description: "light or dark paper (diagrams and marks are drawn for it); the base's when omitted" },
+  palette: { type: "object", description: "hues laid over the base's palette, by name, each a flat colour #rrggbb: { primary: \"#b5533c\", bg: \"#f6f1e7\" }; describe_looks tells what every hue is for", additionalProperties: { type: "string" } },
+  shape: { type: "object", description: "corners: rScale (0 square … 1.6 very round), rCtlMin (0px keeps each control's own corner, 99px makes every control a pill)", additionalProperties: { type: "string" } },
+  type: { type: "object", description: "text: font and mono (an id from describe_looks fonts, or a family stack), lineHeight, fsScale", additionalProperties: { type: "string" } },
+  motion: { type: "object", description: "tFast, tBase, tSlow (durations, 0ms for none), easeOut, easePop", additionalProperties: { type: "string" } },
+  elevation: { type: "object", description: "shadows and light, as CSS: a shadow, none, or for bevel a gradient; $name, alpha($name, 0.2) and mix($a, $b, 0.5) may stand inside", additionalProperties: { type: "string" } },
+  canvas: { type: "object", description: "the chat's paper: gradCanvas (a colour or gradients), canvasPattern (none, or a pattern), canvasPatternSize, gradPage, the scrollbar", additionalProperties: { type: "string" } },
+  elements: { type: "object", description: "per element group, the parts to change: { bubble: { bg: \"$white\", border: \"alpha($ink, 0.12)\" }, btn: { shadow: \"none\" } }; describe_looks lists every group and key with its VibeClassic value", additionalProperties: { type: "object", additionalProperties: { type: "string" } } },
+};
+
 const TOOLS = [
   {
     name: TOOL_NAME,
@@ -131,6 +145,50 @@ const TOOLS = [
             remove: { type: "array", items: { type: "string" } },
           },
         },
+      },
+      required: ["why"],
+    },
+  },
+  {
+    name: "describe_looks",
+    description:
+      "Everything about the looks before you design one: the looks that exist (the ones viberoom ships and the human's own), how the window is set now (the look worn, its fine-tuning, the fonts, the text size), every token a look may set with what it means and its VibeClassic value, how a value is written ($name, alpha(), mix()), the fonts by id, and what may be fine-tuned on any look without a spec. Read-only. Load the built-in skill \"look-designer\" for what makes a look good.",
+    inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "lint_look",
+    description:
+      "Check a look spec without saving anything: whether every key exists and every value is of the right kind, and whether the words read on their paper (the contrast floors every look must pass), with the ratio of every pair measured, so you see the numbers you cannot see as colours. Errors must go before create_look takes it; warnings are advice.",
+    inputSchema: { type: "object", properties: LOOK_SPEC_FIELDS, required: ["id", "label"] },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "create_look",
+    description:
+      "Save a look among the human's own looks: a file the human picks under Settings → Appearance, listed after the looks viberoom ships with the human's name on it. The spec extends a shipped look and changes only what it gives. The hub checks it first (an error stops the save, warnings come back with it). Nothing is worn until the human picks it (or applies a propose_look_changes card). A taken id needs replace: true (one of the human's own looks may be replaced; a look viberoom ships never).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...LOOK_SPEC_FIELDS,
+        replace: { type: "boolean", description: "optional: overwrite the human's look with this id instead of refusing" },
+      },
+      required: ["id", "label"],
+    },
+  },
+  {
+    name: "propose_look_changes",
+    description:
+      "Propose a change to how the human's window looks, as a card the human applies or rejects: which look to wear (a shipped one, or one of the human's own by its id, e.g. one you just saved), the fine-tuning of a look (the adjustables describe_looks lists: a colour as #rrggbb, a scale as a number 0-2), the fonts, the text size. This is the whole window, not this room alone; nothing changes until the human clicks Apply, and the room gets a line with the outcome. Say in why what it improves.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        why: { type: "string", description: "one or two sentences: what this change improves; shown on the card" },
+        look: { type: "string", description: "optional: the id of the look to wear" },
+        adjust: { type: "object", description: "optional: the fine-tuning of the look named in look (or of the one worn now): { accent: \"#b5533c\", corners: 0.5 }; describe_looks lists the keys", additionalProperties: {} },
+        chatFontSize: { type: "number", description: "optional: the text size in px, 12-24" },
+        font: { type: "string", description: "optional: a text font id (describe_looks fonts.text)" },
+        mono: { type: "string", description: "optional: a code font id (describe_looks fonts.mono)" },
       },
       required: ["why"],
     },
@@ -282,6 +340,37 @@ async function handle(message: JsonRpcMessage): Promise<void> {
       }
       if (name === "propose_room_changes") {
         const res = await hub("/api/mcp/propose", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: TOKEN, ...args }),
+        });
+        if (!res.ok) return errorResult("the proposal could not be made", res);
+        reply(id, { content: [{ type: "text", text: String(res.body.message ?? "proposed") }] });
+        return;
+      }
+      if (name === "describe_looks") {
+        const res = await hub(`/api/mcp/looks?token=${encodeURIComponent(TOKEN)}`);
+        if (!res.ok) return errorResult("the looks could not be described", res);
+        reply(id, { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] });
+        return;
+      }
+      if (name === "lint_look" || name === "create_look") {
+        const { replace, ...spec } = args;
+        const res = await hub(name === "lint_look" ? "/api/mcp/looks/lint" : "/api/mcp/looks/create", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: TOKEN, spec, replace }),
+        });
+        if (!res.ok) return errorResult(name === "lint_look" ? "the look could not be checked" : "the look could not be saved", res);
+        if (name === "lint_look") {
+          reply(id, { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }], isError: res.body.ok === false ? true : undefined });
+          return;
+        }
+        reply(id, { content: [{ type: "text", text: String(res.body.message ?? "saved") }] });
+        return;
+      }
+      if (name === "propose_look_changes") {
+        const res = await hub("/api/mcp/looks/propose", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ token: TOKEN, ...args }),

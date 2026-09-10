@@ -519,12 +519,13 @@
     describe: "A look, shown as a small picture of itself: its paper, a reply and your bubble on it, its accent, its corners, its name in its own font. The picker in Settings and the style guide's own switch are rows of these; the colours come from the look's tokens, so the card is right whatever look the page wears.",
     props: {
       look: { type: "object", required: true, note: "a look from VIBEROOM_TOKENS.looks: id, label, palette, shape, type, elements" },
+      tag: { type: "string", note: "a small word under the name: whose look it is (one of the human's own)" },
       on: { type: "boolean", default: false },
       act: { type: "string" },
       title: { type: "string" },
       data: { type: "object" },
     },
-    build: ({ look, on, act, title, data }, ui) => {
+    build: ({ look, tag, on, act, title, data }, ui) => {
       const p = look.palette;
       const e = look.elements;
       const r = (px) => `calc(${px}px * ${look.shape.rScale || 1})`;
@@ -535,9 +536,13 @@
           ui.h("span", { class: "reply", style: `background:${e.bubble.bg};color:${e.bubble.ink};border-radius:${r(8)};font-family:${look.type.font};box-shadow:${e.bubble.shadow || "none"}` }, "Aa"),
           ui.h("span", { class: "mine", style: `background:${e.bubble.mineBg};border-radius:${r(8)};box-shadow:${e.bubble.mineShadow || "none"}` }),
           ui.h("span", { class: "accent", style: `background:${p.primary};border-radius:${r(6)};box-shadow:${shadows.shadowPrimary || "none"}` })),
-        ui.h("span", { class: "name", style: `font-family:${look.type.font}` }, look.label));
+        ui.h("span", { class: "name", style: `font-family:${look.type.font}` }, look.label),
+        tag ? ui.h("span", { class: "tag" }, tag) : null);
     },
     states: ["rest", "hover", "on"],
-    samples: Object.values(globalThis.VIBEROOM_TOKENS.looks).map((l) => ({ label: l.label, props: { look: l, on: l.id === globalThis.VIBEROOM_TOKENS.current.id } })),
+    samples: [
+      ...Object.values(globalThis.VIBEROOM_TOKENS.looks).map((l) => ({ label: l.label, props: { look: l, on: l.id === globalThis.VIBEROOM_TOKENS.current.id } })),
+      { label: "one of the human's own", props: { look: globalThis.VIBEROOM_TOKENS.current, tag: "Sam's look" } },
+    ],
   });
 })();

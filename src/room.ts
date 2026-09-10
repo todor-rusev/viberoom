@@ -28,6 +28,8 @@ import {
 } from "./skills.js";
 import type { McpServer } from "./acp-types.js";
 import { templateId, type TemplateLibrary, type TemplateVibemate } from "./templates.js";
+import type { LookCheck, LookSpec } from "./looks.js";
+import type { AppearanceSettings } from "./hub.js";
 import { applyVibemateChanges, diffSettings, lintRoomDesign, ruleLines, type RoomChangeSet, type RoomDesign, type RoomDesignContext, type SettingChange, type VibemateChange } from "./room-design.js";
 import {
   BRIEF_AFFECTING_SETTINGS,
@@ -215,6 +217,7 @@ export interface RoomProposal {
   why: string;
   settings: SettingChange[];
   vibemates: VibemateChange[];
+  appearance?: SettingChange[];
   warnings: string[];
   touchesOwn: boolean;
   status: "pending" | "applied" | "rejected";
@@ -272,6 +275,26 @@ export interface SkillsBridge {
   save: (draft: SkillDraft) => SkillMeta;
   templates: TemplateLibrary;
   templatesChanged: () => void;
+  looks?: {
+    list: () => LookSpec[];
+    describe: () => Promise<Record<string, unknown>>;
+    check: (raw: unknown) => Promise<LookCheck>;
+    save: (raw: unknown, options: { author: string; replace?: boolean }) => Promise<LookCheck>;
+  };
+  appearance?: {
+    current: () => AppearanceSettings;
+    preview: (patch: Record<string, unknown>) => AppearanceSettings;
+    apply: (patch: Record<string, unknown>) => void;
+    ownAdjustments: (lookId: string) => Promise<{ label: string; values: Record<string, string> } | null>;
+  };
+}
+
+export interface LookChangeSet {
+  look?: string;
+  adjust?: Record<string, unknown>;
+  chatFontSize?: number;
+  font?: string;
+  mono?: string;
 }
 
 export interface AgentSkillInput {
@@ -400,7 +423,7 @@ export class Room extends EventEmitter {
   private readonly drafts = new Map<string, ChatMessage>();
   private readonly permissions = new Map<string, PermissionEntry>();
   private readonly proposals = new Map<string, RoomProposal>();
-  private readonly proposalPlans = new Map<string, { settings: SettingChange[]; vibemates: TemplateVibemate[]; ops: VibemateChange[]; ids: Record<string, string> }>();
+  private readonly proposalPlans = new Map<string, { settings: SettingChange[]; vibemates: TemplateVibemate[]; ops: VibemateChange[]; ids: Record<string, string>; appearance?: Record<string, unknown> }>();
   private readonly optionCache: Map<string, DiscoveredOptions>;
   private readonly log: Logger;
   private colorIndex = 0;
@@ -1514,6 +1537,10 @@ export class Room extends EventEmitter {
       if (message.skill) {
         const skill = this.skills?.library.get(message.skill.name);
         if (!message.to.length) targets = targets.filter((id) => this.hasSkill(this.participants.get(id), message.skill!.name));
+        if (!targets.length && !message.to.length) {
+          const alone = [...this.runtimes.keys()].filter(live);
+          if (alone.length === 1) targets = alone;
+        }
         if (!targets.length) this.notice(`Nobody in this room has the skill "${message.skill.name}"; attach it to an agent first, or address one with @.`, "warn");
         if (skill) {
           for (const id of targets) {
@@ -1545,13 +1572,19 @@ export class Room extends EventEmitter {
 
 
   private hasSkill(participant: Participant | undefined, name: string): boolean {
+    if (this.isBuiltinSkill(name)) return true;
     if (!participant?.skills) return false;
     const lower = name.toLowerCase();
     return participant.skills.some((s) => s.toLowerCase() === lower);
   }
 
+  private isBuiltinSkill(name: string): boolean {
+    const skill = this.skills?.library.get(name);
+    return !!skill && skill.author === BUILTIN_AUTHOR && !skill.draft && !skill.problems.length;
+  }
+
   private attachedSkills(participant: Participant): SkillMeta[] {
-    if (!this.skills || !participant.skills?.length) return [];
+    if (!this.skills) return [];
     return this.skills.library.list().filter((s) => !s.problems.length && !s.draft && this.hasSkill(participant, s.name));
   }
 
@@ -1737,12 +1770,113 @@ export class Room extends EventEmitter {
     };
   }
 
+
+  async describeLooksForAgent(participantId: string): Promise<Record<string, unknown>> {
+    const participant = this.agentInRoom(participantId);
+    if (!this.skills?.looks || !this.skills.appearance) throw new Error("looks are not available in this hub");
+    const described = await this.skills.looks.describe();
+    return { you: participant.name, human: this.settings.humanName, appearance: this.skills.appearance.current(), ...described };
+  }
+
+  async lintLookForAgent(participantId: string, raw: unknown): Promise<{ ok: boolean; id?: string; errors: { key: string; message: string }[]; warnings: { key: string; message: string }[]; report: string[] }> {
+    this.agentInRoom(participantId);
+    if (!this.skills?.looks) throw new Error("looks are not available in this hub");
+    try {
+      const checked = await this.skills.looks.check(raw);
+      return { ok: checked.lint.ok, id: checked.spec.id, errors: checked.lint.errors.map((e) => ({ key: e.key, message: e.message })), warnings: checked.lint.warnings.map((w) => ({ key: w.key, message: w.message })), report: checked.lint.report };
+    } catch (error) {
+      return { ok: false, errors: [{ key: "spec", message: error instanceof Error ? error.message : String(error) }], warnings: [], report: [] };
+    }
+  }
+
+  async createLookForAgent(participantId: string, raw: unknown, replace: boolean): Promise<{ ok: true; message: string; id: string; warnings: string[] }> {
+    const participant = this.agentInRoom(participantId);
+    if (!this.skills?.looks) throw new Error("looks are not available in this hub");
+    let saved: LookCheck;
+    try {
+      saved = await this.skills.looks.save(raw, { author: participant.name, replace });
+    } catch (error) {
+      throw new Error(`not saved: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const warnings = saved.lint.warnings.map((w) => w.message);
+    this.postSystem(`${participant.name} saved the look "${saved.spec.label}" (Settings → Appearance).`);
+    this.log.info(`${participant.name} saved look ${saved.spec.id}`);
+    return {
+      ok: true,
+      message: `Saved the look "${saved.spec.label}" (id ${saved.spec.id}) among ${this.settings.humanName}'s own looks: it is in Settings → Appearance now, after the looks viberoom ships. Nothing is worn until ${this.settings.humanName} picks it; propose_look_changes with look "${saved.spec.id}" offers it as a card.${warnings.length ? ` Warnings: ${warnings.join("; ")}` : ""}`,
+      id: saved.spec.id,
+      warnings,
+    };
+  }
+
+  async proposeLookChanges(participantId: string, why: string, changes: LookChangeSet): Promise<{ ok: true; message: string; key: string; warnings: string[] }> {
+    const participant = this.agentInRoom(participantId);
+    if (!this.skills?.appearance || !this.skills.looks) throw new Error("looks are not available in this hub");
+    const current = this.skills.appearance.current();
+    const patch: Record<string, unknown> = {};
+    const rows: SettingChange[] = [];
+    if (changes.look !== undefined) {
+      const lookId = String(changes.look).trim();
+      const known = await this.skills.appearance.ownAdjustments(lookId);
+      if (!known) throw new Error(`not proposed: no look "${lookId}" (the looks viberoom ships, or one of ${this.settings.humanName}'s own by its id)`);
+      patch.look = lookId;
+      if (lookId !== current.look) rows.push({ key: "look", from: current.look, to: lookId });
+    }
+    if (changes.adjust !== undefined) {
+      if (!changes.adjust || typeof changes.adjust !== "object" || Array.isArray(changes.adjust)) throw new Error("not proposed: adjust is an object of adjustable keys and values");
+      const lookId = String(changes.look ?? current.look);
+      const own = await this.skills.appearance.ownAdjustments(lookId);
+      if (!own) throw new Error(`not proposed: no look "${lookId}" to fine-tune`);
+      const merged = { ...(current.custom?.[lookId] ?? {}), ...(changes.adjust as Record<string, unknown>) };
+      patch.custom = { [lookId]: merged };
+      const previewed = this.skills.appearance.preview({ custom: { [lookId]: merged } });
+      for (const key of Object.keys(changes.adjust)) {
+        const from = current.custom?.[lookId]?.[key as keyof typeof current.custom[string]] ?? own.values[key] ?? "";
+        const to = previewed.custom[lookId]?.[key as keyof typeof previewed.custom[string]] ?? "";
+        if (String(from).toLowerCase() !== String(to).toLowerCase()) rows.push({ key: `${key} (${own.label})`, from, to });
+      }
+    }
+    for (const key of ["chatFontSize", "font", "mono"] as const) {
+      if (changes[key] === undefined) continue;
+      patch[key] = changes[key];
+      const previewed = this.skills.appearance.preview({ [key]: changes[key] });
+      if (String(previewed[key]) !== String(current[key])) rows.push({ key: key === "chatFontSize" ? "text size" : key === "font" ? "font" : "code font", from: current[key], to: previewed[key] });
+    }
+    this.skills.appearance.preview(patch);
+    if (!rows.length) throw new Error("not proposed: the change leaves the window as it is");
+    const proposal: RoomProposal = {
+      key: randomUUID(),
+      participantId,
+      participantName: participant.name,
+      ts: Date.now(),
+      why: String(why ?? "").trim().slice(0, 600),
+      settings: [],
+      vibemates: [],
+      appearance: rows,
+      warnings: [],
+      touchesOwn: false,
+      status: "pending",
+    };
+    this.proposalPlans.set(proposal.key, { settings: [], vibemates: [], ops: [], ids: {}, appearance: patch });
+    this.proposals.set(proposal.key, proposal);
+    this.push({ type: "proposal", proposal });
+    const what = rows.map((c) => c.key).join(", ");
+    this.postSystem(`${participant.name} proposes a change to how the window looks (${what}); apply or reject it on the card.`, "human", false, { tone: "attention" });
+    this.log.info(`look proposal ${proposal.key} from ${participant.name}: ${what}`);
+    return {
+      ok: true,
+      message: `Proposal sent to ${this.settings.humanName} as a card in the room (${what}). It changes the whole window, not this room alone; nothing changes until they apply it, and you will see a room line with the outcome.`,
+      key: proposal.key,
+      warnings: [],
+    };
+  }
+
   async resolveProposal(key: string, accept: boolean): Promise<RoomProposal> {
     const proposal = this.proposals.get(key);
     const plan = this.proposalPlans.get(key);
     if (!proposal || !plan) throw new Error("no such pending proposal");
     if (proposal.status !== "pending") return proposal;
-    const what = [...proposal.settings.map((c) => c.key), ...proposal.vibemates.map((o) => `${o.op} ${o.name}`)].join(", ");
+    const what = [...proposal.settings.map((c) => c.key), ...proposal.vibemates.map((o) => `${o.op} ${o.name}`), ...(proposal.appearance ?? []).map((c) => c.key)].join(", ");
     if (!accept) {
       proposal.status = "rejected";
       this.proposalPlans.delete(key);
@@ -1783,6 +1917,14 @@ export class Room extends EventEmitter {
       const patch: Record<string, unknown> = {};
       for (const c of plan.settings) patch[c.key] = c.key === "language" ? (c.to as RoomSettings["language"]) : c.to;
       this.updateSettings(patch);
+    }
+    if (plan.appearance) {
+      try {
+        if (!this.skills?.appearance) throw new Error("looks are not available in this hub");
+        this.skills.appearance.apply(plan.appearance);
+      } catch (error) {
+        skipped.push(`appearance (${error instanceof Error ? error.message : String(error)})`);
+      }
     }
     proposal.status = "applied";
     proposal.skipped = skipped;
@@ -1956,10 +2098,9 @@ export class Room extends EventEmitter {
   private resolveAgentSkill(participant: Participant, name: string): { ok: true; skill: Skill } | { ok: false; reason: string } {
     if (!this.skills) return { ok: false, reason: "skills are not available in this hub" };
     const skill = this.skills.library.get(name);
-    const builtin = !!skill && skill.author === BUILTIN_AUTHOR && !skill.draft;
     const mine = this.attachedSkills(participant).filter((s) => s.agentInvocable).map((s) => s.name);
     const list = mine.length ? `your skills: ${mine.join(", ")}` : "you have no skills";
-    if (!builtin && (!this.hasSkill(participant, name) || !mine.some((s) => s.toLowerCase() === name.toLowerCase()))) {
+    if (!this.hasSkill(participant, name) || !mine.some((s) => s.toLowerCase() === name.toLowerCase())) {
       return { ok: false, reason: `"${name}" is not one of your skills (${list})` };
     }
     if (!skill || skill.problems.length) return { ok: false, reason: `skill "${name}" cannot be loaded right now (${skill ? skill.problems.join("; ") : "missing"})` };

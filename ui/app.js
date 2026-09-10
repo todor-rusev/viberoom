@@ -7,6 +7,7 @@
     recipes: [],
     roomDefaults: null,
     skills: [],
+    looks: [],
     version: null,
     rooms: new Map(),
     currentRoomId: null,
@@ -161,36 +162,7 @@
   } catch {
   }
 
-  const FONTS = {
-    text: {
-      nunito: { label: "Nunito (default)", stack: '"Nunito", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      inter: { label: "Inter", stack: '"Inter", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      "noto-sans": { label: "Noto Sans", stack: '"Noto Sans", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      "open-sans": { label: "Open Sans", stack: '"Open Sans", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      "source-sans-3": { label: "Source Sans 3", stack: '"Source Sans 3", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      "ibm-plex-sans": { label: "IBM Plex Sans", stack: '"IBM Plex Sans", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      "manrope": { label: "Manrope", stack: '"Manrope", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      "rubik": { label: "Rubik", stack: '"Rubik", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      "montserrat": { label: "Montserrat", stack: '"Montserrat", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      "golos-text": { label: "Golos Text", stack: '"Golos Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      "exo-2": { label: "Exo 2", stack: '"Exo 2", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      "comfortaa": { label: "Comfortaa", stack: '"Comfortaa", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      "ubuntu-sans": { label: "Ubuntu Sans", stack: '"Ubuntu Sans", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
-      arial: { label: "Arial / Helvetica (system)", stack: 'Arial, Helvetica, "Liberation Sans", sans-serif' },
-      system: { label: "System UI font", stack: 'system-ui, -apple-system, "Segoe UI", Roboto, Cantarell, sans-serif' },
-    },
-    mono: {
-      "jetbrains-mono": { label: "JetBrains Mono (default)", stack: '"JetBrains Mono", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
-      "fira-code": { label: "Fira Code", stack: '"Fira Code", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
-      "source-code-pro": { label: "Source Code Pro", stack: '"Source Code Pro", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
-      "ibm-plex-mono": { label: "IBM Plex Mono", stack: '"IBM Plex Mono", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
-      "pt-mono": { label: "PT Mono", stack: '"PT Mono", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
-      "victor-mono": { label: "Victor Mono", stack: '"Victor Mono", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
-      "anonymous-pro": { label: "Anonymous Pro", stack: '"Anonymous Pro", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
-      "cascadia-code": { label: "Cascadia Code", stack: '"Cascadia Code", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
-      system: { label: "System monospace", stack: 'ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", "Courier New", monospace' },
-    },
-  };
+  const FONTS = globalThis.VIBEROOM_TOKENS.fonts;
   const STATUS_LABEL = { unstaffed: "needs a coding agent", starting: "starting…", idle: "ready", queued: "waiting…", thinking: "thinking…", writing: "writing…", error: "error", offline: "offline", left: "left" };
   const STATUS_TONE = { idle: "ready", queued: "waiting", starting: "waiting", thinking: "thinking", writing: "writing", error: "error", offline: "asleep", left: "asleep", unstaffed: "attention" };
   const TOOL_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
@@ -2149,6 +2121,7 @@
       const card = choice.closest('[data-ui="ask-card"]');
       if (choice.dataset.act === "permit") post(roomApi(`/permissions/${encodeURIComponent(card.dataset.key)}`), { optionId: choice.dataset.option || null }).catch(showError);
       else if (choice.dataset.act === "decide") post(roomApi(`/proposals/${encodeURIComponent(card.dataset.key)}`), { accept: choice.dataset.answer === "apply" }).catch(showError);
+      else if (choice.dataset.act === "try-look") tryLook(choice.dataset.look);
       return;
     }
     const chip = e.target.closest('[data-ui="tool-call"] > [data-ui="chip"]');
@@ -2630,6 +2603,7 @@
         rows.push(`<div class="prop-row"><b>Room rules</b>${lines.join("")}</div>`);
       } else rows.push(`<div class="prop-row"><b>${esc(c.key)}</b> <span class="prop-from">${esc(proposalValue(c.from))}</span> → <span class="prop-to">${esc(proposalValue(c.to))}</span></div>`);
     }
+    for (const c of p.appearance || []) rows.push(`<div class="prop-row"><b>${esc(c.key)}</b> <span class="prop-from">${esc(proposalValue(c.from))}</span> → <span class="prop-to">${esc(proposalValue(c.to))}</span></div>`);
     for (const v of p.vibemates || []) {
       if (v.op === "update") rows.push(`<div class="prop-row"><b>${esc(v.name)}</b>${(v.fields || []).map((f) => `<div class="prop-line">${esc(f.field)}: <span class="prop-from">${esc(f.from || "(empty)")}</span> → <span class="prop-to">${esc(f.to || "(empty)")}</span></div>`).join("")}</div>`);
       else rows.push(`<div class="prop-row"><b>${v.op === "add" ? "New vibemate" : "Remove"}</b> ${esc(v.name)}${v.op === "add" ? ' <span class="hint">(you pick its coding agent)</span>' : ""}</div>`);
@@ -2638,9 +2612,15 @@
   }
   function renderProposal(room, p) {
     const existing = els.messages.querySelector(`[data-ui="ask-card"][data-kind="proposal"][data-key="${CSS.escape(p.key)}"]`);
+    const lookRow = (p.appearance || []).find((c) => c.key === "look");
+    const lookTarget = lookRow && TOKENS.looks[lookRow.to];
+    const windowNote = p.appearance && p.appearance.length
+      ? `<div class="prop-window"><span class="note">${ic("eye")} This changes the whole window, not this room alone.</span>${lookTarget ? `<div class="prop-look">${UI.html("look-card", { look: lookTarget, tag: lookTag(lookTarget), title: lookTarget.label })}${p.status === "pending" ? UI.html("button", { label: document.documentElement.dataset.tried === lookTarget.id ? "Back" : "Try it on", kind: "soft", size: "xs", act: "try-look", data: { look: lookTarget.id }, title: "This window only, until you apply or reject" }) : ""}</div>` : ""}</div>`
+      : "";
     const body =
       (p.why ? `<div class="prop-why">${esc(p.why)}</div>` : "") +
       `<div class="prop-diff">${proposalDiffHtml(p)}</div>` +
+      windowNote +
       (p.warnings && p.warnings.length ? `<ul class="prop-warn">${p.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : "") +
       (p.touchesOwn ? `<div class="prop-own">${ic("info")} This changes the rules or ${esc(p.participantName)}'s own persona: it decides how ${esc(p.participantName)} itself will behave.</div>` : "");
     const outcome = p.status === "pending" ? undefined : p.status === "applied" ? `applied${p.skipped && p.skipped.length ? ` · not applied: ${p.skipped.join("; ")}` : ""}` : "rejected";
@@ -3072,11 +3052,11 @@
               const lookId = TOKENS.looks[a.look] ? a.look : TOKENS.current.id;
               const look = TOKENS.looks[lookId];
               const custom = (a.custom || {})[lookId] || {};
-              const cards = Object.values(TOKENS.looks).map((l) => UI.html("look-card", { look: l, on: lookId === l.id, data: { look: l.id } })).join("");
+              const cards = Object.values(TOKENS.looks).map((l) => UI.html("look-card", { look: l, tag: lookTag(l), on: lookId === l.id, data: { look: l.id } })).join("");
               const groups = [...new Set(TOKENS.adjustables.map((f) => f.group))];
               const rows = (group) => TOKENS.adjustables.filter((f) => f.group === group).map((f) => UI.html("adjust-row", { key: f.key, label: f.label, hint: f.hint, kind: f.kind, value: custom[f.key] || String(f.of(look)), own: String(f.of(look)), min: f.min, max: f.max, step: f.step })).join("");
               return `<div class="look-preview" id="sp-look-preview">${lookSampleHtml()}</div>
-              ${field("Look", `<input type="hidden" id="sp-look" value="${esc(lookId)}"><div class="look-cards">${cards}</div>`, "How the room is drawn. Every element keeps what it does; only its look changes. The sample above wears the look you pick; the window changes on save.")}
+              ${field("Look", `<input type="hidden" id="sp-look" value="${esc(lookId)}"><div class="look-cards">${cards}</div><div class="look-own" id="sp-look-own">${UI.html("button", { label: "Import a look…", kind: "ghost", size: "xs", hook: "sp-look-import", title: "A look file (.json) saved from viberoom, yours or someone else's" })}<span class="own-only"${look.custom ? "" : " hidden"}>${UI.html("button", { label: "Export", kind: "ghost", size: "xs", hook: "sp-look-export", title: "Save this look as a file, to share or keep" })}${UI.html("button", { label: "Delete", kind: "danger", size: "xs", hook: "sp-look-delete", title: "Remove this look from your own looks" })}</span><input type="file" id="sp-look-file" accept=".json,application/json" hidden></div>`, "How the room is drawn. Every element keeps what it does; only its look changes. The sample above wears the look you pick; the window changes on save. Your own looks (a vibemate's, or a file you import) come after the ones viberoom ships.")}
               <div class="look-adjust" id="sp-look-adjust">
                 <div class="adjust-head"><span class="label">Fine-tune <span id="sp-adj-name">${esc(look.label)}</span></span>${UI.html("button", { label: "Reset all", kind: "ghost", size: "xs", hook: "sp-adj-reset", title: "Back to the look as designed" })}</div>
                 <p class="hint">Kept for this look alone. The sample follows as you pick; the window follows on save.</p>
@@ -3275,9 +3255,56 @@
         input.value = b.dataset.look;
         fillRows(b.dataset.look);
         paintLookPreview();
+        paintOwnRow();
         input.dispatchEvent(new Event("change", { bubbles: true }));
       }),
     );
+    const paintOwnRow = () => {
+      const own = looksBox.querySelector("#sp-look-own .own-only");
+      if (own) own.hidden = !pickedLook().custom;
+    };
+    looksBox.querySelector(".sp-look-import").addEventListener("click", () => $("#sp-look-file").click());
+    $("#sp-look-file").addEventListener("change", async () => {
+      const file = $("#sp-look-file").files && $("#sp-look-file").files[0];
+      $("#sp-look-file").value = "";
+      if (!file) return;
+      try {
+        const spec = JSON.parse(await file.text());
+        const checked = await post("/api/looks/check", { spec });
+        if (!checked.ok) throw new Error(`${file.name} is not a look viberoom can wear: ${(checked.errors || []).map((x) => x.message).join("; ")}`);
+        const taken = TOKENS.looks[checked.id];
+        if (taken && !taken.custom) throw new Error(`"${checked.id}" is the id of a look viberoom ships; change the id in the file`);
+        if (taken && !(await confirmDialog(`You have a look "${taken.label}" with this id already. Replace it with the one from ${file.name}?`, { title: "Replace the look?", okLabel: "Replace" }))) return;
+        const saved = await post("/api/looks", { spec, replace: !!taken });
+        toast(`Look "${saved.look.label}" ${taken ? "replaced" : "added"}: it is in the list now.${(saved.warnings || []).length ? ` ${saved.warnings.map((w) => w.message).join(" ")}` : ""}`, "success");
+      } catch (error) {
+        showError(error);
+      }
+    });
+    looksBox.querySelector(".sp-look-export").addEventListener("click", () => {
+      const look = pickedLook();
+      const spec = state.looks.find((l) => l.id === look.id);
+      if (!spec) return;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([`${JSON.stringify(spec, null, 2)}\n`], { type: "application/json" }));
+      a.download = `${look.id}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    });
+    looksBox.querySelector(".sp-look-delete").addEventListener("click", async () => {
+      const look = pickedLook();
+      if (!look.custom) return;
+      const ok = await confirmDialog(`"${look.label}" goes from your looks; a window wearing it falls back to VibeClassic. The file is gone too (export it first to keep it).`, { title: "Delete the look?", okLabel: "Delete", danger: true });
+      if (!ok) return;
+      try {
+        await post("/api/looks/remove", { id: look.id });
+        toast(`Look "${look.label}" deleted.`, "success");
+      } catch (error) {
+        showError(error);
+      }
+    });
     looksBox.querySelectorAll('[data-ui="adjust-row"] input').forEach((i) => i.addEventListener("input", paintLookPreview));
     looksBox.addEventListener("click", (e) => {
       const back = e.target.closest && e.target.closest('[data-ui="adjust-row"] .back');
@@ -4199,7 +4226,7 @@
   els.pfDialog.addEventListener("cancel", (event) => event.preventDefault());
   function offerLook() {
     const current = (state.settings.appearance || {}).look || TOKENS.current.id;
-    $("#look-dialog-cards").innerHTML = Object.values(TOKENS.looks).map((l) => UI.html("look-card", { look: l, on: l.id === current, data: { look: l.id } })).join("");
+    $("#look-dialog-cards").innerHTML = Object.values(TOKENS.looks).map((l) => UI.html("look-card", { look: l, tag: lookTag(l), on: l.id === current, data: { look: l.id } })).join("");
     openDialog($("#look-dialog"));
   }
   $("#look-dialog-cards").addEventListener("click", async (e) => {
@@ -4274,10 +4301,47 @@
     for (const name of CUSTOM_VARS) el.style.removeProperty(name);
     for (const [name, value] of Object.entries(customVars(values || {}))) el.style.setProperty(name, value);
   }
+  function registerLooks(specs) {
+    for (const id of Object.keys(TOKENS.looks)) if (TOKENS.looks[id].custom) delete TOKENS.looks[id];
+    for (const spec of specs || []) {
+      try {
+        TOKENS.looks[spec.id] = TOKENS.make(spec);
+      } catch (error) {
+        console.warn(`look ${spec.id} could not be built: ${error.message}`);
+      }
+    }
+  }
+  function refreshLooksCss() {
+    const link = $("#looks-custom");
+    if (link) link.href = `/looks-custom.css?v=${Date.now()}`;
+  }
+  function lookTag(look) {
+    return look.custom ? `${(state.settings && state.settings.humanName) || "Your"}'s look` : undefined;
+  }
+  function tryLook(id) {
+    const root = document.documentElement;
+    if (root.dataset.tried === id || !TOKENS.looks[id]) {
+      applyAppearance();
+      return;
+    }
+    if (id === TOKENS.current.id) delete root.dataset.look;
+    else root.dataset.look = id;
+    applyCustomVars(root, (((state.settings || {}).appearance || {}).custom || {})[id] || {});
+    root.dataset.tried = id;
+    refreshTryButtons();
+  }
+  function refreshTryButtons() {
+    const tried = document.documentElement.dataset.tried || "";
+    document.querySelectorAll('[data-ui="ask-card"] [data-act="try-look"]').forEach((b) => {
+      const label = b.querySelector(".label") || b;
+      label.textContent = tried === b.dataset.look ? "Back" : "Try it on";
+    });
+  }
   let appliedScheme = null;
   function applyAppearance() {
     const a = (state.settings || {}).appearance || {};
     const root = document.documentElement;
+    delete root.dataset.tried;
     root.style.setProperty("--fs-scale", String((a.chatFontSize || 14.5) / 14.5));
     const look = TOKENS.looks[a.look] ? a.look : TOKENS.current.id;
     if (look === TOKENS.current.id) delete root.dataset.look;
@@ -4295,6 +4359,7 @@
     if (frame) frame.content = TOKENS.looks[look].elements.browser.themeColor;
     applyCustomVars(root, (a.custom || {})[look] || {});
     document.querySelectorAll("#participants .avatar .life").forEach((ring) => setLifePath(ring, ring.parentElement));
+    refreshTryButtons();
   }
 
   let hubIdentity = null;
@@ -4307,6 +4372,8 @@
     }
     if (identity) hubIdentity = identity;
     state.settings = snapshot.settings;
+    state.looks = snapshot.looks || [];
+    registerLooks(state.looks);
     applyAppearance();
     state.update = snapshot.update || null;
     renderUpdatePop();
@@ -4484,6 +4551,13 @@
       state.skills = m.skills || [];
       if (state.view === "skills" && !editingInDetails()) renderSkillsPage();
       if (state.detailsOpen && !editingInDetails()) renderDetails();
+    },
+    looks: (m) => {
+      state.looks = m.looks || [];
+      registerLooks(state.looks);
+      refreshLooksCss();
+      applyAppearance();
+      if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
     },
     settings: (m) => {
       state.settings = m.settings;

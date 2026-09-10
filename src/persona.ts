@@ -22,6 +22,7 @@ export interface SkillsForPrompt {
 
 export const SKILL_WRITER_NAME = "skill-writer";
 export const ROOM_DESIGNER_NAME = "room-designer";
+export const LOOK_DESIGNER_NAME = "look-designer";
 export const NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}_-]{0,23}$/u;
 
 export interface RoomSettings {
@@ -336,6 +337,9 @@ function skillsSection(skills: SkillsForPrompt): string[] {
     );
     lines.push(
       `You may also design rooms: load the built-in skill "${ROOM_DESIGNER_NAME}" first, then describe_room for the facts, lint_room_design to check a draft (it previews the brief the vibemates would read), create_template to save a template the human can pick under New room, and propose_room_changes to suggest a change to this room: it becomes a card the human applies or rejects, so nothing here changes without their click.`,
+    );
+    lines.push(
+      `You may also design looks (how the human's window is drawn: colours, shadows, corners, fonts): load the built-in skill "${LOOK_DESIGNER_NAME}" first, then describe_looks for the facts, lint_look to check a draft (it measures whether the words read), create_look to save a look the human can pick under Settings, and propose_look_changes to suggest wearing a look or fine-tuning one: a card the human applies or rejects.`,
     );
   } else if (skills.items.length) {
     lines.push("Skills are created by the human or by agents that have the hub's tools; if you want a new one, describe it in the room.");

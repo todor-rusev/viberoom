@@ -8,7 +8,7 @@ import { isReservedSkillName, RESERVED_SKILL_NAMES } from "./commands.js";
 
 export const SKILL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
 export const SKILL_FILE = "SKILL.md";
-import { ROOM_DESIGNER_NAME } from "./persona.js";
+import { LOOK_DESIGNER_NAME, ROOM_DESIGNER_NAME } from "./persona.js";
 
 export const BUILTIN_AUTHOR = "viberoom";
 export const HUMAN_AUTHOR = "human";
@@ -233,7 +233,29 @@ export function renderSkillBody(body: string, args: string): string {
     .trim();
 }
 
-export const BUILTIN_SKILLS: SkillDraft[] = [SKILL_WRITER, ROOM_DESIGNER];
+export const LOOK_DESIGNER: SkillDraft = {
+  name: LOOK_DESIGNER_NAME,
+  description: "How to design a good viberoom look (how the window is drawn: colours, light, corners, fonts) as data that extends a shipped look. Load it before lint_look, create_look or propose_look_changes.",
+  argumentHint: "",
+  body: [
+    "A look is data, not code: which shipped look it extends, a few hues laid over that look's palette, and what it wants otherwise (corners, fonts, shadows, the chat's paper, a part of an element). Everything the window draws is derived from the palette, so a hue changed there reaches every place that wears it; start from the shipped look closest to what is asked and change as little as says it. The facts (the looks, every hue and element with what it means, the value syntax, the fonts, how the window is set now) come from describe_looks; never guess a name, a key the look does not have is refused.",
+    "",
+    "Name what a colour looks like, not what it is for: the palette says primary, ink, bg, white, lav; the elements say which part wears which hue (bubble.bg, btn.hoverInk). Prefer changing hues over changing elements: a new accent is palette.primary plus its primaryLight, primaryDeep and primaryDark steps and its tints lav and lav2; a new paper is bg with white (the panels) a shade apart from it, and soft / softer a step off white; a new ink is ink with ink2 for the words in a bubble and ink3, muted and faint growing quieter. Change an element only when a part must differ from what the palette gives it.",
+    "",
+    "You cannot see the colours; the lint can. Every look must read: the words on a bubble and on the paper at 7:1, the quiet words at 3:1 (4.5:1 on dark paper), every ink on its own paper at 3:1. Run lint_look before you save and read the report: it names every pair with its ratio. Fix the ink before the paper (a darker muted, an ink2 nearer black), keep the accent readable where it is written on (btn.onPrimary on primary at 3:1), and give a bubble that sits on paper of nearly its own shade a hairline (bubble.border) or another shade.",
+    "",
+    "Light comes from one place, top-left, and the shadows fall from it in the palette's shadowInk; a flat look sets the shadows to none, a look with volume raises a thing with a soft shadow below it and a bevel (a light gradient over its face) and sinks a pressed one with an inset shade. Say scheme dark when the paper is dark: diagrams, marks and the quiet-word floors follow it. One accent; the state colours (green ready, yellow thinking, red error, blue waiting, violet writing) keep their families, only their shades follow the paper. Fonts by id from describe_looks (they ship with viberoom and look the same on every machine); running text at lineHeight 1.45 or more; a terminal look wants the mono font everywhere and no curves (rScale 0), a soft look rounder corners (rScale 1.2-1.6) and pills for every control (rCtlMin 99px).",
+    "",
+    "When it reads: create_look saves it among the human's own looks (Settings → Appearance, after the shipped ones, with the human's name on it); one of the human's own may be replaced with replace: true, a shipped look never. Then propose_look_changes offers it as a card (look: its id), or fine-tunes any look with the adjustables describe_looks lists (a colour as #rrggbb, a scale 0-2) — the whole window changes, not this room, and only on the human's click. What a look cannot do: no CSS of its own, no layout, no icons, no fonts beyond the shipped ids; when the human asks for such a thing, say so instead of forcing a token to carry it.",
+  ].join("\n"),
+  userInvocable: true,
+  agentInvocable: true,
+  author: BUILTIN_AUTHOR,
+  reviewed: true,
+  draft: false,
+};
+
+export const BUILTIN_SKILLS: SkillDraft[] = [SKILL_WRITER, ROOM_DESIGNER, LOOK_DESIGNER];
 
 export function isBuiltinSkill(name: string): boolean {
   const lower = name.trim().toLowerCase();

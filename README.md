@@ -88,6 +88,17 @@ brief the others would receive, save a template for you to pick under New room, 
 the room you are in. A proposal is a card in the chat with the diff; nothing changes until you click
 Apply, and the room is told what you decided.
 
+## Let them design the look
+
+A look (how the window is drawn: colours, light, corners, fonts) is data, not code: which of the shipped
+looks it starts from, a few hues, and what it wants otherwise. Ask a vibemate for "a warm paper look for
+long evenings" and it has a built-in skill on what makes a look good and four tools: read every token
+with what it means, check a draft (the hub measures whether the words read on their paper and reports
+the numbers, since a vibemate cannot see colours), save the look among your own (Settings → Appearance,
+after the shipped ones, with your name on it), or propose wearing it as a card you can try on first. Your
+own looks are files under your data folder: export one to share it, import one someone sent you, delete
+one you are done with. A shipped look can only be fine-tuned, never rewritten.
+
 <br>
 
 ## Talk to all, or to one

@@ -154,6 +154,13 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (req.method === "GET" && path === "/looks-custom.css") {
+      const css = await hub.looks.css();
+      res.writeHead(200, { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-cache" });
+      res.end(css);
+      return;
+    }
+
     if (req.method === "GET" && STATIC_FILES[path]) {
       const entry = STATIC_FILES[path];
       const body = await readFile(staticPath(entry));
@@ -368,6 +375,16 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (req.method === "GET" && path === "/api/mcp/looks") {
+      const target = hub.resolveMcpToken(url.searchParams.get("token") ?? "");
+      if (!target) {
+        sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+        return;
+      }
+      sendJson(res, 200, await target.room.describeLooksForAgent(target.participantId));
+      return;
+    }
+
     if (req.method === "GET" && path === "/api/mcp/message") {
       const target = hub.resolveMcpToken(url.searchParams.get("token") ?? "");
       if (!target) {
@@ -423,6 +440,15 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (req.method === "GET" && path === "/api/looks") {
+      sendJson(res, 200, { looks: hub.looks.list() });
+      return;
+    }
+    if (req.method === "GET" && path === "/api/looks/describe") {
+      sendJson(res, 200, await hub.looks.describe());
+      return;
+    }
+
     if (req.method === "GET" && path === "/api/rooms") {
       sendJson(res, 200, [...hub.rooms.values()].map((r) => r.snapshot()));
       return;
@@ -437,6 +463,28 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     if (path === "/api/settings") {
       sendJson(res, 200, { ok: true, settings: hub.updateSettings(body) });
+      return;
+    }
+
+    if (path === "/api/looks/check") {
+      const { checkLookSpec } = await import("./looks.js");
+      try {
+        const checked = await checkLookSpec(body.spec ?? body);
+        sendJson(res, 200, { ok: checked.lint.ok, id: checked.spec.id, errors: checked.lint.errors, warnings: checked.lint.warnings, report: checked.lint.report });
+      } catch (error) {
+        sendJson(res, 200, { ok: false, errors: [{ level: "error", key: "spec", message: error instanceof Error ? error.message : String(error) }], warnings: [], report: [] });
+      }
+      return;
+    }
+    if (path === "/api/looks") {
+      const saved = await hub.saveLook(body.spec ?? body, { author: "human", replace: body.replace === true || body.replace === "true" });
+      sendJson(res, 200, { ok: true, look: saved.spec, warnings: saved.lint.warnings, report: saved.lint.report });
+      return;
+    }
+    if (path === "/api/looks/remove") {
+      const id = String(body.id ?? "");
+      if (!hub.removeLook(id)) throw new Error(`no look "${id}" of your own to remove`);
+      sendJson(res, 200, { ok: true });
       return;
     }
 
@@ -517,6 +565,35 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         return;
       }
       sendJson(res, 200, target.room.createTemplateForAgent(target.participantId, design, body.replace === true || body.replace === "true"));
+      return;
+    }
+
+    if (path === "/api/mcp/looks/lint" || path === "/api/mcp/looks/create" || path === "/api/mcp/looks/propose") {
+      const target = hub.resolveMcpToken(String(body.token ?? ""));
+      if (!target) {
+        sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+        return;
+      }
+      if (path === "/api/mcp/looks/lint") {
+        sendJson(res, 200, await target.room.lintLookForAgent(target.participantId, body.spec ?? body));
+        return;
+      }
+      if (path === "/api/mcp/looks/create") {
+        sendJson(res, 200, await target.room.createLookForAgent(target.participantId, body.spec ?? body, body.replace === true || body.replace === "true"));
+        return;
+      }
+      const num = (v: unknown) => (v === undefined || v === null || v === "" ? undefined : Number(v));
+      sendJson(
+        res,
+        200,
+        await target.room.proposeLookChanges(target.participantId, String(body.why ?? ""), {
+          look: typeof body.look === "string" ? body.look : undefined,
+          adjust: body.adjust && typeof body.adjust === "object" && !Array.isArray(body.adjust) ? (body.adjust as Record<string, unknown>) : undefined,
+          chatFontSize: num(body.chatFontSize),
+          font: typeof body.font === "string" ? body.font : undefined,
+          mono: typeof body.mono === "string" ? body.mono : undefined,
+        }),
+      );
       return;
     }
 
