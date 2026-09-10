@@ -27,9 +27,11 @@ This product bundles the following third-party material:
   - Cascadia Code: Copyright 2019 Microsoft Corporation.
 
 - Vendor icons (assets/vendors/): the logos of Claude, Codex, Gemini, Cursor,
-  OpenCode and GitHub Copilot, as published in the Agent Client Protocol
-  registry (https://agentclientprotocol.com). Each mark belongs to its owner and
-  is used only to identify the agent it stands for.
+  OpenCode, GitHub Copilot and Grok, as published in the Agent Client Protocol
+  registry (https://agentclientprotocol.com), and the Nous Research mark for
+  Hermes Agent, traced in one colour from the icon published on nousresearch.com.
+  Each mark belongs to its owner and is used only to identify the agent it
+  stands for.
 
 - ACP adapters (vendor/acp/, copied from the npm packages at build time by
   scripts/vendor-acp.mjs, each with its licence file):

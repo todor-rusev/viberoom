@@ -615,6 +615,7 @@ pre { background: var(--code-bg); color: var(--code-ink); padding: 10px 12px; bo
 .hint { color: var(--faint); font-size: var(--fs-xs); font-weight: 600; line-height: 1.45; }
 .hint.accent { color: var(--primary); }
 .hint.warn { color: var(--warm-ink); }
+.hint.req { color: var(--rose-ink); font-weight: 700; }
 .hint.error, .error { color: var(--rose-ink); font-size: var(--fs-sm); font-weight: 700; }
 .eyebrow { font-size: calc(11px * var(--fs-scale)); text-transform: uppercase; letter-spacing: 0.1em; color: var(--faint); font-weight: 800; }
 .muted { color: var(--muted); }
@@ -820,6 +821,9 @@ code .open-link { color: inherit; }
 .dialog .actions .spacer { flex: 1; }
 .dialog.wide { width: 720px; }
 .dialog.narrow { width: 440px; }
+.dialog.narrow.three-way { width: 580px; }
+.dialog.narrow.three-way .actions { flex-wrap: nowrap; }
+.dialog.narrow.three-way .actions [data-ui="button"] { white-space: nowrap; }
 .toasts { position: fixed; right: 18px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; max-width: 400px; z-index: 50; pointer-events: none; }
 .toast { pointer-events: auto; background: var(--toast-bg); color: var(--toast-ink); padding: 10px 14px; border-radius: calc(12px * var(--r-scale)); font-size: var(--fs-sm); font-weight: 700; box-shadow: var(--shadow-pop); cursor: pointer; animation: slide-in-right var(--t-slow) var(--ease-pop); line-height: 1.4; display: flex; gap: 8px; align-items: flex-start; }
 .toast .i { width: 15px; height: 15px; margin-top: 1px; opacity: 0.85; }

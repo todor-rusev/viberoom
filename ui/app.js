@@ -1322,13 +1322,14 @@
     const dialog = $("#confirm-dialog");
     $("#cf-title").textContent = o.title || "Are you sure?";
     $("#cf-text").textContent = text;
-    const ok = $("#cf-ok");
-    ok.textContent = o.okLabel || "OK";
-    ok.className = `btn ${o.danger ? "danger solid" : "primary"}`;
-    $("#cf-cancel").textContent = o.cancelLabel || "Cancel";
-    const alt = $("#cf-alt");
-    alt.textContent = o.altLabel || "";
-    alt.hidden = !o.altLabel;
+    const buttons = { ok: $("#cf-ok"), alt: $("#cf-alt"), cancel: $("#cf-cancel") };
+    buttons.ok.textContent = o.okLabel || "OK";
+    buttons.cancel.textContent = o.cancelLabel || "Cancel";
+    buttons.alt.textContent = o.altLabel || "";
+    buttons.alt.hidden = !o.altLabel;
+    dialog.classList.toggle("three-way", !!o.altLabel);
+    const primary = o.primary || "ok";
+    for (const [name, button] of Object.entries(buttons)) button.dataset.kind = name === primary ? (o.danger ? "danger" : "primary") : "ghost";
     return new Promise((resolve) => {
       const done = () => {
         dialog.removeEventListener("close", done);
@@ -1337,7 +1338,7 @@
       dialog.addEventListener("close", done);
       dialog.returnValue = "";
       openDialog(dialog);
-      ok.focus();
+      buttons[primary].focus();
     });
   }
 
@@ -1361,7 +1362,7 @@
     if (text.length <= limit) return text;
     const needed = Math.min(BRIEF_TEXT_MAX, Math.ceil(text.length / 500) * 500);
     const canRaise = text.length <= BRIEF_TEXT_MAX;
-    const choice = await choiceDialog(`${what} is ${text.length} characters; this room's limit is ${limit}. Cut it at the limit, or raise the limit for this room?${canRaise ? "" : ` ${BRIEF_TEXT_MAX} is the most a room can allow.`}`, { title: "Over the room's limit", okLabel: `Cut at ${limit}`, altLabel: canRaise ? `Raise the limit to ${needed}` : "", cancelLabel: "Go back" });
+    const choice = await choiceDialog(`${what} is ${text.length} characters; this room's limit is ${limit}. Cut it at the limit, or raise the limit for this room?${canRaise ? "" : ` ${BRIEF_TEXT_MAX} is the most a room can allow.`}`, { title: "Over the room's limit", okLabel: `Cut at ${limit}`, altLabel: canRaise ? `Raise the limit to ${needed}` : "", cancelLabel: "Go back", primary: "cancel" });
     if (choice === "ok") return text.slice(0, limit);
     if (choice !== "alt") return null;
     if (limitInput) limitInput.value = String(needed);
@@ -3777,7 +3778,7 @@
       }
       els.invModelCustom.hidden = !info.modelAtLaunch;
       const who = info.agentInfo && info.agentInfo.name ? `${info.agentInfo.name} ${info.agentInfo.version || ""}`.trim() : recipe.vendor;
-      els.invStatus.textContent = parts.length ? `Options from ${who} (${parts.join(", ")}; ${(info.durationMs / 1000).toFixed(1)} s)` : `${who} exposes no config options over ACP${info.modelAtLaunch ? "; the model is a launch flag (built-in list, or type one)" : ""}.`;
+      els.invStatus.textContent = parts.length ? `Options from ${who} (${parts.join(", ")}; ${(info.durationMs / 1000).toFixed(1)} s)` : `${who} exposes no config options over ACP${info.modelAtLaunch ? "; the model is a launch flag (built-in list, or type one)" : ""}${info.modeAtLaunch ? "; the mode is a launch flag (a change restarts the session)" : ""}.`;
     } catch (error) {
       if (requestId !== optionsRequest) return;
       els.invStatus.textContent = `Could not read the vibemate's options (${error.message}); showing the built-in list.`;

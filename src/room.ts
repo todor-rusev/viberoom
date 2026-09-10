@@ -12,7 +12,7 @@ import { agentReadableWindow, resolveQuotes, type Quote, type QuoteInput } from 
 import { join, resolve } from "node:path";
 import { AcpAgent } from "./acp-client.js";
 import { RemoteError } from "./jsonrpc.js";
-import { getRecipe, listRecipes } from "./recipes.js";
+import { getRecipe, listRecipes, type AgentRecipe } from "./recipes.js";
 import { classifyStartFailure, type Trouble } from "./agent-health.js";
 import { legacyRowTone } from "./rows.js";
 import { composeSkillBlock, skillPull, SKILL_TOOL_NAME, type SkillsForPrompt } from "./persona.js";
@@ -319,6 +319,7 @@ interface PendingSkill {
 }
 
 const SKILL_TOOL_READY_MS = 5000;
+const AUTH_WAIT_MS = 8000;
 
 export interface DiscoveredOptions {
   recipeId: string;
@@ -327,6 +328,7 @@ export interface DiscoveredOptions {
   modes: NewSessionResult["modes"];
   configOptions: SessionConfigOption[];
   modelAtLaunch: boolean;
+  modeAtLaunch: boolean;
   discoveredAt: number;
   durationMs: number;
 }
@@ -862,14 +864,7 @@ export class Room extends EventEmitter {
     participant.sessionId = undefined;
     this.restoredSeen.set(id, this.seq);
     this.push({ type: "participant", participant });
-    if (!online) {
-      participant.statusDetail = withNotes ? `${why}; a reconnect starts it with its notes` : `${why}; a reconnect starts it with an empty head`;
-      const comesBack = withNotes ? "it comes back with its notes" : "it comes back knowing nothing from before";
-      this.postSystem(options.reason ? `${participant.name} was respawned while offline (${why}): ${comesBack}.` : `${participant.name} was respawned while offline: ${comesBack}.`);
-      this.push({ type: "participant", participant });
-      this.log.info(`respawn of ${participant.name} (offline): stored session dropped`);
-      return participant;
-    }
+    if (!online) this.log.info(`respawn of ${participant.name} (offline): stored session dropped, starting it now`);
     await this.reconnect(id, memory
       ? { mode: "replay", replay, memory: withNotes, reason: `${why}; it comes back with ${withNotes ? "its notes and " : ""}the last ${replay} messages` }
       : { mode: "replay", replay: 0, reason: `${why}, it remembers nothing from before` });
@@ -1135,7 +1130,7 @@ export class Room extends EventEmitter {
 
     const cwd = ensureDir(join(this.dataDir, ".probe"));
     const log = this.log.child(`probe:${recipeId}`);
-    const launch = recipe.build({ model: null });
+    const launch = recipe.build({ model: null, mode: null });
     const agent = new AcpAgent(
       { ...launch, cwd },
       {
@@ -1150,7 +1145,7 @@ export class Room extends EventEmitter {
       const info = await Promise.race([
         (async (): Promise<DiscoveredOptions> => {
           const init = await agent.initialize({ name: "viberoom", version: "0.2.0" });
-          const session = await this.openSession(agent, cwd, log);
+          const session = await this.openSession(agent, cwd, log, [], recipe);
           const result: DiscoveredOptions = {
             recipeId,
             agentInfo: { name: init.agentInfo?.name ?? null, version: init.agentInfo?.version ?? null },
@@ -1158,6 +1153,7 @@ export class Room extends EventEmitter {
             modes: session.modes ?? null,
             configOptions: session.configOptions ?? [],
             modelAtLaunch: !!recipe.modelAtLaunch,
+            modeAtLaunch: !!recipe.modeAtLaunch,
             discoveredAt: Date.now(),
             durationMs: 0,
           };
@@ -1287,7 +1283,7 @@ export class Room extends EventEmitter {
     const name = participant.name;
     const log = this.log.child(name);
     const cwd = ensureDir(this.dir);
-    const spec = recipe.build({ model: launch.model });
+    const spec = recipe.build({ model: launch.model, mode: launch.mode });
     const transcript = new Transcript(join(this.dataDir, "transcripts"), name);
     log.info(`spawning ${spec.command} ${spec.args.join(" ")} (cwd ${cwd}); transcript ${transcript.path}`);
 
@@ -1341,7 +1337,7 @@ export class Room extends EventEmitter {
           }
         }
       }
-      if (!session) session = await this.openSession(agent, cwd, log, mcpServers);
+      if (!session) session = await this.openSession(agent, cwd, log, mcpServers, recipe);
       participant.sessionId = session.sessionId;
       participant.sessionOrigin = origin;
       const storedSeen = this.restoredSeen.get(id);
@@ -1395,9 +1391,13 @@ export class Room extends EventEmitter {
       const warnings = await this.applyConfig(runtime, participant, {
         model: recipe.modelAtLaunch ? null : launch.model,
         effort: launch.effort,
-        mode: launch.mode,
+        mode: recipe.modeAtLaunch ? null : launch.mode,
       });
       if (recipe.modelAtLaunch && launch.model) participant.model = launch.model;
+      if (recipe.modeAtLaunch) {
+        if (!participant.modes?.length) participant.modes = recipe.modePresets.map((id) => ({ id, name: id }));
+        participant.mode = launch.mode ?? recipe.defaultMode ?? participant.mode;
+      }
       for (const w of warnings) this.notice(`${name}: ${w}`, "warn");
 
       participant.status = "idle";
@@ -1491,6 +1491,15 @@ export class Room extends EventEmitter {
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
     if (!runtime || !participant) throw new Error("no such agent (offline?)");
+    const recipe = getRecipe(participant.agentType ?? "");
+    if (recipe?.modeAtLaunch && configId === "mode") {
+      if (!recipe.modePresets.includes(String(value))) throw new Error(`${participant.name}: no mode "${value}" (${recipe.modePresets.join(", ")})`);
+      participant.launch = { model: participant.launch?.model ?? null, effort: participant.launch?.effort ?? null, mode: String(value) };
+      participant.mode = String(value);
+      this.push({ type: "participant", participant });
+      await this.respawnAgent(id, { memory: true, reason: "its mode changed" });
+      return;
+    }
     const hasOption = participant.configOptions?.some((o) => o.id === configId);
     if (!hasOption && configId === "mode" && participant.modes?.some((m) => m.id === value)) {
       await runtime.agent.setMode(runtime.sessionId, String(value));
@@ -2844,18 +2853,27 @@ export class Room extends EventEmitter {
   }
 
 
-  private async openSession(agent: AcpAgent, cwd: string, log: Logger, mcpServers: McpServer[] = []): Promise<NewSessionResult> {
+  private async openSession(agent: AcpAgent, cwd: string, log: Logger, mcpServers: McpServer[] = [], recipe?: AgentRecipe): Promise<NewSessionResult> {
     try {
       return await agent.newSession(cwd, mcpServers);
     } catch (error) {
       if (!isAuthRequired(error) || !agent.authMethods.length) throw error;
       log.info(`session/new needs authentication: ${describeError(error)}`);
+      if (recipe?.loginState === "missing") throw new Error(`authentication required; log in with the agent's own CLI first${recipe.loginCommand ? ` (${recipe.loginCommand})` : ""}`);
     }
     const failures: string[] = [];
     for (const method of agent.authMethods) {
+      if ((method as { type?: string }).type === "terminal") {
+        failures.push(`${method.id}: needs a terminal`);
+        continue;
+      }
       log.info(`authenticate with "${method.id}"${method.name ? ` (${method.name})` : ""}`);
       try {
-        await agent.authenticate(method.id);
+        const done = await Promise.race([agent.authenticate(method.id).then(() => true), delay(AUTH_WAIT_MS).then(() => false)]);
+        if (!done) {
+          failures.push(`${method.id}: no answer in ${AUTH_WAIT_MS / 1000} s (a sign-in that needs you)`);
+          continue;
+        }
         return await agent.newSession(cwd, mcpServers);
       } catch (error) {
         failures.push(`${method.id}: ${describeError(error)}`);
@@ -2931,7 +2949,7 @@ export class Room extends EventEmitter {
   }
 
   private failStart(participant: Participant, error: unknown, fresh: boolean, stderr: string[] = []): Error {
-    participant.statusDetail = error instanceof Error ? error.message : String(error);
+    participant.statusDetail = describeError(error);
     const recipe = getRecipe(participant.agentType ?? "");
     participant.trouble = classifyStartFailure({
       error: participant.statusDetail,
@@ -3083,7 +3101,10 @@ function isAuthRequired(error: unknown): boolean {
 }
 
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (!(error instanceof Error)) return String(error);
+  const data = (error as Error & { data?: unknown; rpc?: { data?: unknown } }).rpc?.data ?? (error as Error & { data?: unknown }).data;
+  const detail = typeof data === "string" ? data : data && typeof data === "object" && typeof (data as { details?: unknown }).details === "string" ? (data as { details: string }).details : "";
+  return detail && !error.message.includes(detail) ? `${error.message}: ${detail}` : error.message;
 }
 
 function looksSilent(text: string): boolean {

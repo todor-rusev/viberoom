@@ -31,7 +31,7 @@ export interface Trouble {
   advice: string;
 }
 
-const LOGIN_WORDS = /\b(not logged in|log ?in required|login required|please log ?in|unauthori[sz]ed|authentication (failed|required|error)|invalid api key|api key (is )?(missing|not set|invalid)|no credentials|credentials not found|401|403|oauth|token (expired|invalid))\b/i;
+const LOGIN_WORDS = /\b(not logged in|log ?in required|login required|please log ?in|unauthori[sz]ed|authentication (failed|required|error)|invalid api key|api key (is )?(missing|not set|invalid)|no credentials|credentials not found|no (llm )?provider (configured|available)|401|403|oauth|token (expired|invalid))\b/i;
 const MISSING_WORDS = /\b(enoent|not found|no such file|is not recognized|command not found|spawn\w* (failed|error))\b/i;
 const TIMEOUT_WORDS = /\b(timed out|timeout|took too long|did not answer|no response)\b/i;
 

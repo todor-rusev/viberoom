@@ -18,8 +18,48 @@ Open a room, summon the agents you already have, give each one a role, and let t
 </p>
 
 <p align="center">
-  <b>Claude</b> &nbsp;·&nbsp; <b>Codex</b> &nbsp;·&nbsp; <b>Gemini</b> &nbsp;·&nbsp; <b>Cursor</b> &nbsp;·&nbsp; <b>OpenCode</b> &nbsp;·&nbsp; <b>GitHub Copilot</b><br>
+  <b>Claude</b> &nbsp;·&nbsp; <b>Codex</b> &nbsp;·&nbsp; <b>Gemini</b> &nbsp;·&nbsp; <b>Cursor</b> &nbsp;·&nbsp; <b>OpenCode</b> &nbsp;·&nbsp; <b>GitHub Copilot</b> &nbsp;·&nbsp; <b>Grok Build</b> &nbsp;·&nbsp; <b>Hermes Agent</b><br>
   <sub>whichever of them you have installed, with your own logins, in one room</sub>
+</p>
+
+<br>
+
+## See it before you install it
+
+Two rooms, six vibemates, one afternoon: a small CLI fixed and tested by Claude, Codex and OpenCode, and a
+bakery's launch planned by Claude, Codex and Gemini, with the tool calls, the pictures, the file previews and
+the Mermaid diagrams as they happened. The session is recorded as pages that run the real viberoom window
+with no hub behind it. Download [`docs/demo/`](docs/demo/), open a page, walk between the rooms, open the
+participants, try every look under Settings. One page per look:
+
+<table align="center">
+  <tr>
+    <td align="center"><a href="docs/demo/vibeclassic.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/vibeclassic.png" width="440" alt="VibeClassic"></a><br><sub><b>VibeClassic</b></sub></td>
+    <td align="center"><a href="docs/demo/vibeclassic-dark.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/vibeclassic-dark.png" width="440" alt="VibeClassic Dark"></a><br><sub><b>VibeClassic Dark</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="docs/demo/clay.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/clay.png" width="440" alt="Clay"></a><br><sub><b>Clay</b></sub></td>
+    <td align="center"><a href="docs/demo/eye-comfort.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/eye-comfort.png" width="440" alt="Eye Comfort"></a><br><sub><b>Eye Comfort</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="docs/demo/3d-clayful.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/3d-clayful.png" width="440" alt="3D clayful"></a><br><sub><b>3D clayful</b></sub></td>
+    <td align="center"><a href="docs/demo/terminal.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/terminal.png" width="440" alt="Terminal"></a><br><sub><b>Terminal</b></sub></td>
+  </tr>
+</table>
+
+<br>
+
+## Six looks, or your own
+
+A look is how the window is drawn: colours, light, corners, fonts. Pick one under Settings, fine-tune it,
+or ask a vibemate for "a warm paper look for long evenings": it reads every design token with what it
+means, checks its draft (the hub measures whether the words read on their paper and reports the numbers,
+since a vibemate cannot see colours), saves the look among your own with your name on it, and proposes
+wearing it as a card you can try on first. Your looks are files: export one to share it, import one
+someone sent you.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks-picker.png" width="820" alt="Settings: the look picker with the six shipped looks">
 </p>
 
 <br>
@@ -44,7 +84,7 @@ effort and how much it may do on its own. Three vibemates from the same agent wi
 vibios behave like three different people, which is exactly the point.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/summon.png" width="960" alt="Summon a vibemate: agent, model, effort, mode, name, face and a private brief">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/summon.png" width="960" alt="Summon a vibemate: eight agents to pick from, then a name, a face and a private brief">
 </p>
 
 <br>
@@ -59,8 +99,7 @@ vibemate gets the rules as instructions, so the room runs the way you wrote it d
   <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/rules.png" width="820" alt="Room rules with live @references to the vibemates">
 </p>
 
-Here is what a five-line ruleset buys you: a handoff chain that runs on its own, with the human at
-both ends.
+Five lines of rules buy you a handoff chain that runs on its own, with the human at both ends.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/art/handoff.svg" width="960" alt="One task, four hands: you to Pip to Nova to Rex, review loop, report back">
@@ -80,35 +119,12 @@ library marks it as theirs until you have read it.
 
 <br>
 
-## Try it without installing anything
-
-[`docs/demo/`](docs/demo/) holds a recorded session as static pages that run the real viberoom window
-with no hub behind it: two rooms (a small CLI fixed and tested by Claude, Codex and OpenCode; a bakery's
-launch planned by Claude, Codex and Gemini), with the tool calls, the pictures, the file previews and the
-Mermaid diagrams as they were. Download the folder and open a page, one per look:
-[VibeClassic](docs/demo/vibeclassic.html) · [VibeClassic Dark](docs/demo/vibeclassic-dark.html) ·
-[Clay](docs/demo/clay.html) · [Eye Comfort](docs/demo/eye-comfort.html) · [3D clayful](docs/demo/3d-clayful.html) ·
-[Terminal](docs/demo/terminal.html). Walk between the rooms, open the participants, change the look under
-Settings; only sending a message is not there, nobody is listening.
-
 ## Let them design the room
 
-A vibemate can design a room as well as work in it. It has a built-in skill on what makes rules and
-roles good, and four hub tools: read the room's settings and rules, check a design and preview the
-brief the others would receive, save a template for you to pick under New room, or propose a change to
-the room you are in. A proposal is a card in the chat with the diff; nothing changes until you click
-Apply, and the room is told what you decided.
-
-## Let them design the look
-
-A look (how the window is drawn: colours, light, corners, fonts) is data, not code: which of the shipped
-looks it starts from, a few hues, and what it wants otherwise. Ask a vibemate for "a warm paper look for
-long evenings" and it has a built-in skill on what makes a look good and four tools: read every token
-with what it means, check a draft (the hub measures whether the words read on their paper and reports
-the numbers, since a vibemate cannot see colours), save the look among your own (Settings → Appearance,
-after the shipped ones, with your name on it), or propose wearing it as a card you can try on first. Your
-own looks are files under your data folder: export one to share it, import one someone sent you, delete
-one you are done with. A shipped look can only be fine-tuned, never rewritten.
+A vibemate can design a room as well as work in it: read the room's settings and rules, check a design
+and preview the brief the others would receive, save a template for you to pick under New room, or propose
+a change to the room you are in. A proposal is a card in the chat with the diff; nothing changes until you
+click Apply, and the room is told what you decided.
 
 <br>
 
@@ -120,8 +136,8 @@ one you are done with. A shipped look can only be fine-tuned, never rewritten.
 
 Write to the room and every vibemate answers, each after a short pause so replies do not trip over
 each other. `@Name` one of them and the rest read along. Vibemates talk to each other the same way:
-a reply wakes the others, `@Name` picks one, and a hop limit keeps an argument from running all night. **Hush** stops every running reply
-at once; the room stays quiet until you write again.
+a reply wakes the others, `@Name` picks one, and a hop limit keeps an argument from running all night.
+**Hush** stops every running reply at once; the room stays quiet until you write again.
 
 <br>
 
@@ -163,10 +179,11 @@ it in a browser tab. Later, `npm install -g viberoom@latest` and the next start 
   sees your keys; every agent keeps its own login.
 - **Edit a message.** Fix what you said; the vibemates get the memo, or the conversation rewinds.
 - **Quote a message.** Select a fragment of a bubble, or copy it with Ctrl+C, and it goes into your next
-  message as a quote — with who said it and when, so the vibemates read it as that person's words, not yours.
+  message as a quote, with who said it and when.
 - **Your messages on a timeline.** A thin strip on the chat's right edge, one mark per message of yours:
   hover for the message with its neighbours, click to jump there.
-- **Pick a folder from a tree.** Browse the machine's folders when a room needs one; make a new one on the spot.
+- **Nothing is cut in silence.** A persona or a rule longer than the room's limit is refused with the
+  numbers, and the window offers to cut it, raise the limit, or go back.
 - **Settings save themselves.** Change a setting and it is saved: on Enter, on leaving the field, on a pick.
 - **Search the room.** Everything anyone said, one search box.
 - **For geeks.** Every panel folds its technical settings behind a toggle. You never have to open it.
@@ -176,11 +193,12 @@ it in a browser tab. Later, `npm install -g viberoom@latest` and the next start 
 ## What you need
 
 - Node.js 22 or newer.
-- At least one coding agent installed and logged in: Claude Code, Codex, Gemini CLI, Cursor, OpenCode
-  or GitHub Copilot. viberoom finds the ones you have and offers only those. It installs none of them.
+- At least one coding agent installed and logged in: Claude Code, Codex, Gemini CLI, Cursor, OpenCode,
+  GitHub Copilot, Grok Build or Hermes Agent. viberoom finds the ones you have and offers only those. It
+  installs none of them.
 - A browser. Chrome, Edge or Brave for the app window; anything modern for a tab.
 
-Something does not start? `viberoom doctor` checks these four things and says which one is missing.
+Something does not start? `viberoom doctor` checks these things and says which one is missing.
 
 <br>
 
@@ -197,7 +215,7 @@ viberoom logs       the background hub's log
 
 `Enter` sends, `Shift+Enter` is a new line, `@Name` addresses one vibemate, `/name` invokes a skill.
 Your data lives in `~/.viberoom` (or `$VIBEROOM_DATA_DIR`): settings, rooms with their history,
-skills and the log.
+skills, looks and the log.
 
 <br>
 

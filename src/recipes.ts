@@ -1,14 +1,14 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
 import { execSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loginState, type LoginProbe, type LoginState } from "./agent-health.js";
 
-export type AgentTypeId = "claude" | "codex" | "gemini" | "cursor" | "opencode" | "copilot" | "fake";
+export type AgentTypeId = "claude" | "codex" | "gemini" | "cursor" | "opencode" | "copilot" | "grok" | "hermes" | "fake";
 
 export interface LaunchSpec {
   command: string;
@@ -38,10 +38,20 @@ export interface AgentRecipe {
   modelAtLaunch?: boolean;
   bypassMode: string | null;
   bypassConfig?: Record<string, string>;
-  build(options: { model: string | null }): LaunchSpec;
+  modeAtLaunch?: boolean;
+  build(options: { model: string | null; mode: string | null }): LaunchSpec;
 }
 
 const isWindows = process.platform === "win32";
+
+const ICON_VERSION: string = (() => {
+  try {
+    return String((createRequire(import.meta.url)("../package.json") as { version?: string }).version ?? "0");
+  } catch {
+    return "0";
+  }
+})();
+const iconUrl = (id: string): string => `/vendor-icons/${id}.svg?v=${ICON_VERSION}`;
 
 function resolvePackageEntry(packageName: string, relativeEntry: string): string | null {
   try {
@@ -171,6 +181,42 @@ function resolveCodex(): string | null {
   return resolveGlobalNpmBin("codex") ?? resolveOnPath(["codex"]);
 }
 
+function realHome(): string | null {
+  try {
+    return realpathSync(homedir());
+  } catch {
+    return null;
+  }
+}
+
+function resolveGrok(): string | null {
+  const exe = isWindows ? "grok.exe" : "grok";
+  const home = realHome();
+  const dirs = [process.env.GROK_BIN_DIR, process.env.GROK_HOME && join(process.env.GROK_HOME, "bin"), join(homedir(), ".grok", "bin"), home && join(home, ".grok", "bin")];
+  for (const dir of dirs) if (dir && existsSync(join(dir, exe))) return join(dir, exe);
+  const onPath = resolveOnPath(["grok"]);
+  return onPath && !/\.(cmd|bat|ps1)$/i.test(onPath) ? onPath : null;
+}
+
+function resolveHermes(): { command: string; args: string[] } | null {
+  const hermesHome = process.env.HERMES_HOME || (isWindows ? process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, "hermes") : join(homedir(), ".hermes"));
+  const scripts = isWindows ? "Scripts" : "bin";
+  const exe = (name: string) => (isWindows ? `${name}.exe` : name);
+  const candidates: { command: string; args: string[] }[] = [];
+  if (hermesHome) {
+    const venv = join(hermesHome, "hermes-agent", "venv");
+    candidates.push({ command: join(venv, scripts, exe("hermes-acp")), args: [] }, { command: join(venv, scripts, exe("hermes")), args: ["acp"] });
+    if (isWindows) candidates.push({ command: join(hermesHome, "bin", "hermes-acp.exe"), args: [] }, { command: join(hermesHome, "bin", "hermes.exe"), args: ["acp"] });
+  }
+  if (!isWindows) {
+    candidates.push({ command: join(homedir(), ".local", "bin", "hermes"), args: ["acp"] }, { command: "/usr/local/lib/hermes-agent/venv/bin/hermes-acp", args: [] }, { command: "/usr/local/bin/hermes", args: ["acp"] });
+  }
+  for (const candidate of candidates) if (existsSync(candidate.command)) return candidate;
+  const onPath = resolveOnPath(["hermes-acp", "hermes"]);
+  if (onPath && !/\.(cmd|bat|ps1)$/i.test(onPath)) return { command: onPath, args: /^hermes-acp/i.test(basename(onPath)) ? [] : ["acp"] };
+  return null;
+}
+
 const vendorDir = join(dirname(fileURLToPath(import.meta.url)), "..", "vendor", "acp");
 const claudeAdapter = join(vendorDir, "claude-agent-acp", "dist", "index.js");
 const codexAdapter = join(vendorDir, "codex-acp", "dist", "index.js");
@@ -182,13 +228,15 @@ const geminiEntry =
 const cursorAgent = resolveCursorAgent();
 const openCodeExe = resolveOpenCode();
 const copilotExe = resolveCopilot();
+const grokExe = resolveGrok();
+const hermesLaunch = resolveHermes();
 
 const recipes: AgentRecipe[] = [
   {
     id: "claude",
     label: "Claude (claude-agent-acp)",
     vendor: "Claude",
-    icon: "/vendor-icons/claude.svg",
+    icon: iconUrl("claude"),
     tested: true,
     note: "Adapter around the Claude Agent SDK, driving the Claude Code installed on this machine with its login and settings.",
     modelPresets: ["haiku", "sonnet", "opus", "default"],
@@ -214,7 +262,7 @@ const recipes: AgentRecipe[] = [
     id: "codex",
     label: "Codex (codex-acp)",
     vendor: "Codex",
-    icon: "/vendor-icons/codex.svg",
+    icon: iconUrl("codex"),
     tested: true,
     note: "Adapter around the Codex App Server of the Codex CLI installed on this machine; uses its login (~/.codex) or CODEX_API_KEY. Mode 'agent' edits the working directory without asking; 'read-only' for a chat-only participant.",
     modelPresets: ["gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
@@ -240,7 +288,7 @@ const recipes: AgentRecipe[] = [
     id: "gemini",
     label: "Gemini CLI (gemini --acp)",
     vendor: "Gemini",
-    icon: "/vendor-icons/gemini.svg",
+    icon: iconUrl("gemini"),
     tested: true,
     note: "Native ACP mode of the globally installed Gemini CLI; uses the machine's Gemini login / API key. Exposes no config options over ACP: the model is fixed at launch (--model).",
     modelPresets: ["gemini-3.8-flash", "gemini-3.7-flash"],
@@ -267,7 +315,7 @@ const recipes: AgentRecipe[] = [
     id: "cursor",
     label: "Cursor (cursor-agent acp)",
     vendor: "Cursor",
-    icon: "/vendor-icons/cursor.svg",
+    icon: iconUrl("cursor"),
     tested: true,
     note: "Cursor's CLI agent in native ACP mode; uses the machine's Cursor login (agent login) or CURSOR_API_KEY. Mode 'agent' edits without asking; 'ask' is read-only Q&A. Models: see the session settings after joining.",
     modelPresets: [],
@@ -293,7 +341,7 @@ const recipes: AgentRecipe[] = [
     id: "opencode",
     label: "OpenCode (opencode acp)",
     vendor: "OpenCode",
-    icon: "/vendor-icons/opencode.svg",
+    icon: iconUrl("opencode"),
     tested: false,
     note: "The open-source coding agent in native ACP mode; the model list comes from the providers configured in OpenCode (opencode providers). Mode 'plan' is read-only; 'build' edits the working directory (OpenCode's own permission config decides what still asks; the questions arrive here).",
     modelPresets: [],
@@ -318,7 +366,7 @@ const recipes: AgentRecipe[] = [
     id: "copilot",
     label: "GitHub Copilot (copilot --acp)",
     vendor: "Copilot",
-    icon: "/vendor-icons/copilot.svg",
+    icon: iconUrl("copilot"),
     tested: false,
     note: "GitHub Copilot CLI in native ACP mode; uses the machine's Copilot login (copilot login). Session modes agent / plan / autopilot; the 'allow_all' option decides whether tool calls ask for permission. Exposes no model option over ACP: the model is fixed at launch (--model, e.g. auto).",
     modelPresets: ["auto"],
@@ -342,6 +390,57 @@ const recipes: AgentRecipe[] = [
     build: ({ model }) => ({
       command: copilotExe ?? "",
       args: ["--acp", ...(model ? ["--model", model] : [])],
+    }),
+  },
+  {
+    id: "grok",
+    label: "Grok Build (grok agent stdio)",
+    vendor: "Grok",
+    icon: iconUrl("grok"),
+    tested: true,
+    note: "xAI's coding agent in its native ACP mode; uses this machine's Grok login (grok login) or XAI_API_KEY. It reports no session modes over ACP, so the mode is a launch flag: 'ask-first' asks before every tool call, 'always-approve' never does; a change restarts the session with its notes kept. Model and reasoning effort are session options (the model also goes on the launch command).",
+    modelPresets: ["grok-4.6", "grok-4.5"],
+    defaultModel: null,
+    effortPresets: ["xhigh", "high", "medium", "low"],
+    defaultEffort: null,
+    modePresets: ["ask-first", "always-approve"],
+    defaultMode: "ask-first",
+    bypassMode: "always-approve",
+    unavailableReason: grokExe ? null : "Grok Build not found",
+    installedAt: grokExe,
+    installHint: "curl -fsSL https://x.ai/cli/install.sh | bash (Windows: irm https://x.ai/cli/install.ps1 | iex), or npm install -g @xai-official/grok; then grok login",
+    loginCommand: "grok login",
+    login: { env: ["XAI_API_KEY", "GROK_DEPLOYMENT_KEY"], files: [".grok/auth.json"], command: "grok login" },
+    loginState: "unknown",
+    modeAtLaunch: true,
+    build: ({ model, mode }) => ({
+      command: grokExe ?? "",
+      args: ["agent", ...(model ? ["-m", model] : []), ...(mode === "always-approve" ? ["--always-approve"] : []), "stdio"],
+    }),
+  },
+  {
+    id: "hermes",
+    label: "Hermes Agent (hermes acp)",
+    vendor: "Hermes",
+    icon: iconUrl("hermes"),
+    tested: true,
+    note: "Nous Research's open-source agent in its native ACP mode; the provider and model are the ones configured in Hermes (hermes model). Mode 'default' asks before edits, 'accept_edits' auto-allows workspace and /tmp edits, 'dont_ask' auto-allows file edits except sensitive paths; a tool call that still needs permission arrives here with Hermes' own choices: once, this session, or always.",
+    modelPresets: [],
+    defaultModel: null,
+    effortPresets: [],
+    defaultEffort: null,
+    modePresets: ["default", "accept_edits", "dont_ask"],
+    defaultMode: "default",
+    bypassMode: "dont_ask",
+    unavailableReason: hermesLaunch ? null : "Hermes Agent not found",
+    installedAt: hermesLaunch?.command ?? null,
+    installHint: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash (Windows: iex (irm https://hermes-agent.nousresearch.com/install.ps1)), then hermes model",
+    loginCommand: "hermes model",
+    login: { env: [], files: [], command: "hermes model" },
+    loginState: "unknown",
+    build: () => ({
+      command: hermesLaunch?.command ?? "",
+      args: hermesLaunch?.args ?? [],
     }),
   },
 ];

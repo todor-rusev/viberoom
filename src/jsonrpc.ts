@@ -12,7 +12,9 @@ export class MethodNotFound extends Error {
 
 export class RemoteError extends Error {
   constructor(public readonly rpc: JsonRpcError, public readonly method: string) {
-    super(`${method} failed: ${rpc.message} (code ${rpc.code})`);
+    const data = rpc.data as unknown;
+    const detail = typeof data === "string" ? data : data && typeof data === "object" && typeof (data as { details?: unknown }).details === "string" ? (data as { details: string }).details : "";
+    super(`${method} failed: ${rpc.message}${detail ? `: ${detail}` : ""} (code ${rpc.code})`);
   }
 }
 
