@@ -14,7 +14,11 @@ Open a room, summon the agents you already have, give each one a role, and let t
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/conversation.png" width="960" alt="A room with two vibemates: one explains a git command from a screenshot, the other adds the part that changes whose problem it is">
+  <a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/looks.gif" width="960" alt="The recorded session, drawn in each of the six looks in turn; click to open the interactive demo"></a>
+</p>
+
+<p align="center">
+  <a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/try-the-demo.png" width="880" alt="Try the interactive demo: a recorded session in the real viberoom window, two rooms, six vibemates, six looks, nothing to install"></a>
 </p>
 
 <p align="center">
@@ -29,25 +33,51 @@ Open a room, summon the agents you already have, give each one a role, and let t
 Two rooms, six vibemates, one afternoon: a small CLI fixed and tested by Claude, Codex and OpenCode, and a
 bakery's launch planned by Claude, Codex and Gemini, with the tool calls, the pictures, the file previews and
 the Mermaid diagrams as they happened. The session is recorded as pages that run the real viberoom window
-with no hub behind it: click a look, walk between the rooms, open the participants, try every look under
-Settings. (The same pages live in [`docs/demo/`](docs/demo/), for a copy of your own.)
+with no hub behind it. Every card below opens it in that look: walk between the rooms, open the participants,
+change the look under Settings. (The pages live in [`docs/demo/`](docs/demo/) too, for a copy of your own.)
 
-<table align="center">
-  <tr>
-    <td align="center"><a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/vibeclassic.png" width="440" alt="VibeClassic"></a><br><sub><b>VibeClassic</b></sub></td>
-    <td align="center"><a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic-dark.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/vibeclassic-dark.png" width="440" alt="VibeClassic Dark"></a><br><sub><b>VibeClassic Dark</b></sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="https://todor-rusev.github.io/viberoom/demo/clay.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/clay.png" width="440" alt="Clay"></a><br><sub><b>Clay</b></sub></td>
-    <td align="center"><a href="https://todor-rusev.github.io/viberoom/demo/eye-comfort.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/eye-comfort.png" width="440" alt="Eye Comfort"></a><br><sub><b>Eye Comfort</b></sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="https://todor-rusev.github.io/viberoom/demo/3d-clayful.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/3d-clayful.png" width="440" alt="3D clayful"></a><br><sub><b>3D clayful</b></sub></td>
-    <td align="center"><a href="https://todor-rusev.github.io/viberoom/demo/terminal.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/terminal.png" width="440" alt="Terminal"></a><br><sub><b>Terminal</b></sub></td>
-  </tr>
-</table>
+<a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic.html"><img align="right" width="460" src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/card-vibeclassic.jpg" alt="VibeClassic"></a>
 
-<br>
+**VibeClassic** &mdash; the default: lavender light, soft tiles, room to breathe.<br>
+<a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic.html">Open the demo in VibeClassic &rarr;</a>
+
+<br clear="all">
+
+<a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic-dark.html"><img align="left" width="460" src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/card-vibeclassic-dark.jpg" alt="VibeClassic Dark"></a>
+
+**VibeClassic Dark** &mdash; the same room after dark: navy paper, the same tiles, nothing glares.<br>
+<a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic-dark.html">Open the demo in VibeClassic Dark &rarr;</a>
+
+<br clear="all">
+
+<a href="https://todor-rusev.github.io/viberoom/demo/clay.html"><img align="right" width="460" src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/card-clay.jpg" alt="Clay"></a>
+
+**Clay** &mdash; sand, terracotta and teal on warm paper; matte objects, soft corners.<br>
+<a href="https://todor-rusev.github.io/viberoom/demo/clay.html">Open the demo in Clay &rarr;</a>
+
+<br clear="all">
+
+<a href="https://todor-rusev.github.io/viberoom/demo/eye-comfort.html"><img align="left" width="460" src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/card-eye-comfort.jpg" alt="Eye Comfort"></a>
+
+**Eye Comfort** &mdash; cream instead of white, dark grey instead of black, air between the lines: made for long evenings.<br>
+<a href="https://todor-rusev.github.io/viberoom/demo/eye-comfort.html">Open the demo in Eye Comfort &rarr;</a>
+
+<br clear="all">
+
+<a href="https://todor-rusev.github.io/viberoom/demo/3d-clayful.html"><img align="right" width="460" src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/card-3d-clayful.jpg" alt="3D clayful"></a>
+
+**3D clayful** &mdash; cream, lavender, pink and mint with real volume: light from the top left, a wall under every object.<br>
+<a href="https://todor-rusev.github.io/viberoom/demo/3d-clayful.html">Open the demo in 3D clayful &rarr;</a>
+
+<br clear="all">
+
+<a href="https://todor-rusev.github.io/viberoom/demo/terminal.html"><img align="left" width="460" src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/card-terminal.jpg" alt="Terminal"></a>
+
+**Terminal** &mdash; phosphor green on black, one monospace face, hairlines instead of shadows.<br>
+<a href="https://todor-rusev.github.io/viberoom/demo/terminal.html">Open the demo in Terminal &rarr;</a>
+
+<br clear="all">
+
 
 ## Six looks, or your own
 
@@ -149,7 +179,7 @@ at that line. A diagram block becomes a diagram. Change one of your own messages
 the vibemates are told, or the conversation rewinds to that point.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/home.png" width="960" alt="The home page: welcome back, your rooms, what you can do here">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/conversation.png" width="960" alt="A room with two vibemates: one explains a git command from a screenshot, the other adds the part that changes whose problem it is">
 </p>
 
 <br>
