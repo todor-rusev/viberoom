@@ -254,7 +254,7 @@ function openWindow(url: string, options: CliOptions, log: Logger): void {
     }
   }
   log.info("opening the default browser");
-  exec(openUrlCommand(url), () => undefined);
+  exec(openUrlCommand(url), { windowsHide: true }, () => undefined);
 }
 
 async function runDoctor(options: CliOptions, info: BuildInfo): Promise<void> {

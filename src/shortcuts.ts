@@ -151,7 +151,7 @@ export function installShortcuts(o: ShortcutOptions): ShortcutResult {
     const aumid = appUserModelId(browser, "http://127.0.0.1:4810/", basename(join(o.dataDir, "browser")));
     for (const lnk of windowsShortcutPaths(home, env, o.desktop)) {
       mkdirSync(join(lnk, ".."), { recursive: true });
-      const r = spawnSync("powershell", ["-NoProfile", "-Command", shortcutScript(lnk, wscript, vbs, o.dataDir, ico, aumid)], { encoding: "utf8" });
+      const r = spawnSync("powershell", ["-NoProfile", "-Command", shortcutScript(lnk, wscript, vbs, o.dataDir, ico, aumid)], { encoding: "utf8", windowsHide: true });
       if (r.status === 0) result.files.push(lnk);
       else result.notes.push(`could not create ${lnk}: ${(r.stderr || "").split("\n")[0]}`);
     }

@@ -60,7 +60,7 @@ function resolveGlobalNpmRoot(): string | null {
   const candidates: string[] = [];
   if (isWindows && process.env.APPDATA) candidates.push(join(process.env.APPDATA, "npm", "node_modules"));
   try {
-    const out = execSync("npm root -g", { encoding: "utf8", shell: isWindows ? "cmd.exe" : "/bin/sh", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const out = execSync("npm root -g", { encoding: "utf8", shell: isWindows ? "cmd.exe" : "/bin/sh", stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).trim();
     if (out) candidates.push(out);
   } catch {
   }
@@ -105,6 +105,7 @@ function resolveOnPath(names: string[]): string | null {
         encoding: "utf8",
         shell: isWindows ? "cmd.exe" : "/bin/sh",
         stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
       });
       const first = out
         .split(/\r?\n/)
