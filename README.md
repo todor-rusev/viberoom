@@ -29,21 +29,21 @@ Open a room, summon the agents you already have, give each one a role, and let t
 Two rooms, six vibemates, one afternoon: a small CLI fixed and tested by Claude, Codex and OpenCode, and a
 bakery's launch planned by Claude, Codex and Gemini, with the tool calls, the pictures, the file previews and
 the Mermaid diagrams as they happened. The session is recorded as pages that run the real viberoom window
-with no hub behind it. Download [`docs/demo/`](docs/demo/), open a page, walk between the rooms, open the
-participants, try every look under Settings. One page per look:
+with no hub behind it: click a look, walk between the rooms, open the participants, try every look under
+Settings. (The same pages live in [`docs/demo/`](docs/demo/), for a copy of your own.)
 
 <table align="center">
   <tr>
-    <td align="center"><a href="docs/demo/vibeclassic.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/vibeclassic.png" width="440" alt="VibeClassic"></a><br><sub><b>VibeClassic</b></sub></td>
-    <td align="center"><a href="docs/demo/vibeclassic-dark.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/vibeclassic-dark.png" width="440" alt="VibeClassic Dark"></a><br><sub><b>VibeClassic Dark</b></sub></td>
+    <td align="center"><a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/vibeclassic.png" width="440" alt="VibeClassic"></a><br><sub><b>VibeClassic</b></sub></td>
+    <td align="center"><a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic-dark.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/vibeclassic-dark.png" width="440" alt="VibeClassic Dark"></a><br><sub><b>VibeClassic Dark</b></sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/demo/clay.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/clay.png" width="440" alt="Clay"></a><br><sub><b>Clay</b></sub></td>
-    <td align="center"><a href="docs/demo/eye-comfort.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/eye-comfort.png" width="440" alt="Eye Comfort"></a><br><sub><b>Eye Comfort</b></sub></td>
+    <td align="center"><a href="https://todor-rusev.github.io/viberoom/demo/clay.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/clay.png" width="440" alt="Clay"></a><br><sub><b>Clay</b></sub></td>
+    <td align="center"><a href="https://todor-rusev.github.io/viberoom/demo/eye-comfort.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/eye-comfort.png" width="440" alt="Eye Comfort"></a><br><sub><b>Eye Comfort</b></sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/demo/3d-clayful.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/3d-clayful.png" width="440" alt="3D clayful"></a><br><sub><b>3D clayful</b></sub></td>
-    <td align="center"><a href="docs/demo/terminal.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/terminal.png" width="440" alt="Terminal"></a><br><sub><b>Terminal</b></sub></td>
+    <td align="center"><a href="https://todor-rusev.github.io/viberoom/demo/3d-clayful.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/3d-clayful.png" width="440" alt="3D clayful"></a><br><sub><b>3D clayful</b></sub></td>
+    <td align="center"><a href="https://todor-rusev.github.io/viberoom/demo/terminal.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks/terminal.png" width="440" alt="Terminal"></a><br><sub><b>Terminal</b></sub></td>
   </tr>
 </table>
 
