@@ -5,12 +5,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>viberoom</title>
-  <link rel="icon" href="/icon.svg?v=7" type="image/svg+xml">
-  <link rel="icon" href="/favicon.ico?v=7" sizes="any">
-  <link rel="apple-touch-icon" href="/icon-256.png?v=7">
+  <link rel="icon" href="/favicon.ico?v=8" sizes="16x16 32x32 48x48 64x64 128x128 256x256">
+  <link rel="icon" href="/icon-256.png?v=8" type="image/png" sizes="256x256">
+  <link rel="apple-touch-icon" href="/icon-256.png?v=8">
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#6d5dfc">
   <link rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="/looks.css">
   <link rel="stylesheet" href="/components.css">
   <link rel="stylesheet" href="/app.css">
 </head>
@@ -133,6 +134,14 @@
       <div class="actions"><button type="submit" data-ui="button" data-kind="primary" data-size="lg">Start vibing</button></div>
     </form>
   </dialog>
+  <dialog id="look-dialog" class="dialog wide">
+    <form id="look-form" method="dialog">
+      <h3><span class="h-ico" data-icon="eye"></span>Pick a look</h3>
+      <p class="lead">How viberoom is drawn. A click tries a look on the window at once; change it, or fine-tune it, any time under Settings → Appearance.</p>
+      <div class="look-cards" id="look-dialog-cards"></div>
+      <div class="actions"><button type="submit" data-ui="button" data-kind="primary" data-size="lg">Keep this look</button></div>
+    </form>
+  </dialog>
   <dialog id="confirm-dialog" class="dialog narrow">
     <form method="dialog">
       <h3 id="cf-title">Are you sure?</h3>
@@ -201,7 +210,7 @@
       <details class="geek" id="inv-geek">
         <summary><span data-icon="geek"></span>for geeks<span class="g-hint">reply delay, skills, where the vibemate lives</span><span class="chev" data-icon="down"></span></summary>
         <div class="geek-body">
-          <label>Reply delay override, seconds<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Empty: the room's delay. A value here overrides it for this vibemate only. Before each turn the vibemate waits a random 0–N seconds, so replies cross less often; messages that arrive meanwhile land in its backlog.</span><input id="inv-delay" type="number" min="0" max="120" step="0.5" placeholder="the room's"></label>
+          <label>Reply delay override, seconds<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Empty: the room's delay. A value here overrides it for this vibemate only. Before each turn the vibemate waits a random 0–N seconds, so replies cross less often; messages that arrive meanwhile land in its backlog.</span><span data-ui="number-field"><input id="inv-delay" type="number" min="0" max="120" step="0.5" placeholder="the room's"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span></label>
           <label>Skills <span class="hint">(from the library)</span><div id="inv-skills" class="check-list"></div></label>
           <p class="hint" id="inv-where"></p>
           <p class="hint" id="inv-note"></p>
@@ -248,7 +257,7 @@
       <h3><span class="h-ico" data-icon="refresh"></span>Welcome back</h3>
       <p class="lead" id="rc-intro"></p>
       <div class="choice-list">
-        <label class="choice"><input type="radio" name="rc-mode" value="replay" checked> <span><strong>Replay the last</strong> <input id="rc-replay" type="number" min="0" max="500" value="10" class="rc-num"> <strong>chat messages</strong> — a fresh start with the recent history.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="replay" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>A new vibemate session that reads the recent room history (room events in between come along), like a person coming back from a break. Cheap and works for every vibemate.</span></span></label>
+        <label class="choice"><input type="radio" name="rc-mode" value="replay" checked> <span><strong>Replay the last</strong> <span data-ui="number-field" class="rc-num"><input id="rc-replay" type="number" min="0" max="500" value="10"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span> <strong>chat messages</strong> — a fresh start with the recent history.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="replay" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>A new vibemate session that reads the recent room history (room events in between come along), like a person coming back from a break. Cheap and works for every vibemate.</span></span></label>
         <label class="choice"><input type="radio" name="rc-mode" value="load"> <span><strong>Restore the full session</strong> — the vibemate comes back with everything it knew.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="load" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>ACP <code>session/load</code>: the vibemate reloads its own stored conversation, with tool results and reasoning. Its next turn pays for the whole history again. Falls back to replay if the vibemate cannot load it.</span></span></label>
       </div>
       <table class="rc-table" id="rc-table"></table>
@@ -295,7 +304,7 @@
       <div class="fv-tools" id="fv-tools" hidden>
         <label class="search fv-find"><span class="search-icon" data-icon="search"></span><input id="fv-search" type="search" placeholder="Find in this file…" autocomplete="off"></label>
         <span class="fv-hits" id="fv-hits"></span>
-        <label class="fv-goto">line <input id="fv-line" type="number" min="1" step="1" placeholder="1"></label>
+        <label class="fv-goto">line <span data-ui="number-field" class="fv-num"><input id="fv-line" type="number" min="1" step="1" placeholder="1"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span></label>
         <label class="fv-wrap"><input id="fv-wrap" type="checkbox"> wrap</label>
         <span class="fv-count" id="fv-count"></span>
       </div>

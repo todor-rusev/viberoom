@@ -40,10 +40,17 @@ export interface AppearanceSettings {
   chatFontSize: number;
   font: string;
   mono: string;
+  look: string;
+  custom: Record<string, Partial<Record<Adjustable, string>>>;
 }
-export const TEXT_FONTS = ["nunito", "inter", "noto-sans", "arial", "system"];
-export const MONO_FONTS = ["jetbrains-mono", "fira-code", "source-code-pro", "system"];
-export const DEFAULT_APPEARANCE: AppearanceSettings = { chatFontSize: 14.5, font: "nunito", mono: "jetbrains-mono" };
+export type Adjustable = "canvas" | "panel" | "bubble" | "mine" | "ring" | "ink" | "muted" | "accent" | "face" | "logo" | "logoInk" | "corners";
+export const ADJUSTABLE: Record<Adjustable, "colour" | "scale"> = {
+  canvas: "colour", panel: "colour", bubble: "colour", mine: "colour", ring: "colour", ink: "colour", muted: "colour", accent: "colour",
+  face: "colour", logo: "colour", logoInk: "colour", corners: "scale",
+};
+export const TEXT_FONTS = ["nunito", "inter", "noto-sans", "open-sans", "source-sans-3", "ibm-plex-sans", "manrope", "rubik", "montserrat", "golos-text", "exo-2", "comfortaa", "ubuntu-sans", "arial", "system"];
+export const MONO_FONTS = ["jetbrains-mono", "fira-code", "source-code-pro", "ibm-plex-mono", "pt-mono", "victor-mono", "anonymous-pro", "cascadia-code", "system"];
+export const DEFAULT_APPEARANCE: AppearanceSettings = { chatFontSize: 14.5, font: "nunito", mono: "jetbrains-mono", look: "classic", custom: {} };
 
 export interface DiagramSettings {
   preset: DiagramPreset;
@@ -279,7 +286,35 @@ export class Hub extends EventEmitter {
       if (!TEXT_FONTS.includes(font)) throw new Error(`appearance.font must be one of ${TEXT_FONTS.join(", ")}`);
       const mono = String(a.mono ?? next.appearance?.mono ?? DEFAULT_APPEARANCE.mono);
       if (!MONO_FONTS.includes(mono)) throw new Error(`appearance.mono must be one of ${MONO_FONTS.join(", ")}`);
-      next.appearance = { chatFontSize: Math.round(chatFontSize * 2) / 2, font, mono };
+      const look = String(a.look ?? next.appearance?.look ?? DEFAULT_APPEARANCE.look);
+      if (!/^[a-z][a-z0-9-]{0,30}$/.test(look)) throw new Error("appearance.look must be a short lower-case id");
+      const custom: Record<string, Partial<Record<Adjustable, string>>> = { ...(next.appearance?.custom ?? {}) };
+      if (a.custom !== undefined && typeof a.custom === "object" && a.custom) {
+        for (const [lookId, values] of Object.entries(a.custom as Record<string, unknown>)) {
+          if (!/^[a-z][a-z0-9-]{0,30}$/.test(lookId)) throw new Error("appearance.custom: a look id is a short lower-case id");
+          if (values === null) {
+            delete custom[lookId];
+            continue;
+          }
+          if (typeof values !== "object") throw new Error("appearance.custom: each look takes an object of adjustments");
+          const clean: Partial<Record<Adjustable, string>> = {};
+          for (const [key, value] of Object.entries(values as Record<string, unknown>)) {
+            const kind = (ADJUSTABLE as Record<string, string | undefined>)[key];
+            if (!kind) throw new Error(`appearance.custom: "${key}" is not adjustable (${Object.keys(ADJUSTABLE).join(", ")})`);
+            if (kind === "colour") {
+              if (typeof value !== "string" || !/^#[0-9a-fA-F]{6}$/.test(value)) throw new Error(`appearance.custom.${key} must be a colour like #1a2b3c`);
+              clean[key as Adjustable] = value.toLowerCase();
+            } else {
+              const n = typeof value === "string" || typeof value === "number" ? Number(value) : NaN;
+              if (!Number.isFinite(n) || n < 0 || n > 2) throw new Error(`appearance.custom.${key} must be a number between 0 and 2`);
+              clean[key as Adjustable] = String(Math.round(n * 100) / 100);
+            }
+          }
+          if (Object.keys(clean).length) custom[lookId] = clean;
+          else delete custom[lookId];
+        }
+      }
+      next.appearance = { chatFontSize: Math.round(chatFontSize * 2) / 2, font, mono, look, custom };
     }
     next.appearance = { ...DEFAULT_APPEARANCE, ...(next.appearance ?? {}) };
     if (!next.editor) next.editor = { ...DEFAULT_EDITOR_SETTINGS };

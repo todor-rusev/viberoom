@@ -47,9 +47,11 @@
     if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error(`a UI type is named in lower-case words joined by dashes, not "${name}"`);
     if (registry.has(name)) throw new Error(`the UI type "${name}" is defined twice`);
     if (typeof spec.build !== "function") throw new Error(`the UI type "${name}" has no build function`);
+    if (!spec.group) throw new Error(`the UI type "${name}" names no token group`);
     registry.set(name, {
       name,
       describe: spec.describe || "",
+      group: spec.group,
       props: spec.props || {},
       build: spec.build,
       states: spec.states && spec.states.length ? spec.states : ["rest"],

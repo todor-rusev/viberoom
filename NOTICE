@@ -11,6 +11,20 @@ This product bundles the following third-party material:
   - JetBrains Mono: Copyright 2020 The JetBrains Mono Project Authors.
   - Fira Code: Copyright 2014-2020 The Fira Code Project Authors.
   - Source Code Pro: Copyright 2010-2019 Adobe (http://www.adobe.com/).
+  - Open Sans: Copyright 2020 The Open Sans Project Authors.
+  - Source Sans 3: Copyright 2010-2020 Adobe (http://www.adobe.com/).
+  - IBM Plex Sans, IBM Plex Mono: Copyright 2017 IBM Corp.
+  - Manrope: Copyright 2018 The Manrope Project Authors.
+  - Rubik: Copyright 2015 The Rubik Project Authors.
+  - Montserrat: Copyright 2011 The Montserrat Project Authors.
+  - Golos Text: Copyright 2023 The Golos Text Project Authors.
+  - Exo 2: Copyright 2013 The Exo 2 Project Authors.
+  - Comfortaa: Copyright 2011 The Comfortaa Project Authors.
+  - Ubuntu Sans: Copyright 2022 The Ubuntu Sans Project Authors.
+  - PT Mono: Copyright 2011 ParaType Ltd.
+  - Victor Mono: Copyright 2019 The Victor Mono Project Authors.
+  - Anonymous Pro: Copyright 2009 The Anonymous Pro Project Authors.
+  - Cascadia Code: Copyright 2019 Microsoft Corporation.
 
 - Vendor icons (assets/vendors/): the logos of Claude, Codex, Gemini, Cursor,
   OpenCode and GitHub Copilot, as published in the Agent Client Protocol

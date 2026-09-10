@@ -2,7 +2,7 @@
 (() => {
   "use strict";
 
-  const tokens = () => globalThis.VIBEROOM_TOKENS.current.elements.participant;
+  const tokens = () => globalThis.VIBEROOM_TOKENS.active().elements.face;
 
   function hash(text) {
     let h = 2166136261;
@@ -52,25 +52,18 @@
 
   function avatarHtml(participant, size, options) {
     const opts = options || {};
+    const UI = globalThis.UI;
     const color = participant.color || tokens().avatarDefault;
     const s = size || 40;
     const emoji = participant.avatar;
-    const label = emoji ? emoji : initials(participant.name);
-    const fontSize = Math.round(emoji ? s * 0.56 : s * 0.38);
-    const radius = Math.round(s * 0.32);
-    const svg = `<span class="av-tile" role="img" aria-label="${escapeAttr(participant.name)}" style="background:color-mix(in srgb, ${escapeAttr(color)} 16%, ${tokens().avatarBlend});color:${escapeAttr(color)};font-size:${fontSize}px;border-radius:${radius}px">${escapeText(label)}</span>`;
-    const status = opts.status ? `<span class="avatar-status status-${escapeAttr(participant.status || "idle")}"></span>` : "";
-    let badge = "";
+    let badge = null;
     if (opts.vendor && participant.kind === "agent") {
       const recipe = opts.recipes ? opts.recipes.find((r) => r.id === participant.agentType) : null;
-      const letter = escapeText((participant.agentVendor || participant.agentType || "?").slice(0, 1).toUpperCase());
-      const title = escapeAttr(participant.agentLabel || participant.agentType || "");
-      badge = recipe && recipe.icon
-        ? `<span class="avatar-badge" title="${title}"><img src="${escapeAttr(recipe.icon)}" alt="" onerror="this.replaceWith(document.createTextNode('${letter}'))"></span>`
-        : `<span class="avatar-badge" title="${title}">${letter}</span>`;
+      badge = UI.raw(UI.html("logo-tile", { icon: recipe && recipe.icon ? recipe.icon : "", letter: (participant.agentVendor || participant.agentType || "?").slice(0, 1), size: "badge", title: participant.agentLabel || participant.agentType || "" }));
     }
-    if (opts.muted && participant.kind === "agent" && window.Icons) badge = `<span class="avatar-badge muted" title="muted: receives no prompts">${window.Icons.svg("mute")}</span>`;
-    return `<span class="avatar" style="width:${size}px;height:${size}px">${svg}${badge}${status}</span>`;
+    if (opts.muted && participant.kind === "agent") badge = UI.raw(UI.html("logo-tile", { glyph: "mute", size: "badge", tone: "muted", title: "muted: receives no prompts" }));
+    const status = opts.status === true ? participant.status || "idle" : typeof opts.status === "string" ? opts.status : undefined;
+    return UI.html("face", { name: participant.name, label: emoji ? emoji : initials(participant.name), emoji: !!emoji, color, size: s, badge, status, me: !!opts.me, kind: opts.kind || "tile", ring: !!opts.ring, dim: opts.dim, title: opts.title });
   }
 
   const GALLERY = [

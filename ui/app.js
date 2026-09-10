@@ -166,6 +166,16 @@
       nunito: { label: "Nunito (default)", stack: '"Nunito", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
       inter: { label: "Inter", stack: '"Inter", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
       "noto-sans": { label: "Noto Sans", stack: '"Noto Sans", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      "open-sans": { label: "Open Sans", stack: '"Open Sans", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      "source-sans-3": { label: "Source Sans 3", stack: '"Source Sans 3", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      "ibm-plex-sans": { label: "IBM Plex Sans", stack: '"IBM Plex Sans", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      "manrope": { label: "Manrope", stack: '"Manrope", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      "rubik": { label: "Rubik", stack: '"Rubik", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      "montserrat": { label: "Montserrat", stack: '"Montserrat", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      "golos-text": { label: "Golos Text", stack: '"Golos Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      "exo-2": { label: "Exo 2", stack: '"Exo 2", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      "comfortaa": { label: "Comfortaa", stack: '"Comfortaa", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
+      "ubuntu-sans": { label: "Ubuntu Sans", stack: '"Ubuntu Sans", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
       arial: { label: "Arial / Helvetica (system)", stack: 'Arial, Helvetica, "Liberation Sans", sans-serif' },
       system: { label: "System UI font", stack: 'system-ui, -apple-system, "Segoe UI", Roboto, Cantarell, sans-serif' },
     },
@@ -173,6 +183,11 @@
       "jetbrains-mono": { label: "JetBrains Mono (default)", stack: '"JetBrains Mono", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
       "fira-code": { label: "Fira Code", stack: '"Fira Code", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
       "source-code-pro": { label: "Source Code Pro", stack: '"Source Code Pro", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
+      "ibm-plex-mono": { label: "IBM Plex Mono", stack: '"IBM Plex Mono", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
+      "pt-mono": { label: "PT Mono", stack: '"PT Mono", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
+      "victor-mono": { label: "Victor Mono", stack: '"Victor Mono", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
+      "anonymous-pro": { label: "Anonymous Pro", stack: '"Anonymous Pro", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
+      "cascadia-code": { label: "Cascadia Code", stack: '"Cascadia Code", ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", monospace' },
       system: { label: "System monospace", stack: 'ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", "Courier New", monospace' },
     },
   };
@@ -180,7 +195,7 @@
   const STATUS_TONE = { idle: "ready", queued: "waiting", starting: "waiting", thinking: "thinking", writing: "writing", error: "error", offline: "asleep", left: "asleep", unstaffed: "attention" };
   const TOOL_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
   const TOKENS = globalThis.VIBEROOM_TOKENS;
-  const FALLBACK_COLOR = TOKENS.current.elements.participant.fallback;
+  const FALLBACK_COLOR = () => TOKENS.active().elements.face.fallback;
   const WORKING_SVG = '<svg class="working" viewBox="0 0 44 35" aria-hidden="true" title="working…">'
     + '<g class="body">'
     + '<circle cx="20" cy="6.5" r="5.6" fill="currentColor"/>'
@@ -825,9 +840,13 @@
   function diagramSettings(d) {
     return d || (state.settings && state.settings.diagrams) || {};
   }
+  function diagramPreset(d) {
+    const look = TOKENS.active();
+    return TOKENS.diagrams.forScheme(DIAGRAM_PRESETS[d.preset] || DIAGRAM_PRESETS.pop, look.scheme, look.elements.diagram.nodeInk);
+  }
   function mermaidThemeVariables(d) {
     d = diagramSettings(d);
-    const preset = DIAGRAM_PRESETS[d.preset] || DIAGRAM_PRESETS.pop;
+    const preset = diagramPreset(d);
     const vars = Object.assign({}, preset, { fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font").trim() || "Nunito, sans-serif", fontSize: "13px" });
     delete vars.label;
     delete vars.palette;
@@ -841,19 +860,19 @@
   }
   function diagramPalette(d) {
     d = diagramSettings(d);
-    const preset = DIAGRAM_PRESETS[d.preset] || DIAGRAM_PRESETS.pop;
+    const preset = diagramPreset(d);
     return preset.palette && !d.primary ? preset.palette : null;
   }
-  const MERMAID_CSS = [
+  const mermaidCss = () => [
     ".node rect, .node .label-container, .node .basic, .cluster rect, rect.actor { rx: 12px; ry: 12px; }",
-    `.node .label-container, .node .basic, .node rect, .node circle, .node ellipse, rect.actor { stroke-width: 1.8px; filter: drop-shadow(0 2px 0 ${TOKENS.current.elements.diagram.nodeShadow}); }`,
+    `.node .label-container, .node .basic, .node rect, .node circle, .node ellipse, rect.actor { stroke-width: 1.8px; filter: drop-shadow(0 2px 0 ${TOKENS.active().elements.diagram.nodeShadow}); }`,
     ".edgePath .path, .flowchart-link, .messageLine0, .messageLine1, .transition, .relation { stroke-width: 2px; }",
     ".edgeLabel, .edgeLabel p { font-weight: 700; }",
     ".cluster rect { stroke-dasharray: 4 3; stroke-width: 1.5px; }",
     ".cluster-label, .cluster-label p { font-weight: 800; }",
   ].join(" ");
   function paintDiagram(root, palette) {
-    const ink = TOKENS.current.elements.diagram.nodeInk;
+    const ink = TOKENS.active().elements.diagram.nodeInk;
     const byKey = new Map();
     const pick = (key) => {
       if (!byKey.has(key)) byKey.set(key, palette[byKey.size % palette.length]);
@@ -911,7 +930,7 @@
       theme: "base",
       securityLevel: "strict",
       themeVariables: mermaidThemeVariables(d),
-      themeCSS: MERMAID_CSS,
+      themeCSS: mermaidCss(),
       flowchart: { curve: "basis", padding: 14, nodeSpacing: 44, rankSpacing: 52 },
     });
     for (const block of blocks) {
@@ -993,7 +1012,7 @@
   }
   function meAvatarData() {
     const s = state.settings || {};
-    return { name: s.humanName || "You", color: TOKENS.current.elements.participant.humanInk, avatar: s.humanAvatar, kind: "human" };
+    return { name: s.humanName || "You", color: TOKENS.active().elements.face.humanInk, avatar: s.humanAvatar, kind: "human" };
   }
   function copyableHtml(el) {
     const clone = (el.querySelector(".text > .words") || el.querySelector(".text")).cloneNode(true);
@@ -1044,11 +1063,26 @@
     t.hidden = !t.hidden;
     b.classList.toggle("on", !t.hidden);
   });
+  document.addEventListener("click", (e) => {
+    const step = e.target.closest && e.target.closest('[data-ui="number-field"] > .steps > button');
+    if (!step) return;
+    e.preventDefault();
+    const input = step.closest('[data-ui="number-field"]').querySelector("input");
+    if (!input || input.disabled) return;
+    try {
+      if (step.dataset.act === "up") input.stepUp();
+      else input.stepDown();
+    } catch {
+      return;
+    }
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
   function field(label, inputHtml, hint, geekText) {
     return `<label class="field"><span class="label">${label}${geekText ? geekTip(geekText) : ""}</span>${inputHtml}${hint ? `<span class="hint">${hint}</span>` : ""}</label>`;
   }
-  function vendorLogo(r) {
-    return `<span class="vc-logo">${r.icon ? `<img src="${esc(r.icon)}" alt="" onerror="this.replaceWith(document.createTextNode('${esc(r.vendor[0])}'))">` : esc(r.vendor[0])}</span>`;
+  function vendorLogo(r, size) {
+    return UI.html("logo-tile", { icon: r.icon || "", letter: r.vendor[0], size: size || "md", title: r.vendor });
   }
   function slowTasksHtml() {
     if (!slowTasks.length) return '<p class="hint">Nothing over 8 ms so far in this window.</p>';
@@ -1146,11 +1180,18 @@
     return h % 360;
   }
   function roomMark(room, lg) {
-    const hue = roomHue(room);
     const emoji = (room.settings && room.settings.emoji) || "";
-    if (emoji) return `<span class="room-mark emoji${lg ? " lg" : ""}" style="--room-hue:${hue}">${esc(emoji)}</span>`;
-    const letter = (room.name.trim()[0] || "?").toUpperCase();
-    return `<span class="room-mark${lg ? " lg" : ""}" style="--room-hue:${hue};--room-hue-2:${(hue + 30) % 360}">${esc(letter)}</span>`;
+    return UI.html("room-mark", { hue: roomHue(room), emoji: emoji || undefined, letter: emoji ? undefined : room.name.trim()[0] || "?", size: lg ? "lg" : "md" });
+  }
+  function lookSampleHtml() {
+    const withIcon = state.recipes.filter((r) => r.icon);
+    const lead = withIcon[0] || state.recipes[0];
+    const sam = { name: "Sam", kind: "agent", color: TOKENS.active().elements.face.avatarDefault, avatar: "🦊", agentType: lead ? lead.id : "", agentLabel: lead ? lead.vendor : "" };
+    const marks = (withIcon.length ? withIcon : state.recipes).slice(0, 3).map((r) => vendorLogo(r, "sm")).join("");
+    return `<div class="msg agent"><div class="bubble-col"><div class="head"><span class="head-av">${avatar(sam, 32, { vendor: true })}</span><span class="name" style="color:${sam.color}">Sam</span><span class="time">16:21</span></div><div class="bubble">A reply, on this look's paper, in its ink, with <code>code</code> a step smaller.</div><div class="meta"><span>seen</span></div></div></div>
+      <div class="msg mine"><div class="bubble-col"><div class="bubble">Your message.</div></div></div>
+      <div class="sample-row">${UI.html("hub-row", { text: "Sam finished the reply started at 16:21 · 2m 30s", ref: "sample", title: "a row the hub writes", face: UI.raw(avatar(sam, 20, {})) })}</div>
+      <div class="sample-row">${UI.html("room-mark", { hue: 200, letter: "V", title: "a room" })}${UI.html("room-mark", { hue: 40, emoji: "🎭", title: "a room with an emoji" })}${marks}${UI.html("button", { label: "Send", kind: "primary", size: "sm" })}</div>`;
   }
   function roomTitle(room) {
     const emoji = (room.settings && room.settings.emoji) || "";
@@ -1168,10 +1209,11 @@
 
   function attachScrollHints(box) {
     if (!box || box.dataset.hinted) return;
+    const inside = box.tagName === "DIALOG";
     const frame = box.parentElement;
-    if (!frame) return;
+    if (!frame && !inside) return;
     box.dataset.hinted = "1";
-    if (getComputedStyle(frame).position === "static") frame.style.position = "relative";
+    if (!inside && getComputedStyle(frame).position === "static") frame.style.position = "relative";
     const make = (dir) => {
       const b = document.createElement("button");
       b.type = "button";
@@ -1180,7 +1222,13 @@
       b.innerHTML = ic(dir === "up" ? "chevrons-up" : "chevrons-down");
       b.hidden = true;
       b.addEventListener("click", () => box.scrollBy({ top: (dir === "up" ? -1 : 1) * Math.max(120, box.clientHeight * 0.85), behavior: "smooth" }));
-      frame.appendChild(b);
+      if (inside) {
+        const slot = document.createElement("div");
+        slot.className = `scroll-hint-slot ${dir}`;
+        slot.appendChild(b);
+        if (dir === "up") box.prepend(slot);
+        else box.append(slot);
+      } else frame.appendChild(b);
       return b;
     };
     const up = make("up");
@@ -1427,7 +1475,7 @@
     renderRailRooms();
     const s = state.settings;
     if (s) {
-      els.railMeAvatar.innerHTML = avatar(meAvatarData(), 44, {});
+      els.railMeAvatar.innerHTML = avatar(meAvatarData(), 44, { kind: "bare" });
       els.railMeLabel.textContent = s.humanName;
     }
     const open = els.app.classList.contains("rail-open");
@@ -1510,7 +1558,7 @@
     const q = state.roomSearch.toLowerCase();
     const all = document.createElement("li");
     all.className = state.skillsRoom ? "" : "selected";
-    all.innerHTML = `<span class="room-mark" style="background:var(--grad-primary)">${ic("skills")}</span><div class="p-body"><div class="p-name"><span>All skills</span></div><div class="p-preview">${(state.skills || []).length} in the library</div></div>`;
+    all.innerHTML = `${UI.html("room-mark", { icon: "skills", title: "All skills" })}<div class="p-body"><div class="p-name"><span>All skills</span></div><div class="p-preview">${(state.skills || []).length} in the library</div></div>`;
     all.addEventListener("click", () => {
       state.skillsRoom = null;
       renderSideSkills();
@@ -1568,6 +1616,7 @@
     { tone: "peach", emoji: "🧩", title: "Skills", text: "Reusable instructions in your library. Attach them to vibemates, invoke one with /name, or let a vibemate write its own." },
     { tone: "rose", emoji: "🤫", title: "Hush", text: "Too much at once? One click stops every running reply. The vibemates stay quiet until you write again." },
     { tone: "sky", emoji: "📊", title: "Links and diagrams", text: "Links and file paths open on your machine with one click. A ```mermaid block in a reply turns into a diagram." },
+    { tone: "orchid", emoji: "🎨", title: "Looks", text: "VibeClassic and its dark twin, Terminal, Clay, Eye Comfort (the look the research on tired eyes asks for) or 3D clayful (soft clay objects, with weight): pick one with the button above or under Settings → Appearance, and fine-tune its paper, bubbles, ink and corners." },
   ];
   const STEPS = [
     { n: 1, title: "Open a room", text: "Give it a name and a folder. The folder is where the vibemates read and write." },
@@ -1579,7 +1628,7 @@
     const name = s.humanName || "there";
     const rooms = sortedRooms().slice(0, 4);
     const vendors = state.recipes.filter((r) => !r.unavailableReason);
-    const vendorLogos = (vendors.length ? vendors : state.recipes).map((r) => `<span class="home-vendor" title="${esc(r.vendor)}${r.unavailableReason ? " (not installed)" : ""}"${r.unavailableReason ? ' style="opacity:.45"' : ""}>${vendorLogo(r)}</span>`).join("");
+    const vendorLogos = (vendors.length ? vendors : state.recipes).map((r) => `<span class="home-vendor" title="${esc(r.vendor)}${r.unavailableReason ? " (not installed)" : ""}"${r.unavailableReason ? ' style="opacity:.45"' : ""}>${vendorLogo(r, "sm")}</span>`).join("");
     els.homeView.innerHTML = `
       <div class="home-inner">
         <section class="hero">
@@ -1589,6 +1638,7 @@
             <p>One chat, many coding agents. Summon your vibemates into a room, talk to all of them at once, and let them talk to each other.</p>
             <div class="hero-actions">
               ${UI.html("button", { label: "Open room", icon: "rooms", size: "cta", id: "home-open-room", hook: "hero-cta" })}
+              ${UI.html("button", { label: "Change the look", icon: "eye", size: "cta", id: "home-change-look", hook: "hero-cta", title: "Settings → Appearance: the looks and their fine-tuning" })}
             </div>
           </div>
           <div class="hero-art" aria-hidden="true">
@@ -1608,7 +1658,7 @@
                 return `<button class="home-room" data-room="${esc(room.id)}">${roomMark(room)}<span class="hr-body"><span class="hr-name">${esc(room.name)}</span><span class="hr-sub">${esc(last ? `${last.fromName}: ${String(last.text).replace(/\s+/g, " ").slice(0, 70)}` : room.settings.topic || `${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}`)}</span></span>${st.unread ? `<span class="count-pill">${st.unread}</span>` : `<span class="hr-time">${esc(relTime(st.last))}</span>`}</button>`;
               })
               .join("")}
-            ${rooms.length ? "" : `<div class="home-room empty-room"><span class="room-mark" style="background:var(--grad-primary)">${ic("plus")}</span><span class="hr-body"><span class="hr-name">No rooms yet</span><span class="hr-sub">Open one, summon a vibemate, say hello.</span></span></div>`}
+            ${rooms.length ? "" : `<div class="home-room empty-room">${UI.html("room-mark", { icon: "plus" })}<span class="hr-body"><span class="hr-name">No rooms yet</span><span class="hr-sub">Open one, summon a vibemate, say hello.</span></span></div>`}
           </div>
         </section>
         <section class="home-section">
@@ -1640,6 +1690,15 @@
       setView("rooms");
       remember("view", "rooms");
     });
+    const changeLook = $("#home-change-look");
+    if (changeLook) changeLook.addEventListener("click", () => {
+      setView("settings");
+      remember("view", "settings");
+      requestAnimationFrame(() => {
+        const section = $("#sp-appearance");
+        if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
     const all = $("#home-all-rooms");
     if (all) all.addEventListener("click", () => setView("rooms"));
     els.homeView.querySelectorAll(".home-room[data-room]").forEach((b) => b.addEventListener("click", () => selectRoom(b.dataset.room)));
@@ -1666,7 +1725,7 @@
       const st = roomStats(room);
       const card = document.createElement("div");
       card.className = `card hover room-card${room.id === state.currentRoomId ? " current" : ""}`;
-      const faces = st.agents.slice(0, 5).map((p) => avatar(p, 26, { vendor: true })).join("");
+      const faces = st.agents.slice(0, 5).map((p) => avatar(p, 26, { vendor: true, ring: true })).join("");
       card.innerHTML = `
         <div class="rc-head"><div class="rc-title">${roomMark(room)}<h3>${esc(room.name)}</h3></div>${st.unread ? `<span class="count-pill">${st.unread}</span>` : st.thinking ? '<span class="live-dot" title="a vibemate is replying"></span>' : ""}</div>
         <div class="rc-topic">${esc(room.settings.topic || (st.chats.length ? String(st.chats[st.chats.length - 1].text).slice(0, 140) : "Nothing said yet."))}</div>
@@ -1706,8 +1765,8 @@
         : asleep
         ? `<span class="zzz" title="${esc(STATUS_LABEL[p.status] || p.status)}">zzz</span>`
         : p.kind === "agent" && p.status !== "idle" ? UI.html("badge", { label: STATUS_LABEL[shown] || shown, tone: STATUS_TONE[shown] || "plain", dot: p.status === "thinking" }) : "";
-      const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true, muted: p.muted });
-      const statusClass = p.kind === "agent" ? `avatar-status status-${esc(shown || "idle")}` : "";
+      const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true, muted: p.muted, me: p.kind === "human", dim: unstaffed ? "unstaffed" : asleep ? "asleep" : undefined });
+      const statusValue = p.kind === "agent" ? shown || "idle" : "";
       const bodyHtml = `<div class="p-body">
           <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? UI.html("badge", { label: "muted", tone: "muted" }) : ""}${status}</div>
           <div class="p-sub">${esc(sub)}</div>
@@ -1721,16 +1780,16 @@
         li.dataset.id = p.id;
         li.innerHTML = avatarHtml + bodyHtml + (p.kind === "agent" ? UI.html("row-button", { icon: "settings", title: `Open ${p.name}'s panel`, act: "panel" }) + UI.html("row-button", { icon: "last-reply", title: `Go to ${p.name}'s last reply`, act: "last-reply" }) : "");
         li.dataset.avatar = avatarHtml;
-        if (statusClass) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="${statusClass}"></span>`);
+        if (statusValue) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="status" data-status="${esc(statusValue)}"></span>`);
         li.dataset.body = bodyHtml;
       } else {
         if (li.dataset.avatar !== avatarHtml) {
           li.querySelector(".avatar").outerHTML = avatarHtml;
           li.dataset.avatar = avatarHtml;
         }
-        const dot = li.querySelector(".avatar-status");
-        if (statusClass && dot && dot.className !== statusClass) dot.className = statusClass;
-        else if (statusClass && !dot) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="${statusClass}"></span>`);
+        const dot = li.querySelector(".avatar .status");
+        if (statusValue && dot && dot.dataset.status !== statusValue) dot.dataset.status = statusValue;
+        else if (statusValue && !dot) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="status" data-status="${esc(statusValue)}"></span>`);
         if (li.dataset.body !== bodyHtml) {
           li.querySelectorAll(".p-body, .p-actions").forEach((el) => el.remove());
           li.insertAdjacentHTML("beforeend", bodyHtml);
@@ -1851,12 +1910,12 @@
       el.innerHTML = UI.html("hub-row", { text: m.text, tone, ref: details.refId || undefined, face: face ? UI.raw(face) : undefined, title: details.refId ? `${fullTime(m.ts)} · go to the reply` : fullTime(m.ts) });
       return el;
     }
-    const p = findById(room, m.from) || { name: m.fromName, color: FALLBACK_COLOR, kind: m.from === "human" ? "human" : "agent" };
+    const p = findById(room, m.from) || { name: m.fromName, color: FALLBACK_COLOR(), kind: m.from === "human" ? "human" : "agent" };
     const mine = m.from === "human";
     el.className = "msg " + (mine ? "mine" : "agent");
     el.innerHTML = `
       <div class="bubble-col">
-        <div class="head"><span class="head-av">${avatar(mine ? Object.assign(meAvatarData(), { color: p.color }) : p, 32, { vendor: true })}</span><span class="name" style="color:${p.color}">${esc(m.fromName)}</span><span class="edited" hidden></span>${mine ? UI.html("icon-button", { icon: "pencil", title: "Edit this message", kind: "ghost", size: "xs", act: "edit" }) : ""}${UI.html("icon-button", { icon: "quote", title: "Quote this message in your next one", kind: "ghost", size: "xs", act: "quote" })}${UI.html("icon-button", { icon: "pin", title: "Pin this message", kind: "ghost", size: "xs", act: "pin" })}${UI.html("icon-button", { icon: "copy", title: "Copy this message, formatted; the tool calls stay here", kind: "ghost", size: "xs", act: "copy" })}<span class="time" title="${esc(fullTime(m.ts))}">${time(m.ts)}</span></div>
+        <div class="head"><span class="head-av">${avatar(mine ? Object.assign(meAvatarData(), { color: p.color }) : p, 32, { vendor: true, me: mine })}</span><span class="name" style="color:${p.color}">${esc(m.fromName)}</span><span class="edited" hidden></span>${mine ? UI.html("icon-button", { icon: "pencil", title: "Edit this message", kind: "ghost", size: "xs", act: "edit" }) : ""}${UI.html("icon-button", { icon: "quote", title: "Quote this message in your next one", kind: "ghost", size: "xs", act: "quote" })}${UI.html("icon-button", { icon: "pin", title: "Pin this message", kind: "ghost", size: "xs", act: "pin" })}${UI.html("icon-button", { icon: "copy", title: "Copy this message, formatted; the tool calls stay here", kind: "ghost", size: "xs", act: "copy" })}<span class="time" title="${esc(fullTime(m.ts))}">${time(m.ts)}</span></div>
         <div class="bubble">
           ${m.skill ? `<div class="skill-invoke" title="skill invocation: the vibemates that have this skill got its instructions with this message">${ic("skills")} skill <b>${esc(m.skill.name)}</b></div>` : ""}
           <div class="edit-box" hidden></div>
@@ -2106,8 +2165,17 @@
     el.classList.toggle("hidden-by-search", !messageMatches(m));
     const wasPinned = el.classList.contains("pinned");
     el.classList.toggle("pinned", !!m.pinned);
-    const pinBtn = el.querySelector('[data-act="pin"]');
+    const pinBtn = el.querySelector('.head [data-act="pin"]');
     if (pinBtn) pinBtn.title = m.pinned ? "Unpin this message" : "Pin this message";
+    const bubble = el.querySelector(".bubble");
+    const mark = bubble && bubble.querySelector(":scope > .pin-mark");
+    if (m.pinned && bubble && !mark) {
+      bubble.insertAdjacentHTML("beforeend", UI.html("icon-button", { icon: "pin", title: "Pinned: click to unpin", kind: "primary", size: "xs", act: "unpin", hook: "pin-mark" }));
+      bubble.querySelector(":scope > .pin-mark").addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (pinBtn) pinBtn.click();
+      });
+    } else if (!m.pinned && mark) mark.remove();
     if (wasPinned !== !!m.pinned) renderTimeline();
     const editedEl = el.querySelector(".edited");
     if (editedEl) {
@@ -2289,12 +2357,9 @@
     return [...visibilityMarkers(room).entries()].map(([seq, ps]) => `${seq}:${ps.map((p) => p.id).join(",")}`).sort().join("|");
   }
   function dividerElement(agents) {
-    const el = document.createElement("div");
-    el.className = "visibility-divider";
     const names = agents.map((p) => p.name);
     const label = names.length === 1 ? `${names[0]} has not seen anything above this line` : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} have not seen anything above this line`;
-    el.innerHTML = `<span class="vd-line"></span><span class="vd-label" title="Vibemates know the room only from their own starting point: the join, a replay of the last N messages, or a restored session.">↑ ${esc(label)}</span><span class="vd-line"></span>`;
-    return el;
+    return UI.el("unseen-line", { label, title: "Vibemates know the room only from their own starting point: the join, a replay of the last N messages, or a restored session." });
   }
 
   const PAGE_SIZE = 50;
@@ -2706,12 +2771,12 @@
       </div>
       <div class="section" id="pp-timing">
         ${sectionTitle("bolt", "Timing")}
-        ${field("Reply delay override, seconds", `<input type="number" id="pp-delay" min="0" max="120" step="0.5" value="${p.replyDelay ?? ""}" placeholder="the room's: ${room.settings.replyDelay ?? 4} s">`, `Overrides the room's delay (${room.settings.replyDelay ?? 4} s, used only when two or more vibemates are in) for this vibemate only, even when it is alone. Empty: it follows the room.`, "Before each turn the vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive during the wait land in its backlog, so it can react to them or stay silent.")}
+        ${field("Reply delay override, seconds", `${UI.html("number-field", { id: "pp-delay", value: String(p.replyDelay ?? ""), min: 0, max: 120, step: 0.5, placeholder: `the room's: ${room.settings.replyDelay ?? 4} s` })}`, `Overrides the room's delay (${room.settings.replyDelay ?? 4} s, used only when two or more vibemates are in) for this vibemate only, even when it is alone. Empty: it follows the room.`, "Before each turn the vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive during the wait land in its backlog, so it can react to them or stay silent.")}
       </div>
       <div class="section danger">
         ${sectionTitle("bolt", "Respawn")}
         <p class="hint">${esc(p.name)} comes back with an empty head: it forgets this conversation entirely. The room's history stays and you still see everything.${geekTip("A session's context cannot be erased, so the vibemate's process and session are closed and it starts a new one with no replay. Its stored session is dropped too, or a later reconnect would bring the old context back. Same thing as typing /respawn @Name in the composer.")}</p>
-        <div class="row-btns start">${UI.html("button", { label: `Respawn ${p.name}`, icon: "bolt", kind: "danger", size: "sm", act: "respawn" })}<label class="lp-with">${UI.html("button", { label: "With the last", size: "sm", act: "respawn-mem" })}<input type="number" id="pp-respawn-n" min="0" max="500" value="${room.settings.replayAfterRestart ?? 10}"> messages</label></div>
+        <div class="row-btns start">${UI.html("button", { label: `Respawn ${p.name}`, icon: "bolt", kind: "danger", size: "sm", act: "respawn" })}<label class="lp-with">${UI.html("button", { label: "With the last", size: "sm", act: "respawn-mem" })}${UI.html("number-field", { id: "pp-respawn-n", value: String(room.settings.replayAfterRestart ?? 10), min: 0, max: 500 })} messages</label></div>
         <p class="hint">With memory: a new session that gets only ${p.notes ? "its own notes and " : ""}the last N messages of this room; the rest is gone.</p>
       </div>
       <div class="section">
@@ -2814,7 +2879,7 @@
     els.detailsInner.innerHTML = `
       ${panelTitle("Your vibe", "how the vibemates know you")}
       <div class="profile">
-        ${avatar(meAvatarData(), 84, {})}
+        ${avatar(meAvatarData(), 84, { kind: "card" })}
         <h3>${esc(s.humanName || "")}</h3>
         <div class="tagline">${esc(s.humanDescription || "no vibe line yet")}</div>
       </div>
@@ -2868,7 +2933,7 @@
       <div class="section">
         ${sectionTitle("user", "Turn taking")}
         ${field("Who may speak", `<select id="rp-turns"><option value="one-at-a-time"${rs.turnTaking !== "parallel" ? " selected" : ""}>One vibemate at a time</option><option value="parallel"${rs.turnTaking === "parallel" ? " selected" : ""}>All addressed vibemates at once</option></select>`, null, "One at a time: the others queue and see the earlier replies before they answer; the addressed vibemates go first. All at once: fastest, but replies may cross.")}
-        ${field("Reply delay, seconds", `<input type="number" id="rp-delay" min="0" max="120" step="0.5" value="${rs.replyDelay ?? 4}">`, "With two or more vibemates, each waits a random 0–N seconds before it answers, so replies cross less often. A vibemate alone answers at once. A vibemate's own delay (in its panel) always applies.")}
+        ${field("Reply delay, seconds", `${UI.html("number-field", { id: "rp-delay", value: String(rs.replyDelay ?? 4), min: 0, max: 120, step: 0.5 })}`, "With two or more vibemates, each waits a random 0–N seconds before it answers, so replies cross less often. A vibemate alone answers at once. A vibemate's own delay (in its panel) always applies.")}
         <label class="switch"><span class="label">Vibemates wake each other<span class="hint">A reply without @ wakes every other vibemate, as yours does; each may answer or stay silent. Off: only @Name wakes a vibemate. The hop limit applies either way.</span></span><input type="checkbox" id="rp-wake" ${rs.agentsWakeEachOther !== false ? "checked" : ""}></label>
         <label class="switch"><span class="label">Wait while you are typing<span class="hint">A vibemate about to start holds back while you type (a few seconds after your last keystroke). A reply already under way is not interrupted.</span></span><input type="checkbox" id="rp-wait-typing" ${rs.waitWhileHumanTypes !== false ? "checked" : ""}></label>
       </div>
@@ -2890,8 +2955,8 @@
       <div class="section">
         ${sectionTitle("chat", "Conversation")}
         ${field("Vibemates' own tools (files, shell, web)", `<select id="rp-tools"><option value="on-request"${rs.tools === "on-request" ? " selected" : ""}>Only when someone explicitly asks</option><option value="never"${rs.tools === "never" ? " selected" : ""}>Never (chat only)</option></select>`, null, "An instruction in every vibemate's brief; the vibemate's mode is the real limit.")}
-        ${field("Max sentences per reply", `<input type="number" id="rp-maxlen" min="1" max="100" value="${rs.maxSentences ?? ""}" placeholder="no limit">`)}
-        ${field("Hop limit (vibemate-to-vibemate replies per human message)", `<input type="number" id="rp-hops" min="0" max="10000" value="${rs.hopLimit}">`)}
+        ${field("Max sentences per reply", `${UI.html("number-field", { id: "rp-maxlen", value: String(rs.maxSentences ?? ""), min: 1, max: 100, placeholder: "no limit" })}`)}
+        ${field("Hop limit (vibemate-to-vibemate replies per human message)", `${UI.html("number-field", { id: "rp-hops", value: String(rs.hopLimit), min: 0, max: 10000 })}`)}
       </div>
       <div class="section">
         ${sectionTitle("eye", "Referee")}
@@ -2899,12 +2964,12 @@
       </div>
       <div class="section">
         ${sectionTitle("save", "Instruction delivery")}
-        ${field("Full brief every N vibemate turns", `<input type="number" id="rp-brief-turns" min="1" max="10000" value="${rs.fullBriefEveryTurns}">`)}
-        ${field("…or every N new context tokens", `<input type="number" id="rp-brief-tokens" min="1000" max="10000000" step="1000" value="${rs.fullBriefEveryTokens}">`)}
+        ${field("Full brief every N vibemate turns", `${UI.html("number-field", { id: "rp-brief-turns", value: String(rs.fullBriefEveryTurns), min: 1, max: 10000 })}`)}
+        ${field("…or every N new context tokens", `${UI.html("number-field", { id: "rp-brief-tokens", value: String(rs.fullBriefEveryTokens), min: 1000, max: 10000000, step: 1000 })}`)}
         <label class="switch"><span class="label">Repeat core rules in every header</span><input type="checkbox" id="rp-header-rules" ${rs.headerRules ? "checked" : ""}></label>
         <label class="switch"><span class="label">Show vendor and model to other vibemates</span><input type="checkbox" id="rp-vendor" ${rs.showVendorInRoster ? "checked" : ""}></label>
-        ${field("Replay last N chat messages after a reconnect", `<input type="number" id="rp-replay" min="0" max="200" value="${rs.replayAfterRestart}">`)}
-        ${field("Missed messages a vibemate reads at most on its next turn", `<input type="number" id="rp-backlog" min="1" max="1000" value="${rs.backlogCap}">`, "Everything posted since its last turn counts, including while it was muted; older messages are dropped with a note in its prompt.")}
+        ${field("Replay last N chat messages after a reconnect", `${UI.html("number-field", { id: "rp-replay", value: String(rs.replayAfterRestart), min: 0, max: 200 })}`)}
+        ${field("Missed messages a vibemate reads at most on its next turn", `${UI.html("number-field", { id: "rp-backlog", value: String(rs.backlogCap), min: 1, max: 1000 })}`, "Everything posted since its last turn counts, including while it was muted; older messages are dropped with a note in its prompt.")}
       </div>`,
         "tools, hops, referee, briefs",
       )}
@@ -2976,7 +3041,7 @@
       .map((r) => {
         const v = (s.vendorPresets || {})[r.id] || {};
         return `<div class="vendor-card">
-          <div class="vc-head"><span class="vc-logo">${r.icon ? `<img src="${esc(r.icon)}" alt="" onerror="this.replaceWith(document.createTextNode('${esc(r.vendor[0])}'))">` : esc(r.vendor[0])}</span><span class="vc-name">${esc(r.vendor)}</span>${UI.html("badge", { label: "installed", tone: "ready", dot: true })}</div>
+          <div class="vc-head">${vendorLogo(r)}<span class="vc-name">${esc(r.vendor)}</span>${UI.html("badge", { label: "installed", tone: "ready", dot: true })}</div>
           <div class="vc-fields">
             ${field("Model", `<input type="text" data-vendor="${r.id}" data-key="model" value="${esc(v.model || "")}" placeholder="${esc(r.defaultModel || "vibemate default")}">`)}
             ${field("Effort", `<input type="text" data-vendor="${r.id}" data-key="effort" value="${esc(v.effort || "")}" placeholder="${esc(r.defaultEffort || "vibemate default")}">`)}
@@ -2985,7 +3050,7 @@
         </div>`;
       })
       .join("");
-    const logo = (r) => `<span class="vc-logo">${r.icon ? `<img src="${esc(r.icon)}" alt="" onerror="this.replaceWith(document.createTextNode('${esc(r.vendor[0])}'))">` : esc(r.vendor[0])}</span>`;
+    const logo = (r) => vendorLogo(r);
     const machine =
       installed
         .map((r) => {
@@ -3000,6 +3065,31 @@
       <div id="sp-form">
       <div class="page-cols">
         <div>
+          <div class="section" id="sp-appearance">
+            ${sectionTitle("eye", "Appearance")}
+            ${(() => {
+              const a = s.appearance || {};
+              const lookId = TOKENS.looks[a.look] ? a.look : TOKENS.current.id;
+              const look = TOKENS.looks[lookId];
+              const custom = (a.custom || {})[lookId] || {};
+              const cards = Object.values(TOKENS.looks).map((l) => UI.html("look-card", { look: l, on: lookId === l.id, data: { look: l.id } })).join("");
+              const groups = [...new Set(TOKENS.adjustables.map((f) => f.group))];
+              const rows = (group) => TOKENS.adjustables.filter((f) => f.group === group).map((f) => UI.html("adjust-row", { key: f.key, label: f.label, hint: f.hint, kind: f.kind, value: custom[f.key] || String(f.of(look)), own: String(f.of(look)), min: f.min, max: f.max, step: f.step })).join("");
+              return `<div class="look-preview" id="sp-look-preview">${lookSampleHtml()}</div>
+              ${field("Look", `<input type="hidden" id="sp-look" value="${esc(lookId)}"><div class="look-cards">${cards}</div>`, "How the room is drawn. Every element keeps what it does; only its look changes. The sample above wears the look you pick; the window changes on save.")}
+              <div class="look-adjust" id="sp-look-adjust">
+                <div class="adjust-head"><span class="label">Fine-tune <span id="sp-adj-name">${esc(look.label)}</span></span>${UI.html("button", { label: "Reset all", kind: "ghost", size: "xs", hook: "sp-adj-reset", title: "Back to the look as designed" })}</div>
+                <p class="hint">Kept for this look alone. The sample follows as you pick; the window follows on save.</p>
+                ${groups.map((g) => `<div class="adjust-group"><h5>${esc(g)}</h5>${rows(g)}</div>`).join("")}
+              </div>`;
+            })()}
+            <div class="adjust-group text"><h5>Text</h5>
+              <div class="field row"><span class="label">Size, px<span class="hint">Only the text changes size; the boxes, buttons and panels stay. 14.5 is the default.</span></span>${UI.html("number-field", { id: "sp-chat-fs", value: String((s.appearance || {}).chatFontSize || 14.5), min: 12, max: 24, step: 0.5 })}</div>
+              <div class="field row"><span class="label">Font${geekTip("The named fonts come with viberoom and look the same on every OS (all free, with Cyrillic); the system entries use what this machine has. A look with a font of its own (Terminal, Clay) keeps it while this stays at the default.")}</span><select id="sp-font">${Object.entries(FONTS.text).map(([id, f]) => `<option value="${id}"${((s.appearance || {}).font || "nunito") === id ? " selected" : ""}>${esc(f.label)}</option>`).join("")}</select></div>
+              <div class="field row"><span class="label">Code font<span class="hint">For code blocks, paths and tool output.</span></span><select id="sp-mono">${Object.entries(FONTS.mono).map(([id, f]) => `<option value="${id}"${((s.appearance || {}).mono || "jetbrains-mono") === id ? " selected" : ""}>${esc(f.label)}</option>`).join("")}</select></div>
+              <div class="bubble" id="sp-chat-sample" style="display:inline-block;font-size:${(s.appearance || {}).chatFontSize || 14.5}px">Messages will read like this, with <code>code</code> a step smaller.</div>
+            </div>
+          </div>
           <div class="section">
             ${sectionTitle("lock", "Permissions")}
             <label class="switch"><span class="label">Vibemates act without asking<span class="hint">Off: they ask you before editing files or running commands.</span>${geekTip('New vibemates start in their vendor\'s "act without asking" mode (Claude bypassPermissions, Codex agent-full-access, Gemini yolo, Cursor agent, OpenCode build, Copilot agent + allow_all). Change it per vibemate when summoning one, or later in its panel.')}</span><input type="checkbox" id="sp-bypass" ${s.bypassPermissionsByDefault !== false ? "checked" : ""}></label>
@@ -3007,20 +3097,13 @@
           <div class="section">
             ${sectionTitle("bolt", "Pace")}
             ${field("Turn taking in new rooms", `<select id="sp-turns"><option value="one-at-a-time"${d.turnTaking !== "parallel" ? " selected" : ""}>One vibemate at a time</option><option value="parallel"${d.turnTaking === "parallel" ? " selected" : ""}>All addressed vibemates at once</option></select>`)}
-            ${field("Reply delay in new rooms, seconds", `<input type="number" id="sp-delay" min="0" max="120" step="0.5" value="${d.replyDelay ?? 4}">`, "Used when two or more vibemates share a room; each room can change it; a vibemate can override it in its own panel.", "Before each turn a vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive meanwhile land in its backlog. A vibemate alone answers at once unless it has its own delay.")}
-          </div>
-          <div class="section" id="sp-appearance">
-            ${sectionTitle("eye", "Appearance")}
-            ${field("Text size, px", `<input type="number" id="sp-chat-fs" min="12" max="24" step="0.5" value="${esc(String((s.appearance || {}).chatFontSize || 14.5))}">`, "The size of the chat text; 14.5 is the default. Only the text changes size with it: the boxes, buttons and panels stay as they are.")}
-            ${field("Font", `<select id="sp-font">${Object.entries(FONTS.text).map(([id, f]) => `<option value="${id}"${((s.appearance || {}).font || "nunito") === id ? " selected" : ""}>${esc(f.label)}</option>`).join("")}</select>`, "Nunito, Inter and Noto Sans come with viberoom and look the same on every OS; the system entries use what this machine has.")}
-            ${field("Code font", `<select id="sp-mono">${Object.entries(FONTS.mono).map(([id, f]) => `<option value="${id}"${((s.appearance || {}).mono || "jetbrains-mono") === id ? " selected" : ""}>${esc(f.label)}</option>`).join("")}</select>`, "For code blocks, paths and tool output.")}
-            <div class="bubble" id="sp-chat-sample" style="display:inline-block;font-size:${(s.appearance || {}).chatFontSize || 14.5}px">Messages will read like this, with <code>code</code> a step smaller.</div>
+            ${field("Reply delay in new rooms, seconds", `${UI.html("number-field", { id: "sp-delay", value: String(d.replyDelay ?? 4), min: 0, max: 120, step: 0.5 })}`, "Used when two or more vibemates share a room; each room can change it; a vibemate can override it in its own panel.", "Before each turn a vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive meanwhile land in its backlog. A vibemate alone answers at once unless it has its own delay.")}
           </div>
           <div class="section" id="sp-editor">
             ${sectionTitle("pencil", "Open files at a line")}
             <label class="field"><span class="label">A click on a path like main.ts:375 opens the file in${geekTip("Only an editor can jump to a line; the OS default app just opens the file. Auto looks for VS Code, Cursor, Windsurf, Zed, Sublime Text, Notepad++ and the JetBrains IDEs, in that order, on PATH and in their usual folders. Custom: a command with {file}, {line} and {column} placeholders, e.g. code --goto {file}:{line}.")}</span>
               <div class="chips editor-modes">
-                ${UI.html("choice", { label: "Auto", on: !["custom", "default-app"].includes((s.editor || {}).mode), data: { mode: "auto" }, trail: UI.raw('<span class="hint" id="sp-editor-auto">…</span>') })}
+                ${UI.html("choice", { label: "Auto", on: !["custom", "default-app"].includes((s.editor || {}).mode), data: { mode: "auto" } })}
                 ${UI.html("choice", { label: "The default app", on: (s.editor || {}).mode === "default-app", data: { mode: "default-app" } })}
                 ${UI.html("choice", { label: "My own command", on: (s.editor || {}).mode === "custom", data: { mode: "custom" } })}
               </div>
@@ -3065,9 +3148,9 @@
           <div class="section">
             ${sectionTitle("rooms", "Defaults for new rooms")}
             <p class="field-note">Every new room starts with these; each room can change them in its own settings.</p>
-            ${field("Hop limit", `<input type="number" id="sp-hops" min="0" max="10000" value="${d.hopLimit}">`, "How many vibemate-to-vibemate replies may follow one message of yours before the room waits for you again.")}
-            ${field("Full brief every N turns", `<input type="number" id="sp-brief-turns" min="1" max="10000" value="${d.fullBriefEveryTurns}">`, "How often a vibemate gets the whole room brief again instead of the short header.")}
-            ${field("Full brief every N tokens", `<input type="number" id="sp-brief-tokens" min="1000" max="10000000" step="1000" value="${d.fullBriefEveryTokens}">`, "…or after this much new context since its last full brief, whichever comes first.")}
+            ${field("Hop limit", `${UI.html("number-field", { id: "sp-hops", value: String(d.hopLimit), min: 0, max: 10000 })}`, "How many vibemate-to-vibemate replies may follow one message of yours before the room waits for you again.")}
+            ${field("Full brief every N turns", `${UI.html("number-field", { id: "sp-brief-turns", value: String(d.fullBriefEveryTurns), min: 1, max: 10000 })}`, "How often a vibemate gets the whole room brief again instead of the short header.")}
+            ${field("Full brief every N tokens", `${UI.html("number-field", { id: "sp-brief-tokens", value: String(d.fullBriefEveryTokens), min: 1000, max: 10000000, step: 1000 })}`, "…or after this much new context since its last full brief, whichever comes first.")}
             <label class="switch"><span class="label">Repeat core rules in every header<span class="hint">The short header before each turn repeats the room's core rules (who is here, how to address, how long to write).</span></span><input type="checkbox" id="sp-header-rules" ${d.headerRules ? "checked" : ""}></label>
             ${field("Tools", `<select id="sp-tools"><option value="on-request"${d.tools === "on-request" ? " selected" : ""}>Only when asked</option><option value="never"${d.tools === "never" ? " selected" : ""}>Never</option></select>`, "Whether vibemates may use their own tools (files, shell, web) without being asked to.")}
           </div>
@@ -3106,12 +3189,6 @@
         showEditorCmd();
       }),
     );
-    get("/api/editor")
-      .then((r) => {
-        const auto = $("#sp-editor-auto");
-        if (auto) auto.textContent = r.editor ? `(${r.editor.label})` : "(none found)";
-      })
-      .catch(() => undefined);
     const diagramSection = $("#sp-diagrams");
     const previewTheme = () => ({ preset: $("#sp-diagram-preset").value, primary: $("#sp-diagram-custom").checked ? $("#sp-diagram-color").value : null });
     const redrawPreview = () => {
@@ -3141,6 +3218,88 @@
       if (px >= 12 && px <= 24) sample.style.fontSize = `${px}px`;
     });
     $("#sp-font").addEventListener("change", () => (sample.style.fontFamily = FONTS.text[$("#sp-font").value].stack));
+    const looksBox = $("#sp-appearance");
+    const pickedLook = () => TOKENS.looks[$("#sp-look").value] || TOKENS.current;
+    const rowOf = (key) => looksBox.querySelector(`[data-ui="adjust-row"][data-key="${key}"]`);
+    const inputOf = (key) => {
+      const row = rowOf(key);
+      return row ? row.querySelector("input") : null;
+    };
+    const pendingAdjust = () => {
+      const look = pickedLook();
+      const out = {};
+      for (const f of TOKENS.adjustables) {
+        const input = inputOf(f.key);
+        const value = String(input ? input.value : "").toLowerCase();
+        if (value && value !== String(f.of(look)).toLowerCase()) out[f.key] = value;
+      }
+      return out;
+    };
+    const paintRows = () => {
+      const look = pickedLook();
+      for (const f of TOKENS.adjustables) {
+        const row = rowOf(f.key);
+        const input = inputOf(f.key);
+        if (!row || !input) continue;
+        const own = String(f.of(look));
+        UI.setState(row, input.value.toLowerCase() !== own.toLowerCase() ? "changed" : null);
+        row.querySelector(".value").textContent = input.value;
+        row.querySelector(".back").title = `Back to the look's own, ${own}`;
+      }
+    };
+    const paintLookPreview = () => {
+      const preview = $("#sp-look-preview");
+      if (!preview) return;
+      const look = pickedLook();
+      preview.dataset.look = look.id;
+      for (const [name, value] of Object.entries(TOKENS.cssVars(look))) preview.style.setProperty(name, value);
+      applyCustomVars(preview, pendingAdjust());
+      paintRows();
+    };
+    const fillRows = (lookId) => {
+      const look = TOKENS.looks[lookId] || TOKENS.current;
+      const custom = ((state.settings.appearance || {}).custom || {})[look.id] || {};
+      for (const f of TOKENS.adjustables) {
+        const input = inputOf(f.key);
+        if (input) input.value = custom[f.key] || String(f.of(look));
+      }
+      $("#sp-adj-name").textContent = look.label;
+    };
+    looksBox.querySelectorAll('.look-cards [data-ui="look-card"]').forEach((b) =>
+      b.addEventListener("click", () => {
+        looksBox.querySelectorAll('.look-cards [data-ui="look-card"]').forEach((x) => {
+          UI.setState(x, x === b ? "on" : null);
+          x.setAttribute("aria-pressed", x === b ? "true" : "false");
+        });
+        const input = $("#sp-look");
+        input.value = b.dataset.look;
+        fillRows(b.dataset.look);
+        paintLookPreview();
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }),
+    );
+    looksBox.querySelectorAll('[data-ui="adjust-row"] input').forEach((i) => i.addEventListener("input", paintLookPreview));
+    looksBox.addEventListener("click", (e) => {
+      const back = e.target.closest && e.target.closest('[data-ui="adjust-row"] .back');
+      if (!back) return;
+      const row = back.closest('[data-ui="adjust-row"]');
+      const f = TOKENS.adjustables.find((x) => x.key === row.dataset.key);
+      const input = row.querySelector("input");
+      if (!f || !input) return;
+      input.value = String(f.of(pickedLook()));
+      paintLookPreview();
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    looksBox.querySelector(".sp-adj-reset").addEventListener("click", () => {
+      const look = pickedLook();
+      for (const f of TOKENS.adjustables) {
+        const input = inputOf(f.key);
+        if (input) input.value = String(f.of(look));
+      }
+      paintLookPreview();
+      $("#sp-look").dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    paintLookPreview();
     $("#sp-mono").addEventListener("change", () => sample.querySelectorAll("code").forEach((c) => (c.style.fontFamily = FONTS.mono[$("#sp-mono").value].stack)));
     $("#sp-slow-copy").addEventListener("click", async () => {
       const b = $("#sp-slow-copy");
@@ -3193,7 +3352,7 @@
           checkForUpdates: $("#sp-updates").checked,
           diagrams: { preset: $("#sp-diagram-preset").value, primary: $("#sp-diagram-custom").checked ? $("#sp-diagram-color").value : null },
           editor: { mode: $("#sp-editor-mode").value, command: $("#sp-editor-cmd").value },
-          appearance: { chatFontSize: Number($("#sp-chat-fs").value), font: $("#sp-font").value, mono: $("#sp-mono").value },
+          appearance: { chatFontSize: Number($("#sp-chat-fs").value), font: $("#sp-font").value, mono: $("#sp-mono").value, look: $("#sp-look").value, custom: { [$("#sp-look").value]: Object.keys(pendingAdjust()).length ? pendingAdjust() : null } },
           roomDefaults: {
             turnTaking: $("#sp-turns").value,
             replyDelay: Number($("#sp-delay").value),
@@ -3580,7 +3739,7 @@
     els.invAgents.innerHTML = state.recipes
       .map(
         (r) =>
-          `<button type="button" class="agent-tile${r.unavailableReason ? " off" : ""}" data-agent="${esc(r.id)}" title="${esc(r.unavailableReason ? `Not installed on this machine. ${r.installHint || ""}` : r.loginState === "missing" ? `Found at ${r.installedAt || "bundled"}, but not logged in: run ${r.loginCommand}` : `Found at ${r.installedAt || "bundled"}`)}"><span class="at-logo">${vendorLogo(r)}</span><span class="at-name">${esc(r.vendor)}</span><span class="at-sub">${r.unavailableReason ? "not installed" : r.loginState === "missing" ? "no login" : "installed"}</span></button>`,
+          `<button type="button" class="agent-tile${r.unavailableReason ? " off" : ""}" data-agent="${esc(r.id)}" title="${esc(r.unavailableReason ? `Not installed on this machine. ${r.installHint || ""}` : r.loginState === "missing" ? `Found at ${r.installedAt || "bundled"}, but not logged in: run ${r.loginCommand}` : `Found at ${r.installedAt || "bundled"}`)}">${vendorLogo(r, "lg")}<span class="at-name">${esc(r.vendor)}</span><span class="at-sub">${r.unavailableReason ? "not installed" : r.loginState === "missing" ? "no login" : "installed"}</span></button>`,
       )
       .join("");
     els.invAgents.querySelectorAll(".agent-tile:not(.off)").forEach((b) =>
@@ -3735,6 +3894,7 @@
     if (!room) return closeDialog(els.rcDialog);
     const globalMode = els.rcForm.querySelector('input[name="rc-mode"]:checked').value;
     const replay = Number(els.rcReplay.value);
+    if (Number.isFinite(replay) && replay !== (room.settings.replayAfterRestart ?? 10)) post(roomApi("/settings"), { replayAfterRestart: replay }).catch((error) => toast(error.message, "error"));
     const rows = [...els.rcTable.querySelectorAll("tr")].map((tr) => ({ id: tr.dataset.id, choice: tr.querySelector(".rc-per").value || globalMode }));
     els.rcSubmit.disabled = true;
     UI.setState(els.rcSubmit, "loading");
@@ -3787,7 +3947,7 @@
     tplEls.list.innerHTML = tpl.items
       .map((t) => {
         const on = tpl.current && t.id === tpl.current.id;
-        const faces = t.vibemates.slice(0, 4).map((v) => avatar({ name: v.name, avatar: v.avatar, color: FALLBACK_COLOR }, 20, {})).join("");
+        const faces = t.vibemates.slice(0, 4).map((v) => avatar({ name: v.name, avatar: v.avatar, color: FALLBACK_COLOR() }, 20, { ring: true })).join("");
         return `<button type="button" class="tpl-item${on ? " on" : ""}" data-id="${esc(t.id)}" role="radio" aria-checked="${on ? "true" : "false"}">
           <span class="tpl-emoji">${esc(t.emoji || "🧩")}</span>
           <span class="tpl-body"><b>${esc(t.name)}${t.builtin ? "" : UI.html("badge", { label: "your template", size: "xs" })}${t.recommended ? UI.html("badge", { label: "recommended", tone: "attention", size: "xs" }) : ""}</b><span class="tpl-meta">${t.vibemates.length} vibemate${t.vibemates.length === 1 ? "" : "s"}${t.builtin ? " · built in" : ""}</span><span class="avatar-stack">${faces}</span></span>
@@ -3895,22 +4055,22 @@
       ${stpField("Language", `<input type="text" id="stp-lang" value="${esc(lang)}" placeholder="follow the human (default), or e.g. English">`)}
       ${stpField("Vibemates' own tools", stpSelect("stp-tools", st.tools || "on-request", [["on-request", "Only when someone explicitly asks"], ["never", "Never (chat only)"]]))}
       ${stpField("Who may speak", stpSelect("stp-turns", st.turnTaking || "parallel", [["parallel", "All addressed vibemates at once"], ["one-at-a-time", "One vibemate at a time"]]))}
-      ${stpField("Reply delay, seconds", `<input type="number" id="stp-delay" min="0" max="120" step="0.5" value="${esc(String(st.replyDelay ?? 4))}">`)}
+      ${stpField("Reply delay, seconds", `${UI.html("number-field", { id: "stp-delay", value: String(st.replyDelay ?? 4), min: 0, max: 120, step: 0.5 })}`)}
       ${stpSwitch("Vibemates wake each other", "stp-wake", st.agentsWakeEachOther !== false)}
       ${stpSwitch("Wait while you are typing", "stp-wait", st.waitWhileHumanTypes !== false)}
-      ${stpField("Hop limit", `<input type="number" id="stp-hops" min="0" max="10000" value="${esc(String(st.hopLimit ?? 100))}">`)}
-      ${stpField("Max sentences per reply", `<input type="number" id="stp-maxlen" min="1" max="100" value="${st.maxSentences ?? ""}" placeholder="no limit">`)}
+      ${stpField("Hop limit", `${UI.html("number-field", { id: "stp-hops", value: String(st.hopLimit ?? 100), min: 0, max: 10000 })}`)}
+      ${stpField("Max sentences per reply", `${UI.html("number-field", { id: "stp-maxlen", value: String(st.maxSentences ?? ""), min: 1, max: 100, placeholder: "no limit" })}`)}
       ${stpField("Referee", stpSelect("stp-referee", st.refereeAction || "next-header", [["next-header", "Post it; remind in the next header"], ["retry-hidden", "Hold it; retry in a hidden turn"]]))}
       ${stpField("About you", stpSelect("stp-about", st.humanDescriptionMode || "inherit", [["inherit", "Program-wide description"], ["append", "Program-wide + this room's"], ["override", "Only this room's"], ["none", "Nothing about me"]]))}
-      ${stpField("Full brief every N turns", `<input type="number" id="stp-brief-turns" min="1" max="10000" value="${esc(String(st.fullBriefEveryTurns ?? 8))}">`)}
-      ${stpField("…or every N tokens", `<input type="number" id="stp-brief-tokens" min="1000" max="10000000" step="1000" value="${esc(String(st.fullBriefEveryTokens ?? 20000))}">`)}
-      ${stpField("Replay after a reconnect", `<input type="number" id="stp-replay" min="0" max="200" value="${esc(String(st.replayAfterRestart ?? 10))}">`)}
-      ${stpField("Missed messages read at most", `<input type="number" id="stp-backlog" min="1" max="1000" value="${esc(String(st.backlogCap ?? 50))}">`)}
+      ${stpField("Full brief every N turns", `${UI.html("number-field", { id: "stp-brief-turns", value: String(st.fullBriefEveryTurns ?? 8), min: 1, max: 10000 })}`)}
+      ${stpField("…or every N tokens", `${UI.html("number-field", { id: "stp-brief-tokens", value: String(st.fullBriefEveryTokens ?? 20000), min: 1000, max: 10000000, step: 1000 })}`)}
+      ${stpField("Replay after a reconnect", `${UI.html("number-field", { id: "stp-replay", value: String(st.replayAfterRestart ?? 10), min: 0, max: 200 })}`)}
+      ${stpField("Missed messages read at most", `${UI.html("number-field", { id: "stp-backlog", value: String(st.backlogCap ?? 50), min: 1, max: 1000 })}`)}
       ${stpSwitch("Core rules in every header", "stp-header-rules", st.headerRules !== false)}
       ${stpSwitch("Show vendor and model to other vibemates", "stp-vendor", !!st.showVendorInRoster)}
     </div>`;
     const agentOptions = [["", "none yet: cast when the room opens"], ...state.recipes.map((r) => [r.id, r.vendor + (r.unavailableReason ? " (not installed here)" : "")])];
-    const vms = (t.vibemates || []).map((v, i) => `<div class="stp-vm" data-i="${i}">${avatar({ name: v.name, avatar: v.avatar, color: FALLBACK_COLOR }, 36, {})}<div>
+    const vms = (t.vibemates || []).map((v, i) => `<div class="stp-vm" data-i="${i}">${avatar({ name: v.name, avatar: v.avatar, color: FALLBACK_COLOR() }, 36, {})}<div>
         <div class="stp-vm-top"><b>${esc(v.name)}</b>${UI.html("icon-button", { icon: "close", title: "Leave this vibemate out of the template", kind: "ghost", size: "sm", data: { stpRemove: true } })}</div>
         <div class="stp-vm-fields">
           ${stpField("Vibename", `<input type="text" data-k="name" maxlength="40" value="${esc(v.name)}" required>`)}
@@ -3921,7 +4081,7 @@
           ${stpField("Model", `<input type="text" data-k="model" value="${esc(v.model || "")}" placeholder="the agent's default">`)}
           ${stpField("Effort", `<input type="text" data-k="effort" value="${esc(v.effort || "")}" placeholder="default">`)}
           ${stpField("Mode", `<input type="text" data-k="mode" value="${esc(v.mode || "")}" placeholder="default">`)}
-          ${stpField("Reply delay override, s", `<input type="number" data-k="replyDelay" min="0" max="120" step="0.5" value="${v.replyDelay ?? ""}" placeholder="the room's">`)}
+          ${stpField("Reply delay override, s", `${UI.html("number-field", { value: String(v.replyDelay ?? ""), min: 0, max: 120, step: 0.5, placeholder: "the room's", data: { k: "replyDelay" } })}`)}
           ${stpField("Skills, comma-separated", `<input type="text" data-k="skills" value="${esc((v.skills || []).join(", "))}">`, true)}
         </div>
       </div></div>`).join("");
@@ -4030,12 +4190,35 @@
       closeDialog(els.pfDialog);
       if (state.view === "home") renderHome();
       toast(`Welcome, ${els.pfName.value.trim()}. Open a room and summon a vibemate.`, "info");
+      if (state.freshVibe) offerLook();
     } catch (error) {
       els.pfError.textContent = error.message;
       els.pfError.hidden = false;
     }
   });
   els.pfDialog.addEventListener("cancel", (event) => event.preventDefault());
+  function offerLook() {
+    const current = (state.settings.appearance || {}).look || TOKENS.current.id;
+    $("#look-dialog-cards").innerHTML = Object.values(TOKENS.looks).map((l) => UI.html("look-card", { look: l, on: l.id === current, data: { look: l.id } })).join("");
+    openDialog($("#look-dialog"));
+  }
+  $("#look-dialog-cards").addEventListener("click", async (e) => {
+    const card = e.target.closest('[data-ui="look-card"]');
+    if (!card) return;
+    $("#look-dialog-cards").querySelectorAll('[data-ui="look-card"]').forEach((x) => {
+      UI.setState(x, x === card ? "on" : null);
+      x.setAttribute("aria-pressed", x === card ? "true" : "false");
+    });
+    try {
+      await post("/api/settings", { appearance: { look: card.dataset.look } });
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+  $("#look-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    closeDialog($("#look-dialog"));
+  });
 
   function openEraseDialog() {
     els.eraseWord.value = "";
@@ -4081,12 +4264,37 @@
   }
 
 
+  const CUSTOM_VARS = [...new Set(TOKENS.adjustables.flatMap((f) => Object.keys(f.vars(f.kind === "scale" ? "1" : TOKENS.current.palette.black))))];
+  function customVars(v) {
+    const out = {};
+    for (const f of TOKENS.adjustables) if (v[f.key]) Object.assign(out, f.vars(v[f.key]));
+    return out;
+  }
+  function applyCustomVars(el, values) {
+    for (const name of CUSTOM_VARS) el.style.removeProperty(name);
+    for (const [name, value] of Object.entries(customVars(values || {}))) el.style.setProperty(name, value);
+  }
+  let appliedScheme = null;
   function applyAppearance() {
     const a = (state.settings || {}).appearance || {};
     const root = document.documentElement;
     root.style.setProperty("--fs-scale", String((a.chatFontSize || 14.5) / 14.5));
-    root.style.setProperty("--font", (FONTS.text[a.font] || FONTS.text.nunito).stack);
+    const look = TOKENS.looks[a.look] ? a.look : TOKENS.current.id;
+    if (look === TOKENS.current.id) delete root.dataset.look;
+    else root.dataset.look = look;
+    const scheme = TOKENS.looks[look].scheme;
+    if (appliedScheme && appliedScheme !== scheme) {
+      document.querySelectorAll(".mermaid-block[data-rendered]").forEach((b) => delete b.dataset.rendered);
+      renderDiagrams(document);
+    }
+    appliedScheme = scheme;
+    if (look !== TOKENS.current.id && (!a.font || a.font === "nunito")) root.style.removeProperty("--font");
+    else root.style.setProperty("--font", (FONTS.text[a.font] || FONTS.text.nunito).stack);
     root.style.setProperty("--mono", (FONTS.mono[a.mono] || FONTS.mono["jetbrains-mono"]).stack);
+    const frame = document.querySelector('meta[name="theme-color"]');
+    if (frame) frame.content = TOKENS.looks[look].elements.browser.themeColor;
+    applyCustomVars(root, (a.custom || {})[look] || {});
+    document.querySelectorAll("#participants .avatar .life").forEach((ring) => setLifePath(ring, ring.parentElement));
   }
 
   let hubIdentity = null;
@@ -4700,7 +4908,7 @@
     const waiting = room ? room.participants.filter((p) => p.kind === "agent" && p.status === "unstaffed") : [];
     castBanner.hidden = waiting.length === 0;
     castBanner.innerHTML = waiting.length
-      ? `<div class="cast-lead"><strong>Summon ${waiting.map((p) => esc(p.name)).join(" and ")} to begin.</strong> ${waiting.length === 1 ? "It comes" : "They come"} from the template with the character set; pick the coding agent that runs ${waiting.length === 1 ? "it" : "each"}.</div><div class="cast-list">${waiting.map((p) => `<button type="button" class="cast-card" data-id="${esc(p.id)}">${avatar(p, 44, {})}<b>${esc(p.name)}</b>${p.tagline ? `<span>"${esc(p.tagline)}"</span>` : ""}<em>Summon ${esc(p.name)}</em></button>`).join("")}</div>`
+      ? `<div class="cast-lead"><strong>Summon ${waiting.map((p) => esc(p.name)).join(" and ")} to begin.</strong> ${waiting.length === 1 ? "It comes" : "They come"} from the template with the character set; pick the coding agent that runs ${waiting.length === 1 ? "it" : "each"}.</div><div class="cast-list">${waiting.map((p) => `<button type="button" class="cast-card" data-id="${esc(p.id)}">${avatar(p, 44, { dim: "unstaffed" })}<b>${esc(p.name)}</b>${p.tagline ? `<span>"${esc(p.tagline)}"</span>` : ""}<em>Summon ${esc(p.name)}</em></button>`).join("")}</div>`
       : "";
     els.input.disabled = waiting.length > 0;
     els.input.placeholder = waiting.length ? `Summon ${waiting.map((p) => p.name).join(" and ")} to start the conversation` : "Message the room… @Name or /skill";
@@ -5216,7 +5424,9 @@
       if (!nodes.length) return;
       const total = els.messages.scrollHeight || 1;
       const h = Math.max(0, t.ticks.clientHeight - TICK_H);
-      const tops = nodes.map(topInList);
+      const fits = els.messages.scrollHeight <= els.messages.clientHeight + 1;
+      const stripTop = fits ? t.ticks.getBoundingClientRect().top : 0;
+      const tops = fits ? nodes.map((el) => el.getBoundingClientRect().top - stripTop) : nodes.map(topInList);
       const frag = document.createDocumentFragment();
       nodes.forEach((el, i) => {
         const tick = document.createElement("div");
@@ -5224,11 +5434,18 @@
         tick.className = `tl-tick${pinned ? " pinned i i-pin" : ""}`;
         tick.dataset.i = i;
         if (opts.colorOf) tick.style.setProperty("--tick", opts.colorOf(room, el));
-        tick.style.top = `${Math.round((tops[i] / total) * h)}px`;
+        tick.style.top = `${Math.round(fits ? Math.max(0, Math.min(h, tops[i] + 6)) : (tops[i] / total) * h)}px`;
         frag.appendChild(tick);
       });
       t.ticks.replaceChildren(frag);
       updateView();
+      if (fits && !t.following) {
+        t.following = true;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          render();
+          t.following = false;
+        }));
+      }
     }
     function updateView() {
       if (t.el.hidden) return;
@@ -5346,7 +5563,7 @@
     if (room.id !== state.currentRoomId || state.view !== "room") return;
     requestAnimationFrame(() => {
       if (bubbleInView(m.id)) return;
-      const p = findById(room, m.from) || { name: m.fromName, color: FALLBACK_COLOR, kind: "agent" };
+      const p = findById(room, m.from) || { name: m.fromName, color: FALLBACK_COLOR(), kind: "agent" };
       pushNote({ id: m.id, kind: "done", p, text: `${p.name} finished`, sub: `started ${time(m.ts)}${m.durationMs ? ` · ${spanText(m.durationMs)}` : ""}` });
     });
   }
@@ -5354,7 +5571,7 @@
     if (room.id !== state.currentRoomId || state.view !== "room") return;
     requestAnimationFrame(() => {
       if (bubbleInView(m.id)) return;
-      const p = findById(room, m.from) || { name: m.fromName, color: FALLBACK_COLOR, kind: "agent" };
+      const p = findById(room, m.from) || { name: m.fromName, color: FALLBACK_COLOR(), kind: "agent" };
       pushNote({ id: m.id, kind: "new", p, text: `${p.name} wrote below`, sub: time(m.ts) });
     });
   }
@@ -5391,7 +5608,7 @@
   const timelines = [
     createTimeline($("#timeline"), () => [...els.messages.querySelectorAll(".msg.mine:not(.hidden-by-search)")], {}),
     createTimeline($("#timeline-left"), () => [...els.messages.querySelectorAll(".msg.agent:not(.hidden-by-search)")], {
-      colorOf: (room, el) => (authorOf(room, el) || {}).color || FALLBACK_COLOR,
+      colorOf: (room, el) => (authorOf(room, el) || {}).color || FALLBACK_COLOR(),
       avatarOf: (room, el) => { const p = authorOf(room, el); return p ? avatar(p, 16, {}) : ""; },
     }),
   ];
@@ -5404,6 +5621,7 @@
   function updateTimelineView() { for (const t of timelines) t.updateView(); }
   attachScrollHints(els.pageInner);
   attachScrollHints(els.detailsInner);
+  document.querySelectorAll("dialog.dialog").forEach((d) => attachScrollHints(d));
   const composerFollowers = [$("#timeline"), $("#timeline-left"), els.mentionMenu, els.emojiMenu, els.jumpLatest];
   new ResizeObserver(() => {
     const h = `${els.composer.offsetHeight}px`;
@@ -5411,6 +5629,15 @@
     renderTimeline();
   }).observe(els.composer);
   new ResizeObserver(() => renderTimeline()).observe(els.messages);
+  document.fonts.ready.then(() => renderTimeline());
+  let timelineTimer = 0;
+  new MutationObserver(() => {
+    if (timelineTimer) return;
+    timelineTimer = setTimeout(() => {
+      timelineTimer = 0;
+      renderTimeline();
+    }, 300);
+  }).observe(els.messages, { childList: true, subtree: true });
 
   const workingNow = $("#working-now");
   function renderWorkingNow() {
@@ -5453,8 +5680,27 @@
     const left = Math.max(0, Math.min(100, 100 - Math.round((100 * (p.contextUsed || 0)) / p.contextSize)));
     return { left, tone: left <= 20 ? "hot" : left <= 50 ? "warm" : "ok" };
   }
-  const LIFE_PATH = "M26 2.5H32.5A17 17 0 0 1 49.5 19.5V32.5A17 17 0 0 1 32.5 49.5H19.5A17 17 0 0 1 2.5 32.5V19.5A17 17 0 0 1 19.5 2.5H26";
-  const LIFE_RING = `<svg class="life" viewBox="0 0 52 52" aria-hidden="true"><path class="life-track" d="${LIFE_PATH}" pathLength="100"/><path class="life-arc" d="${LIFE_PATH}" pathLength="100"/></svg>`;
+  function lifePathFor(r) {
+    const s = 2.5, e = 49.5, mid = 26;
+    r = Math.max(0, Math.min(23.5, r));
+    const n = (v) => String(Math.round(v * 10) / 10);
+    if (r < 0.5) return `M${mid} ${s}H${e}V${e}H${s}V${s}H${mid}`;
+    const a = (x, y) => `A${n(r)} ${n(r)} 0 0 1 ${n(x)} ${n(y)}`;
+    return `M${mid} ${s}H${n(e - r)}${a(e, s + r)}V${n(e - r)}${a(e - r, e)}H${n(s + r)}${a(s, e - r)}V${n(s + r)}${a(s + r, s)}H${mid}`;
+  }
+  function lifeRadius(av) {
+    const cs = getComputedStyle(av.isConnected ? av : document.documentElement);
+    const scale = parseFloat(cs.getPropertyValue("--r-scale"));
+    const corner = parseFloat(cs.getPropertyValue("--face-corner"));
+    return ((Number.isFinite(corner) ? corner : 0.32) * 44 + 4) * (Number.isFinite(scale) ? scale : 1);
+  }
+  function setLifePath(ring, av) {
+    const d = lifePathFor(lifeRadius(av));
+    if (ring.dataset.d === d) return;
+    ring.querySelectorAll("path").forEach((path) => path.setAttribute("d", d));
+    ring.dataset.d = d;
+  }
+  const LIFE_RING = `<svg class="life" viewBox="0 0 52 52" aria-hidden="true"><path class="life-track" pathLength="100"/><path class="life-arc" pathLength="100"/></svg>`;
   function patchLifeRing(li, p) {
     const av = li.querySelector(".avatar");
     if (!av) return;
@@ -5464,6 +5710,7 @@
       ring = av.querySelector(".life");
       av.classList.add("has-life");
     }
+    setLifePath(ring, av);
     const { left, tone } = lifeOf(p);
     const cls = `life life-${tone}`;
     if (ring.getAttribute("class") !== cls) ring.setAttribute("class", cls);
@@ -5553,7 +5800,7 @@
         ${p.notes ? `<pre class="lp-notes">${esc(p.notes)}</pre><div class="lp-editor" hidden><textarea class="lp-notes-area" rows="6" maxlength="4000">${esc(p.notes)}</textarea><div class="row-btns">${UI.html("button", { label: "Clear", kind: "ghost", size: "sm", hook: "lp-notes-clear" })}${UI.html("button", { label: "Save", kind: "primary", size: "sm", hook: "lp-notes-save" })}</div></div>` : ""}
         <div class="lp-respawn">
           ${UI.html("button", { label: "Respawn, empty head", icon: "bolt", kind: "danger", size: "sm", hook: "lp-empty", title: "A new session that knows nothing of this conversation" })}
-          <label class="lp-with">${UI.html("button", { label: "Respawn with the last", size: "sm", hook: "lp-mem", title: `A new session that re-reads only the last N messages${p.notes ? " and its own notes" : ""}` })}<input type="number" class="lp-n" min="0" max="500" value="${n}"> messages</label>
+          <label class="lp-with">${UI.html("button", { label: "Respawn with the last", size: "sm", hook: "lp-mem", title: `A new session that re-reads only the last N messages${p.notes ? " and its own notes" : ""}` })}${UI.html("number-field", { value: String(n), min: 0, max: 500, hook: "lp-n" })} messages</label>
         </div>
       </div>
       <div class="lp-side">${UI.html("icon-button", { icon: "close", title: "Close", size: "sm", hook: "lp-x" })}${UI.html("icon-button", { icon: "settings", title: "Open this vibemate's panel", size: "sm", hook: "lp-more" })}</div>`;
