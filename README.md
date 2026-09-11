@@ -226,10 +226,35 @@ it in a browser tab. Later, `npm install -g viberoom@latest` and the next start 
 - Node.js 22 or newer.
 - At least one coding agent installed and logged in: Claude Code, Codex, Gemini CLI, Cursor, OpenCode,
   GitHub Copilot, Grok Build or Hermes Agent. viberoom finds the ones you have and offers only those. It
-  installs none of them.
+  downloads none of them itself: a missing one gets an **Install…** button that opens a terminal with the
+  agent's own install command.
 - A browser. Chrome, Edge or Brave for the app window; anything modern for a tab.
 
-Something does not start? `viberoom doctor` checks these things and says which one is missing.
+Something does not start? `viberoom doctor` checks these things, asks each agent whether it is logged
+in, and says which one is missing.
+
+<br>
+
+## Log in, or install, from the room
+
+Summon a vibemate and every tile says whether that agent is logged in, in the agent's own words: viberoom
+runs the agent's own status command, or asks the agent itself, and repeats the answer. Not logged in? Press
+**Log in** under the tile, on the vibemate's row, in its panel or in the Welcome-back dialog: one dialog
+opens, and a drawing says what happens before you read a word — a browser opening, a code to type, a
+question to answer, a terminal window. viberoom starts the agent's own sign-in and shows what it says: the
+page to open, the code to enter, the question to answer. Agents that sign in through a full-screen menu of
+their own (OpenCode, Hermes, Gemini) get a terminal window opened for them instead; finish there and press
+**I'm done**. Either way the agent is asked again at the end, the dialog closes by itself, and the tile
+turns to *logged in*. A vibemate whose vendor logged out wears a small plug in the corner of its face.
+viberoom never sees your password or keys: the agent signs you in, the dialog only shows what it says; the
+agent's own lines and the exact commands sit behind *for geeks*.
+
+An agent you do not have yet keeps its grey tile, with a small **Install** under it. Press it and a card
+explains what will happen; the exact command sits behind *for geeks*. Agents that come from npm are
+installed quietly, with npm's own lines shown in the card, and the tile turns live when it is done.
+Agents with an installer of their own (Grok, Hermes) get a terminal window with it, since such installers
+may ask you things; finish there and press **I'm done**. Either way viberoom downloads nothing itself: it
+runs the agent's own installer and shows what it says.
 
 <br>
 

@@ -143,6 +143,9 @@
       <div class="actions"><button type="submit" data-ui="button" data-kind="primary" data-size="lg">Keep this look</button></div>
     </form>
   </dialog>
+  <dialog id="login-dialog" class="dialog">
+    <form id="login-form" method="dialog"><div id="ld-body"></div></form>
+  </dialog>
   <dialog id="confirm-dialog" class="dialog narrow">
     <form method="dialog">
       <h3 id="cf-title">Are you sure?</h3>
@@ -192,6 +195,8 @@
       <h3><span class="h-ico" data-icon="spark"></span>Summon a Vibemate</h3>
       <p class="lead">Pick a vibemate, give it a vibename and a character, and it joins the room.</p>
       <div class="agent-grid" id="inv-agents"></div>
+      <p class="hint inv-tools">Each tile says whether that agent is installed and logged in, in its own words. <button type="button" data-ui="button" data-kind="ghost" data-size="sm" id="inv-recheck" title="Look for every agent on this machine again, and ask each one whether it is logged in">Check again</button></p>
+      <div id="inv-login" class="login-host" hidden></div>
       <p class="hint" id="inv-none" hidden></p>
       <select id="inv-type" hidden></select>
       <div id="inv-options" hidden>

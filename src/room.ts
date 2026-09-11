@@ -12,8 +12,8 @@ import { agentReadableWindow, resolveQuotes, type Quote, type QuoteInput } from 
 import { join, resolve } from "node:path";
 import { AcpAgent } from "./acp-client.js";
 import { RemoteError } from "./jsonrpc.js";
-import { getRecipe, listRecipes, type AgentRecipe } from "./recipes.js";
-import { classifyStartFailure, type Trouble } from "./agent-health.js";
+import { getRecipe, listRecipes, publicRecipes, type AgentRecipe } from "./recipes.js";
+import { classifyStartFailure, classifyTurnFailure, type Trouble } from "./agent-health.js";
 import { legacyRowTone } from "./rows.js";
 import { composeSkillBlock, skillPull, SKILL_TOOL_NAME, type SkillsForPrompt } from "./persona.js";
 import {
@@ -357,6 +357,7 @@ interface AgentRuntime {
   lastSeenSeq: number;
   turnStartSeq: number;
   turnActive: boolean;
+  usageSeenThisTurn?: boolean;
   pendingTurn: boolean;
   turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; published: boolean; publishedAt?: number; hidden?: boolean } | null;
   strayMessageId: string | null;
@@ -401,6 +402,19 @@ const MENTION_PATTERN = /@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu;
 const RULE_REF_TOKEN = /@\{p:([^}]+)\}/g;
 const ADAPTER_ERROR_PATTERN =
   /^(?:Warning: Falling back from WebSockets|unexpected status \d{3}|Error when talking to|API Error|You have exhausted your (?:daily )?quota|Rate limit|429 |5\d\d )/i;
+
+function needsTheHuman(method: { id: string; name?: string | null; description?: string | null }, recipe?: AgentRecipe): boolean {
+  if (recipe?.loginFlow.kind === "acp" && method.id === recipe.loginFlow.methodId) return true;
+  return /\b(browser|oauth|log ?in with|sign ?in with)\b/i.test(`${method.id} ${method.name ?? ""} ${method.description ?? ""}`);
+}
+
+export function tokensCarried(result: { usage?: { inputTokens?: number | null; cachedReadTokens?: number | null } | null; _meta?: Record<string, unknown> | null }): number | null {
+  const usage = result.usage;
+  if (usage && typeof usage.inputTokens === "number" && usage.inputTokens > 0) return usage.inputTokens + (typeof usage.cachedReadTokens === "number" ? usage.cachedReadTokens : 0);
+  const meta = result._meta as { quota?: { token_count?: { input_tokens?: unknown } } } | null | undefined;
+  const fromMeta = meta?.quota?.token_count?.input_tokens;
+  return typeof fromMeta === "number" && fromMeta > 0 ? fromMeta : null;
+}
 
 export class Room extends EventEmitter {
   readonly id: string;
@@ -633,7 +647,7 @@ export class Room extends EventEmitter {
       messages: this.messagesWithLiveDrafts(),
       permissions: [...this.permissions.values()].map(({ resolve: _r, ...p }) => p),
       proposals: [...this.proposals.values()],
-      recipes: listRecipes().map(({ build: _b, ...r }) => r),
+      recipes: publicRecipes(),
       lastMessageAt: last?.ts ?? this.createdAt,
     };
   }
@@ -1100,6 +1114,42 @@ export class Room extends EventEmitter {
     if (changed.length && runtime) runtime.briefPending = `your persona: ${changed.join(", ")}`;
     this.push({ type: "participant", participant });
     return participant;
+  }
+
+  retryTurn(id: string): Participant {
+    const participant = this.participants.get(id);
+    const runtime = this.runtimes.get(id);
+    if (!participant || participant.kind !== "agent") throw new Error("no such vibemate");
+    if (!runtime || !runtime.agent.alive) throw new Error(`${participant.name} is not running: respawn it instead`);
+    if (runtime.turnActive) throw new Error(`${participant.name} is answering right now`);
+    if (participant.trouble?.stage === "turn") runtime.lastSeenSeq = Math.min(runtime.lastSeenSeq, runtime.turnStartSeq);
+    this.clearTrouble(participant, undefined);
+    this.log.info(`retry of ${participant.name}'s last turn, asked by the human`);
+    this.requestTurn(id, true);
+    return participant;
+  }
+
+  retryAfterLogin(recipeId: string): void {
+    for (const participant of this.participants.values()) {
+      if (participant.kind !== "agent" || participant.agentType !== recipeId || participant.trouble?.kind !== "login") continue;
+      const runtime = this.runtimes.get(participant.id);
+      if (runtime?.agent.alive) {
+        this.notice(`${participant.name}: ${getRecipe(recipeId)?.vendor ?? recipeId} is logged in again; sending it the messages it missed.`, "info");
+        try { this.retryTurn(participant.id); } catch (error) { this.log.warn(`retry after login: ${describeError(error)}`); }
+      } else {
+        const restore = !!participant.sessionId && participant.supportsLoad !== false;
+        this.notice(`${participant.name}: ${getRecipe(recipeId)?.vendor ?? recipeId} is logged in again; ${restore ? "bringing it back with its session" : "starting it afresh with its notes"}.`, "info");
+        void (restore ? this.reconnect(participant.id, { mode: "load" }) : this.respawnAgent(participant.id, { memory: true, reason: "logged in again" })).catch((error) => this.notice(`${participant.name}: the start after the login failed: ${describeError(error)}`, "error"));
+      }
+    }
+  }
+
+  private clearTrouble(participant: Participant, why: string | undefined): void {
+    if (participant.status === "error") participant.status = "idle";
+    participant.trouble = undefined;
+    participant.statusDetail = undefined;
+    this.push({ type: "participant", participant });
+    if (why) this.notice(`${participant.name} is back in the conversation (${why}).`, "info");
   }
 
   setMuted(id: string, muted: boolean): Participant {
@@ -2155,6 +2205,12 @@ export class Room extends EventEmitter {
     const participant = this.participants.get(id);
     if (!runtime || !participant) return;
     runtime.pendingTurn = true;
+    if (participant.status === "error") {
+      const trouble = participant.trouble;
+      const canResume = addressed && runtime.agent.alive && trouble?.stage === "turn" && trouble.kind !== "crash";
+      if (!canResume) return;
+      this.clearTrouble(participant, "you wrote to it directly");
+    }
     if (addressed && !runtime.addressed) {
       runtime.addressed = true;
       if (this.floorQueue.includes(id)) {
@@ -2241,7 +2297,7 @@ export class Room extends EventEmitter {
       const id = this.floorQueue.shift()!;
       const runtime = this.runtimes.get(id);
       const participant = this.participants.get(id);
-      if (!runtime || !participant || !runtime.pendingTurn || participant.muted || this.focused) continue;
+      if (!runtime || !participant || !runtime.pendingTurn || participant.muted || this.focused || participant.status === "error") continue;
       void this.runTurn(id);
       return;
     }
@@ -2391,6 +2447,7 @@ export class Room extends EventEmitter {
   private async executeTurn(participant: Participant, runtime: AgentRuntime, blocks: ContentBlock[], retry: RetryRequest | null, hidden = false): Promise<RetryRequest | null> {
     const id = participant.id;
     runtime.turnActive = true;
+    runtime.usageSeenThisTurn = false;
     participant.status = "thinking";
     participant.statusDetail = undefined;
     this.push({ type: "participant", participant });
@@ -2439,16 +2496,43 @@ export class Room extends EventEmitter {
       return null;
     }
     if (failure || !result) {
-      participant.status = runtime.agent.alive ? "idle" : "error";
       participant.statusDetail = `last turn failed: ${(failure ?? "no result").replace(/\s+/g, " ").slice(0, 120)}`;
       participant.failedTurns = (participant.failedTurns ?? 0) + 1;
-      this.push({ type: "participant", participant });
       this.push({ type: "message.removed", id: draft.id });
-      this.notice(`${participant.name}: turn failed: ${failure ?? "no result"}`, "error");
       runtime.log.error(`turn failed: ${failure}`);
       if (retry) this.closeRetry(retry, "the correction turn failed; nothing was posted");
-      if (isContextFullError(failure)) this.contextFull(participant, runtime, failure ?? "");
-      else this.postSystem(`${participant.name} could not answer: ${(failure ?? "no result").slice(0, 240)}`, undefined, false, { tone: "error" });
+      if (isContextFullError(failure)) {
+        participant.status = runtime.agent.alive ? "idle" : "error";
+        this.push({ type: "participant", participant });
+        this.contextFull(participant, runtime, failure ?? "");
+        return null;
+      }
+      const recipe = getRecipe(participant.agentType ?? "");
+      const trouble = classifyTurnFailure({
+        error: failure ?? "no result",
+        vendor: recipe?.vendor ?? participant.agentVendor ?? "The coding agent",
+        alive: runtime.agent.alive,
+        loginCommand: recipe?.loginCommand || undefined,
+        loginFromHere: !!recipe && recipe.loginFlow.kind !== "none",
+      });
+      const again = participant.trouble?.stage === "turn" && participant.trouble.kind === trouble.kind;
+      trouble.streak = again ? (participant.trouble?.streak ?? 1) + 1 : 1;
+      if (trouble.streak >= 2 && trouble.kind === "unknown" && trouble.actions?.includes("respawn")) {
+        trouble.actions = ["respawn", ...trouble.actions.filter((a) => a !== "respawn")];
+        trouble.advice = "It failed the same way twice in a row: respawn it (a fresh session with its notes and the last messages; the history stays), or press Retry if it was a passing thing.";
+      } else if (trouble.streak >= 2 && (trouble.kind === "limit" || trouble.kind === "network")) {
+        trouble.advice = `${trouble.advice} It has failed this way ${trouble.streak} times in a row: give it a few minutes first.`;
+      }
+      participant.trouble = trouble;
+      const paused = !runtime.agent.alive || trouble.kind === "login" || trouble.streak >= 2;
+      participant.status = paused ? "error" : "idle";
+      this.push({ type: "participant", participant });
+      if (paused) {
+        runtime.log.warn(`paused after ${trouble.streak} ${trouble.kind} failure(s): waiting for the human`);
+        this.postSystem(`${participant.name} needs you: ${trouble.what} ${trouble.advice}`, "human", false, { tone: "attention" });
+      } else {
+        this.postSystem(`${participant.name} could not answer: ${(failure ?? "no result").slice(0, 240)}`, undefined, false, { tone: "error" });
+      }
       return null;
     }
     return this.finalizeTurn(participant, runtime, draft, result, Date.now() - startedAt, retry, published, publishedAt);
@@ -2465,6 +2549,18 @@ export class Room extends EventEmitter {
     publishedAt: number | null = null,
   ): RetryRequest | null {
     participant.status = "idle";
+    if (!runtime.usageSeenThisTurn) {
+      const used = tokensCarried(result);
+      if (used !== null) {
+        participant.contextUsed = used;
+        runtime.lastUsed = used;
+        runtime.log.info(`context from the result: ${used} input tokens${participant.contextSize ? ` of ${participant.contextSize}` : " (window size unknown)"}`);
+      }
+    }
+    if (participant.trouble?.stage === "turn") {
+      participant.trouble = undefined;
+      participant.statusDetail = undefined;
+    }
     this.push({ type: "participant", participant });
 
     const cancelled = result.stopReason === "cancelled";
@@ -2762,6 +2858,7 @@ export class Room extends EventEmitter {
           runtime.log.info(`usage report of 0 after ${runtime.lastUsed} tokens ignored (failed request?)`);
           return;
         }
+        runtime.usageSeenThisTurn = true;
         participant.contextUsed = u.used;
         participant.contextSize = u.size;
         if (u.cost) participant.cost = { amount: u.cost.amount, currency: u.cost.currency };
@@ -2859,12 +2956,13 @@ export class Room extends EventEmitter {
     } catch (error) {
       if (!isAuthRequired(error) || !agent.authMethods.length) throw error;
       log.info(`session/new needs authentication: ${describeError(error)}`);
-      if (recipe?.loginState === "missing") throw new Error(`authentication required; log in with the agent's own CLI first${recipe.loginCommand ? ` (${recipe.loginCommand})` : ""}`);
+      if (recipe?.loginState === "missing") throw new Error(`authentication required: ${recipe.vendor} is not logged in on this machine${recipe.loginCommand ? ` (its own CLI: ${recipe.loginCommand})` : ""}`);
     }
     const failures: string[] = [];
     for (const method of agent.authMethods) {
-      if ((method as { type?: string }).type === "terminal") {
-        failures.push(`${method.id}: needs a terminal`);
+      const human = (method as { type?: string }).type === "terminal" ? "needs a terminal" : needsTheHuman(method, recipe) ? "opens a browser (a sign-in that needs you)" : null;
+      if (human) {
+        failures.push(`${method.id}: ${human}`);
         continue;
       }
       log.info(`authenticate with "${method.id}"${method.name ? ` (${method.name})` : ""}`);
@@ -2879,7 +2977,7 @@ export class Room extends EventEmitter {
         failures.push(`${method.id}: ${describeError(error)}`);
       }
     }
-    throw new Error(`authentication failed; log in with the agent's own CLI first. ${failures.join("; ")}`);
+    throw new Error(`authentication failed: ${recipe?.vendor ?? "the agent"} is not logged in on this machine. ${failures.join("; ")}`);
   }
 
   private async applyConfig(
@@ -2958,8 +3056,9 @@ export class Room extends EventEmitter {
       loginCommand: recipe?.loginCommand || undefined,
       installHint: recipe?.installHint || undefined,
       loginState: recipe?.loginState,
+      loginFromHere: !!recipe && recipe.loginFlow.kind !== "none",
     });
-    this.notice(`${participant.name}: failed to start: ${participant.statusDetail}`, "error");
+    this.log.warn(`${participant.name}: failed to start: ${participant.statusDetail}`);
     if (fresh) {
       participant.status = "error";
       this.push({ type: "participant", participant });

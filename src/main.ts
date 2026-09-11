@@ -3,7 +3,7 @@
 
 import { exec, spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hub } from "./hub.js";
@@ -33,6 +33,7 @@ import {
 import { aumidSyncScript, installShortcuts, windowsShortcutPaths } from "./shortcuts.js";
 import { askEnter, renderInstalled, runMenu, unicodeSupported } from "./tui.js";
 import { listRecipes } from "./recipes.js";
+import { checkLogin } from "./login-status.js";
 
 interface CliOptions {
   command: Command;
@@ -271,7 +272,15 @@ async function runDoctor(options: CliOptions, info: BuildInfo): Promise<void> {
   const found = recipes.filter((r) => !r.unavailableReason);
   lines.push(`${found.length ? "ok  " : "warn"} coding agents: ${found.length ? found.map((r) => r.vendor).join(", ") : "none found"}${found.length ? "" : " (install and log in to at least one: Claude Code, Codex, Gemini CLI, Cursor, OpenCode or GitHub Copilot)"}`);
   for (const r of recipes.filter((r) => r.unavailableReason)) lines.push(`     ${r.vendor}: ${r.unavailableReason} (${r.installHint})`);
-  for (const r of found.filter((r) => r.loginState === "missing")) lines.push(`warn ${r.vendor}: installed, not logged in: run \`${r.loginCommand}\``);
+  const probeDir = join(tmpdir(), "viberoom-doctor");
+  mkdirSync(probeDir, { recursive: true });
+  const checks = await Promise.all(found.map(async (r) => [r, await checkLogin(r.loginStatus, r.build({ model: null, mode: null }), probeDir)] as const));
+  for (const [r, c] of checks) {
+    const how = c.how === "command" ? "its own status command" : "asked over ACP";
+    if (c.state === "ok") lines.push(`ok   ${r.vendor}: logged in (${how}: ${c.detail})`);
+    else if (c.state === "missing") lines.push(`warn ${r.vendor}: installed, not logged in: run \`${r.loginCommand}\` (${how}: ${c.detail})`);
+    else lines.push(`info ${r.vendor}: installed; whether it is logged in could not be told (${how}: ${c.detail})`);
+  }
   const running = await runningInstance(options.port);
   lines.push(running ? `ok   hub running at ${running.url} (build ${running.build ?? "unknown"})` : `info no hub on port ${options.port}: start one with "viberoom start" (or "viberoom start --browser" without a Chromium browser)`);
   lines.push(`     data: ${options.dataDir}`);

@@ -11,7 +11,7 @@
       letter: { type: "string", note: "the letter shown without a drawing" },
       glyph: { type: "icon", note: "an icon from the set instead of a drawing (the mute mark)" },
       size: { type: "enum", values: ["sm", "md", "lg", "badge"], default: "md", note: "badge: the corner of a face, sized by the face" },
-      tone: { type: "enum", values: ["plain", "muted"], default: "plain" },
+      tone: { type: "enum", values: ["plain", "muted", "unplugged"], default: "plain", note: "unplugged: the vendor is logged out (U147)" },
       title: { type: "string" },
     },
     build: ({ icon, letter, glyph, size, tone, title }, ui) =>
@@ -24,6 +24,7 @@
       { label: "a letter", props: { letter: "F", size: "sm", title: "Fake" } },
       { label: "a badge", props: { icon: "/vendor-icons/gemini.svg", size: "badge", title: "Gemini" } },
       { label: "muted", props: { glyph: "mute", size: "badge", tone: "muted", title: "muted: receives no prompts" } },
+      { label: "unplugged", props: { glyph: "unplugged", size: "badge", tone: "unplugged", title: "not logged in" } },
     ],
   });
 
@@ -42,11 +43,12 @@
       me: { type: "boolean", default: false, note: "the human's own face: wears the accent ring" },
       kind: { type: "enum", values: ["tile", "card", "bare"], default: "tile", note: "card: on the profile card, on paper with a shadow; bare: no tile (the rail)" },
       ring: { type: "boolean", default: false, note: "a ring in the paper's colour, for faces that overlap in a stack" },
+      alert: { type: "boolean", default: false, note: "the vibemate needs the human (U144): a breathing ring in the attention colour" },
       dim: { type: "enum", values: ["asleep", "unstaffed"], note: "greyed: asleep a little, unstaffed more" },
       title: { type: "string" },
     },
-    build: ({ name, label, color, size, emoji, badge, status, me, kind, ring, dim, title }, ui) =>
-      ui.h("span", { class: "avatar", role: "img", "aria-label": name, title, "data-kind": kind !== "tile" ? kind : null, "data-me": me || null, "data-ring": ring || null, "data-dim": dim || null, style: `--face-color:${color};--face-size:${size}px;width:${size}px;height:${size}px` },
+    build: ({ name, label, color, size, emoji, badge, status, me, kind, ring, alert, dim, title }, ui) =>
+      ui.h("span", { class: "avatar", role: "img", "aria-label": name, title, "data-kind": kind !== "tile" ? kind : null, "data-me": me || null, "data-ring": ring || null, "data-alert": alert || null, "data-dim": dim || null, style: `--face-color:${color};--face-size:${size}px;width:${size}px;height:${size}px` },
         ui.h("span", { class: "tile", "data-emoji": emoji || null, style: `font-size:${Math.round(emoji ? size * 0.56 : size * 0.38)}px` }, label),
         badge,
         status ? ui.h("span", { class: "status", "data-status": status }) : null),
@@ -57,6 +59,7 @@
         { label: "initials", props: { name: "Maken", label: "MA", color: p.primary, size: 44 } },
         { label: "an emoji, a vendor", props: { name: "Sam", label: "🦊", emoji: true, color: p.orange, size: 44, badge: UI.raw(UI.html("logo-tile", { icon: "/vendor-icons/claude.svg", size: "badge", title: "Claude" })), status: "thinking" } },
         { label: "you", props: { name: "You", label: "🧑‍💻", emoji: true, color: p.indigo, size: 44, me: true } },
+        { label: "needs you", props: { name: "Nia", label: "NI", color: p.primary, size: 44, alert: true, status: "error" } },
         { label: "asleep", props: { name: "Rex", label: "🦖", emoji: true, color: p.green, size: 44, dim: "asleep", status: "offline", badge: UI.raw(UI.html("logo-tile", { glyph: "mute", size: "badge", tone: "muted", title: "muted" })) } },
         { label: "on the card", props: { name: "You", label: "🧑‍💻", emoji: true, color: p.indigo, size: 64, kind: "card" } },
       ];
@@ -493,6 +496,80 @@
       { label: "a permission", props: { kind: "permission", who: "Maken", subject: "Bash", subjectKind: "execute", input: "{ \"command\": \"npm test\" }", choices: [{ label: "Allow", tone: "ok", act: "permit", data: { option: "allow" } }, { label: "Deny", tone: "no", act: "permit", data: { option: "deny" } }, { label: "Dismiss (cancelled)", act: "permit" }] } },
       { label: "a proposal", props: { kind: "proposal", who: "Ana", body: "<div class=\"why\">The room keeps forgetting the deploy steps.</div>", choices: [{ label: "Apply", tone: "ok", act: "decide", data: { answer: "apply" } }, { label: "Reject", tone: "no", act: "decide", data: { answer: "reject" } }] } },
       { label: "decided", props: { kind: "permission", who: "Maken", subject: "Bash", outcome: "chosen: allow" } },
+    ],
+  });
+
+  UI.define("login-dialog", {
+    group: "loginDialog",
+    describe: "A vendor's sign-in or install, from any place in the room, in one modal (U147): the vendor's mark and a title, a scene (one drawing: a browser opening, a code to type, a question, a terminal, a package coming in, done, failed) that says what happens, one sentence, the task itself when there is one (a page to open, a code to type, a question to answer), the vendor's own lines behind 'for geeks', and the way out. viberoom never sees a password or a key: the vendor signs the human in, this dialog shows what it says.",
+    props: {
+      vendor: { type: "string", required: true },
+      icon: { type: "string", note: "the vendor's drawing (a recipe's icon); a letter without" },
+      purpose: { type: "enum", values: ["login", "install"], default: "login" },
+      state: { type: "enum", values: ["idle", "running", "done", "failed", "cancelled"], required: true, note: "idle: nothing started yet" },
+      scene: { type: "enum", values: ["browser", "code", "question", "terminal", "package", "done", "failed"], required: true },
+      words: { type: "string", required: true, note: "one sentence: what happens, or what happened" },
+      status: { type: "string", note: "the vendor's own word on its state, under the title" },
+      kind: { type: "enum", values: ["command", "acp", "terminal", "url"], default: "command", note: "terminal: the human finishes in a window and presses I'm done; url: the vendor's page" },
+      url: { type: "string", note: "the page to open" },
+      code: { type: "string", note: "the code to type there" },
+      wantsInput: { type: "boolean", default: false, note: "the vendor asks something: an answer field" },
+      lines: { type: "array", note: "the vendor's own lines (for geeks)" },
+      geek: { type: "string", note: "fine print markup (for geeks): the command, where the login lives" },
+      terminal: { type: "boolean", default: false, note: "a terminal window is another way in (offered after a failure)" },
+      flowId: { type: "string" },
+      data: { type: "object" },
+    },
+    build: ({ vendor, icon, purpose, state, scene, words, status, kind, url, code, wantsInput, lines, geek, terminal, flowId, data }, ui) => {
+      const installing = purpose === "install";
+      const running = state === "running";
+      const title = installing
+        ? (state === "done" ? `${vendor} is installed` : state === "failed" ? `${vendor} was not installed` : `Install ${vendor}`)
+        : (state === "done" ? `${vendor} is logged in` : state === "failed" ? `${vendor} did not sign you in` : `Log in to ${vendor}`);
+      const startLabel = installing
+        ? (kind === "terminal" ? `Open a terminal to install ${vendor}` : kind === "url" ? "Open the page" : `Install ${vendor}`)
+        : (kind === "terminal" ? `Open a terminal to sign in` : `Log in to ${vendor}`);
+      const startAct = installing ? (kind === "url" ? "open-install-url" : "start-install") : "start-login";
+      const foot = [];
+      if (state === "idle") {
+        foot.push(ui.build("button", { label: startLabel, kind: "primary", size: "md", act: startAct, icon: installing ? "tool" : "lock", data: kind === "url" && url ? { url } : undefined }));
+        if (kind === "url") foot.push(ui.build("button", { label: "Check again", kind: "paper", act: "rescan", icon: "refresh", title: "Look for it on this machine again" }));
+        foot.push(ui.build("button", { label: "Later", kind: "ghost", act: "close-login" }));
+      } else if (running) {
+        if (kind === "terminal") foot.push(ui.build("button", { label: "I'm done", kind: "primary", act: "recheck-login", icon: "check" }));
+        foot.push(ui.build("button", { label: "Cancel", kind: "ghost", act: "cancel-login" }));
+      } else if (state === "done") {
+        foot.push(ui.build("button", { label: "Close", kind: "primary", act: "close-login" }));
+      } else {
+        foot.push(ui.build("button", { label: "Try again", kind: "primary", act: "retry-login", icon: "refresh" }));
+        if (terminal && kind !== "terminal") foot.push(ui.build("button", { label: "Open a terminal instead", kind: "paper", act: "terminal-login" }));
+        foot.push(ui.build("button", { label: "Close", kind: "ghost", act: "close-login" }));
+      }
+      return ui.h("div", { "data-state": state, "data-scene": scene, "data-purpose": purpose, "data-kind": kind, "data-flow": flowId || null, ...ui.dataAttrs(data) },
+        ui.h("div", { class: "head" },
+          ui.build("logo-tile", { icon: icon || "", letter: vendor.slice(0, 1), size: "lg", title: vendor }),
+          ui.h("div", { class: "titles" }, ui.h("div", { class: "title" }, title), status ? ui.h("div", { class: "status" }, status) : null)),
+        ui.h("div", { class: "stage", "data-scene": scene }, ui.raw(globalThis.Icons.scene(scene))),
+        ui.h("p", { class: "words" }, words),
+        url && running && !installing ? ui.h("div", { class: "task" },
+          ui.h("div", { class: "step" }, ui.h("span", { class: "n" }, "1"), ui.h("span", { class: "say" }, "Open the sign-in page"), ui.build("button", { label: "Open it", kind: "primary", size: "sm", act: "open-login-url", icon: "link", data: { url } })),
+          code ? ui.h("div", { class: "step" }, ui.h("span", { class: "n" }, "2"), ui.h("span", { class: "say" }, "Enter this code there"), ui.h("code", { class: "code" }, code), ui.build("button", { label: "Copy", kind: "ghost", size: "sm", act: "copy-login-code", icon: "copy", data: { code } })) : null) : null,
+        wantsInput && running ? ui.h("div", { class: "answer" }, ui.h("input", { type: "text", name: "text", placeholder: "Your answer, then Enter", autocomplete: "off", "data-act": "login-answer" }), ui.build("button", { label: "Send", kind: "primary", size: "sm", act: "send-login-answer" })) : null,
+        (lines && lines.length) || geek ? ui.h("details", { class: "fineprint" },
+          ui.h("summary", null, ui.icon("geek"), "for geeks"),
+          geek ? ui.h("p", { class: "fine" }, ui.raw(geek)) : null,
+          lines && lines.length ? ui.h("pre", { class: "lines" }, lines.slice(-12).join("\n")) : null) : null,
+        ui.h("div", { class: "foot" }, ...foot));
+    },
+    states: ["rest"],
+    samples: [
+      { label: "before anything runs", props: { vendor: "Grok", state: "idle", scene: "browser", kind: "acp", words: "Grok opens your browser. Sign in there and come back; viberoom waits.", status: "You are not authenticated.", geek: "The hub asks Grok to sign you in over ACP (grok.com). viberoom never sees your password or keys." } },
+      { label: "a code to type", props: { vendor: "Codex", state: "running", scene: "code", words: "Open the page and enter the code there; Codex notices when you are done.", url: "https://auth.openai.com/codex/device", code: "ABCD-1234", lines: ["Follow these steps to sign in with ChatGPT using device code authorization:", "1. Open this link in your browser", "   https://auth.openai.com/codex/device", "2. Enter this one-time code", "   ABCD-1234"] } },
+      { label: "a question", props: { vendor: "Fake", state: "running", scene: "question", words: "Fake is asking you something: answer below.", wantsInput: true, lines: ["Paste the code here:"] } },
+      { label: "in a terminal", props: { vendor: "Hermes", state: "running", scene: "terminal", kind: "terminal", words: "Finish the sign-in in the terminal window, then press I'm done.", lines: ["\"C:\\Users\\me\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\hermes.exe\" model"] } },
+      { label: "installing", props: { vendor: "Gemini CLI", purpose: "install", state: "running", scene: "package", words: "npm is fetching Gemini CLI; the tile turns live when it is done.", lines: ["added 12 packages in 4s"] } },
+      { label: "done", props: { vendor: "Grok", state: "done", scene: "done", words: "Grok confirms it is logged in.", status: "logged in with grok.com" } },
+      { label: "failed", props: { vendor: "Copilot", state: "failed", scene: "failed", words: "Copilot's sign-in ended without success: access denied.", terminal: true, lines: ["error: access denied"] } },
     ],
   });
 

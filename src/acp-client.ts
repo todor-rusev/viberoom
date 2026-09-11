@@ -181,6 +181,6 @@ export class AcpAgent {
       this.hooks.onSessionUpdate(p.sessionId, p.update);
       return;
     }
-    this.hooks.onStderr(`[protocol] unhandled notification ${method}`);
+    this.hooks.onProtocolError?.(`unhandled notification ${method}`);
   }
 }

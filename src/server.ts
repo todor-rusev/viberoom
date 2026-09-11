@@ -65,6 +65,7 @@ export interface RunningServer {
 }
 
 import { checkForUpdate, installUpdate, restartWithNewBuild, runsFromSourceCheckout } from "./update.js";
+import { publicRecipes } from "./recipes.js";
 
 export interface BuildInfo {
   name: string;
@@ -549,6 +550,32 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    const loginStart = path.match(/^\/api\/recipes\/([^/]+)\/login$/);
+    if (loginStart) {
+      sendJson(res, 200, { ok: true, flow: hub.startLogin(decodeURIComponent(loginStart[1]), body.terminal === true) });
+      return;
+    }
+    const installStart = path.match(/^\/api\/recipes\/([^/]+)\/install$/);
+    if (installStart) {
+      sendJson(res, 200, { ok: true, flow: hub.startInstall(decodeURIComponent(installStart[1]), body.terminal === true) });
+      return;
+    }
+    const loginAction = path.match(/^\/api\/login\/([^/]+)\/(input|cancel)$/);
+    if (loginAction) {
+      const id = decodeURIComponent(loginAction[1]);
+      const flow = loginAction[2] === "input" ? hub.logins.input(id, String(body.text ?? "")) : hub.logins.cancel(id);
+      sendJson(res, 200, { ok: true, flow });
+      return;
+    }
+
+    if (path === "/api/recipes/check") {
+      const id = optionalString(body.id);
+      if (body.rescan === true || body.rescan === "true") await hub.rescan(id ? [id] : undefined);
+      else await hub.checkLogins(id ? [id] : undefined, body.force === true || body.force === "true" ? 0 : 60_000);
+      sendJson(res, 200, { ok: true, recipes: publicRecipes() });
+      return;
+    }
+
     if (path === "/api/mcp/design/lint" || path === "/api/mcp/templates") {
       const target = hub.resolveMcpToken(String(body.token ?? ""));
       if (!target) {
@@ -810,13 +837,16 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
-    const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|remove|config|persona|reconnect|mute|unmute|respawn|staff|notes|take-notes)$/);
+    const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|remove|config|persona|reconnect|mute|unmute|respawn|retry|staff|notes|take-notes)$/);
     if (participantAction) {
       const room = hub.getRoom(decodeURIComponent(participantAction[1]));
       const id = decodeURIComponent(participantAction[2]);
       const action = participantAction[3];
       if (action === "cancel") {
         sendJson(res, 200, { ok: true, stopped: room.cancelTurn(id) });
+        return;
+      } else if (action === "retry") {
+        sendJson(res, 200, { ok: true, participant: room.retryTurn(id) });
         return;
       } else if (action === "respawn") {
         const replay = body.replay === undefined || body.replay === null || body.replay === "" ? undefined : Number(body.replay);

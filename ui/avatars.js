@@ -62,8 +62,9 @@
       badge = UI.raw(UI.html("logo-tile", { icon: recipe && recipe.icon ? recipe.icon : "", letter: (participant.agentVendor || participant.agentType || "?").slice(0, 1), size: "badge", title: participant.agentLabel || participant.agentType || "" }));
     }
     if (opts.muted && participant.kind === "agent") badge = UI.raw(UI.html("logo-tile", { glyph: "mute", size: "badge", tone: "muted", title: "muted: receives no prompts" }));
+    if (opts.unplugged && participant.kind === "agent") badge = UI.raw(UI.html("logo-tile", { glyph: "unplugged", size: "badge", tone: "unplugged", title: `${participant.agentVendor || "the vendor"} is not logged in` }));
     const status = opts.status === true ? participant.status || "idle" : typeof opts.status === "string" ? opts.status : undefined;
-    return UI.html("face", { name: participant.name, label: emoji ? emoji : initials(participant.name), emoji: !!emoji, color, size: s, badge, status, me: !!opts.me, kind: opts.kind || "tile", ring: !!opts.ring, dim: opts.dim, title: opts.title });
+    return UI.html("face", { name: participant.name, label: emoji ? emoji : initials(participant.name), emoji: !!emoji, color, size: s, badge, status, me: !!opts.me, kind: opts.kind || "tile", ring: !!opts.ring, alert: !!opts.alert, dim: opts.dim, title: opts.title });
   }
 
   const GALLERY = [

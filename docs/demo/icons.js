@@ -51,6 +51,7 @@
     save: `<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>`,
     copy: `<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>`,
     eye: `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`,
+    unplugged: `<path d="M2.5 12h2.5"/><rect x="5" y="7.5" width="6" height="9" rx="2"/><path d="M11 10h3M11 14h3"/><path d="M18 8.5v7M18 12h3.5"/>`,
     lock: `<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>`,
     sun: `<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/>`,
     geek: `<rect x="2.5" y="10" width="8" height="7" rx="2.5"/><rect x="13.5" y="10" width="8" height="7" rx="2.5"/><path d="M10.5 13h3M2.5 12l1.8-4.5M21.5 12l-1.8-4.5"/>`,
@@ -86,5 +87,20 @@
     return `<span class="i i-${name}${cls ? ` ${cls}` : ""}" aria-hidden="true"></span>`;
   }
 
-  window.Icons = { install, svg, names: Object.keys(ICONS) };
+  const SCENES = {
+    browser: `<rect class="paper-fill" x="14" y="16" width="72" height="52" rx="6"/><path class="chrome" d="M16.5 28h67" stroke-linecap="butt"/><circle class="chrome" cx="21" cy="22" r="1.6"/><circle class="chrome" cx="27" cy="22" r="1.6"/><circle class="chrome" cx="33" cy="22" r="1.6"/><rect class="chrome" x="40" y="19" width="40" height="6" rx="3"/><rect class="outline" x="14" y="16" width="72" height="52" rx="6"/><circle class="stroke" cx="50" cy="42" r="6"/><path class="stroke" d="M37 60c3-8 23-8 26 0"/><path class="accent arrow" d="M92 30l16-16M108 14h-10M108 14v10"/>`,
+    code: `<rect class="paper-fill" x="10" y="14" width="60" height="44" rx="6"/><path class="chrome" d="M12.5 26h55" stroke-linecap="butt"/><circle class="chrome" cx="17" cy="20" r="1.6"/><circle class="chrome" cx="23" cy="20" r="1.6"/><circle class="chrome" cx="29" cy="20" r="1.6"/><rect class="outline" x="10" y="14" width="60" height="44" rx="6"/><rect class="stroke" x="21" y="36" width="38" height="12" rx="3"/><rect class="accent-fill" x="64" y="40" width="48" height="26" rx="7"/><path class="on-accent" d="M74 53h6M84 53h6M94 53h6" stroke-width="3.2"/>`,
+    question: `<path class="paper" d="M22 12h76a8 8 0 0 1 8 8v22a8 8 0 0 1-8 8H48l-14 11V50H22a8 8 0 0 1-8-8V20a8 8 0 0 1 8-8z"/><path class="accent" d="M54 25a6 6 0 1 1 8.4 5.5c-1.6.8-2.4 1.8-2.4 3.5" stroke-width="2.6"/><circle class="accent-fill" cx="60" cy="40" r="1.6"/><rect class="stroke" x="36" y="62" width="56" height="12" rx="4"/><path class="accent" d="M42 68h2" stroke-width="2.6"/>`,
+    terminal: `<rect class="dark" x="12" y="12" width="96" height="58" rx="7"/><path class="on-dark" d="M26 30l8 6-8 6"/><path class="on-dark" d="M40 42h14"/><rect class="accent-fill" x="58" y="36" width="4" height="10" rx="1"/>`,
+    package: `<path class="paper" d="M22 36l38-16 38 16v28l-38 16-38-16z"/><path class="stroke" d="M22 36l38 16 38-16M60 52v28"/><path class="accent arrow" d="M60 6v20M52 18l8 8 8-8"/>`,
+    done: `<circle class="ok-fill" cx="60" cy="40" r="26"/><path class="on-ok" d="M46 41l9 9 19-19" stroke-width="4"/>`,
+    failed: `<path class="bad-fill" d="M60 13l30 52H30z"/><path class="on-bad" d="M60 33v14M60 55v1" stroke-width="4"/>`,
+  };
+
+  function scene(name) {
+    const body = SCENES[name] || SCENES.failed;
+    return `<svg viewBox="0 0 120 80" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+  }
+
+  window.Icons = { install, svg, scene, names: Object.keys(ICONS), scenes: Object.keys(SCENES) };
 })();

@@ -6,6 +6,8 @@
     settings: null,
     recipes: [],
     roomDefaults: null,
+    logins: new Map(),
+    installs: new Map(),
     skills: [],
     looks: [],
     version: null,
@@ -100,6 +102,7 @@
     invForm: $("#invite-form"),
     invType: $("#inv-type"),
     invNote: $("#inv-note"),
+    invLogin: $("#inv-login"),
     invWhere: $("#inv-where"),
     invStatus: $("#inv-status"),
     invName: $("#inv-name"),
@@ -128,6 +131,8 @@
     rcReplay: $("#rc-replay"),
     rcTable: $("#rc-table"),
     rcError: $("#rc-error"),
+    loginDialog: $("#login-dialog"),
+    ldBody: $("#ld-body"),
     rcSubmit: $("#rc-submit"),
     eraseDialog: $("#erase-dialog"),
     eraseForm: $("#erase-form"),
@@ -163,8 +168,8 @@
   }
 
   const FONTS = globalThis.VIBEROOM_TOKENS.fonts;
-  const STATUS_LABEL = { unstaffed: "needs a coding agent", starting: "starting…", idle: "ready", queued: "waiting…", thinking: "thinking…", writing: "writing…", error: "error", offline: "offline", left: "left" };
-  const STATUS_TONE = { idle: "ready", queued: "waiting", starting: "waiting", thinking: "thinking", writing: "writing", error: "error", offline: "asleep", left: "asleep", unstaffed: "attention" };
+  const STATUS_LABEL = { unstaffed: "needs a coding agent", starting: "starting…", idle: "ready", queued: "waiting…", thinking: "thinking…", writing: "writing…", error: "needs you", offline: "offline", left: "left" };
+  const STATUS_TONE = { idle: "ready", queued: "waiting", starting: "waiting", thinking: "thinking", writing: "writing", error: "attention", offline: "asleep", left: "asleep", unstaffed: "attention" };
   const TOOL_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
   const TOKENS = globalThis.VIBEROOM_TOKENS;
   const FALLBACK_COLOR = () => TOKENS.active().elements.face.fallback;
@@ -1022,7 +1027,7 @@
     };
     el.addEventListener("click", leave);
     els.toasts.appendChild(el);
-    if (level !== "error") setTimeout(leave, 9000);
+    setTimeout(leave, level === "error" ? 14000 : 9000);
     while (els.toasts.children.length > 6) els.toasts.firstChild.remove();
   }
   const notice = toast;
@@ -1773,13 +1778,16 @@
       const shown = shownStatus(room, p);
       const className = (p.kind === "human" ? "me" : "") + (selected ? " selected" : "") + (asleep ? " offline" : "") + (unstaffed ? " unstaffed" : "");
       const sub = p.kind === "human" ? "you, the human" : [p.tagline ? `"${p.tagline}"` : "", p.agentVendor || p.agentLabel, p.model].filter(Boolean).join(" · ");
-      const warn = p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>` : "";
+      const troubled = p.kind === "agent" && p.trouble && (p.status === "error" || p.trouble.stage === "turn" || (p.trouble.actions && p.trouble.actions.length > 0));
+      const unplugged = vendorLoggedOut(p);
+      const loginRow = unplugged && p.status === "offline" && !troubled ? `<div class="p-fix">${UI.html("button", { label: "Log in", kind: "primary", size: "xs", act: "open-login-dialog", icon: "lock", title: `${p.agentVendor || "The vendor"} is not logged in: log in, and ${p.name} comes back`, data: { recipe: p.agentType, purpose: "login" } })}</div>` : "";
+      const warn = troubled ? troubleHtml(p) : p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>${loginRow}` : loginRow;
       const status = unstaffed
         ? UI.html("badge", { label: "summon", tone: "attention", title: "Click to summon this vibemate: pick the coding agent that runs it" })
         : asleep
         ? `<span class="zzz" title="${esc(STATUS_LABEL[p.status] || p.status)}">zzz</span>`
         : p.kind === "agent" && p.status !== "idle" ? UI.html("badge", { label: STATUS_LABEL[shown] || shown, tone: STATUS_TONE[shown] || "plain", dot: p.status === "thinking" }) : "";
-      const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true, muted: p.muted, me: p.kind === "human", dim: unstaffed ? "unstaffed" : asleep ? "asleep" : undefined });
+      const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true, muted: p.muted, unplugged, me: p.kind === "human", alert: p.kind === "agent" && (p.status === "error" || (p.status === "offline" && !!(p.trouble && p.trouble.actions && p.trouble.actions.length))), dim: unstaffed ? "unstaffed" : asleep ? "asleep" : undefined });
       const statusValue = p.kind === "agent" ? shown || "idle" : "";
       const bodyHtml = `<div class="p-body">
           <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? UI.html("badge", { label: "muted", tone: "muted" }) : ""}${status}</div>
@@ -1787,7 +1795,7 @@
           ${warn}
         </div>
         <div class="p-actions">
-          ${p.kind === "agent" && p.status === "offline" ? UI.html("row-button", { icon: "refresh", title: `Wake ${p.name} up: reconnect it to the room`, act: "wake" }) : ""}
+          ${p.kind === "agent" && p.status === "offline" && !unplugged ? UI.html("row-button", { icon: "refresh", title: `Wake ${p.name} up: reconnect it to the room`, act: "wake" }) : ""}
         </div>`;
       if (!li) {
         li = document.createElement("li");
@@ -2777,8 +2785,9 @@
         ${field("Vibeface", `<div id="pp-avatar-picker"></div><input type="text" id="pp-avatar" maxlength="8" value="${esc(p.avatar || "")}" placeholder="custom emoji (optional)">`)}
         ${field("Vibio", `<textarea id="pp-role" rows="5" placeholder="who it is, how it speaks, what it cares about">${esc(p.role || "")}</textarea>`, `Only this vibemate reads it.<span class="count" id="pp-role-count"></span>`, "Reaches the vibemate as refreshed instructions in its brief on its next turn; its memory is kept. The other participants never see it. A vibio and the room rules go into every brief, so the room has a limit for them (the room's settings, for geeks); text over it is never cut in silence.")}
       </div>
-      ${p.trouble ? `<div class="trouble"><b>${esc(p.trouble.what)}</b><span>${esc(p.trouble.advice)}</span></div>` : ""}
+      ${p.trouble ? `<div class="trouble"><b>${esc(p.trouble.what)}</b><span>${esc(p.trouble.advice)}</span>${troubleActionsHtml(p)}</div>` : ""}
       ${p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<p class="hint" style="color:var(--danger);margin:0 4px 10px">${esc(p.statusDetail)}</p>` : ""}
+      ${vendorLoggedOut(p) && p.trouble?.kind !== "login" ? `<div class="pp-login"><div class="row-btns">${UI.html("button", { label: `Log in to ${p.agentVendor || "the vendor"}`, icon: "lock", kind: "primary", size: "sm", act: "open-login-dialog", data: { recipe: p.agentType, purpose: "login" } })}</div><p class="hint">${esc(p.agentVendor || "The vendor")} is not logged in on this machine; log in, and ${esc(p.name)} comes back by itself.</p></div>` : ""}
       <div class="section" id="pp-engine">
         ${sectionTitle("spark", "Coding agent")}
         <p class="hint">What runs ${esc(p.name)}${rec ? `: ${esc(rec.vendor)}` : ""}. Its model, how hard it thinks, what it may do without asking.${geekTip("These options come from the coding agent itself: the hub lists the ones it offers and sets your pick on its running session, so a change takes effect from the next turn, without restarting it or losing what it remembers.")}</p>
@@ -2818,6 +2827,7 @@
         "skills, timing, stats",
       )}`;
     wireDetailsClose();
+    els.detailsInner.querySelectorAll('.trouble [data-act^="trouble-"]').forEach((btn) => btn.addEventListener("click", () => troubleAction(room, p, btn.dataset.act.slice("trouble-".length), btn).catch(showError)));
     const respawnBtn = els.detailsInner.querySelector('button[data-act="respawn"]');
     if (respawnBtn) respawnBtn.addEventListener("click", () => respawnWith(p, 0));
     const respawnMem = els.detailsInner.querySelector('button[data-act="respawn-mem"]');
@@ -3790,46 +3800,332 @@
     if (!recipe) return;
     els.invAgents.querySelectorAll(".agent-tile").forEach((b) => b.classList.toggle("selected", b.dataset.agent === recipe.id));
     const preset = presetFor(recipe);
-    const bypassOn = (state.settings || {}).bypassPermissionsByDefault !== false;
-    els.invNote.textContent = (recipe.unavailableReason ? `${recipe.note} — ${recipe.unavailableReason}` : recipe.note) + (bypassOn && recipe.bypassMode ? ` Mode defaults to "${recipe.bypassMode}" (acts without asking; change it here or in Settings).` : "");
-    els.invSubmit.disabled = !!recipe.unavailableReason;
-    const noLogin = !recipe.unavailableReason && recipe.loginState === "missing";
-    els.invWhere.textContent = recipe.unavailableReason
-      ? `Not installed on this machine. To install: ${recipe.installHint || ""}`
-      : noLogin
-        ? `Found at ${recipe.installedAt || "bundled"}, but no login of ${recipe.vendor} was found here. Run ${recipe.loginCommand} in a terminal first, or summon it and see.`
-        : `Found on this machine: ${recipe.installedAt || "bundled"}`;
-    els.invWhere.className = recipe.unavailableReason ? "hint error" : noLogin ? "hint warn" : "hint";
+    const blocked = inviteBlocked(recipe);
+    els.invOptions.hidden = blocked;
+    refreshInviteWords(recipe);
+    updateInviteSubmit();
+    if (blocked) return;
     fillSelect(els.invModel, recipe.modelPresets, preset.model, "vibemate default");
     fillSelect(els.invEffort, recipe.effortPresets, preset.effort, "vibemate default");
     fillSelect(els.invMode, recipe.modePresets, preset.mode, "vibemate default");
     els.invModelCustom.hidden = true;
     els.invModelCustom.value = "";
     els.invStatus.textContent = "";
-    if (!recipe.unavailableReason) loadAgentOptions(recipe, refresh);
+    loadAgentOptions(recipe, refresh);
+  }
+  function refreshInviteWords(recipe) {
+    const bypassOn = (state.settings || {}).bypassPermissionsByDefault !== false;
+    els.invNote.textContent = (recipe.unavailableReason ? `${recipe.note} — ${recipe.unavailableReason}` : recipe.note) + (bypassOn && recipe.bypassMode ? ` Mode defaults to "${recipe.bypassMode}" (acts without asking; change it here or in Settings).` : "") + (recipe.loginState === "missing" ? " Not logged in yet: press Log in under its tile." : "");
+    const noLogin = !recipe.unavailableReason && recipe.loginState === "missing";
+    els.invWhere.textContent = recipe.unavailableReason
+      ? `Not installed on this machine. To install: ${recipe.installHint || ""}`
+      : noLogin
+        ? `Found at ${recipe.installedAt || "bundled"}, but ${recipe.vendor} is not logged in${recipe.loginChecked ? ` (${recipe.loginChecked.how === "command" ? "its own status command says" : "asked over ACP"}: ${recipe.loginChecked.detail})` : ""}.${recipe.loginCommand && recipe.loginHow !== "card" ? ` Run \`${recipe.loginCommand}\` in a terminal, then press "Check again".` : ""}`
+        : `Found on this machine: ${recipe.installedAt || "bundled"}`;
+    els.invWhere.className = recipe.unavailableReason ? "hint error" : noLogin ? "hint warn" : "hint";
+    renderInviteLogin();
+    if (els.invType.value === recipe.id) {
+      if (inviteBlocked(recipe)) { els.invOptions.hidden = true; updateInviteSubmit(); }
+      else if (els.invOptions.hidden) applyRecipe(false);
+      else updateInviteSubmit();
+    }
   }
   function openInvite() {
     if (!currentRoom()) return toast("Open a room first.", "warn");
     els.invError.hidden = true;
     els.invType.innerHTML = "";
-    const installed = state.recipes.filter((r) => !r.unavailableReason);
-    for (const r of installed) {
+    for (const r of state.recipes) {
       const o = document.createElement("option");
       o.value = r.id;
       o.textContent = r.label;
       els.invType.appendChild(o);
     }
+    renderInviteTiles();
+    resetInviteForm();
+    renderInviteLogin();
+    if (!els.invName.dataset.bound) {
+      els.invName.dataset.bound = "1";
+      els.invName.addEventListener("input", updateInviteSubmit);
+    }
+    post("/api/recipes/check", {}).catch(() => undefined);
+    const recheck = document.querySelector("#inv-recheck");
+    if (recheck && !recheck.dataset.bound) {
+      recheck.dataset.bound = "1";
+      recheck.addEventListener("click", () => {
+        recheck.disabled = true;
+        post("/api/recipes/check", { force: true, rescan: true }).catch(showError).finally(() => { recheck.disabled = false; });
+      });
+    }
+  }
+
+  const loginDialog = { recipeId: null, purpose: "login", closeTimer: null, openedAt: 0 };
+  const flowOf = (recipe, purpose) => (purpose === "install" ? state.installs : state.logins).get(recipe.id) || null;
+
+  function openLoginDialog(recipeId, purpose) {
+    const recipe = state.recipes.find((r) => r.id === recipeId);
+    if (!recipe) return toast("That agent is not on this machine.", "warn");
+    loginDialog.recipeId = recipeId;
+    loginDialog.purpose = purpose || (recipe.unavailableReason ? "install" : "login");
+    loginDialog.openedAt = Date.now();
+    clearTimeout(loginDialog.closeTimer);
+    loginDialog.closeTimer = null;
+    bindLoginDialog();
+    renderLoginDialog(true);
+    openDialog(els.loginDialog);
+  }
+
+  function loginStatusWords(recipe) {
+    const own = recipe.loginChecked && recipe.loginChecked.how === "command" && recipe.loginChecked.detail ? ` · ${recipe.loginChecked.detail}` : "";
+    return recipe.loginState === "ok" ? `logged in${own}` : recipe.loginState === "missing" ? `not logged in${own}` : "login not known";
+  }
+  function loginDialogProps(recipe, purpose) {
+    const known = flowOf(recipe, purpose);
+    const flow = known && (known.state === "running" || (known.endedAt || 0) >= loginDialog.openedAt) ? known : null;
+    const running = !!flow && flow.state === "running";
+    const checkedAfter = !!flow && (flow.kind === "terminal" || (!!recipe.loginChecked && recipe.loginChecked.at >= (flow.endedAt || 0) && !recipe.loginChecking));
+    const base = { vendor: recipe.vendor, icon: recipe.icon || "", purpose, flowId: flow ? flow.id : undefined, data: { recipe: recipe.id } };
+    let confirmed = false;
+    let props;
+    if (purpose === "install") {
+      const kind = recipe.installHow === "url" ? "url" : recipe.installHow === "terminal" ? "terminal" : "command";
+      const idleScene = kind === "terminal" ? "terminal" : kind === "url" ? "browser" : "package";
+      const geek = `${esc(recipe.installNote || "")}${recipe.installCommand ? ` It runs <code>${esc(recipe.installCommand)}</code>${kind === "terminal" ? " in a terminal window" : " hidden, the way you would in a terminal"}.` : ""} viberoom downloads nothing itself: it is the vendor's own installer.`;
+      if (!recipe.unavailableReason && !(running)) {
+        confirmed = checkedAfter && recipe.loginState === "ok";
+        props = { ...base, kind, state: "done", scene: "done", words: confirmed ? `${recipe.vendor} is installed and logged in. You can summon it now.` : `${recipe.vendor} is installed. Asking whether it is logged in…`, status: recipe.installedAt || undefined, lines: flow ? flow.lines : undefined };
+      } else if (running) {
+        props = { ...base, kind, state: "running", scene: idleScene, words: flow.detail, lines: flow.lines, geek };
+      } else if (flow && flow.state === "failed") {
+        props = { ...base, kind, state: "failed", scene: "failed", words: flow.detail, lines: flow.lines, geek, terminal: kind === "command" };
+      } else {
+        const words = kind === "url" ? `${recipe.vendor} is installed from its website. Follow the steps there, come back, and press Check again.` : kind === "terminal" ? `A terminal window opens with ${recipe.vendor}'s installer. Finish there, then press I'm done.` : `${recipe.vendor} is fetched from npm; the tile turns live when it is done.`;
+        props = { ...base, kind, state: "idle", scene: idleScene, words, status: "not installed on this machine", url: recipe.installUrl, geek };
+      }
+      return { props, confirmed };
+    }
+    const kind = recipe.loginHow === "terminal" ? "terminal" : "command";
+    const geek = `${esc(recipe.loginHint || "")}${recipe.loginTerminalCommand ? ` In a terminal it is <code>${esc(recipe.loginTerminalCommand)}</code>.` : ""} viberoom never sees your password or keys: ${esc(recipe.vendor)} signs you in, this dialog only shows what it says.`;
+    const terminal = kind !== "terminal" && !!recipe.loginTerminalCommand;
+    const said = loginStatusWords(recipe);
+    if (recipe.loginState === "ok" && flow && flow.state === "done" && checkedAfter) {
+      confirmed = true;
+      props = { ...base, kind, state: "done", scene: "done", words: `${recipe.vendor} confirms it is logged in.`, status: said, lines: flow.lines };
+    } else if (running) {
+      const scene = kind === "terminal" ? "terminal" : flow.wantsInput ? "question" : flow.code ? "code" : "browser";
+      props = { ...base, kind, state: "running", scene, words: flow.detail, url: flow.url, code: flow.code, wantsInput: !!flow.wantsInput, lines: flow.lines, geek };
+    } else if (flow && flow.state === "done" && !checkedAfter) {
+      props = { ...base, kind, state: "done", scene: "done", words: `${recipe.vendor} says it is signed in. Asking it…`, lines: flow.lines };
+    } else if (flow && flow.state === "done" && recipe.loginState === "missing") {
+      props = { ...base, kind, state: "failed", scene: "failed", words: `${recipe.vendor} said it signed in, but asked again it says: ${said || "not logged in"}.`, lines: flow.lines, geek, terminal };
+    } else if (flow && flow.state === "done") {
+      props = { ...base, kind, state: "done", scene: "done", words: `${recipe.vendor} says it is signed in; asked again, it could not say for sure. Summon it and see.`, status: said, lines: flow.lines };
+    } else if (flow && flow.state === "failed") {
+      props = { ...base, kind, state: "failed", scene: "failed", words: flow.detail, lines: flow.lines, geek, terminal };
+    } else {
+      const scene = recipe.loginScene || "browser";
+      const words = scene === "terminal" ? `A terminal window opens with ${recipe.vendor}'s own sign-in. Finish there, then press I'm done.` : scene === "code" ? `${recipe.vendor} shows a page and a code. Open the page, type the code, and it signs you in.` : `${recipe.vendor} opens your browser. Sign in there and come back; viberoom waits.`;
+      props = { ...base, kind, state: "idle", scene, words: flow && flow.state === "cancelled" ? `Cancelled. ${words}` : words, status: said, geek };
+    }
+    return { props, confirmed };
+  }
+
+  function renderLoginDialog(force) {
+    if (!loginDialog.recipeId || (!force && !els.loginDialog.open)) return;
+    const recipe = state.recipes.find((r) => r.id === loginDialog.recipeId);
+    if (!recipe) return closeDialog(els.loginDialog);
+    if (loginDialog.purpose === "install" && !recipe.unavailableReason) {
+      const inst = state.installs.get(recipe.id);
+      if (recipe.loginChecked && recipe.loginChecked.at >= (inst ? inst.endedAt || 0 : 0) && !recipe.loginChecking && recipe.loginState === "missing") {
+        loginDialog.purpose = "login";
+        toast(`${recipe.vendor} is installed. Now log in.`, "success");
+      }
+    }
+    const { props, confirmed } = loginDialogProps(recipe, loginDialog.purpose);
+    const body = els.ldBody;
+    const prior = body.querySelector(".answer input");
+    const typed = prior ? { value: prior.value, focused: document.activeElement === prior, start: prior.selectionStart, end: prior.selectionEnd } : null;
+    body.innerHTML = UI.html("login-dialog", props);
+    const input = body.querySelector(".answer input");
+    if (input && typed) {
+      input.value = typed.value;
+      if (typed.focused) { input.focus(); try { input.setSelectionRange(typed.start, typed.end); } catch { } }
+    } else if (input) input.focus();
+    if (confirmed) {
+      if (!loginDialog.closeTimer) loginDialog.closeTimer = setTimeout(() => {
+        loginDialog.closeTimer = null;
+        closeDialog(els.loginDialog);
+        toast(loginDialog.purpose === "install" ? `${recipe.vendor} is installed and logged in.` : `${recipe.vendor} is logged in.`, "success");
+      }, 1600);
+    } else {
+      clearTimeout(loginDialog.closeTimer);
+      loginDialog.closeTimer = null;
+    }
+  }
+
+  function bindLoginDialog() {
+    const body = els.ldBody;
+    if (!body || body.dataset.bound) return;
+    body.dataset.bound = "1";
+    body.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-act]");
+      if (!btn) return;
+      const act = btn.dataset.act;
+      const recipeId = loginDialog.recipeId;
+      const purpose = loginDialog.purpose;
+      const root = body.querySelector('[data-ui="login-dialog"]');
+      const flowId = root && root.dataset.flow;
+      try {
+        if (act === "close-login") closeDialog(els.loginDialog);
+        else if (act === "start-login" || (act === "retry-login" && purpose === "login")) { btn.disabled = true; await startLoginFlow(recipeId, false); }
+        else if (act === "start-install" || (act === "retry-login" && purpose === "install")) { btn.disabled = true; await startInstallFlow(recipeId, false); }
+        else if (act === "terminal-login") { btn.disabled = true; await (purpose === "install" ? startInstallFlow(recipeId, true) : startLoginFlow(recipeId, true)); }
+        else if (act === "rescan" || (act === "recheck-login" && purpose === "install")) { btn.disabled = true; await post("/api/recipes/check", { id: recipeId, rescan: true }); }
+        else if (act === "recheck-login") { btn.disabled = true; await post("/api/recipes/check", { id: recipeId, force: true }); }
+        else if (act === "cancel-login" && flowId) await post(`/api/login/${encodeURIComponent(flowId)}/cancel`, {});
+        else if ((act === "open-login-url" || act === "open-install-url") && btn.dataset.url) window.open(btn.dataset.url, "_blank", "noopener");
+        else if (act === "copy-login-code" && btn.dataset.code) { await navigator.clipboard.writeText(btn.dataset.code); toast("Code copied.", "ok"); }
+        else if (act === "send-login-answer") await sendLoginAnswer(root);
+      } catch (error) {
+        showError(error);
+      }
+    });
+    body.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || !e.target.matches(".answer input")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      sendLoginAnswer(body.querySelector('[data-ui="login-dialog"]')).catch(showError);
+    });
+  }
+  async function startLoginFlow(recipeId, terminal) {
+    const { flow } = await post(`/api/recipes/${encodeURIComponent(recipeId)}/login`, terminal ? { terminal: true } : {});
+    const known = state.logins.get(flow.recipeId);
+    if (!known || known.id !== flow.id) state.logins.set(flow.recipeId, flow);
+    renderLoginHosts();
+  }
+  async function startInstallFlow(recipeId, terminal) {
+    const { flow } = await post(`/api/recipes/${encodeURIComponent(recipeId)}/install`, terminal ? { terminal: true } : {});
+    const known = state.installs.get(flow.recipeId);
+    if (!known || known.id !== flow.id) state.installs.set(flow.recipeId, flow);
+    renderLoginHosts();
+  }
+  async function sendLoginAnswer(root) {
+    const input = root && root.querySelector(".answer input");
+    if (!root || !input) return;
+    const text = input.value;
+    input.value = "";
+    await post(`/api/login/${encodeURIComponent(root.dataset.flow)}/input`, { text });
+  }
+  function renderLoginHosts() {
+    if (document.querySelector("#invite-dialog")?.open) renderInviteLogin();
+    if (els.rcDialog.open) renderReconnectLogin();
+    if (els.loginDialog.open) renderLoginDialog();
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest('[data-act="open-login-dialog"]');
+    if (!b) return;
+    e.preventDefault();
+    openLoginDialog(b.dataset.recipe, b.dataset.purpose || "login");
+  });
+
+  function inviteWarnHtml(recipe) {
+    const install = state.installs.get(recipe.id);
+    const login = state.logins.get(recipe.id);
+    let words = "";
+    if (recipe.unavailableReason) words = install && install.state === "running" ? `${recipe.vendor} is being installed; the dialog follows it.` : `${recipe.vendor} is not installed on this machine. Install it first: the button under its tile.`;
+    else if (login && login.state === "running") words = `${recipe.vendor} is signing you in; the dialog follows it.`;
+    else if (recipe.loginState === "missing") words = `${recipe.vendor} is not logged in on this machine. Log in first: the button under its tile. Then summon.`;
+    return words ? `<p class="inv-warn">${ic(recipe.unavailableReason ? "tool" : "unplugged")}<span>${esc(words)}</span></p>` : "";
+  }
+  function renderInviteLogin() {
+    const host = els.invLogin;
+    if (!host) return;
+    const recipe = state.recipes.find((r) => r.id === els.invType.value);
+    const row = recipe ? inviteWarnHtml(recipe) : "";
+    host.hidden = !row;
+    host.innerHTML = row;
+  }
+  const inviteBlocked = (recipe) => !recipe || !!recipe.unavailableReason || recipe.loginState === "missing";
+  const vendorLoggedOut = (p) => p.kind === "agent" && (p.trouble?.kind === "login" || (p.status === "offline" && state.recipes.find((r) => r.id === p.agentType)?.loginState === "missing"));
+  function updateInviteSubmit() {
+    const recipe = state.recipes.find((r) => r.id === els.invType.value);
+    els.invSubmit.disabled = inviteBlocked(recipe) || !els.invName.value.trim();
+  }
+  function pickForInstall(id) {
+    els.invType.value = id;
+    els.invOptions.hidden = true;
+    applyRecipe(false);
+    openLoginDialog(id, "install");
+  }
+
+  function troubleActionsHtml(p) {
+    const recipe = state.recipes.find((r) => r.id === p.agentType);
+    const actions = (p.trouble && p.trouble.actions) || [];
+    const buttons = actions
+      .map((a, i) => {
+        const kind = i === 0 ? "primary" : "paper";
+        if (a === "retry") return UI.html("button", { label: "Retry", kind, size: "xs", act: "trouble-retry", icon: "refresh", title: "Send it the messages it missed again" });
+        if (a === "respawn") return p.trouble.stage === "start"
+          ? UI.html("button", { label: "Start again", kind, size: "xs", act: "trouble-respawn", icon: "bolt", title: "Start it again, with its notes and the last messages" })
+          : UI.html("button", { label: "Respawn", kind, size: "xs", act: "trouble-respawn", icon: "bolt", title: "A fresh session with its notes and the last messages; the history stays" });
+        if (a === "login" && recipe && recipe.loginHow !== "none") return UI.html("button", { label: `Log in to ${recipe.vendor}`, kind, size: "xs", act: "trouble-login", icon: "lock" });
+        return "";
+      })
+      .filter(Boolean);
+    return buttons.length ? `<div class="fix">${buttons.join("")}</div>` : "";
+  }
+  function troubleHtml(p) {
+    return `<div class="p-trouble" title="${esc(`${p.trouble.advice}${p.statusDetail ? ` (${p.statusDetail})` : ""}`)}"><b>${esc(p.trouble.what)}</b>${troubleActionsHtml(p)}</div>`;
+  }
+  async function troubleAction(room, p, act, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      if (act === "retry") await post(roomApi(`/participants/${encodeURIComponent(p.id)}/retry`));
+      else if (act === "respawn" && p.trouble?.stage === "start") await post(roomApi(`/participants/${encodeURIComponent(p.id)}/respawn`), { memory: true, replay: room.settings?.replayAfterRestart ?? 10 });
+      else if (act === "respawn") await respawnWith(p, room.settings?.replayAfterRestart ?? 10);
+      else if (act === "login") openLoginDialog(p.agentType, "login");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function loginWords(r) {
+    if (r.unavailableReason) return { state: "off", text: "not installed" };
+    if (r.loginChecking && !r.loginChecked) return { state: "checking", text: "checking…" };
+    if (r.loginState === "missing") return { state: "missing", text: "not logged in" };
+    if (r.loginState === "ok") return { state: "ok", text: "logged in" };
+    return { state: "unknown", text: "installed" };
+  }
+  function loginTitle(r) {
+    const said = r.loginChecked ? ` ${r.loginChecked.how === "command" ? "Its own status command says" : "Asked over ACP"}: ${r.loginChecked.detail}` : "";
+    if (r.unavailableReason) return `Not installed on this machine. ${r.installHint || ""}`;
+    if (r.loginState === "missing") return `Found at ${r.installedAt || "bundled"}, but not logged in.${r.loginCommand ? ` Run \`${r.loginCommand}\` in a terminal, then "Check again".` : ""}${said}`;
+    return `Found at ${r.installedAt || "bundled"}.${said}`;
+  }
+  function renderInviteTiles() {
+    const picked = els.invType.value;
+    const installed = state.recipes.filter((r) => !r.unavailableReason);
     els.invAgents.innerHTML = state.recipes
-      .map(
-        (r) =>
-          `<button type="button" class="agent-tile${r.unavailableReason ? " off" : ""}" data-agent="${esc(r.id)}" title="${esc(r.unavailableReason ? `Not installed on this machine. ${r.installHint || ""}` : r.loginState === "missing" ? `Found at ${r.installedAt || "bundled"}, but not logged in: run ${r.loginCommand}` : `Found at ${r.installedAt || "bundled"}`)}">${vendorLogo(r, "lg")}<span class="at-name">${esc(r.vendor)}</span><span class="at-sub">${r.unavailableReason ? "not installed" : r.loginState === "missing" ? "no login" : "installed"}</span></button>`,
-      )
+      .map((r) => {
+        const login = loginWords(r);
+        const tile = `<button type="button" class="agent-tile${r.unavailableReason ? " off" : ""}${r.id === picked ? " selected" : ""}" data-agent="${esc(r.id)}" title="${esc(loginTitle(r))}">${vendorLogo(r, "lg")}<span class="at-name">${esc(r.vendor)}</span><span class="at-sub" data-state="${login.state}">${login.state === "missing" ? ic("unplugged") : ""}${login.text}</span></button>`;
+        const installing = r.unavailableReason && state.installs.get(r.id)?.state === "running";
+        const signingIn = !r.unavailableReason && state.logins.get(r.id)?.state === "running";
+        const under = installing
+          ? UI.html("button", { label: "Installing…", kind: "soft", size: "xs", act: "install-pick", icon: "tool", disabled: true, title: `${r.vendor} is being installed: the dialog follows it`, data: { agent: r.id } })
+          : r.unavailableReason
+          ? UI.html("button", { label: "Install", kind: "soft", size: "xs", act: "install-pick", icon: "tool", title: `${r.vendor} is not installed here: see how to install it`, data: { agent: r.id } })
+          : signingIn
+          ? UI.html("button", { label: "Signing in…", kind: "primary", size: "xs", act: "open-login-dialog", icon: "lock", title: `${r.vendor} is signing you in: the dialog follows it`, data: { recipe: r.id, purpose: "login" } })
+          : r.loginState === "missing"
+          ? UI.html("button", { label: "Log in", kind: "primary", size: "xs", act: "open-login-dialog", icon: "lock", title: `${r.vendor} is not logged in here: log in from the room`, data: { recipe: r.id, purpose: "login" } })
+          : "";
+        return `<div class="agent-cell">${tile}${under}</div>`;
+      })
       .join("");
+    els.invAgents.querySelectorAll('[data-act="install-pick"]').forEach((b) => b.addEventListener("click", () => pickForInstall(b.dataset.agent)));
     els.invAgents.querySelectorAll(".agent-tile:not(.off)").forEach((b) =>
       b.addEventListener("click", () => {
         els.invType.value = b.dataset.agent;
-        els.invOptions.hidden = false;
-        els.invSubmit.disabled = false;
         applyRecipe(false);
       }),
     );
@@ -3837,6 +4133,8 @@
     els.invNone.innerHTML = installed.length
       ? ""
       : `No supported vibemate is installed on this machine yet. Install one and open this dialog again: ${state.recipes.map((r) => `<b>${esc(r.vendor)}</b> (<code>${esc(r.installHint || "")}</code>)`).join(", ")}.`;
+  }
+  function resetInviteForm() {
     els.invSubmit.disabled = true;
     els.invType.value = "";
     els.invOptions.hidden = true;
@@ -3960,25 +4258,57 @@
     els.rcIntro.textContent = only
       ? `${only.name} is offline in "${room.name}" (its session ended with the previous hub run). Choose how it comes back:`
       : `${offline.length} vibemate${offline.length > 1 ? "s are" : " is"} offline in "${room.name}" (their sessions ended with the previous hub run). Choose how they come back:`;
-    els.rcTable.innerHTML = offline
-      .map(
-        (p) => `<tr data-id="${esc(p.id)}">
-          <td>${avatar(p, 28, { vendor: true })}<span><strong>${esc(p.name)}</strong> <span class="rc-note">${esc(p.tagline || p.agentVendor || "")}</span></span></td>
-          <td class="rc-note">${p.supportsLoad === false ? "no session/load" : p.sessionId ? "stored session available" : "no stored session"}</td>
-          <td><select class="rc-per"><option value="">as above</option><option value="replay">replay</option><option value="load"${p.supportsLoad === false || !p.sessionId ? " disabled" : ""}>full session</option><option value="skip">leave offline</option></select></td>
-        </tr>`,
-      )
-      .join("");
+    els.rcTable.dataset.ids = offline.map((p) => p.id).join(",");
+    els.rcTable.innerHTML = "";
+    renderReconnectRows(room);
     openDialog(els.rcDialog);
   }
-  async function submitReconnect(event) {
-    event.preventDefault();
-    const room = currentRoom();
-    if (!room) return closeDialog(els.rcDialog);
+  function reconnectListed(room) {
+    return (els.rcTable.dataset.ids || "").split(",").filter(Boolean).map((id) => findById(room, id)).filter(Boolean);
+  }
+  const reconnectStuck = (p) => p.trouble?.kind === "login" || state.recipes.find((r) => r.id === p.agentType)?.loginState === "missing";
+  const reconnectBack = (p) => ["idle", "queued", "thinking", "writing"].includes(p.status);
+  function renderReconnectRows(room) {
+    const listed = reconnectListed(room);
+    const prior = new Map([...els.rcTable.querySelectorAll("tr")].map((tr) => [tr.dataset.id, { choice: tr.querySelector(".rc-per")?.value || "", stuck: tr.dataset.stuck === "1" }]));
+    const freed = [];
+    els.rcTable.innerHTML = listed
+      .map((p) => {
+        const was = prior.get(p.id);
+        const back = reconnectBack(p);
+        const starting = p.status === "starting";
+        const stuck = !back && !starting && reconnectStuck(p);
+        if (was && was.stuck && !stuck && !back && !starting) freed.push(p.id);
+        const recipe = state.recipes.find((r) => r.id === p.agentType);
+        const middle = back
+          ? UI.html("badge", { label: "back", tone: "ready" })
+          : starting
+          ? UI.html("badge", { label: "starting…", tone: "waiting" })
+          : stuck
+          ? `<span class="rc-note rc-stuck">${ic("unplugged")}not logged in</span>`
+          : `<span class="rc-note">${p.supportsLoad === false ? "no session/load" : p.sessionId ? "stored session available" : "no stored session"}</span>`;
+        const right = back || starting
+          ? ""
+          : stuck && recipe
+          ? UI.html("button", { label: `Log in to ${recipe.vendor}`, kind: "primary", size: "sm", act: "open-login-dialog", icon: "lock", data: { recipe: recipe.id, purpose: "login" } })
+          : `<select class="rc-per"><option value="">as above</option><option value="replay"${was && was.choice === "replay" ? " selected" : ""}>replay</option><option value="load"${p.supportsLoad === false || !p.sessionId ? " disabled" : ""}${was && was.choice === "load" ? " selected" : ""}>full session</option><option value="skip"${was && was.choice === "skip" ? " selected" : ""}>leave offline</option></select>`;
+        return `<tr data-id="${esc(p.id)}" data-stuck="${stuck ? "1" : ""}">
+          <td>${avatar(p, 28, { vendor: true, unplugged: stuck })}<span><strong>${esc(p.name)}</strong> <span class="rc-note">${esc(p.tagline || p.agentVendor || "")}</span></span></td>
+          <td>${middle}</td>
+          <td>${right}</td>
+        </tr>`;
+      })
+      .join("");
+    const canGo = listed.some((p) => !reconnectBack(p) && p.status !== "starting" && !reconnectStuck(p));
+    els.rcSubmit.disabled = !canGo;
+    els.rcSubmit.title = canGo ? "" : listed.some(reconnectStuck) ? "Log in first; the hub brings them back by itself" : "";
+    if (freed.length) reconnectRows(room, freed).catch(showError);
+  }
+  async function reconnectRows(room, ids) {
     const globalMode = els.rcForm.querySelector('input[name="rc-mode"]:checked').value;
     const replay = Number(els.rcReplay.value);
     if (Number.isFinite(replay) && replay !== (room.settings.replayAfterRestart ?? 10)) post(roomApi("/settings"), { replayAfterRestart: replay }).catch((error) => toast(error.message, "error"));
-    const rows = [...els.rcTable.querySelectorAll("tr")].map((tr) => ({ id: tr.dataset.id, choice: tr.querySelector(".rc-per").value || globalMode }));
+    const rows = [...els.rcTable.querySelectorAll("tr")].filter((tr) => ids.includes(tr.dataset.id)).map((tr) => ({ id: tr.dataset.id, choice: tr.querySelector(".rc-per")?.value || globalMode }));
     els.rcSubmit.disabled = true;
     UI.setState(els.rcSubmit, "loading");
     els.rcError.hidden = true;
@@ -3991,14 +4321,36 @@
         failures.push(`${row.id}: ${error.message}`);
       }
     }
-    els.rcSubmit.disabled = false;
     UI.setState(els.rcSubmit, null);
     if (failures.length) {
       els.rcError.textContent = failures.join(" · ");
       els.rcError.hidden = false;
+    }
+    if (els.rcDialog.open) refreshReconnectDialog(room);
+  }
+  function refreshReconnectDialog(room) {
+    const listed = reconnectListed(room);
+    if (listed.length && listed.every(reconnectBack)) {
+      closeDialog(els.rcDialog);
+      toast(listed.length === 1 ? `${listed[0].name} is back.` : "Everyone is back.", "success");
       return;
     }
-    closeDialog(els.rcDialog);
+    renderReconnectRows(room);
+  }
+  function renderReconnectLogin() {
+    const room = currentRoom();
+    if (room && els.rcDialog.open) renderReconnectRows(room);
+  }
+  async function submitReconnect(event) {
+    event.preventDefault();
+    const room = currentRoom();
+    if (!room) return closeDialog(els.rcDialog);
+    const ids = reconnectListed(room).filter((p) => !reconnectBack(p) && p.status !== "starting" && !reconnectStuck(p)).map((p) => p.id);
+    if (!ids.length) return;
+    const skipped = reconnectListed(room).filter((p) => ids.includes(p.id) && !reconnectBack(p)).length === 0;
+    if (skipped) return;
+    await reconnectRows(room, ids);
+    if (els.rcDialog.open && !reconnectListed(room).some(reconnectStuck) && els.rcError.hidden) closeDialog(els.rcDialog);
   }
   function maybeOfferReconnect() {
     const room = currentRoom();
@@ -4438,6 +4790,8 @@
     state.version = snapshot.version || null;
     state.skills = snapshot.skills || [];
     state.recipes = snapshot.recipes || [];
+    state.logins = new Map((snapshot.logins || []).filter((f) => f.purpose !== "install").map((f) => [f.recipeId, f]));
+    state.installs = new Map((snapshot.logins || []).filter((f) => f.purpose === "install").map((f) => [f.recipeId, f]));
     state.roomDefaults = snapshot.roomDefaults || null;
     state.rooms = new Map((snapshot.rooms || []).map((r) => [r.id, r]));
     state.openRooms = [...(snapshot.openRooms || [])];
@@ -4480,6 +4834,7 @@
           else refreshSeen(room);
           renderSideRoom();
           renderChatHead();
+          if (els.rcDialog.open) refreshReconnectDialog(room);
           if (state.detailsOpen && state.selection.kind === "participant" && state.selection.id === event.participant.id) {
             if (!editingInDetails()) renderDetails();
             else refreshDetailsHeader(event.participant);
@@ -4578,6 +4933,23 @@
   const HUB_EVENTS = {
     snapshot: (m) => loadSnapshot(m.snapshot),
     "room.event": (m) => onRoomEvent(m.roomId, m.event),
+    recipes: (m) => {
+      state.recipes = m.recipes || [];
+      if (document.querySelector("#invite-dialog")?.open) {
+        renderInviteTiles();
+        const picked = state.recipes.find((r) => r.id === els.invType.value);
+        if (picked) refreshInviteWords(picked);
+        else renderInviteLogin();
+      }
+      if (els.rcDialog.open) renderReconnectLogin();
+      if (els.loginDialog.open) renderLoginDialog();
+      if (state.view === "room") renderSideRoom();
+    },
+    login: (m) => {
+      (m.flow.purpose === "install" ? state.installs : state.logins).set(m.flow.recipeId, m.flow);
+      renderLoginHosts();
+      if (document.querySelector("#invite-dialog")?.open) renderInviteTiles();
+    },
     "room.created": (m) => {
       state.rooms.set(m.room.id, m.room);
       if ((state.view === "rooms" || state.view === "home")) {
@@ -5009,6 +5381,11 @@
       if (!lifePop || lifePop.id !== p.id) openLifePop(p, li);
       else if (lifePop.hover) lifePop.hover = false;
       else closeLifePop();
+      return;
+    }
+    const fix = e.target.closest('[data-act^="trouble-"]');
+    if (fix) {
+      troubleAction(room, p, fix.dataset.act.slice("trouble-".length), fix).catch(showError);
       return;
     }
     const action = e.target.closest('[data-ui="row-button"]');
@@ -5852,7 +6229,7 @@
     else if (tone !== "unknown" && q) q.remove();
     const ev = recentContextEvent(p);
     av.classList.toggle("life-attn", !!ev && ev.kind !== "threshold");
-    av.title = (tone === "fresh" ? "Context: fresh, nothing used yet." : tone === "unknown" ? "Context: not reported by this agent." : `Context ${fmtTokens(p.contextUsed)} of ${fmtTokens(p.contextSize)} used · ${left} % left.`) + (ev ? ` ${contextEventText(p, ev)}.` : "") + " Click for details.";
+    av.title = (tone === "fresh" ? "Context: fresh, nothing used yet." : tone === "unknown" ? (p.contextUsed ? `Context: ${fmtTokens(p.contextUsed)} tokens in use; this agent does not say how big its window is.` : "Context: not reported by this agent.") : `Context ${fmtTokens(p.contextUsed)} of ${fmtTokens(p.contextSize)} used · ${left} % left.`) + (ev ? ` ${contextEventText(p, ev)}.` : "") + " Click for details.";
   }
   const CONTEXT_EVENT_FRESH_MS = 15 * 60 * 1000;
   function recentContextEvent(p) {
@@ -5919,7 +6296,7 @@
     const last = [...room.messages].reverse().find((m) => m.from === p.id && m.usage);
     const n = lifePop.n ?? room.settings.replayAfterRestart ?? 10;
     el.innerHTML = `<div class="lp-main">
-        <div class="lp-head">${avatar(p, 28, {})}<div><b>${esc(p.name)}</b><div class="lp-sub">${tone === "fresh" ? "fresh session: nothing used yet" : tone === "unknown" ? "context not reported by this agent" : `context ${fmtTokens(p.contextUsed)} of ${fmtTokens(p.contextSize)} used · <b>${left} % left</b>`}</div></div></div>
+        <div class="lp-head">${avatar(p, 28, {})}<div><b>${esc(p.name)}</b><div class="lp-sub">${tone === "fresh" ? "fresh session: nothing used yet" : tone === "unknown" ? (p.contextUsed ? `context: ${fmtTokens(p.contextUsed)} tokens in use, window size not reported` : "context not reported by this agent") : `context ${fmtTokens(p.contextUsed)} of ${fmtTokens(p.contextSize)} used · <b>${left} % left</b>`}</div></div></div>
         <div class="life-bar life-${tone}"><i style="width:${left ?? 0}%"></i></div>
         ${p.contextEvent ? `<div class="lp-event${recentContextEvent(p) && p.contextEvent.kind !== "threshold" ? " fresh" : ""}">${ic("info")} ${esc(contextEventText(p, p.contextEvent))}</div>` : ""}
         <div class="kv lp-kv">
@@ -5930,10 +6307,10 @@
           <span>Notes</span><span>${p.notes ? `taken at ${fmtTokens(p.notesAt || 0)} tokens` : "none yet"}${p.notesTurn ? ` · <span class="taking" title="The hidden turn is running; nothing is posted">taking notes<i></i><i></i><i></i></span>` : `${p.status === "offline" || p.status === "unstaffed" ? "" : ` · <button type="button" class="link-btn lp-take" title="A hidden turn: the vibemate writes 10 lines for a future restart; nothing is posted">${p.notes ? "refresh" : "take now"}</button>`}${p.notes ? ` · <button type="button" class="link-btn lp-edit">edit</button>` : ""}`}</span>
         </div>
         ${p.notes ? `<pre class="lp-notes">${esc(p.notes)}</pre><div class="lp-editor" hidden><textarea class="lp-notes-area" rows="6" maxlength="4000">${esc(p.notes)}</textarea><div class="row-btns">${UI.html("button", { label: "Clear", kind: "ghost", size: "sm", hook: "lp-notes-clear" })}${UI.html("button", { label: "Save", kind: "primary", size: "sm", hook: "lp-notes-save" })}</div></div>` : ""}
-        <div class="lp-respawn">
+        ${vendorLoggedOut(p) ? `<div class="lp-respawn lp-login">${UI.html("button", { label: `Log in to ${p.agentVendor || "the vendor"}`, icon: "lock", kind: "primary", size: "sm", act: "open-login-dialog", data: { recipe: p.agentType, purpose: "login" } })}<span class="lp-sub">${esc(p.agentVendor || "The vendor")} is not logged in; a respawn would fail the same way.</span></div>` : `<div class="lp-respawn">
           ${UI.html("button", { label: "Respawn, empty head", icon: "bolt", kind: "danger", size: "sm", hook: "lp-empty", title: "A new session that knows nothing of this conversation" })}
           <label class="lp-with">${UI.html("button", { label: "Respawn with the last", size: "sm", hook: "lp-mem", title: `A new session that re-reads only the last N messages${p.notes ? " and its own notes" : ""}` })}${UI.html("number-field", { value: String(n), min: 0, max: 500, hook: "lp-n" })} messages</label>
-        </div>
+        </div>`}
       </div>
       <div class="lp-side">${UI.html("icon-button", { icon: "close", title: "Close", size: "sm", hook: "lp-x" })}${UI.html("icon-button", { icon: "settings", title: "Open this vibemate's panel", size: "sm", hook: "lp-more" })}</div>`;
     el.querySelector(".lp-x").addEventListener("click", closeLifePop);
@@ -5941,9 +6318,10 @@
       closeLifePop();
       openDetails({ kind: "participant", id: p.id });
     });
-    el.querySelector(".lp-empty").addEventListener("click", () => respawnWith(p, 0));
-    el.querySelector(".lp-mem").addEventListener("click", () => respawnWith(p, Number(el.querySelector(".lp-n").value) || 0));
-    el.querySelector(".lp-n").addEventListener("input", (e) => (lifePop.n = Number(e.target.value) || 0));
+    el.querySelector(".lp-empty")?.addEventListener("click", () => respawnWith(p, 0));
+    el.querySelector(".lp-mem")?.addEventListener("click", () => respawnWith(p, Number(el.querySelector(".lp-n").value) || 0));
+    el.querySelector(".lp-n")?.addEventListener("input", (e) => (lifePop.n = Number(e.target.value) || 0));
+    el.querySelector('.lp-login [data-act="open-login-dialog"]')?.addEventListener("click", closeLifePop);
     const take = el.querySelector(".lp-take");
     if (take)
       take.addEventListener("click", async () => {
