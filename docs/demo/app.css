@@ -10,8 +10,8 @@
   height: 100%; display: grid; gap: var(--gap); padding: var(--gap);
   grid-template-columns: var(--rail-w) var(--side-w) minmax(0, 1fr) auto;
   grid-template-areas: "rail side main details";
-  transition: grid-template-columns var(--t-slow) var(--ease-out);
 }
+.side.arrive { animation: slide-in-left var(--t-slow) var(--ease-out); }
 .shell.rail-open { grid-template-columns: var(--rail-w-open) var(--side-w) minmax(0, 1fr) auto; }
 .shell.resizing { user-select: none; cursor: col-resize; }
 .rail { grid-area: rail; position: relative; display: flex; flex-direction: column; align-items: stretch; padding: 8px 0 4px; min-height: 0; }

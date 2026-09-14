@@ -975,18 +975,22 @@
   }
   let stuck = true;
   let settling = 0;
+  let settled = 0;
   function scrollToBottom() {
     els.messages.scrollTop = els.messages.scrollHeight;
     els.jumpLatest.hidden = true;
     stuck = true;
+    settled = 0;
     if (!settling) settleBottom(20);
   }
   function settleBottom(frames) {
     settling = frames;
     requestAnimationFrame(() => {
       const el = els.messages;
-      if (stuck && el.scrollTop + el.clientHeight < el.scrollHeight - 1) el.scrollTop = el.scrollHeight;
-      settling = frames - 1;
+      const short = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+      if (stuck && short) el.scrollTop = el.scrollHeight;
+      settled = short ? 0 : settled + 1;
+      settling = settled >= 2 ? 0 : frames - 1;
       if (settling > 0) settleBottom(settling);
     });
   }
@@ -1221,9 +1225,18 @@
       up.hidden = !(hidden > 8 && box.scrollTop > 8);
       down.hidden = !(hidden > 8 && box.scrollTop < hidden - 8);
     };
+    let queued = false;
+    const updateSoon = () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        update();
+      });
+    };
     box.addEventListener("scroll", update, { passive: true });
-    new ResizeObserver(update).observe(box);
-    new MutationObserver(update).observe(box, { childList: true, subtree: true });
+    new ResizeObserver(updateSoon).observe(box);
+    new MutationObserver(updateSoon).observe(box, { childList: true, subtree: true });
     update();
   }
 
@@ -1282,7 +1295,10 @@
           const box = entry.borderBoxSize && entry.borderBoxSize[0];
           const w = Math.round(box ? box.inlineSize : entry.contentRect.width);
           const h = Math.round(box ? box.blockSize : entry.contentRect.height);
-          if (w >= DIALOG_MIN_W && h >= DIALOG_MIN_H) remember(dialogSizeKey(el), `${w}x${h}`);
+          if (w >= DIALOG_MIN_W && h >= DIALOG_MIN_H) {
+            clearTimeout(el.sizeTimer);
+            el.sizeTimer = setTimeout(() => remember(dialogSizeKey(el), `${w}x${h}`), 200);
+          }
         }
       });
     }
@@ -2233,10 +2249,11 @@
     if (want("text")) {
       words.innerHTML = renderText(room, m.text, m.images, m.quotes);
       if (!m.streaming) {
-        renderDiagrams(words);
-        highlightBlocks(words);
         renderPreviews(words, m);
         linkRelativePaths(words, m);
+        const finish = () => { renderDiagrams(words); highlightBlocks(words); };
+        if (Date.now() - lastTypedAt < TYPING_WINDOW_MS) setTimeout(() => { if (words.isConnected) finish(); }, TYPING_WINDOW_MS);
+        else finish();
       }
       if (m.streaming && !m.text) words.innerHTML = '<span class="pending" title="thinking…"><i></i><i></i><i></i></span>';
     }
@@ -2509,6 +2526,7 @@
   let flushScheduled = false;
   let lastTypedAt = 0;
   const TYPING_FLUSH_MS = 100;
+  const STREAM_FLUSH_MS = 30;
   const TYPING_WINDOW_MS = 1500;
   const watchingTheBottom = () => stuck;
   function patchMessage(roomId, id, fn, part) {
@@ -2524,8 +2542,8 @@
     dirty.set(id, entry);
     if (flushScheduled) return;
     flushScheduled = true;
-    if (Date.now() - lastTypedAt < TYPING_WINDOW_MS || !watchingTheBottom()) setTimeout(() => requestAnimationFrame(flushPatches), TYPING_FLUSH_MS);
-    else requestAnimationFrame(flushPatches);
+    const slow = Date.now() - lastTypedAt < TYPING_WINDOW_MS || !watchingTheBottom();
+    setTimeout(() => requestAnimationFrame(flushPatches), slow ? TYPING_FLUSH_MS : STREAM_FLUSH_MS);
   }
   function flushPatches() {
     flushScheduled = false;
@@ -4799,6 +4817,7 @@
     const frame = document.querySelector('meta[name="theme-color"]');
     if (frame) frame.content = TOKENS.looks[look].elements.browser.themeColor;
     applyCustomVars(root, (a.custom || {})[look] || {});
+    lifeRadiusCache = null;
     document.querySelectorAll("#participants .avatar .life").forEach((ring) => setLifePath(ring, ring.parentElement));
     refreshTryButtons();
   }
@@ -5791,8 +5810,15 @@
     if (b) selectRoom(b.dataset.room, { keepDetails: true });
   });
   els.railRooms.addEventListener("animationend", (e) => e.target.classList.remove("bump"));
+  const sidePane = $(".side");
   function setSideOpen(open) {
     els.app.classList.toggle("side-collapsed", !open);
+    if (sidePane) {
+      sidePane.classList.remove("arrive");
+      void sidePane.offsetWidth;
+      sidePane.classList.add("arrive");
+      sidePane.addEventListener("animationend", () => sidePane.classList.remove("arrive"), { once: true });
+    }
     remember("sideOpen", open ? "1" : "0");
     els.sideToggle.title = open ? "Fold this column" : "Unfold this column";
     els.sideToggle.innerHTML = ic(open ? "collapse" : "expand");
@@ -5838,10 +5864,23 @@
     state.roomSearch = els.roomSearch.value.trim();
     renderSideRooms();
   });
+  let searchTimer = 0;
   els.search.addEventListener("input", () => {
-    state.search = els.search.value.trim();
-    renderMessages();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(applySearch, 120);
   });
+  function applySearch() {
+    state.search = els.search.value.trim();
+    const room = currentRoom();
+    if (!room) return;
+    els.messages.classList.toggle("searching", !!state.search);
+    const byId = new Map(room.messages.map((m) => [m.id, m]));
+    for (const el of els.messages.querySelectorAll(".msg[data-id]")) {
+      const m = byId.get(el.dataset.id);
+      if (m) el.classList.toggle("hidden-by-search", !messageMatches(m));
+    }
+    renderTimeline();
+  }
   els.inviteBtn.addEventListener("click", openInvite);
   els.invType.addEventListener("change", () => applyRecipe(false));
   els.invRefresh.addEventListener("click", () => applyRecipe(true));
@@ -5990,6 +6029,14 @@
         }));
       }
     }
+    function rescale() {
+      if (t.el.hidden || !t.pos) return;
+      const total = els.messages.scrollHeight || 1;
+      const h = Math.max(0, t.ticks.clientHeight - TICK_H);
+      const ticks = t.ticks.children;
+      for (let i = 0; i < ticks.length && i < t.pos.length; i++) ticks[i].style.top = `${Math.round((t.pos[i] / total) * h)}px`;
+      updateView();
+    }
     function updateView() {
       if (t.el.hidden) return;
       const m = els.messages;
@@ -6067,7 +6114,7 @@
       },
       { passive: false },
     );
-    return { render, updateView };
+    return { render, rescale, updateView };
   }
   function timelineText(el) {
     const t = el.querySelector(".text");
@@ -6165,6 +6212,7 @@
     noteSlow("timeline strips", performance.now() - t0);
   }
   function updateTimelineView() { for (const t of timelines) t.updateView(); }
+  function rescaleTimeline() { for (const t of timelines) t.rescale(); }
   attachScrollHints(els.pageInner);
   attachScrollHints(els.detailsInner);
   document.querySelectorAll("dialog.dialog").forEach((d) => attachScrollHints(d));
@@ -6172,21 +6220,27 @@
   new ResizeObserver(() => {
     const h = `${els.composer.offsetHeight}px`;
     for (const el of composerFollowers) el.style.setProperty("--composer-h", h);
-    renderTimeline();
+    renderTimelineSoon(true);
   }).observe(els.composer);
-  new ResizeObserver(() => renderTimeline()).observe(els.messages);
+  new ResizeObserver(() => renderTimelineSoon(true)).observe(els.messages);
   document.fonts.ready.then(() => renderTimeline());
   let timelineTimer = 0;
-  function renderTimelineSoon() {
+  let timelineFull = false;
+  function renderTimelineSoon(full) {
+    timelineFull = timelineFull || full;
     if (timelineTimer) return;
     const typing = Date.now() - lastTypedAt < TYPING_WINDOW_MS;
     timelineTimer = setTimeout(() => {
       timelineTimer = 0;
-      if (Date.now() - lastTypedAt < TYPING_WINDOW_MS) renderTimelineSoon();
-      else renderTimeline();
+      if (Date.now() - lastTypedAt < TYPING_WINDOW_MS) renderTimelineSoon(false);
+      else if (timelineFull) { timelineFull = false; renderTimeline(); }
+      else rescaleTimeline();
     }, typing ? TYPING_WINDOW_MS : 300);
   }
-  new MutationObserver(renderTimelineSoon).observe(els.messages, { childList: true, subtree: true });
+  new MutationObserver((records) => {
+    const structural = records.some((r) => r.target === els.messages || (r.target.classList && r.target.classList.contains("msgs-page")));
+    renderTimelineSoon(structural);
+  }).observe(els.messages, { childList: true, subtree: true });
 
   const workingNow = $("#working-now");
   function renderWorkingNow() {
@@ -6237,11 +6291,16 @@
     const a = (x, y) => `A${n(r)} ${n(r)} 0 0 1 ${n(x)} ${n(y)}`;
     return `M${mid} ${s}H${n(e - r)}${a(e, s + r)}V${n(e - r)}${a(e - r, e)}H${n(s + r)}${a(s, e - r)}V${n(s + r)}${a(s + r, s)}H${mid}`;
   }
+  let lifeRadiusCache = null;
   function lifeRadius(av) {
+    const key = document.documentElement.dataset.look || "";
+    if (lifeRadiusCache && lifeRadiusCache.key === key) return lifeRadiusCache.value;
     const cs = getComputedStyle(av.isConnected ? av : document.documentElement);
     const scale = parseFloat(cs.getPropertyValue("--r-scale"));
     const corner = parseFloat(cs.getPropertyValue("--face-corner"));
-    return ((Number.isFinite(corner) ? corner : 0.32) * 44 + 4) * (Number.isFinite(scale) ? scale : 1);
+    const value = ((Number.isFinite(corner) ? corner : 0.32) * 44 + 4) * (Number.isFinite(scale) ? scale : 1);
+    lifeRadiusCache = { key, value };
+    return value;
   }
   function setLifePath(ring, av) {
     const d = lifePathFor(lifeRadius(av));

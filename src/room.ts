@@ -181,6 +181,7 @@ export interface ChatMessage {
   toNames: string[];
   text: string;
   ts: number;
+  displayOrder?: number;
   kind: "chat" | "system" | "hidden";
   details?: { original?: string; corrections?: string[]; outcome?: string; skill?: string; via?: "tool" | "marker"; refId?: string; agentId?: string; tone?: "attention" | "error" | "hush" };
   skill?: { name: string; args: string };
@@ -429,6 +430,7 @@ export class Room extends EventEmitter {
   private lastTurnHidden = false;
   readonly messages: ChatMessage[] = [];
   private seq = 0;
+  private displayOrder = 0;
   private programHumanDescription: string;
   private bypassPermissionsByDefault: boolean;
   private readonly skills?: SkillsBridge;
@@ -499,6 +501,7 @@ export class Room extends EventEmitter {
         }
         this.messages.push(message);
         if (message.seq > this.seq) this.seq = message.seq;
+        this.displayOrder = Math.max(this.displayOrder, message.displayOrder ?? message.seq);
       } catch {
       }
     }
@@ -604,6 +607,7 @@ export class Room extends EventEmitter {
   }
 
   private commit(message: ChatMessage): void {
+    message.displayOrder ??= ++this.displayOrder;
     this.messages.push(message);
     appendFileSync(this.historyPath(), JSON.stringify(message) + "\n");
     this.push({ type: "message", message });
@@ -611,14 +615,9 @@ export class Room extends EventEmitter {
 
   private messagesWithLiveDrafts(): ChatMessage[] {
     const live = [...this.runtimes.values()].filter((r) => r.turn?.published).map((r) => r.turn!.message);
-    if (!live.length) return [...this.messages];
-    const out = [...this.messages];
-    for (const draft of live) {
-      let at = out.length;
-      while (at > 0 && out[at - 1].ts > draft.ts) at--;
-      out.splice(at, 0, draft);
-    }
-    return out;
+    return [...this.messages, ...live].sort((a, b) =>
+      (a.displayOrder ?? a.seq) - (b.displayOrder ?? b.seq) || a.seq - b.seq || a.id.localeCompare(b.id),
+    );
   }
 
 
@@ -2733,6 +2732,10 @@ export class Room extends EventEmitter {
       durationMs,
     };
     this.commit(message);
+    if (participant.contextEvent?.kind === "compacted") {
+      participant.contextEvent = undefined;
+      this.push({ type: "participant", participant });
+    }
     if (publishedAt !== null && this.messages.some((x) => x.kind === "chat" && x.id !== message.id && x.ts > publishedAt)) {
       const at = new Date(draft.ts);
       const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
@@ -2823,6 +2826,7 @@ export class Room extends EventEmitter {
     if (turn.published || turn.hidden) return;
     turn.published = true;
     turn.publishedAt = Date.now();
+    turn.message.displayOrder = ++this.displayOrder;
     this.push({ type: "message", message: turn.message });
   }
 
