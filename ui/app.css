@@ -289,9 +289,8 @@
 .msg.hidden-by-search { display: none; }
 .messages.searching .msgs-page { content-visibility: visible; }
 .msg.system, .msg.hidden { padding-left: calc(4px + var(--shadow-room)); }
-.bubble-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; width: 100%; max-width: min(1040px, 100%); }
+.bubble-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; width: 100%; max-width: min(1400px, 100%); }
 .msg.mine .bubble-col { align-items: flex-end; }
-.shell.side-collapsed .bubble-col { max-width: min(1480px, 100%); }
 .timeline { position: absolute; right: 6px; top: 78px; bottom: calc(var(--composer-h, 60px) + 36px); width: 18px; z-index: 4; }
 .tl-ticks { position: absolute; inset: 0; }
 .tl-view { position: absolute; left: 2px; right: 2px; border-radius: calc(6px * var(--r-scale)); background: var(--timeline-view-bg); pointer-events: none; transition: top 80ms linear, height 80ms linear; }

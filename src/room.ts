@@ -1314,6 +1314,48 @@ export class Room extends EventEmitter {
     });
   }
 
+  async restaff(id: string, choice: { agentType: string; model?: string | null; effort?: string | null; mode?: string | null; replay?: number }): Promise<Participant> {
+    const participant = this.participants.get(id);
+    if (!participant || participant.kind !== "agent") throw new Error("no such agent");
+    if (participant.status === "unstaffed") return this.staff(id, choice);
+    const recipe = getRecipe(choice.agentType);
+    if (!recipe) throw new Error(`unknown agent type: ${choice.agentType}`);
+    if (recipe.unavailableReason) throw new Error(`${recipe.label}: ${recipe.unavailableReason}`);
+    if (recipe.id === participant.agentType) return participant;
+    const runtime = this.runtimes.get(id);
+    const online = !!runtime && runtime.agent.alive;
+    if (online && runtime.turnActive) throw new Error(`${participant.name} is in the middle of a reply; try again when it is idle`);
+    if (online) {
+      try {
+        await this.takeNotes(id);
+      } catch (error) {
+        this.log.warn(`${participant.name}: notes before the change of agent failed (${describeError(error)}); it restarts with the notes it had`);
+      }
+      await this.retireRuntime(id);
+    }
+    const from = participant.agentVendor ?? participant.agentType;
+    participant.agentType = recipe.id;
+    participant.agentLabel = recipe.label;
+    participant.agentVendor = recipe.vendor;
+    participant.agentInfo = undefined;
+    participant.configOptions = undefined;
+    participant.modes = undefined;
+    participant.model = undefined;
+    participant.effort = undefined;
+    participant.mode = undefined;
+    participant.supportsLoad = undefined;
+    participant.contextUsed = undefined;
+    participant.contextSize = undefined;
+    participant.cost = undefined;
+    participant.launch = {
+      model: choice.model ?? recipe.defaultModel,
+      effort: choice.effort ?? recipe.defaultEffort,
+      mode: choice.mode ?? (this.bypassPermissionsByDefault ? recipe.bypassMode ?? recipe.defaultMode : recipe.defaultMode),
+    };
+    this.log.info(`${participant.name}: coding agent ${from} -> ${recipe.vendor}`);
+    return this.respawnAgent(id, { memory: true, replay: choice.replay, reason: `it now runs on ${recipe.vendor}` });
+  }
+
   async reconnect(id: string, options: ReconnectOptions = { mode: "replay" }): Promise<Participant> {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
@@ -2284,7 +2326,7 @@ export class Room extends EventEmitter {
         this.armTypingTimer();
         return;
       }
-      if (!this.speaking) this.startNext();
+      this.startNext();
     }, wait);
   }
 
@@ -2293,13 +2335,15 @@ export class Room extends EventEmitter {
       this.armTypingTimer();
       return;
     }
+    const oneAtATime = this.settings.turnTaking === "one-at-a-time";
+    if (oneAtATime && this.speaking) return;
     while (this.floorQueue.length) {
       const id = this.floorQueue.shift()!;
       const runtime = this.runtimes.get(id);
       const participant = this.participants.get(id);
       if (!runtime || !participant || !runtime.pendingTurn || participant.muted || this.focused || participant.status === "error") continue;
       void this.runTurn(id);
-      return;
+      if (oneAtATime) return;
     }
   }
 

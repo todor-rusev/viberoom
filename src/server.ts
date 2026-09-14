@@ -837,7 +837,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
-    const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|remove|config|persona|reconnect|mute|unmute|respawn|retry|staff|notes|take-notes)$/);
+    const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|remove|config|persona|reconnect|mute|unmute|respawn|retry|staff|restaff|notes|take-notes)$/);
     if (participantAction) {
       const room = hub.getRoom(decodeURIComponent(participantAction[1]));
       const id = decodeURIComponent(participantAction[2]);
@@ -865,6 +865,19 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
           role: optionalString(body.role),
           avatar: optionalString(body.avatar),
           skills: stringList(body.skills),
+        });
+        hub.saveRooms();
+        sendJson(res, 200, { ok: true, participant });
+        return;
+      }
+      else if (action === "restaff") {
+        const replay = body.replay === undefined || body.replay === null || body.replay === "" ? undefined : Number(body.replay);
+        const participant = await room.restaff(id, {
+          agentType: String(body.agentType ?? ""),
+          replay: replay !== undefined && Number.isFinite(replay) ? Math.max(0, Math.min(500, Math.round(replay))) : undefined,
+          model: optionalString(body.model),
+          effort: optionalString(body.effort),
+          mode: optionalString(body.mode),
         });
         hub.saveRooms();
         sendJson(res, 200, { ok: true, participant });

@@ -1327,6 +1327,9 @@
     const dialog = $("#confirm-dialog");
     $("#cf-title").textContent = o.title || "Are you sure?";
     $("#cf-text").textContent = text;
+    const extra = $("#cf-extra");
+    extra.innerHTML = o.extraHtml || "";
+    extra.hidden = !o.extraHtml;
     const buttons = { ok: $("#cf-ok"), alt: $("#cf-alt"), cancel: $("#cf-cancel") };
     buttons.ok.textContent = o.okLabel || "OK";
     buttons.cancel.textContent = o.cancelLabel || "Cancel";
@@ -1338,6 +1341,7 @@
     return new Promise((resolve) => {
       const done = () => {
         dialog.removeEventListener("close", done);
+        if (o.beforeClose) o.beforeClose();
         resolve(dialog.returnValue === "ok" ? "ok" : dialog.returnValue === "alt" ? "alt" : "cancel");
       };
       dialog.addEventListener("close", done);
@@ -2184,7 +2188,8 @@
     else openTools.add(chip.dataset.tool);
     updateMessageElement(msgEl, room, m);
   });
-  function updateMessageElement(el, room, m) {
+  function updateMessageElement(el, room, m, parts) {
+    const want = (part) => !m.streaming || !parts || parts.has(part);
     el.classList.toggle("hidden-by-search", !messageMatches(m));
     const wasPinned = el.classList.contains("pinned");
     el.classList.toggle("pinned", !!m.pinned);
@@ -2225,14 +2230,16 @@
       words.className = "words";
       text.replaceChildren(words);
     }
-    words.innerHTML = renderText(room, m.text, m.images, m.quotes);
-    if (!m.streaming) {
-      renderDiagrams(words);
-      highlightBlocks(words);
-      renderPreviews(words, m);
-      linkRelativePaths(words, m);
+    if (want("text")) {
+      words.innerHTML = renderText(room, m.text, m.images, m.quotes);
+      if (!m.streaming) {
+        renderDiagrams(words);
+        highlightBlocks(words);
+        renderPreviews(words, m);
+        linkRelativePaths(words, m);
+      }
+      if (m.streaming && !m.text) words.innerHTML = '<span class="pending" title="thinking…"><i></i><i></i><i></i></span>';
     }
-    if (m.streaming && !m.text) words.innerHTML = '<span class="pending" title="thinking…"><i></i><i></i><i></i></span>';
     if (m.streaming) {
       let tail = el.liveTail;
       if (!tail) {
@@ -2252,32 +2259,34 @@
     renderShots(el.querySelector(".shots"), room, m);
     renderWaiting(el, room, m);
     const thought = el.querySelector(".thought");
-    if (m.thought) {
+    if (m.thought && want("thought")) {
       thought.hidden = false;
       thought.querySelector(".thought-text").textContent = m.thought;
     }
     el.querySelector(".agent-notices").innerHTML = (m.notices || []).map((n) => UI.html("reply-note", { text: n, tone: "attention" })).join("");
-    const tools = el.querySelector(".tools");
-    tools.innerHTML = "";
-    const calls = m.toolCalls || [];
-    const folded = !m.streaming && calls.length > 0;
-    let host = tools;
-    if (folded) {
-      const group = UI.el("tool-fold", { count: calls.length, failed: calls.filter((c) => c.status === "failed").length, open: openToolGroups.has(m.id) });
-      group.addEventListener("toggle", () => {
-        if (group.open) openToolGroups.add(m.id);
-        else openToolGroups.delete(m.id);
-        group.querySelector("summary").title = group.open ? "Fold the tool calls away" : "Show every tool call";
-      });
-      tools.appendChild(group);
-      host = group.querySelector(".list");
-    }
-    for (const call of calls) {
-      const input = call.rawInput === undefined ? "" : typeof call.rawInput === "string" ? call.rawInput : JSON.stringify(call.rawInput, null, 1);
-      host.appendChild(UI.el("tool-call", { id: call.toolCallId, title: call.title, kind: call.kind || undefined, status: TOOL_STATUSES.has(call.status) ? call.status : "pending", open: openTools.has(call.toolCallId), input: input || undefined, output: call.output || undefined }));
+    if (want("tools")) {
+      const tools = el.querySelector(".tools");
+      tools.innerHTML = "";
+      const calls = m.toolCalls || [];
+      const folded = !m.streaming && calls.length > 0;
+      let host = tools;
+      if (folded) {
+        const group = UI.el("tool-fold", { count: calls.length, failed: calls.filter((c) => c.status === "failed").length, open: openToolGroups.has(m.id) });
+        group.addEventListener("toggle", () => {
+          if (group.open) openToolGroups.add(m.id);
+          else openToolGroups.delete(m.id);
+          group.querySelector("summary").title = group.open ? "Fold the tool calls away" : "Show every tool call";
+        });
+        tools.appendChild(group);
+        host = group.querySelector(".list");
+      }
+      for (const call of calls) {
+        const input = call.rawInput === undefined ? "" : typeof call.rawInput === "string" ? call.rawInput : JSON.stringify(call.rawInput, null, 1);
+        host.appendChild(UI.el("tool-call", { id: call.toolCallId, title: call.title, kind: call.kind || undefined, status: TOOL_STATUSES.has(call.status) ? call.status : "pending", open: openTools.has(call.toolCallId), input: input || undefined, output: call.output || undefined }));
+      }
     }
     const plan = el.querySelector(".plan");
-    if (m.plan && m.plan.length) {
+    if (m.plan && m.plan.length && want("plan")) {
       plan.hidden = false;
       plan.innerHTML = m.plan.map((e) => `<div class="plan-entry ${e.status}">${esc(e.content)}</div>`).join("");
     }
@@ -2502,14 +2511,17 @@
   const TYPING_FLUSH_MS = 100;
   const TYPING_WINDOW_MS = 1500;
   const watchingTheBottom = () => stuck;
-  function patchMessage(roomId, id, fn) {
+  function patchMessage(roomId, id, fn, part) {
     const room = state.rooms.get(roomId);
     if (!room) return;
     const m = room.messages.find((x) => x.id === id);
     if (!m) return;
     fn(m);
     if (roomId !== state.currentRoomId || state.view !== "room") return;
-    dirty.set(id, room);
+    const entry = dirty.get(id) || { room, parts: new Set() };
+    if (part && entry.parts) entry.parts.add(part);
+    else entry.parts = null;
+    dirty.set(id, entry);
     if (flushScheduled) return;
     flushScheduled = true;
     if (Date.now() - lastTypedAt < TYPING_WINDOW_MS || !watchingTheBottom()) setTimeout(() => requestAnimationFrame(flushPatches), TYPING_FLUSH_MS);
@@ -2521,12 +2533,12 @@
     const batch = [...dirty];
     dirty.clear();
     let touched = false;
-    for (const [id, room] of batch) {
+    for (const [id, { room, parts }] of batch) {
       if (room.id !== state.currentRoomId || state.view !== "room") continue;
       const m = room.messages.find((x) => x.id === id);
       const el = m && els.messages.querySelector(`.msg[data-id="${id}"]`);
       if (!el) continue;
-      updateMessageElement(el, room, m);
+      updateMessageElement(el, room, m, parts);
       touched = true;
     }
     if (touched && stuck) scrollToBottom();
@@ -2792,6 +2804,7 @@
         ${sectionTitle("spark", "Coding agent")}
         <p class="hint">What runs ${esc(p.name)}${rec ? `: ${esc(rec.vendor)}` : ""}. Its model, how hard it thinks, what it may do without asking.${geekTip("These options come from the coding agent itself: the hub lists the ones it offers and sets your pick on its running session, so a change takes effect from the next turn, without restarting it or losing what it remembers.")}</p>
         <div id="pp-config"></div>
+        ${field("Coding agent", `<div class="agent-grid" id="pp-recipe">${state.recipes.filter((r) => !r.unavailableReason || r.id === p.agentType).map((r) => `<button type="button" class="agent-tile${r.id === p.agentType ? " selected" : ""}" data-agent="${esc(r.id)}" title="${esc(r.label)}">${vendorLogo(r, "lg")}<span class="at-name">${esc(r.vendor)}</span></button>`).join("")}</div>`, "Another vendor: a new session with its notes and the last messages.", "A session cannot cross vendors, so the vibemate first writes its notes, then comes back on the new agent with those notes and the last messages of the room (like Respawn with memory). Its name, vibio, colour and skills stay; model, effort and mode start from the new agent's defaults.")}
       </div>
       ${geek(
         "pp-geek",
@@ -2866,6 +2879,24 @@
       return true;
     });
     renderConfig($("#pp-config"), p, offline);
+    $("#pp-recipe").querySelectorAll(".agent-tile").forEach((tile) =>
+      tile.addEventListener("click", async () => {
+        const rec2 = state.recipes.find((r) => r.id === tile.dataset.agent);
+        if (!rec2 || rec2.id === p.agentType) return;
+        const extraHtml = `<label class="lp-with">With ${p.notes ? "its own notes and " : ""}the last ${UI.html("number-field", { id: "cf-replay", value: String(room.settings?.replayAfterRestart ?? 10), min: 0, max: 500 })} messages</label>`;
+        let n = 0;
+        const ok = await choiceDialog(`${p.name} moves to ${rec2.vendor}: a new session that gets only what you pick below. You keep the history; the rest of its memory is gone.`, { title: `Run ${p.name} on ${rec2.vendor}?`, okLabel: `Move to ${rec2.vendor}`, danger: true, extraHtml, beforeClose: () => { n = Number($("#cf-replay").value) || 0; } });
+        if (ok !== "ok") return;
+        tile.disabled = true;
+        try {
+          await post(roomApi(`/participants/${encodeURIComponent(p.id)}/restaff`), { agentType: rec2.id, replay: n });
+        } catch (e) {
+          showError(e);
+        } finally {
+          tile.disabled = false;
+        }
+      }),
+    );
   }
 
   function flattenOptions(options) {
@@ -3128,7 +3159,7 @@
               </div>`;
             })()}
             <div class="adjust-group text"><h5>Text</h5>
-              <div class="field row"><span class="label">Size, px<span class="hint">Only the text changes size; the boxes, buttons and panels stay. 14.5 is the default.</span></span>${UI.html("number-field", { id: "sp-chat-fs", value: String((s.appearance || {}).chatFontSize || 14.5), min: 12, max: 24, step: 0.5 })}</div>
+              <div class="field row"><span class="label">Size, px<span class="hint">Only the text changes size; the boxes, buttons and panels stay. 14.5 is the default.</span></span>${UI.html("number-field", { id: "sp-chat-fs", value: String((s.appearance || {}).chatFontSize || 14.5), min: 12, max: 32, step: 0.5 })}</div>
               <div class="field row"><span class="label">Font${geekTip("The named fonts come with viberoom and look the same on every OS (all free, with Cyrillic); the system entries use what this machine has. A look with a font of its own (Terminal, Clay) keeps it while this stays at the default.")}</span><select id="sp-font">${Object.entries(FONTS.text).map(([id, f]) => `<option value="${id}"${((s.appearance || {}).font || "nunito") === id ? " selected" : ""}>${esc(f.label)}</option>`).join("")}</select></div>
               <div class="field row"><span class="label">Code font<span class="hint">For code blocks, paths and tool output.</span></span><select id="sp-mono">${Object.entries(FONTS.mono).map(([id, f]) => `<option value="${id}"${((s.appearance || {}).mono || "jetbrains-mono") === id ? " selected" : ""}>${esc(f.label)}</option>`).join("")}</select></div>
               <div class="bubble" id="sp-chat-sample" style="display:inline-block;font-size:${(s.appearance || {}).chatFontSize || 14.5}px">Messages will read like this, with <code>code</code> a step smaller.</div>
@@ -3260,7 +3291,7 @@
     const sample = $("#sp-chat-sample");
     $("#sp-chat-fs").addEventListener("input", () => {
       const px = Number($("#sp-chat-fs").value);
-      if (px >= 12 && px <= 24) sample.style.fontSize = `${px}px`;
+      if (px >= 12 && px <= 32) sample.style.fontSize = `${px}px`;
     });
     $("#sp-font").addEventListener("change", () => (sample.style.fontFamily = FONTS.text[$("#sp-font").value].stack));
     const looksBox = $("#sp-appearance");
@@ -4867,10 +4898,10 @@
         if (showing) renderMessages();
         return;
       case "chunk":
-        patchMessage(roomId, event.id, (m) => (m.text += event.text));
+        patchMessage(roomId, event.id, (m) => (m.text += event.text), "text");
         return;
       case "thought":
-        patchMessage(roomId, event.id, (m) => (m.thought = (m.thought || "") + event.text));
+        patchMessage(roomId, event.id, (m) => (m.thought = (m.thought || "") + event.text), "thought");
         return;
       case "toolcall":
         patchMessage(roomId, event.id, (m) => {
@@ -4878,10 +4909,10 @@
           const i = m.toolCalls.findIndex((c) => c.toolCallId === event.toolCall.toolCallId);
           if (i >= 0) m.toolCalls[i] = event.toolCall;
           else m.toolCalls.push(event.toolCall);
-        });
+        }, "tools");
         return;
       case "plan":
-        patchMessage(roomId, event.id, (m) => (m.plan = event.entries));
+        patchMessage(roomId, event.id, (m) => (m.plan = event.entries), "plan");
         return;
       case "permission":
         room.permissions.push(event.permission);
@@ -5936,6 +5967,8 @@
       const fits = els.messages.scrollHeight <= els.messages.clientHeight + 1;
       const stripTop = fits ? t.ticks.getBoundingClientRect().top : 0;
       const tops = fits ? nodes.map((el) => el.getBoundingClientRect().top - stripTop) : nodes.map(topInList);
+      t.pos = fits ? null : tops;
+      t.heights = fits ? null : nodes.map((el) => el.offsetHeight);
       const frag = document.createDocumentFragment();
       nodes.forEach((el, i) => {
         const tick = document.createElement("div");
@@ -5947,6 +5980,7 @@
         frag.appendChild(tick);
       });
       t.ticks.replaceChildren(frag);
+      t.inView = null;
       updateView();
       if (fits && !t.following) {
         t.following = true;
@@ -5961,15 +5995,18 @@
       const m = els.messages;
       const total = m.scrollHeight || 1;
       const h = t.ticks.clientHeight;
-      t.view.style.top = `${(m.scrollTop / total) * h}px`;
-      t.view.style.height = `${Math.max(8, (m.clientHeight / total) * h)}px`;
       const top = m.scrollTop;
-      const bottom = m.scrollTop + m.clientHeight;
-      const inView = t.items.map((el) => { const y = topInList(el); return y + el.offsetHeight > top && y < bottom; });
-      inView.forEach((on, i) => {
+      const bottom = top + m.clientHeight;
+      t.view.style.top = `${(top / total) * h}px`;
+      t.view.style.height = `${Math.max(8, (m.clientHeight / total) * h)}px`;
+      const seen = t.inView || [];
+      const next = t.items.map((el, i) => (t.pos ? t.pos[i] + t.heights[i] > top && t.pos[i] < bottom : true));
+      next.forEach((on, i) => {
+        if (seen[i] === on) return;
         const tick = t.ticks.children[i];
         if (tick) tick.classList.toggle("in-view", on);
       });
+      t.inView = next;
     }
     function rowHtml(k, cls) {
       const el = t.items[k];
@@ -6140,13 +6177,16 @@
   new ResizeObserver(() => renderTimeline()).observe(els.messages);
   document.fonts.ready.then(() => renderTimeline());
   let timelineTimer = 0;
-  new MutationObserver(() => {
+  function renderTimelineSoon() {
     if (timelineTimer) return;
+    const typing = Date.now() - lastTypedAt < TYPING_WINDOW_MS;
     timelineTimer = setTimeout(() => {
       timelineTimer = 0;
-      renderTimeline();
-    }, 300);
-  }).observe(els.messages, { childList: true, subtree: true });
+      if (Date.now() - lastTypedAt < TYPING_WINDOW_MS) renderTimelineSoon();
+      else renderTimeline();
+    }, typing ? TYPING_WINDOW_MS : 300);
+  }
+  new MutationObserver(renderTimelineSoon).observe(els.messages, { childList: true, subtree: true });
 
   const workingNow = $("#working-now");
   function renderWorkingNow() {

@@ -544,7 +544,7 @@ function buildRecipes(): AgentRecipe[] {
       installedAt: fakeInstalled ? fakeAgent : null,
       installHint: "",
     install: process.env.FAKE_INSTALL_HIDDEN === "1"
-      ? { kind: "command", command: process.execPath, args: [fakeAgent, "--install"], shell: isWindows ? "cmd" : "sh", line: terminalLine([process.execPath, fakeAgent, "--install"]), note: "A scripted installer: it prints a line and writes its marker." }
+      ? { kind: "command", command: process.execPath, args: [fakeAgent, "--install"], shell: isWindows ? "cmd" : "sh", line: `${terminalLine([process.execPath, fakeAgent, "--install"])}${isWindows ? " & exit" : "; exit"}`, note: "A scripted installer: it prints a line and writes its marker." }
       : { kind: "terminal", shell: isWindows ? "cmd" : "sh", line: `${terminalLine([process.execPath, fakeAgent, "--install"])}${isWindows ? " & exit" : "; exit"}`, note: "A scripted installer: it writes its marker and closes." },
       loginCommand: "",
       loginState: "ok",

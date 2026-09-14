@@ -104,7 +104,7 @@ const INSTRUCTION_FILES = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules"
 
 export function nextAppearance(current: AppearanceSettings, a: Record<string, unknown>): AppearanceSettings {
   const chatFontSize = Number(a.chatFontSize ?? current.chatFontSize ?? DEFAULT_APPEARANCE.chatFontSize);
-  if (!Number.isFinite(chatFontSize) || chatFontSize < 12 || chatFontSize > 24) throw new Error("appearance.chatFontSize must be between 12 and 24");
+  if (!Number.isFinite(chatFontSize) || chatFontSize < 12 || chatFontSize > 32) throw new Error("appearance.chatFontSize must be between 12 and 32");
   const font = String(a.font ?? current.font ?? DEFAULT_APPEARANCE.font);
   if (!TEXT_FONTS.includes(font)) throw new Error(`appearance.font must be one of ${TEXT_FONTS.join(", ")}`);
   const mono = String(a.mono ?? current.mono ?? DEFAULT_APPEARANCE.mono);

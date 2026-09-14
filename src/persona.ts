@@ -381,6 +381,9 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
       ? "- Addressing: use @Name to address a participant. A message without @ goes to everyone: every other agent reads it and may answer or stay silent. Every message to agents costs them a turn; the hub limits how long agents can go back and forth without the human."
       : "- Addressing: use @Name to address a participant. A message without @ is heard by everyone but invites nobody in particular to answer. Every @ to an agent costs that agent a turn; the hub limits how long agents can go back and forth without the human.",
   );
+  lines.push(
+    "- A reply addressed only to the human wakes nobody else. When what you say concerns another participant's work, or they should hear it now, @ them too, or write without @ so everyone hears it.",
+  );
   lines.push(`- If you have nothing worth adding, reply with exactly ${SILENT_MARKER}.`);
   lines.push(`- If you need these instructions again, reply with exactly ${REQUEST_BRIEF_MARKER}.`);
   lines.push(
@@ -440,7 +443,7 @@ export function buildHeader(
   lines.push("<room-header>");
   lines.push(`You are ${who} · room "${settings.name}" · participants: ${list} · hops ${hops}/${settings.hopLimit}`);
   if (settings.headerRules) {
-    lines.push(`· rules: address with @Name; ${SILENT_MARKER} if nothing to add; stay in character`);
+    lines.push(`· rules: @Name for one, none for all; ${SILENT_MARKER} if nothing to add; stay in character`);
   }
   if (skills && skills.items.length) {
     const how = skills.channel === "tool" ? `${SKILL_TOOL_NAME} tool` : "reply exactly [skill:name] to load one";
