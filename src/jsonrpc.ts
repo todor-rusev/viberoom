@@ -10,10 +10,33 @@ export class MethodNotFound extends Error {
   }
 }
 
+export function errorDetail(data: unknown): string {
+  if (typeof data === "string") return data;
+  if (!data || typeof data !== "object") return "";
+  const d = data as { details?: unknown; message?: unknown };
+  if (typeof d.details === "string") return d.details;
+  if (typeof d.message === "string") return d.message;
+  return "";
+}
+
+export function errorCode(data: unknown): string {
+  if (!data || typeof data !== "object") return "";
+  const NAMED = /^(code|type|kind|reason|status|error|errorinfo|error_?type|error_?code|[a-z]+errorinfo|[a-z]+_?error_?(type|code)?)$/i;
+  const found: string[] = [];
+  const scan = (o: Record<string, unknown>, depth: number): void => {
+    for (const [key, value] of Object.entries(o)) {
+      if (typeof value === "string" && NAMED.test(key)) found.push(value);
+      else if (typeof value === "number" && /retry[_-]?after/i.test(key)) found.push(`retry_after_${value}`);
+      else if (value && typeof value === "object" && depth > 0) scan(value as Record<string, unknown>, depth - 1);
+    }
+  };
+  scan(data as Record<string, unknown>, 1);
+  return found.join(" ").toLowerCase();
+}
+
 export class RemoteError extends Error {
   constructor(public readonly rpc: JsonRpcError, public readonly method: string) {
-    const data = rpc.data as unknown;
-    const detail = typeof data === "string" ? data : data && typeof data === "object" && typeof (data as { details?: unknown }).details === "string" ? (data as { details: string }).details : "";
+    const detail = errorDetail(rpc.data as unknown);
     super(`${method} failed: ${rpc.message}${detail ? `: ${detail}` : ""} (code ${rpc.code})`);
   }
 }

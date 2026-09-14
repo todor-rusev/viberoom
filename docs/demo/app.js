@@ -173,18 +173,13 @@
   const TOOL_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
   const TOKENS = globalThis.VIBEROOM_TOKENS;
   const FALLBACK_COLOR = () => TOKENS.active().elements.face.fallback;
-  const WORKING_SVG = '<svg class="working" viewBox="0 0 44 35" aria-hidden="true" title="working…">'
-    + '<g class="body">'
-    + '<circle cx="20" cy="6.5" r="5.6" fill="currentColor"/>'
-    + '<path d="M6 35L13.7 16.5a4 4 0 0 1 8 0L14 35z" fill="currentColor"/>'
-    + '</g>'
-    + '<g class="forearm far"><path d="M22 25.6h10.5" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/></g>'
-    + '<path d="M19 19.5L23 27" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/>'
-    + '<g class="forearm"><path d="M23 27h10.5" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/></g>'
-    + '<rect x="26" y="30.2" width="15.5" height="3" rx="1" fill="currentColor"/>'
-    + '<path d="M35.9 30.2L41.1 14h2.4l-5.1 16.2z" fill="currentColor"/>'
-    + '<rect x="18" y="33.2" width="25" height="1.3" rx=".6" fill="currentColor"/>'
-    + '</svg>';
+  const WORKING_SVG = '<span class="working-box">'
+    + '<svg class="working body" viewBox="0 0 44 35" aria-hidden="true"><circle cx="20" cy="6.5" r="5.6" fill="currentColor"/><path d="M6 35L13.7 16.5a4 4 0 0 1 8 0L14 35z" fill="currentColor"/></svg>'
+    + '<svg class="working arm far" viewBox="0 0 44 35" aria-hidden="true"><path d="M22 25.6h10.5" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/></svg>'
+    + '<svg class="working still" viewBox="0 0 44 35" aria-hidden="true"><path d="M19 19.5L23 27" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/></svg>'
+    + '<svg class="working arm near" viewBox="0 0 44 35" aria-hidden="true"><path d="M23 27h10.5" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/></svg>'
+    + '<svg class="working still" viewBox="0 0 44 35" aria-hidden="true" title="working…"><rect x="26" y="30.2" width="15.5" height="3" rx="1" fill="currentColor"/><path d="M35.9 30.2L41.1 14h2.4l-5.1 16.2z" fill="currentColor"/></svg>'
+    + '</span>';
 
   function shownStatus(room, p) {
     if (p.status !== "thinking") return p.status;
@@ -377,6 +372,30 @@
       } else out += inside > 0 ? part : mentions(room, linkify(part));
     }
     return out;
+  }
+  function renderStreamingWords(room, words, text) {
+    let head = words.querySelector(":scope > .words-head");
+    let tail = words.querySelector(":scope > .words-tail");
+    if (!head || !tail || !text.startsWith(words.streamHeadText || "")) {
+      words.innerHTML = '<div class="words-head"></div><div class="words-tail"></div>';
+      head = words.firstElementChild;
+      tail = words.lastElementChild;
+      words.streamHeadText = "";
+      words.streamFences = 0;
+    }
+    let done = words.streamHeadText.length;
+    const cut = text.lastIndexOf("\n\n");
+    if (cut > done) {
+      const part = text.slice(done, cut + 2);
+      const fences = (part.match(/```/g) || []).length;
+      if ((words.streamFences + fences) % 2 === 0) {
+        head.insertAdjacentHTML("beforeend", renderText(room, part));
+        words.streamHeadText = text.slice(0, cut + 2);
+        words.streamFences += fences;
+        done = cut + 2;
+      }
+    }
+    tail.innerHTML = renderText(room, text.slice(done));
   }
   function renderText(room, text, images, quotes) {
     let html = md ? decorate(room, md.parse(String(text == null ? "" : text))) : renderTextLight(room, text);
@@ -2204,7 +2223,7 @@
     else openTools.add(chip.dataset.tool);
     updateMessageElement(msgEl, room, m);
   });
-  function updateMessageElement(el, room, m, parts) {
+  function updateMessageElement(el, room, m, parts, toolIds) {
     const want = (part) => !m.streaming || !parts || parts.has(part);
     el.classList.toggle("hidden-by-search", !messageMatches(m));
     const wasPinned = el.classList.contains("pinned");
@@ -2247,7 +2266,8 @@
       text.replaceChildren(words);
     }
     if (want("text")) {
-      words.innerHTML = renderText(room, m.text, m.images, m.quotes);
+      if (m.streaming && m.text && !(m.images && m.images.length) && !(m.quotes && m.quotes.length)) renderStreamingWords(room, words, m.text);
+      else words.innerHTML = renderText(room, m.text, m.images, m.quotes);
       if (!m.streaming) {
         renderPreviews(words, m);
         linkRelativePaths(words, m);
@@ -2283,23 +2303,38 @@
     el.querySelector(".agent-notices").innerHTML = (m.notices || []).map((n) => UI.html("reply-note", { text: n, tone: "attention" })).join("");
     if (want("tools")) {
       const tools = el.querySelector(".tools");
-      tools.innerHTML = "";
       const calls = m.toolCalls || [];
-      const folded = !m.streaming && calls.length > 0;
-      let host = tools;
-      if (folded) {
-        const group = UI.el("tool-fold", { count: calls.length, failed: calls.filter((c) => c.status === "failed").length, open: openToolGroups.has(m.id) });
-        group.addEventListener("toggle", () => {
-          if (group.open) openToolGroups.add(m.id);
-          else openToolGroups.delete(m.id);
-          group.querySelector("summary").title = group.open ? "Fold the tool calls away" : "Show every tool call";
-        });
-        tools.appendChild(group);
-        host = group.querySelector(".list");
-      }
-      for (const call of calls) {
+      const chipFor = (call) => {
         const input = call.rawInput === undefined ? "" : typeof call.rawInput === "string" ? call.rawInput : JSON.stringify(call.rawInput, null, 1);
-        host.appendChild(UI.el("tool-call", { id: call.toolCallId, title: call.title, kind: call.kind || undefined, status: TOOL_STATUSES.has(call.status) ? call.status : "pending", open: openTools.has(call.toolCallId), input: input || undefined, output: call.output || undefined }));
+        return UI.el("tool-call", { id: call.toolCallId, title: call.title, kind: call.kind || undefined, status: TOOL_STATUSES.has(call.status) ? call.status : "pending", open: openTools.has(call.toolCallId), input: input || undefined, output: call.output || undefined });
+      };
+      const some = m.streaming && parts && toolIds && !tools.querySelector(":scope > details");
+      if (some) {
+        for (const id of toolIds) {
+          const call = calls.find((c) => c.toolCallId === id);
+          if (!call) continue;
+          const old = tools.querySelector(`:scope > [data-ui="tool-call"] > [data-tool="${CSS.escape(id)}"]`);
+          if (old) old.parentElement.replaceWith(chipFor(call));
+          else {
+            const later = calls.slice(calls.indexOf(call) + 1).map((c) => tools.querySelector(`:scope > [data-ui="tool-call"] > [data-tool="${CSS.escape(c.toolCallId)}"]`)).find(Boolean);
+            tools.insertBefore(chipFor(call), later ? later.parentElement : null);
+          }
+        }
+      } else {
+        tools.innerHTML = "";
+        const folded = !m.streaming && calls.length > 0;
+        let host = tools;
+        if (folded) {
+          const group = UI.el("tool-fold", { count: calls.length, failed: calls.filter((c) => c.status === "failed").length, open: openToolGroups.has(m.id) });
+          group.addEventListener("toggle", () => {
+            if (group.open) openToolGroups.add(m.id);
+            else openToolGroups.delete(m.id);
+            group.querySelector("summary").title = group.open ? "Fold the tool calls away" : "Show every tool call";
+          });
+          tools.appendChild(group);
+          host = group.querySelector(".list");
+        }
+        for (const call of calls) host.appendChild(chipFor(call));
       }
     }
     const plan = el.querySelector(".plan");
@@ -2525,20 +2560,24 @@
   const dirty = new Map();
   let flushScheduled = false;
   let lastTypedAt = 0;
-  const TYPING_FLUSH_MS = 100;
+  const TYPING_FLUSH_MS = 250;
   const STREAM_FLUSH_MS = 30;
   const TYPING_WINDOW_MS = 1500;
   const watchingTheBottom = () => stuck;
-  function patchMessage(roomId, id, fn, part) {
+  function patchMessage(roomId, id, fn, part, toolId) {
     const room = state.rooms.get(roomId);
     if (!room) return;
     const m = room.messages.find((x) => x.id === id);
     if (!m) return;
     fn(m);
     if (roomId !== state.currentRoomId || state.view !== "room") return;
-    const entry = dirty.get(id) || { room, parts: new Set() };
+    const entry = dirty.get(id) || { room, parts: new Set(), toolIds: new Set() };
     if (part && entry.parts) entry.parts.add(part);
     else entry.parts = null;
+    if (part === "tools" && entry.toolIds) {
+      if (toolId) entry.toolIds.add(toolId);
+      else entry.toolIds = null;
+    }
     dirty.set(id, entry);
     if (flushScheduled) return;
     flushScheduled = true;
@@ -2547,16 +2586,21 @@
   }
   function flushPatches() {
     flushScheduled = false;
+    if (Date.now() - lastTypedAt < TYPING_WINDOW_MS && navigator.scheduling?.isInputPending?.()) {
+      flushScheduled = true;
+      setTimeout(() => requestAnimationFrame(flushPatches), TYPING_FLUSH_MS);
+      return;
+    }
     const t0 = performance.now();
     const batch = [...dirty];
     dirty.clear();
     let touched = false;
-    for (const [id, { room, parts }] of batch) {
+    for (const [id, { room, parts, toolIds }] of batch) {
       if (room.id !== state.currentRoomId || state.view !== "room") continue;
       const m = room.messages.find((x) => x.id === id);
       const el = m && els.messages.querySelector(`.msg[data-id="${id}"]`);
       if (!el) continue;
-      updateMessageElement(el, room, m, parts);
+      updateMessageElement(el, room, m, parts, toolIds);
       touched = true;
     }
     if (touched && stuck) scrollToBottom();
@@ -4796,12 +4840,15 @@
       label.textContent = tried === b.dataset.look ? "Back" : "Try it on";
     });
   }
+  const UI_SCALE_CAP = 1.35;
   let appliedScheme = null;
   function applyAppearance() {
     const a = (state.settings || {}).appearance || {};
     const root = document.documentElement;
     delete root.dataset.tried;
-    root.style.setProperty("--fs-scale", String((a.chatFontSize || 14.5) / 14.5));
+    const scale = (a.chatFontSize || 14.5) / 14.5;
+    root.style.setProperty("--chat-fs", String(scale));
+    root.style.setProperty("--fs-scale", String(Math.min(scale, UI_SCALE_CAP)));
     const look = TOKENS.looks[a.look] ? a.look : TOKENS.current.id;
     if (look === TOKENS.current.id) delete root.dataset.look;
     else root.dataset.look = look;
@@ -4928,7 +4975,7 @@
           const i = m.toolCalls.findIndex((c) => c.toolCallId === event.toolCall.toolCallId);
           if (i >= 0) m.toolCalls[i] = event.toolCall;
           else m.toolCalls.push(event.toolCall);
-        }, "tools");
+        }, "tools", event.toolCall.toolCallId);
         return;
       case "plan":
         patchMessage(roomId, event.id, (m) => (m.plan = event.entries), "plan");
@@ -5811,9 +5858,22 @@
   });
   els.railRooms.addEventListener("animationend", (e) => e.target.classList.remove("bump"));
   const sidePane = $(".side");
+  const BUBBLE_CAP = 1400;
+  const mainPane = $(".main");
+  function bubblesKeepTheirWidth() {
+    if (!mainPane) return false;
+    const now = mainPane.clientWidth;
+    const other = now + (els.app.classList.contains("side-collapsed") ? -220 : 220);
+    return Math.min(now, other) - 84 >= BUBBLE_CAP;
+  }
   function setSideOpen(open) {
+    const glide = bubblesKeepTheirWidth();
+    els.app.classList.toggle("glide", glide);
     els.app.classList.toggle("side-collapsed", !open);
-    if (sidePane) {
+    if (glide) {
+      clearTimeout(setSideOpen.timer);
+      setSideOpen.timer = setTimeout(() => els.app.classList.remove("glide"), 400);
+    } else if (sidePane) {
       sidePane.classList.remove("arrive");
       void sidePane.offsetWidth;
       sidePane.classList.add("arrive");
@@ -6192,7 +6252,14 @@
   function jumpToMessage(el) {
     if (!el) return;
     el.scrollIntoView({ block: "center" });
-    requestAnimationFrame(() => el.scrollIntoView({ block: "center" }));
+    requestAnimationFrame(() => {
+      const m = els.messages;
+      const r = el.getBoundingClientRect();
+      const box = m.getBoundingClientRect();
+      const centre = m.scrollTop + (r.top - box.top) - (box.height - r.height) / 2;
+      m.scrollTop = centre - 240;
+      m.scrollTo({ top: centre, behavior: "smooth" });
+    });
     el.classList.remove("flash");
     void el.offsetWidth;
     el.classList.add("flash");

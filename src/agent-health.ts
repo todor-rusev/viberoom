@@ -35,19 +35,24 @@ export interface Trouble {
   streak?: number;
 }
 
+const LIMIT_CODES = /(usage[_-]?limit|rate[_-]?limit|quota|over[_-]?(capacity|loaded)|overloaded|insufficient[_-]?(quota|credit)|too[_-]?many[_-]?requests|retry_after_\d+|\b429\b|\b529\b)/i;
+const LOGIN_CODES = /(auth\w*[_-]?(error|required|failed)|unauthenticated|unauthori[sz]ed|permission[_-]?(error|denied)|invalid[_-]?(api[_-]?key|token|credentials?)|token[_-]?expired|\b401\b|\b403\b)/i;
+const NETWORK_CODES = /(econn\w+|etimedout|enotfound|eai_again|network[_-]?error|service[_-]?unavailable|bad[_-]?gateway|gateway[_-]?timeout|\b50[234]\b)/i;
+
 const LOGIN_WORDS = /\b(not logged in|log ?in required|login required|please log ?in|unauthori[sz]ed|authentication (failed|required|error)|invalid api key|api key (is )?(missing|not set|invalid)|no credentials|credentials not found|no (llm )?provider (configured|available)|401|403|oauth|token (expired|invalid))\b/i;
 const MISSING_WORDS = /\b(enoent|not found|no such file|is not recognized|command not found|spawn\w* (failed|error))\b/i;
 const TIMEOUT_WORDS = /\b(timed out|timeout|took too long|did not answer|no response)\b/i;
 
-const LIMIT_WORDS = /\b(rate[ _-]?limit(ed|s)?|too many requests|429|overloaded|over capacity|at capacity|quota( exceeded)?|usage limit|limit (reached|exceeded)|resource[_ ]exhausted|529|try again (later|in \d))\b/i;
+const LIMIT_WORDS = /\b(rate[ _-]?limit(ed|s)?|too many requests|429|overloaded|over capacity|at capacity|quota( exceeded)?|(usage|spend|monthly|credit) limit|limit (reached|exceeded)|usagelimitexceeded|(out of|insufficient) credits|resource[_ ]exhausted|529|try again (later|in \d|at \d))\b/i;
 const NETWORK_WORDS = /\b(econnreset|econnrefused|etimedout|enotfound|eai_again|network (error|is unreachable|unreachable)|fetch failed|socket hang up|connection (reset|refused|closed|lost|error)|bad gateway|service unavailable|gateway timeout|502|503|504)\b/i;
 const EXPIRED_WORDS = /\b(token (has )?expired|expired token|session expired|re-?authenticat\w*|please (log ?in|sign ?in)|sign ?in required|not authenticated|credentials? (invalid|expired|missing|revoked)|oauth (error|token))\b/i;
 
-export function classifyTurnFailure(input: { error: string; vendor: string; alive: boolean; loginCommand?: string; loginFromHere?: boolean }): Trouble {
+export function classifyTurnFailure(input: { error: string; code?: string; vendor: string; alive: boolean; loginCommand?: string; loginFromHere?: boolean }): Trouble {
   const text = input.error;
+  const code = input.code ?? "";
   const v = input.vendor;
   const stage = "turn" as const;
-  if (LOGIN_WORDS.test(text) || EXPIRED_WORDS.test(text)) {
+  if (LOGIN_CODES.test(code) || LOGIN_WORDS.test(text) || EXPIRED_WORDS.test(text)) {
     return {
       stage, kind: "login",
       what: `${v} refused the last turn: its login is missing or has expired.`,
@@ -57,10 +62,10 @@ export function classifyTurnFailure(input: { error: string; vendor: string; aliv
       actions: input.alive ? ["login", "retry"] : ["login", "respawn"],
     };
   }
-  if (LIMIT_WORDS.test(text)) {
+  if (LIMIT_CODES.test(code) || LIMIT_WORDS.test(text)) {
     return { stage, kind: "limit", what: `${v} is over its limit or overloaded right now.`, advice: "Give it a minute, then press Retry: the messages it missed are sent again.", actions: input.alive ? ["retry"] : ["respawn"] };
   }
-  if (NETWORK_WORDS.test(text)) {
+  if (NETWORK_CODES.test(code) || NETWORK_WORDS.test(text)) {
     return { stage, kind: "network", what: `${v} could not reach its service.`, advice: "Check the connection, then press Retry: the messages it missed are sent again.", actions: input.alive ? ["retry"] : ["respawn"] };
   }
   if (!input.alive) {

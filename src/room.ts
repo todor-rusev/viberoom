@@ -11,7 +11,7 @@ import { saveImages, type Attachment, type ImageInput } from "./files.js";
 import { agentReadableWindow, resolveQuotes, type Quote, type QuoteInput } from "./quotes.js";
 import { join, resolve } from "node:path";
 import { AcpAgent } from "./acp-client.js";
-import { RemoteError } from "./jsonrpc.js";
+import { errorCode, errorDetail, RemoteError } from "./jsonrpc.js";
 import { getRecipe, listRecipes, publicRecipes, type AgentRecipe } from "./recipes.js";
 import { classifyStartFailure, classifyTurnFailure, type Trouble } from "./agent-health.js";
 import { legacyRowTone } from "./rows.js";
@@ -2513,10 +2513,12 @@ export class Room extends EventEmitter {
 
     let result: PromptResult | null = null;
     let failure: string | null = null;
+    let failureCode = "";
     try {
       result = await runtime.agent.prompt(runtime.sessionId, blocks);
     } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
+      failureCode = errorName(error);
+      failure = describeError(error);
     }
 
     const startedAt = runtime.turn.startedAt;
@@ -2553,6 +2555,7 @@ export class Room extends EventEmitter {
       const recipe = getRecipe(participant.agentType ?? "");
       const trouble = classifyTurnFailure({
         error: failure ?? "no result",
+        code: failureCode,
         vendor: recipe?.vendor ?? participant.agentVendor ?? "The coding agent",
         alive: runtime.agent.alive,
         loginCommand: recipe?.loginCommand || undefined,
@@ -2883,12 +2886,7 @@ export class Room extends EventEmitter {
           view = { toolCallId: u.toolCallId, title: u.title ?? u.name ?? "tool call" };
           calls.push(view);
         }
-        if (u.title) view.title = u.title;
-        if (u.kind !== undefined) view.kind = u.kind;
-        if (u.status !== undefined) view.status = u.status;
-        if (u.rawInput !== undefined) view.rawInput = u.rawInput;
-        const output = toolOutputText(u);
-        if (output) view.output = output;
+        if (!applyToolCallUpdate(view, u) && update.sessionUpdate === "tool_call_update") return;
         this.push({ type: "toolcall", id: turn.message.id, toolCall: view });
         return;
       }
@@ -3247,16 +3245,36 @@ function isAuthRequired(error: unknown): boolean {
   return error instanceof Error && /auth/i.test(error.message);
 }
 
+function errorData(error: unknown): unknown {
+  if (!(error instanceof Error)) return undefined;
+  return (error as Error & { data?: unknown; rpc?: { data?: unknown } }).rpc?.data ?? (error as Error & { data?: unknown }).data;
+}
+
+function errorName(error: unknown): string {
+  return errorCode(errorData(error));
+}
+
 function describeError(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
-  const data = (error as Error & { data?: unknown; rpc?: { data?: unknown } }).rpc?.data ?? (error as Error & { data?: unknown }).data;
-  const detail = typeof data === "string" ? data : data && typeof data === "object" && typeof (data as { details?: unknown }).details === "string" ? (data as { details: string }).details : "";
+  const data = errorData(error);
+  const detail = errorDetail(data);
   return detail && !error.message.includes(detail) ? `${error.message}: ${detail}` : error.message;
 }
 
 function looksSilent(text: string): boolean {
   const t = text.trim().toLowerCase();
   return t.length <= SILENT_MARKER.length && SILENT_MARKER.startsWith(t);
+}
+
+export function applyToolCallUpdate(view: ToolCallView, u: ToolCallUpdate): boolean {
+  const before = JSON.stringify(view);
+  if (u.title) view.title = u.title;
+  if (u.kind !== undefined) view.kind = u.kind;
+  if (u.status !== undefined) view.status = u.status;
+  if (u.rawInput !== undefined) view.rawInput = u.rawInput;
+  const output = toolOutputText(u);
+  if (output) view.output = output;
+  return JSON.stringify(view) !== before;
 }
 
 function toolOutputText(u: ToolCallUpdate): string {
