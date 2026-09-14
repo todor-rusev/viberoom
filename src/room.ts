@@ -102,6 +102,7 @@ export interface Participant {
   cost?: { amount: number; currency: string };
   turns: number;
   color: string;
+  colorSlot?: number;
   tagline?: string;
   role?: string;
   avatar?: string;
@@ -134,6 +135,7 @@ export interface StoredParticipant {
   role: string;
   avatar: string;
   color: string;
+  colorSlot?: number;
   launch: LaunchPrefs;
   muted: boolean;
   replyDelay?: number;
@@ -399,6 +401,7 @@ interface PermissionEntry extends PendingPermission {
 }
 
 const COLORS = ["#6d5dfc", "#16a34a", "#d97706", "#dc2626", "#0891b2", "#be185d", "#4d7c0f", "#7c3aed"];
+export const CAST_SIZE = 8;
 const MENTION_PATTERN = /@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu;
 const RULE_REF_TOKEN = /@\{p:([^}]+)\}/g;
 const ADAPTER_ERROR_PATTERN =
@@ -448,6 +451,10 @@ export class Room extends EventEmitter {
   private readonly optionCache: Map<string, DiscoveredOptions>;
   private readonly log: Logger;
   private colorIndex = 0;
+  private nextColour(given?: string): { color: string; colorSlot: number } {
+    const slot = this.colorIndex++ % CAST_SIZE;
+    return { color: given ?? COLORS[slot % COLORS.length], colorSlot: slot };
+  }
   private readonly departed = new Map<string, string>();
   private readonly restoredSeen = new Map<string, number>();
 
@@ -525,6 +532,7 @@ export class Room extends EventEmitter {
         statusDetail: "not connected since the hub restarted",
         turns: 0,
         color: s.color,
+        colorSlot: s.colorSlot ?? (COLORS.indexOf(s.color) >= 0 ? COLORS.indexOf(s.color) : undefined),
         tagline: s.tagline,
         role: s.role,
         avatar: s.avatar || undefined,
@@ -591,6 +599,7 @@ export class Room extends EventEmitter {
           role: p.role ?? "",
           avatar: p.avatar ?? "",
           color: p.color,
+          colorSlot: p.colorSlot,
           launch: p.launch ?? { model: p.model ?? null, effort: p.effort ?? null, mode: p.mode ?? null },
           muted: !!p.muted,
           replyDelay: p.replyDelay,
@@ -1249,7 +1258,7 @@ export class Room extends EventEmitter {
       agentVendor: recipe.vendor,
       status: "starting",
       turns: 0,
-      color: options.color ?? COLORS[this.colorIndex++ % COLORS.length],
+      ...this.nextColour(options.color),
       tagline: (options.tagline ?? "").trim().slice(0, 80),
       role: this.guardBriefText(`${name}'s vibio`, (options.role ?? "").trim(), options.textCheck),
       avatar: (options.avatar ?? "").trim().slice(0, 8) || undefined,
@@ -1278,7 +1287,7 @@ export class Room extends EventEmitter {
       status: "unstaffed",
       statusDetail: "awaiting a coding agent",
       turns: 0,
-      color: input.color ?? COLORS[this.colorIndex++ % COLORS.length],
+      ...this.nextColour(input.color),
       tagline: (input.tagline ?? "").trim().slice(0, 80),
       role: this.guardBriefText(`${name}'s vibio`, (input.role ?? "").trim(), input.textCheck),
       avatar: (input.avatar ?? "").trim().slice(0, 8) || undefined,

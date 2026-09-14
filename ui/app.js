@@ -173,6 +173,7 @@
   const TOOL_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
   const TOKENS = globalThis.VIBEROOM_TOKENS;
   const FALLBACK_COLOR = () => TOKENS.active().elements.face.fallback;
+  const colourOf = (p) => window.Avatars.castColour(p);
   const WORKING_SVG = '<span class="working-box">'
     + '<svg class="working body" viewBox="0 0 44 35" aria-hidden="true"><circle cx="20" cy="6.5" r="5.6" fill="currentColor"/><path d="M6 35L13.7 16.5a4 4 0 0 1 8 0L14 35z" fill="currentColor"/></svg>'
     + '<svg class="working arm far" viewBox="0 0 44 35" aria-hidden="true"><path d="M22 25.6h10.5" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/></svg>'
@@ -315,7 +316,7 @@
     return html.replace(/(?<![\w.\/:])@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu, (m, name) => {
       if (name.toLowerCase() === "all") return `<span class="mention all">@${esc(name)}</span>`;
       const p = findByName(room, name);
-      return p ? `<span class="mention" style="color:${p.color}">@${esc(name)}</span>` : m;
+      return p ? `<span class="mention" style="color:${colourOf(p)}">@${esc(name)}</span>` : m;
     });
   }
   const md = window.marked ? new window.marked.Marked({ gfm: true, breaks: true }) : null;
@@ -1183,7 +1184,12 @@
   function roomHue(room) {
     let h = 0;
     for (const ch of room.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-    return h % 360;
+    const mark = TOKENS.active().elements.roomMark;
+    const from = Number(mark.hueFrom);
+    const span = Number(mark.hueSpan);
+    const place = h % 360;
+    if (!Number.isFinite(from) || !Number.isFinite(span) || span >= 360) return place;
+    return Math.round(((from + (place * span) / 360) % 360 + 360) % 360);
   }
   function roomMark(room, lg) {
     const emoji = (room.settings && room.settings.emoji) || "";
@@ -1976,7 +1982,7 @@
     el.className = "msg " + (mine ? "mine" : "agent");
     el.innerHTML = `
       <div class="bubble-col">
-        <div class="head"><span class="head-av">${avatar(mine ? Object.assign(meAvatarData(), { color: p.color }) : p, 32, { vendor: true, me: mine })}</span><span class="name" style="color:${p.color}">${esc(m.fromName)}</span><span class="edited" hidden></span>${mine ? UI.html("icon-button", { icon: "pencil", title: "Edit this message", kind: "ghost", size: "xs", act: "edit" }) : ""}${UI.html("icon-button", { icon: "quote", title: "Quote this message in your next one", kind: "ghost", size: "xs", act: "quote" })}${UI.html("icon-button", { icon: "pin", title: "Pin this message", kind: "ghost", size: "xs", act: "pin" })}${UI.html("icon-button", { icon: "copy", title: "Copy this message, formatted; the tool calls stay here", kind: "ghost", size: "xs", act: "copy" })}<span class="time" title="${esc(fullTime(m.ts))}">${time(m.ts)}</span></div>
+        <div class="head"><span class="head-av">${avatar(mine ? Object.assign(meAvatarData(), { color: colourOf(p) }) : p, 32, { vendor: true, me: mine })}</span><span class="name" style="color:${p.color}">${esc(m.fromName)}</span><span class="edited" hidden></span>${mine ? UI.html("icon-button", { icon: "pencil", title: "Edit this message", kind: "ghost", size: "xs", act: "edit" }) : ""}${UI.html("icon-button", { icon: "quote", title: "Quote this message in your next one", kind: "ghost", size: "xs", act: "quote" })}${UI.html("icon-button", { icon: "pin", title: "Pin this message", kind: "ghost", size: "xs", act: "pin" })}${UI.html("icon-button", { icon: "copy", title: "Copy this message, formatted; the tool calls stay here", kind: "ghost", size: "xs", act: "copy" })}<span class="time" title="${esc(fullTime(m.ts))}">${time(m.ts)}</span></div>
         <div class="bubble">
           ${m.skill ? `<div class="skill-invoke" title="skill invocation: the vibemates that have this skill got its instructions with this message">${ic("skills")} skill <b>${esc(m.skill.name)}</b></div>` : ""}
           <div class="edit-box" hidden></div>
@@ -4814,6 +4820,23 @@
       }
     }
   }
+  let lookRetried = "";
+  function verifyLookPainted(look) {
+    requestAnimationFrame(() => {
+      const want = String(TOKENS.looks[look]?.palette?.primary || "").toLowerCase();
+      const got = getComputedStyle(document.documentElement).getPropertyValue("--primary").trim().toLowerCase();
+      if (!want || got === want) { lookRetried = ""; return; }
+      if (lookRetried === look) {
+        console.warn(`look ${look}: the window paints ${got}, the look says ${want}; the stylesheet did not arrive`);
+        return;
+      }
+      lookRetried = look;
+      const link = $("#looks-custom");
+      if (!link) return;
+      link.addEventListener("load", () => applyAppearance(), { once: true });
+      refreshLooksCss();
+    });
+  }
   function refreshLooksCss() {
     const link = $("#looks-custom");
     if (link) link.href = `/looks-custom.css?v=${Date.now()}`;
@@ -4852,6 +4875,7 @@
     const look = TOKENS.looks[a.look] ? a.look : TOKENS.current.id;
     if (look === TOKENS.current.id) delete root.dataset.look;
     else root.dataset.look = look;
+    if (TOKENS.looks[look].custom) verifyLookPainted(look);
     const scheme = TOKENS.looks[look].scheme;
     if (appliedScheme && appliedScheme !== scheme) {
       document.querySelectorAll(".mermaid-block[data-rendered]").forEach((b) => delete b.dataset.rendered);
@@ -5580,7 +5604,7 @@
     chip.className = "mention-chip";
     chip.contentEditable = "false";
     chip.dataset.name = p.name;
-    chip.style.color = p.color;
+    chip.style.color = colourOf(p);
     chip.innerHTML = `${avatar(p, 16, { vendor: false })}<span class="chip-name">@${esc(p.name)}</span>`;
     return chip;
   }
@@ -6268,7 +6292,7 @@
   const timelines = [
     createTimeline($("#timeline"), () => [...els.messages.querySelectorAll(".msg.mine:not(.hidden-by-search)")], {}),
     createTimeline($("#timeline-left"), () => [...els.messages.querySelectorAll(".msg.agent:not(.hidden-by-search)")], {
-      colorOf: (room, el) => (authorOf(room, el) || {}).color || FALLBACK_COLOR(),
+      colorOf: (room, el) => { const p = authorOf(room, el); return p ? colourOf(p) : FALLBACK_COLOR(); },
       avatarOf: (room, el) => { const p = authorOf(room, el); return p ? avatar(p, 16, {}) : ""; },
     }),
   ];

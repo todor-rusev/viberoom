@@ -154,7 +154,7 @@
     rose: "#f9e3df", rose2: "#f4d3cd", roseInk: "#c24d43", roseDark: "#a13d34", pink: "#b0356f", pinkTint: "#fbeef3",
     sky: "#e0ecf5", blue: "#4a7fb5", blueDeep: "#35618c", blueSoft: "#7ea6d0",
     orchid: "#ece3f2", orchidInk: "#7a4fa3", orchidMid: "#9d76c4",
-    periwinkle: "#d8d4e6", periwinkleDeep: "#bdb7d6",
+    periwinkle: "#e0d3c6", periwinkleDeep: "#c6b09c",
     deep: "#2b2622", deepGutter: "#241f1c", deepInk: "#f5f1e8", deepMuted: "#8c8477", deepHead: "#efe9dc", deepMeta: "#b8b0a0",
     lavGrey: "#cfc8b8", lilac: "#c3b1ff", seafoam: "#9ad8b6", azure: "#a9cbe8", salmon: "#f2a79a", magenta: "#e5b3e0",
   };
@@ -176,7 +176,7 @@
     rose: "#f2e0dc", rose2: "#ead2cc", roseInk: "#a34a3f", roseDark: "#8a3d34", pink: "#8f3d6a", pinkTint: "#f2e3ea",
     sky: "#dfe7ee", blue: "#3f6e9a", blueDeep: "#2f587d", blueSoft: "#6f93b8",
     orchid: "#e8e2ec", orchidInk: "#6b4f8c", orchidMid: "#8a6fa8",
-    periwinkle: "#d9dbe6", periwinkleDeep: "#b9bdd0",
+    periwinkle: "#ccd7d2", periwinkleDeep: "#a3bab2",
     deep: "#e9e3d6", deepGutter: "#e1dacb", deepInk: "#2b2a27", deepMuted: "#7a7468", deepHead: "#3a3833", deepMeta: "#6f6b62",
     lavGrey: "#7a7468", lilac: "#5b4a9a", seafoam: "#1f6e5a", azure: "#2a5d8f", salmon: "#a3472f", magenta: "#8a3f7a",
   };
@@ -596,6 +596,8 @@
     },
     roomMark: {
       ink: p.white,
+      hueFrom: "0",
+      hueSpan: "360",
       gradAngle: "135deg",
       gradFrom: "72% 66%",
       gradTo: "68% 52%",
@@ -628,6 +630,16 @@
     rail: {
       logoShadow: `0 8px 18px -6px ${alpha(p.primary, 0.6)}`,
       activeBg: p.white,
+    },
+    cast: {
+      c1: p.primary,
+      c2: p.mintInk,
+      c3: p.amber,
+      c4: p.roseInk,
+      c5: p.blue,
+      c6: p.pink,
+      c7: p.orchidInk,
+      c8: p.orangeDeep,
     },
     timeline: {
       viewBg: alpha(p.primary, 0.07),
@@ -877,6 +889,50 @@
     },
   };
 
+  const plain = {
+    ...pop,
+    primary: "#202123", primaryLight: "#2f3033", primaryDeep: "#121314", primaryDark: "#0b0c0d",
+    violet: "#3f4045",
+    iris: "#202123",
+    ink: "#17181a", ink2: "#1f2124", ink3: "#46484d", indigo: "#17181a",
+    muted: "#6b6d72", faint: "#8e9095", placeholder: "#8e9095", grey: "#9a9ca1",
+    white: "#ffffff", black: "#000000",
+    bg: "#f7f7f8", soft: "#f4f4f5", softer: "#ececee", lav: "#f0f0f1", lav2: "#e3e3e5",
+    canvasTop: "#fcfcfd", canvasMid: "#fcfcfd", canvasBottom: "#fcfcfd",
+    shadowInk: "#17181a",
+    mint: "#e7f3ec", mint2: "#d8ebe1", mintTint: "#eff7f2", mintInk: "#186a4c", forest: "#12432f", green: "#2f9e6a",
+    warm: "#faf1da", warm2: "#f3e5c2", warmInk: "#8a6510", bronze: "#4f3c0b", amber: "#d99a2b", honey: "#9a5b0f", spark: "#e6c77a",
+    peach: "#f7e7dc", peach2: "#f2ded1", orange: "#d8763c", orangeLight: "#e08348", orangeDeep: "#c25c28", orangeDark: "#a24a1d", ember: "#d86f43", emberDeep: "#c4472f",
+    rose: "#fbeeec", rose2: "#f5ded9", roseInk: "#b3372c", roseDark: "#962c22", pink: "#a3336a", pinkTint: "#fbeff5",
+    sky: "#e6eef8", blue: "#2563eb", blueDeep: "#1d4ed8", blueSoft: "#7ba0e8",
+    orchid: "#f0e9f7", orchidInk: "#6b3fa0", orchidMid: "#9a6fc4",
+    periwinkle: "#d8d9dc", periwinkleDeep: "#b6b8bd",
+    deep: "#f7f7f8", deepGutter: "#f0f0f1", deepInk: "#17181a", deepMuted: "#6b6d72", deepHead: "#17181a", deepMeta: "#6b6d72",
+    lavGrey: "#57595e", lilac: "#7c3fbf", seafoam: "#0a7b55", azure: "#1f6feb", salmon: "#b3261e", magenta: "#8a3fa0",
+  };
+
+  const plainDark = {
+    ...pop,
+    primary: "#e8e8ea", primaryLight: "#f2f2f3", primaryDeep: "#d6d6d9", primaryDark: "#c2c2c6",
+    violet: "#b9b9bf",
+    iris: "#17171a",
+    ink: "#f2f2f3", ink2: "#e6e6e8", ink3: "#b9b9bf", indigo: "#f7f7f8",
+    muted: "#9a9aa1", faint: "#76767d", placeholder: "#76767d", grey: "#84848b",
+    white: "#17171a", black: "#000000",
+    bg: "#0f0f10", soft: "#1e1e21", softer: "#26262a", lav: "#1c1c20", lav2: "#2e2e33",
+    canvasTop: "#121214", canvasMid: "#121214", canvasBottom: "#121214",
+    shadowInk: "#000000",
+    mint: "#123a2a", mint2: "#174a36", mintTint: "#0f2e23", mintInk: "#5fd6a0", forest: "#a8ecc9", green: "#43c98a",
+    warm: "#3a3014", warm2: "#4a3e1a", warmInk: "#e8bd52", bronze: "#ffe08a", amber: "#dfa93a", honey: "#e8bd52", spark: "#ffd166",
+    peach: "#3a2a1c", peach2: "#4a3524", orange: "#e8935a", orangeLight: "#f0a26d", orangeDeep: "#d2763c", orangeDark: "#f0a26d", ember: "#e8875a", emberDeep: "#d2603c",
+    rose: "#3c1c1a", rose2: "#4c2420", roseInk: "#f08a7e", roseDark: "#f5a099", pink: "#f08ac0", pinkTint: "#331a26",
+    sky: "#1a2a3c", blue: "#7aa9f5", blueDeep: "#96bcf8", blueSoft: "#a8c6f8",
+    orchid: "#2a2036", orchidInk: "#c2a0ea", orchidMid: "#ab8ad8",
+    periwinkle: "#2e2e33", periwinkleDeep: "#3d3d44",
+    deep: "#0b0b0c", deepGutter: "#0f0f10", deepInk: "#f2f2f3", deepMuted: "#76767d", deepHead: "#e6e6e8", deepMeta: "#9a9aa1",
+    lavGrey: "#76767d", lilac: "#c2a0ea", seafoam: "#5fd6a0", azure: "#7aa9f5", salmon: "#f08a7e", magenta: "#f08ac0",
+  };
+
   const look = (id, label, scheme, palette, wants = {}) => {
     const elements = elementsOf(palette);
     for (const [group, parts] of Object.entries(wants.elements ? wants.elements(palette) : {})) elements[group] = { ...(elements[group] || {}), ...parts };
@@ -900,21 +956,77 @@
 
   const flat = Object.fromEntries(Object.keys(elevationOf(pop)).map((key) => [key, "none"]));
 
+  const plainWants = {
+    shape: { rScale: "0.85", rCtlMin: "99px" },
+    type: { font: '"Manrope", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif', mono: '"IBM Plex Mono", ui-monospace, Consolas, "Courier New", monospace', lineHeight: "1.6" },
+    motion: { tFast: "100ms", tBase: "160ms", tSlow: "240ms" },
+    elevation: (p) => ({
+      ...flat,
+      edge: `0 0 0 1px ${alpha(p.ink, 0.07)}`,
+      shadowCard: `0 0 0 1px ${alpha(p.ink, 0.07)}`,
+      shadow: `0 0 0 1px ${alpha(p.ink, 0.07)}`,
+      shadow1: `0 0 0 1px ${alpha(p.ink, 0.07)}`,
+      shadowPop: `0 8px 24px -12px ${alpha(p.shadowInk, 0.35)}`,
+      shadowDialog: `0 24px 60px -28px ${alpha(p.shadowInk, 0.45)}`,
+      shadow2: `0 24px 60px -28px ${alpha(p.shadowInk, 0.45)}`,
+    }),
+    canvas: (p) => ({ gradCanvas: p.canvasTop, canvasPattern: "none", canvasPatternSize: "0 0", sbThumb: alpha(p.ink, 0.18), sbThumbHover: alpha(p.ink, 0.32) }),
+    elements: (p) => ({
+      link: { ink: p.blue, underline: alpha(p.blue, 0.35) },
+      cast: { c1: p.blue, c2: p.mintInk, c3: p.warmInk, c4: p.roseInk, c5: p.orchidInk, c6: p.pink, c7: p.orangeDark, c8: p.ink3 },
+      bubble: {
+        border: alpha(p.ink, 0.08),
+        shadow: "none",
+        mineBg: `linear-gradient(${p.soft}, ${p.soft})`,
+        mineInk: p.ink,
+        mineSoftInk: alpha(p.ink, 0.7),
+        mineWaitingInk: alpha(p.ink, 0.8),
+        mineShadow: "none",
+        mineRule: alpha(p.ink, 0.12),
+        mineBorder: alpha(p.ink, 0.1),
+        mineChipBg: alpha(p.ink, 0.06),
+        mineCodeBg: alpha(p.ink, 0.06),
+        mineThBg: alpha(p.ink, 0.06),
+        mineLinkUnderline: alpha(p.blue, 0.4),
+        mineQuoteBorder: alpha(p.ink, 0.25),
+        mineBtnBg: p.white,
+        mineBtnHoverBg: p.white,
+        mineGhostHoverBg: alpha(p.ink, 0.06),
+        mineCtaBg: p.primary,
+        mineCtaInk: p.white,
+        insetBg: p.white,
+        propRowBg: alpha(p.white, 0.7),
+      },
+      quote: { mineBg: alpha(p.ink, 0.05), mineBorder: alpha(p.ink, 0.2), mineHoverBg: alpha(p.ink, 0.08), mineHoverBorder: alpha(p.ink, 0.4), mineHeadInk: alpha(p.ink, 0.7), mineTextInk: p.ink },
+      attach: { refBg: alpha(p.ink, 0.08), mineRefBg: alpha(p.ink, 0.08), mineChipOpenBg: alpha(p.ink, 0.12), mineChipOpenInk: p.ink, thumbShadow: `0 0 0 1px ${alpha(p.ink, 0.08)}` },
+      code: { headBg: alpha(p.ink, 0.04), headInk: p.ink, headMeta: p.muted, headBtnBg: alpha(p.ink, 0.06), headBtnInk: p.ink, bodyBg: alpha(p.ink, 0.02), sbTrack: alpha(p.ink, 0.06), sbThumb: alpha(p.ink, 0.2), sbThumbHover: alpha(p.ink, 0.35), sbFirefox: alpha(p.ink, 0.25), lineMarkInk: p.orangeDark, lineMarkBg: alpha(p.amber, 0.16) },
+      fileCard: { ink: p.ink, headBg: alpha(p.ink, 0.04), headInk: p.ink, headMeta: p.muted, imageBodyBg: alpha(p.ink, 0.02), imageBg: p.white, shadow: "var(--edge)" },
+      composer: { bg: p.white, radius: "calc(14px * var(--r-scale))", padX: "6px", shadow: `0 0 0 1px ${alpha(p.ink, 0.1)}` },
+      input: { bg: p.white, focusBorder: p.primary, shadow: "none" },
+      face: { shadow: "none", tint: "4%", paper: p.soft, cardBg: p.soft },
+      logoTile: { bg: p.soft, badgeBg: p.soft, shadow: "none" },
+      toast: { bg: p.ink, ink: p.white },
+    }),
+  };
+
+  const plainLook = (id, label, scheme, palette, mark) =>
+    look(id, label, scheme, palette, { ...plainWants, elements: (p) => ({ ...plainWants.elements(p), roomMark: mark }) });
+
   const looks = {
     classic: look("classic", "VibeClassic", "light", pop),
     "classic-dark": look("classic-dark", "VibeClassic Dark", "dark", classicDark, {
-      elements: (p) => ({ logoTile: { bg: p.lav, ink: p.ink, badgeBg: p.lav, badgeInk: p.ink }, bubble: { border: mix(p.white, p.ink, 0.14) } }),
+      elements: (p) => ({ roomMark: { emoji: "42% 26%", gradFrom: "55% 68%", gradTo: "52% 58%" }, logoTile: { bg: p.lav, ink: p.ink, badgeBg: p.lav, badgeInk: p.ink }, bubble: { border: mix(p.white, p.ink, 0.14) } }),
     }),
     clay: look("clay", "Clay", "light", clay, {
       type: { font: '"Inter", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
       canvas: (p) => ({ gradCanvas: p.bg, canvasPattern: "none", canvasPatternSize: "0 0" }),
-      elements: (p) => ({ btn: { hoverInk: p.primaryDeep }, iconButton: { hoverInk: p.primaryDeep }, badge: { ink: p.primaryDeep }, chip: { ink: p.primaryDeep }, toolCall: { pendingInk: p.primaryDeep }, toolFold: { hoverInk: p.primaryDeep }, numberField: { stepHoverInk: p.primaryDeep } }),
+      elements: (p) => ({ roomMark: { emoji: "52% 89%", gradFrom: "52% 60%", gradTo: "48% 50%" }, btn: { hoverInk: p.primaryDeep }, iconButton: { hoverInk: p.primaryDeep }, badge: { ink: p.primaryDeep }, chip: { ink: p.primaryDeep }, toolCall: { pendingInk: p.primaryDeep }, toolFold: { hoverInk: p.primaryDeep }, numberField: { stepHoverInk: p.primaryDeep } }),
     }),
     comfort: look("comfort", "Eye Comfort", "light", comfort, {
       type: { font: '"Open Sans", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif', lineHeight: "1.6" },
       canvas: (p) => ({ gradCanvas: p.bg, canvasPattern: "none", canvasPatternSize: "0 0" }),
       elevation: { shadowPrimary: "none", shadowGlow: "none" },
-      elements: (p) => ({
+      elements: (p) => ({ roomMark: { emoji: "34% 89%", gradFrom: "36% 52%", gradTo: "34% 44%" },
         code: { headBg: alpha(p.ink, 0.04), headBtnBg: alpha(p.ink, 0.08), headBtnInk: p.ink, bodyBg: alpha(p.ink, 0.02), sbTrack: alpha(p.ink, 0.06), sbThumb: alpha(p.ink, 0.3) },
         bubble: { mineBg: `linear-gradient(135deg, ${p.primaryLight}, ${p.primaryDeep})`, shadow: `0 1px 2px ${alpha(p.ink, 0.06)}`, mineShadow: "none" },
         logoTile: { bg: p.white, ink: p.ink },
@@ -978,7 +1090,7 @@
           fileCard: { shadow: puff },
           askCard: { shadow: puff },
           toolFold: { hoverInk: p.primaryDark, shadow: puff },
-          roomMark: { shadow: tinted, radius: "calc(10px * var(--r-scale))", radiusLg: "calc(12px * var(--r-scale))", radiusRail: "calc(10px * var(--r-scale))" },
+          roomMark: { emoji: "58% 90%", gradFrom: "62% 66%", gradTo: "58% 56%", shadow: tinted, radius: "calc(10px * var(--r-scale))", radiusLg: "calc(12px * var(--r-scale))", radiusRail: "calc(10px * var(--r-scale))" },
           feature: { shadow: panel },
           toolCall: { pendingInk: p.primaryDark }, numberField: { stepHoverInk: p.primaryDark },
         }),
@@ -992,6 +1104,7 @@
       canvas: (p) => ({ gradCanvas: p.bg, canvasPattern: "none", canvasPatternSize: "0 0" }),
       elements: (p) => ({
         roomMark: { ink: p.ink, gradFrom: "38% 24%", gradTo: "34% 18%", emoji: "35% 20%" },
+        cast: { c2: p.mint },
         tile: { badgeBg: p.lav2 },
         logoTile: { bg: p.lav2, ink: p.primary, badgeBg: p.lav2, badgeBorder: p.lav2, badgeInk: p.primary },
         bubble: { border: p.lav2, shadow: NO_SHADOW, mineShadow: NO_SHADOW },
@@ -1003,6 +1116,8 @@
         unseenLine: { ink: p.muted, bg: "transparent", line: `repeating-linear-gradient(90deg, ${p.lav2} 0 6px, transparent 6px 12px)`, lineH: "1px", lineOpacity: "1", labelBorder: "1px solid currentColor", labelCase: "uppercase", labelTracking: "0.04em" },
       }),
     }),
+    "plain-light": plainLook("plain-light", "Plain Light", "light", plain, { emoji: "24% 92%", gradFrom: "28% 48%", gradTo: "26% 40%" }),
+    "plain-dark": plainLook("plain-dark", "Plain Dark", "dark", plainDark, { emoji: "22% 26%", gradFrom: "34% 54%", gradTo: "32% 46%" }),
   };
 
   const FLAT = ["palette", "meaning", "aliases", "elevation", "canvas", "shape", "type", "motion"];
@@ -1315,6 +1430,7 @@
       scrim: "the dark glass behind a picture or a diagram",
       toast: "a toast: the ink with the paper's colour on it",
       rail: "the main menu",
+      cast: "the vibemates' own colours (c1-c8): the eight a room hands out in turn, worn by a face's ring, its tile's tint, its name and its ticks; a vibemate keeps its slot, so the cast follows the look",
       timeline: "the strips beside the chat",
       bubble: "the message balloon: everyone else's (bg, ink, border, shadow) and your own (mineBg: always an image, a flat colour as linear-gradient(c, c); mineInk, mineShadow and the parts inside it)",
       quote: "a quoted message inside a balloon",
@@ -1373,6 +1489,7 @@
     if (key === "prefix") return "prefix";
     if (key === "case" || /Case$/.test(key)) return "case";
     if (/[Tt]racking$/.test(key)) return "tracking";
+    if (/^hue/.test(key)) return "scale";
     if (/Bg$|^bg$|Ink$|^ink$|Color$/.test(key) || /gradient\(/.test(v)) return "gradient";
     return null;
   };

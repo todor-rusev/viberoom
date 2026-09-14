@@ -3,6 +3,15 @@
   "use strict";
 
   const tokens = () => globalThis.VIBEROOM_TOKENS.active().elements.face;
+  function castColour(participant) {
+    const slot = participant && participant.colorSlot;
+    if (Number.isInteger(slot)) {
+      const cast = globalThis.VIBEROOM_TOKENS.active().elements.cast;
+      const colour = cast && cast[`c${slot + 1}`];
+      if (colour) return colour;
+    }
+    return (participant && participant.color) || tokens().avatarDefault;
+  }
 
   function hash(text) {
     let h = 2166136261;
@@ -53,7 +62,7 @@
   function avatarHtml(participant, size, options) {
     const opts = options || {};
     const UI = globalThis.UI;
-    const color = participant.color || tokens().avatarDefault;
+    const color = castColour(participant);
     const s = size || 40;
     const emoji = participant.avatar;
     let badge = null;
@@ -204,5 +213,5 @@
     return searchableGrid(GALLERY, current, onPick, { label: "Aa", title: "Initials" });
   }
 
-  window.Avatars = { avatarSvg, avatarHtml, initials, pickerElement, searchableGrid, emojiName, GALLERY };
+  window.Avatars = { avatarSvg, avatarHtml, castColour, initials, pickerElement, searchableGrid, emojiName, GALLERY };
 })();

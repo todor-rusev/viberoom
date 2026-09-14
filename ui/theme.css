@@ -412,6 +412,8 @@
   --tile-badge-bg: #ffffff;
   --tile-count-ink: #ffffff;
   --room-mark-ink: #ffffff;
+  --room-mark-hue-from: 0;
+  --room-mark-hue-span: 360;
   --room-mark-grad-angle: 135deg;
   --room-mark-grad-from: 72% 66%;
   --room-mark-grad-to: 68% 52%;
@@ -434,6 +436,14 @@
   --toast-ink: #ffffff;
   --rail-logo-shadow: 0 8px 18px -6px rgba(91, 91, 240, 0.6);
   --rail-active-bg: #ffffff;
+  --cast-c-1: #5b5bf0;
+  --cast-c-2: #1d8f6a;
+  --cast-c-3: #f5a524;
+  --cast-c-4: #e0554a;
+  --cast-c-5: #4f8ef7;
+  --cast-c-6: #be185d;
+  --cast-c-7: #8a3fc2;
+  --cast-c-8: #e8642a;
   --timeline-view-bg: rgba(91, 91, 240, 0.07);
   --timeline-view-left-bg: rgba(28, 27, 51, 0.05);
   --timeline-tick-blend: #ffffff;
