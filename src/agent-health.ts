@@ -81,10 +81,10 @@ export function classifyStartFailure(input: { error: string; stderr?: string[]; 
   if (LOGIN_WORDS.test(text) || input.loginState === "missing") {
     return {
       stage, kind: "login",
-      what: `${input.vendor} is installed here but the hub could not get past its login.`,
+      what: `${input.vendor} is installed here but the room could not get past its login.`,
       advice: input.loginFromHere
-        ? `Press "Log in to ${input.vendor}" below: ${input.vendor} signs you in, and the hub starts it again by itself. The hub never asks for credentials: it uses the login the vendor's own CLI keeps on this machine.`
-        : `${login}. The hub never asks for credentials itself: it uses the login the vendor's own CLI keeps on this machine.`,
+        ? `Press "Log in to ${input.vendor}" below: ${input.vendor} signs you in, and the room starts it again by itself. The room never asks for credentials: it uses the login the vendor's own CLI keeps on this machine.`
+        : `${login}. The room never asks for credentials itself: it uses the login the vendor's own CLI keeps on this machine.`,
       actions: ["login", "respawn"],
     };
   }
@@ -98,20 +98,20 @@ export function classifyStartFailure(input: { error: string; stderr?: string[]; 
   if (TIMEOUT_WORDS.test(text)) {
     return {
       stage, kind: "timeout", actions: ["respawn"],
-      what: `${input.vendor} started but did not answer the hub in time.`,
+      what: `${input.vendor} started but did not answer the room in time.`,
       advice: `Start it yourself once in a terminal (\`${input.loginCommand ?? input.vendor.toLowerCase()}\`): a first run that asks something — a login, a trust prompt, an update — blocks the protocol until it is answered.`,
     };
   }
   if (/\bexited\b|\bexit code\b|\bsignal\b|\bclosed\b/i.test(text)) {
     return {
       stage, kind: "crash", actions: ["respawn"],
-      what: `${input.vendor} started and then stopped before the hub could talk to it.`,
-      advice: `Run it once in a terminal to see what it prints; \`viberoom logs\` has the hub's side, with the agent's own last lines.`,
+      what: `${input.vendor} started and then stopped before the room could talk to it.`,
+      advice: `Run it once in a terminal to see what it prints; \`viberoom logs\` has the room's side, with the agent's own last lines.`,
     };
   }
   return {
     stage, kind: "unknown", actions: ["respawn"],
     what: `${input.vendor} could not be started.`,
-    advice: `Run it once in a terminal to see what it says; \`viberoom logs\` has the hub's side, with the agent's own last lines.`,
+    advice: `Run it once in a terminal to see what it says; \`viberoom logs\` has the room's side, with the agent's own last lines.`,
   };
 }

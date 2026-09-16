@@ -2,18 +2,23 @@
 
 import { EventEmitter } from "node:events";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { writeFileAtomic } from "./atomic.js";
+import { ensureDataRoot } from "./data-root.js";
+import { RequestTraceRing } from "./mcp-diagnostics.js";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Logger } from "./log.js";
+import { Logger, type TranscriptMode } from "./log.js";
+import { HISTORY_DB_FILE, HistoryStore, type SearchHit, type SearchQuery } from "./history-store.js";
+
+const TRANSCRIPT_MODES: readonly TranscriptMode[] = ["off", "errors", "full"];
 import { DEFAULT_EDITOR_SETTINGS, type EditorSettings } from "./open.js";
 import { listRecipes, loginCheckOf, markLoginChecking, publicRecipes, rememberLoginCheck, rescanRecipes, type AgentTypeId } from "./recipes.js";
 import { checkLogin } from "./login-status.js";
 import { LoginFlows, type LoginFlow } from "./login-flow.js";
 import { openTerminal } from "./terminal.js";
 import { DEFAULT_ROOM_SETTINGS, type RoomSettings } from "./persona.js";
-import { Room, type DiscoveredOptions, type RoomEvent, type SkillsBridge, type StoredParticipant } from "./room.js";
+import { Room, type ChatMessage, type DiscoveredOptions, type RoomEvent, type SkillsBridge, type StoredParticipant, type RoomRecovery } from "./room.js";
 import { SkillLibrary, type SkillDraft, type SkillMeta } from "./skills.js";
 import { TemplateLibrary, roomSettingsFromTemplate, type RoomTemplate } from "./templates.js";
 import { LookLibrary, checkLookSpec, loadTokens, type LookCheck, type LookSpec } from "./looks.js";
@@ -37,6 +42,8 @@ export interface ProgramSettings {
   editor: EditorSettings;
   appearance: AppearanceSettings;
   checkForUpdates: boolean;
+  transcripts: TranscriptMode;
+  foldAfter: number;
   reconnectMode: "replay" | "load";
 }
 
@@ -142,25 +149,32 @@ export function nextAppearance(current: AppearanceSettings, a: Record<string, un
 
 export class Hub extends EventEmitter {
   readonly dataDir: string;
+  readonly requestDiagnostics = new RequestTraceRing();
   readonly rooms = new Map<string, Room>();
   readonly skills: SkillLibrary;
   readonly templates: TemplateLibrary;
   readonly looks: LookLibrary;
+  readonly history: HistoryStore;
+  private readonly staleHistoryRooms = new Set<string>();
   settings: ProgramSettings;
   private readonly log: Logger;
   private readonly optionCache = new Map<string, DiscoveredOptions>();
   private readonly mcpTokens = new Map<string, McpTokenEntry>();
   private hubUrl: string | null = null;
+  private readonly renamedSkills = new Map<string, string>();
+  private renamedAttachments = false;
   private readonly skillsBridge: SkillsBridge;
 
   constructor(dataDir: string, log: Logger, initialHumanName?: string) {
     super();
     this.dataDir = resolve(dataDir);
     this.log = log;
+    ensureDataRoot(this.dataDir);
     mkdirSync(join(this.dataDir, "rooms"), { recursive: true });
     this.skills = new SkillLibrary(join(this.dataDir, "skills"), log.child("skills"));
     this.templates = new TemplateLibrary(join(this.dataDir, "templates"), log.child("templates"));
     this.looks = new LookLibrary(join(this.dataDir, "looks"), log.child("looks"));
+    this.history = this.openHistory();
     setTimeout(() => void this.checkLogins().catch((error) => log.warn(`login checks: ${String(error)}`)), 2500);
     this.logins.on("change", (flow: LoginFlow) => {
       this.emit("event", { type: "login", flow } satisfies HubEvent);
@@ -175,7 +189,7 @@ export class Hub extends EventEmitter {
       }
     });
     try {
-      this.skills.seedBuiltins();
+      for (const { name, kept } of this.skills.seedBuiltins()) this.renamedSkills.set(name.toLowerCase(), kept);
     } catch (error) {
       log.warn(`built-in skills could not be seeded: ${String(error)}`);
     }
@@ -224,6 +238,7 @@ export class Hub extends EventEmitter {
     };
     this.settings = this.loadSettings(initialHumanName);
     this.loadRooms();
+    if (this.renamedAttachments) this.saveRooms();
   }
 
   setHubUrl(url: string): void {
@@ -287,6 +302,8 @@ export class Hub extends EventEmitter {
       editor: { ...DEFAULT_EDITOR_SETTINGS },
       appearance: { ...DEFAULT_APPEARANCE },
       checkForUpdates: true,
+      transcripts: "off",
+      foldAfter: 1200,
       reconnectMode: "replay",
       roomDefaults: {},
       vendorPresets: {},
@@ -335,6 +352,16 @@ export class Hub extends EventEmitter {
     if (patch.profileCompleted !== undefined) next.profileCompleted = patch.profileCompleted === true || patch.profileCompleted === "true";
     if (patch.agentSkillsNeedApproval !== undefined) next.agentSkillsNeedApproval = patch.agentSkillsNeedApproval === true || patch.agentSkillsNeedApproval === "true";
     if (patch.checkForUpdates !== undefined) next.checkForUpdates = patch.checkForUpdates === true || patch.checkForUpdates === "true";
+    if (patch.transcripts !== undefined) {
+      const mode = String(patch.transcripts);
+      if (!TRANSCRIPT_MODES.includes(mode as TranscriptMode)) throw new Error(`transcripts must be one of ${TRANSCRIPT_MODES.join(", ")}`);
+      next.transcripts = mode as TranscriptMode;
+    }
+    if (patch.foldAfter !== undefined) {
+      const n = Number(patch.foldAfter);
+      if (!Number.isInteger(n) || n < 100 || n > 20_000) throw new Error("foldAfter must be an integer between 100 and 20000");
+      next.foldAfter = n;
+    }
     if (patch.diagrams !== undefined && typeof patch.diagrams === "object" && patch.diagrams) {
       const d = patch.diagrams as Record<string, unknown>;
       const preset = String(d.preset ?? next.diagrams?.preset ?? "pop") as DiagramPreset;
@@ -385,6 +412,8 @@ export class Hub extends EventEmitter {
         humanName: next.humanName,
         humanDescription: next.humanDescription,
         bypassPermissionsByDefault: next.bypassPermissionsByDefault,
+        transcripts: next.transcripts,
+        foldAfter: next.foldAfter,
       });
     }
     this.emit("event", { type: "settings", settings: this.settings } satisfies HubEvent);
@@ -395,6 +424,17 @@ export class Hub extends EventEmitter {
 
   private roomsPath(): string {
     return join(this.dataDir, "rooms.json");
+  }
+
+  private keepAttachments(participants: StoredParticipant[]): StoredParticipant[] {
+    if (!this.renamedSkills.size) return participants;
+    return participants.map((p) => {
+      const skills = p.skills?.map((s) => this.renamedSkills.get(s.toLowerCase()) ?? s);
+      if (!skills || skills.every((s, i) => s === p.skills![i])) return p;
+      this.log.info(`${p.name}: attached skills follow the renamed copy (${skills.join(", ")})`);
+      this.renamedAttachments = true;
+      return { ...p, skills };
+    });
   }
 
   private loadRooms(): void {
@@ -409,7 +449,7 @@ export class Hub extends EventEmitter {
     for (const stored of file.rooms ?? []) {
       try {
         const room = this.instantiate(stored.id, stored.name, stored.dir, stored.settings, stored.createdAt);
-        room.restore(stored.participants ?? []);
+        room.restore(this.keepAttachments(stored.participants ?? []));
         this.log.info(`restored room "${stored.name}" (${stored.id}): ${room.messages.length} messages, ${stored.participants?.length ?? 0} participants offline`);
       } catch (error) {
         this.log.error(`could not restore room ${stored.id}: ${String(error)}`);
@@ -425,6 +465,147 @@ export class Hub extends EventEmitter {
     writeJson(this.roomsPath(), file);
   }
 
+  searchHistory(params: { q?: string; rooms?: string; kinds?: string; author?: string; sort?: string; limit?: string; offset?: string; perRoom?: string; deleted?: string }): HistorySearchResponse {
+    if (!this.history) return { hits: [], query: "", usedTrigram: false, unavailable: "the conversation store is off (SQLite is not available in this Node)" };
+    const kinds = (params.kinds ?? "chat").split(",").map((k) => k.trim()).filter((k): k is "chat" | "system" => k === "chat" || k === "system");
+    const rooms = params.rooms && params.rooms !== "all" ? params.rooms.split(",").map((r) => r.trim()).filter((r) => this.rooms.has(r)) : undefined;
+    const sort = params.sort === "newest" || params.sort === "oldest" ? params.sort : "rank";
+    const query: SearchQuery = {
+      text: params.q ?? "",
+      rooms,
+      kinds: kinds.length ? kinds : ["chat"],
+      author: params.author?.trim() || undefined,
+      sort,
+      limit: clampInt(params.limit, 40, 1, 200),
+      offset: clampInt(params.offset, 0, 0, 100_000),
+      perRoom: params.perRoom ? clampInt(params.perRoom, 10, 1, 200) : undefined,
+      includeDeleted: params.deleted === "1",
+    };
+    const stale = this.staleHistoryRoomsAfterRetry(rooms ?? this.rooms.keys()).map((id) => this.rooms.get(id)?.name ?? id);
+    const result = this.history.search(query);
+    return {
+      ...result,
+      hits: result.hits.map((h) => ({ ...h, roomName: this.rooms.get(h.roomId)?.name ?? h.roomId })),
+      roomsSearched: rooms ? rooms.length : this.rooms.size,
+      ...(stale.length ? { stale } : {}),
+    };
+  }
+
+  private openHistory(): HistoryStore {
+    try {
+      return new HistoryStore(join(this.dataDir, HISTORY_DB_FILE), this.log.child("history"));
+    } catch (error) {
+      throw new Error(`the conversation store could not be opened (${error instanceof Error ? error.message : String(error)}); viberoom needs Node 22.16 or newer with node:sqlite`);
+    }
+  }
+
+  historyBackupEveryMs = 10 * 60_000;
+  historyBackupKeep = 5;
+  private backupTimer: NodeJS.Timeout | null = null;
+
+  startBackups(): void {
+    if (this.backupTimer) return;
+    this.backupTimer = setInterval(() => void this.backupHistory().catch((error) => this.log.warn(`history backup failed: ${error instanceof Error ? error.message : String(error)}`)), this.historyBackupEveryMs);
+    this.backupTimer.unref();
+  }
+
+  adoptRoomCopy(id: string): Promise<RoomRecovery> {
+    const room = this.getRoom(id);
+    return room.adoptCopy(() => this.backupHistory(), () => this.rooms.get(id) === room);
+  }
+
+  async backupHistory(): Promise<string> {
+    const dir = join(this.dataDir, "backups");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `history-${new Date().toISOString().replace(/[:.]/g, "-")}.db`);
+    const part = `${file}.part`;
+    try {
+      await this.history.backup(part);
+      renameSync(part, file);
+    } catch (error) {
+      rmSync(part, { force: true });
+      throw error;
+    }
+    const older = readdirSync(dir).filter((f) => /^history-.*\.db$/.test(f)).sort();
+    for (const f of older.slice(0, Math.max(0, older.length - this.historyBackupKeep))) rmSync(join(dir, f), { force: true });
+    return file;
+  }
+
+  historyRetryMs = 30_000;
+  private readonly historyRetriedAt = new Map<string, number>();
+
+  private retryStaleMirror(roomId: string): void {
+    if (!this.staleHistoryRooms.has(roomId)) return;
+    const now = Date.now();
+    if (now - (this.historyRetriedAt.get(roomId) ?? 0) < this.historyRetryMs) return;
+    this.historyRetriedAt.set(roomId, now);
+    const room = this.rooms.get(roomId);
+    if (room) this.mirrorRoom(roomId, room);
+  }
+
+  staleHistoryRoomsAfterRetry(roomIds: Iterable<string>): string[] {
+    const stale: string[] = [];
+    for (const id of roomIds) {
+      this.retryStaleMirror(id);
+      if (this.staleHistoryRooms.has(id)) stale.push(id);
+    }
+    return stale;
+  }
+
+  roomsForAgentSearch(roomId: string): { id: string; name: string }[] {
+    const own = this.rooms.get(roomId);
+    if (!own) return [];
+    if (!own.settings.searchOtherRooms) return [{ id: own.id, name: own.settings.name }];
+    return [...this.rooms.values()]
+      .filter((room) => room.id === roomId || this.canReadSharedHistory(own, room))
+      .map((room) => ({ id: room.id, name: room.settings.name }));
+  }
+
+  private canReadSharedHistory(caller: Room, target: Room): boolean {
+    return caller.settings.searchOtherRooms && target.settings.searchOtherRooms && !caller.readOnly && !target.readOnly
+      && !this.staleHistoryRoomsAfterRetry([target.id]).length;
+  }
+
+  readMessageForAgent(callerRoomId: string, participantId: string, seq: number, around: number, selector?: string): Record<string, unknown> {
+    const caller = this.getRoom(callerRoomId);
+    caller.assertHistoryAccessForAgent(participantId);
+    let target = caller;
+    if (selector !== undefined) {
+      const byId = this.rooms.get(selector);
+      const candidates = byId ? [byId] : [...this.rooms.values()].filter(room => room.settings.name === selector);
+      const matches = candidates.filter(room => room === caller || this.canReadSharedHistory(caller, room));
+      if (matches.length > 1) throw new Error(`room ${JSON.stringify(selector)} is ambiguous; use its room ID from search_history`);
+      if (!matches.length) throw new Error(`room ${JSON.stringify(selector)} is not available to this vibemate`);
+      target = matches[0];
+    }
+    try {
+      const content = target === caller
+        ? caller.readMessageForAgent(participantId, seq, around)
+        : target.readVisibleMessageForAgent(seq, around, `${caller.participants.get(participantId)!.name} from ${JSON.stringify(caller.settings.name)}`);
+      return { room: target.id, roomName: target.settings.name, ...content };
+    } catch (error) {
+      if (target === caller) throw error;
+      throw new Error(`room ${JSON.stringify(target.settings.name)}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  historyForAgent(roomId: string): HistoryStore | null {
+    this.retryStaleMirror(roomId);
+    if (this.staleHistoryRooms.has(roomId)) throw new Error("the conversation store is out of sync for this room; history could not be searched until it is reconciled");
+    return this.history;
+  }
+
+  private mirrorRoom(id: string, room: Room): void {
+    try {
+      const { upserted, marked } = this.history.reconcile(id, room.messages.filter(committed));
+      this.staleHistoryRooms.delete(id);
+      if (upserted || marked) this.log.info(`history store: room ${id} reconciled (${upserted} written, ${marked} marked removed)`);
+    } catch (error) {
+      this.log.warn(`history store: room ${id} could not be reconciled: ${error instanceof Error ? error.message : String(error)}`);
+      this.staleHistoryRooms.add(id);
+    }
+  }
+
   private instantiate(id: string, name: string, dir: string, settings: Partial<RoomSettings>, createdAt: number): Room {
     const room = new Room({
       id,
@@ -435,10 +616,14 @@ export class Hub extends EventEmitter {
       humanName: this.settings.humanName,
       programHumanDescription: this.settings.humanDescription,
       bypassPermissionsByDefault: this.settings.bypassPermissionsByDefault,
+      programTranscripts: this.settings.transcripts,
+      programFoldAfter: this.settings.foldAfter,
       settings: { ...this.settings.roomDefaults, ...settings },
       log: this.log.child(`room:${id}`),
       optionCache: this.optionCache,
       skills: this.skillsBridge,
+      history: this.history,
+      onHistoryFailure: (roomId) => this.staleHistoryRooms.add(roomId),
     });
     room.on("event", (event: RoomEvent) => {
       this.emit("event", { type: "room.event", roomId: id, event } satisfies HubEvent);
@@ -572,6 +757,11 @@ export class Hub extends EventEmitter {
     const room = this.getRoom(id);
     await room.shutdown();
     this.rooms.delete(id);
+    try {
+      this.history?.dropRoom(id);
+    } catch (error) {
+      this.log.warn(`history store: room ${id} not dropped: ${error instanceof Error ? error.message : String(error)}`);
+    }
     const at = this.openRooms.indexOf(id);
     if (at >= 0) this.openRooms.splice(at, 1);
     this.saveRooms();
@@ -695,11 +885,22 @@ export class Hub extends EventEmitter {
   async shutdown(): Promise<void> {
     for (const room of this.rooms.values()) await room.shutdown();
     this.saveRooms();
+    if (this.backupTimer) {
+      clearInterval(this.backupTimer);
+      this.backupTimer = null;
+      try {
+        await this.backupHistory();
+      } catch (error) {
+        this.log.warn(`history backup at shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    this.history.close();
   }
 
   async reset(): Promise<void> {
     this.log.warn("erasing the whole data folder on the human's request");
     for (const room of this.rooms.values()) await room.shutdown();
+    for (const id of this.rooms.keys()) this.history?.dropRoom(id);
     this.rooms.clear();
     for (const token of this.mcpTokens.keys()) this.mcpTokens.delete(token);
     rmSync(join(this.dataDir, "rooms"), { recursive: true, force: true });
@@ -728,4 +929,23 @@ function slugify(name: string): string {
 
 function writeJson(path: string, value: unknown): void {
   writeFileAtomic(path, JSON.stringify(value, null, 2));
+}
+
+export interface HistorySearchResponse {
+  hits: Array<SearchHit & { roomName: string }>;
+  query: string;
+  usedTrigram: boolean;
+  roomsSearched?: number;
+  unavailable?: string;
+  stale?: string[];
+}
+
+function clampInt(raw: string | undefined, fallback: number, lo: number, hi: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, Math.floor(n)));
+}
+
+function committed(message: ChatMessage): boolean {
+  return !message.streaming && Number.isInteger(message.seq) && message.seq > 0;
 }

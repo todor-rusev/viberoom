@@ -79,7 +79,91 @@ rmSync(out, { recursive: true, force: true });
       rewritten += 1;
     }
   }
+  patchClaudeAdapter(join(to, "dist", "acp-agent.js"));
   console.log(`vendored claude-agent-acp ${readJson(join(to, "package.json")).version} (${rewritten} files point at the vendored SDK ${sdkPkg.version})`);
 }
 
 console.log(`vendored codex-acp ${readJson(join(out, "codex-acp", "package.json")).version}`);
+
+function patchClaudeAdapter(file) {
+  let source = readFileSync(file, "utf8");
+  const once = (anchor, replacement) => {
+    const first = source.indexOf(anchor);
+    if (first < 0 || source.indexOf(anchor, first + 1) >= 0) throw new Error(`claude-agent-acp changed: the absorbed-prompt patch anchor is missing or ambiguous: ${anchor.slice(0, 70)}`);
+    source = source.replace(anchor, replacement);
+  };
+  once(
+    "        const ensureActiveTurn = (resultUserMessageUuid) => {",
+    "        const ensureActiveTurn = (resultUserMessageUuid, dispatchedTurn) => {",
+  );
+  once(
+    `            const head = firstUnsettledQueuedTurn();
+            if (!head) {
+                return;
+            }
+            activateTurn(head);`,
+    `            const head = dispatchedTurn && !dispatchedTurn.settled ? dispatchedTurn : firstUnsettledQueuedTurn();
+            if (!head) {
+                return;
+            }
+            activateTurn(head);`,
+  );
+  once(
+    "                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind);",
+    `                        // viberoom: never apply one result twice, including a repeated human result.
+                        const viberoomResults = (session.viberoomResultUuids ??= new Set());
+                        if (typeof message.uuid === "string") {
+                            if (viberoomResults.has(message.uuid)) {
+                                session.owedTrailingIdles++;
+                                break;
+                            }
+                            viberoomResults.add(message.uuid);
+                        }
+                        // A stamped result of an already cancelled command cannot mark a newer command
+                        // as having consumed its result. Drain only that known orphan, before bookkeeping.
+                        if (typeof message.user_message_uuid === "string" && session.orphanCommands?.has(message.user_message_uuid)) {
+                            session.orphanCommands.delete(message.user_message_uuid);
+                            session.pendingEmptyInterruptionDiagnosticCommands?.delete(message.user_message_uuid);
+                            session.owedTrailingIdles++;
+                            break;
+                        }
+                        // Snapshot before result bookkeeping marks dispatched commands as having seen a result.
+                        const absorbedPrompts = (session.turnQueue ?? []).filter((t) => !t.settled && t.commandStarted && !t.commandFinished && !t.commandResultSeen);
+                        const dispatchedOwner = session.activeTurn && !session.activeTurn.settled && session.activeTurn.deferredSettle === undefined
+                            ? session.activeTurn : absorbedPrompts[0];
+                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind) && absorbedPrompts.length === 0;`,
+  );
+  once(
+    "                                ensureActiveTurn(message.user_message_uuid);",
+    `                                ensureActiveTurn(message.user_message_uuid, dispatchedOwner);
+                                // Only after the adapter accepted the owner (orphan/cancel checks included).
+                                // Share its terminal outcome rather than reactivating each command and resetting
+                                // the stop reason/usage, or bypassing early refusal/error/deferral exits.
+                                if (dispatchedOwner && session.activeTurn === dispatchedOwner) {
+                                    const rest = absorbedPrompts.filter((turn) => turn !== dispatchedOwner);
+                                    if (rest.length) {
+                                        const share = (reason, settle) => {
+                                            for (const extra of rest) {
+                                                if (extra.settled) continue;
+                                                this.finishFileChangeAudit(session, extra, reason);
+                                                extra.settled = true;
+                                                extra.usageMarkdownAbort?.abort();
+                                                session.turnQueue = (session.turnQueue ?? []).filter((turn) => turn !== extra);
+                                                settle(extra);
+                                            }
+                                        };
+                                        const { resolve, reject } = dispatchedOwner;
+                                        dispatchedOwner.resolve = (value) => {
+                                            resolve(value);
+                                            share(value.stopReason === "cancelled" ? "cancelled" : "notReported", (extra) => extra.resolve(value));
+                                        };
+                                        dispatchedOwner.reject = (error) => {
+                                            reject(error);
+                                            share("providerError", (extra) => extra.reject(error));
+                                        };
+                                    }
+                                }`,
+  );
+  writeFileSync(file, source);
+  console.log("patched claude-agent-acp: a prompt absorbed into an autonomous cycle completes (experiments/69)");
+}

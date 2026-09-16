@@ -43,11 +43,14 @@ export interface RoomSettings {
   showVendorInRoster: boolean;
   briefTextLimit: number;
   customRules: string;
+  transcripts: "inherit" | "off" | "errors" | "full";
+  foldAfter: number | null;
   humanDescriptionMode: "inherit" | "override" | "append" | "none";
   refereeAction: "next-header" | "retry-hidden";
   turnTaking: "parallel" | "one-at-a-time";
   waitWhileHumanTypes: boolean;
   agentsWakeEachOther: boolean;
+  searchOtherRooms: boolean;
   replyDelay: number;
 }
 
@@ -72,7 +75,7 @@ export const ROOM_SETTINGS_SPEC: Record<keyof RoomSettings, SettingSpec> = {
   language: { kind: "language", default: { mode: "follow-human" }, brief: true, agent: true, doc: "follow-human: reply in the language of the human's latest message; or a fixed language name." },
   tools: { kind: "enum", values: ["on-request", "never"], default: "on-request", brief: true, agent: true, doc: "on-request: tools only when a participant explicitly asks for something that needs them; never: a talk-only room." },
   maxSentences: { kind: "integer-or-null", min: 1, max: 100, default: null, brief: true, agent: true, doc: "A hard length rule for every reply, in sentences; empty for no rule." },
-  hopLimit: { kind: "integer", min: 0, max: 10_000, default: 100, brief: false, agent: true, doc: "Agent-to-agent turns allowed before the hub waits for the human; a chain of three vibemates needs about three times its length." },
+  hopLimit: { kind: "integer", min: 0, max: 10_000, default: 100, brief: false, agent: true, doc: "Agent-to-agent turns allowed before the room waits for the human; a chain of three vibemates needs about three times its length." },
   fullBriefEveryTurns: { kind: "integer", min: 1, max: 10_000, default: 8, brief: false, agent: true, doc: "The full brief is re-sent to a vibemate after this many of its turns." },
   fullBriefEveryTokens: { kind: "integer", min: 1000, max: 10_000_000, default: 20_000, brief: false, agent: true, doc: "The full brief is re-sent once a vibemate's context grew by this many tokens." },
   headerRules: { kind: "boolean", default: true, brief: false, agent: true, doc: "The per-turn header repeats the three core rules (addressing, silent, character)." },
@@ -83,9 +86,12 @@ export const ROOM_SETTINGS_SPEC: Record<keyof RoomSettings, SettingSpec> = {
   customRules: { kind: "text", max: 32_000, default: "", brief: true, agent: true, doc: "The room rules, one per line, at most briefTextLimit characters; every vibemate gets them under 'Room rules (set by the human)'. @Name inside a rule is a live reference." },
   refereeAction: { kind: "enum", values: ["next-header", "retry-hidden"], default: "next-header", brief: false, agent: true, doc: "On a mechanical violation (wrong language, too long): remind in the next header, or hold the reply and ask for a corrected one in a hidden turn." },
   turnTaking: { kind: "enum", values: ["parallel", "one-at-a-time"], default: "parallel", brief: false, agent: true, doc: "parallel: every addressed vibemate answers at once; one-at-a-time: one speaks, the others queue and see the earlier replies first." },
+  searchOtherRooms: { kind: "boolean", default: true, brief: false, agent: false, doc: "Vibemates here may search the other rooms that also share theirs, and those rooms' vibemates may find this room's messages; hidden and deleted messages are never shared. Off: this room is searched only from inside it, and its vibemates see no other room." },
   waitWhileHumanTypes: { kind: "boolean", default: true, brief: false, agent: true, doc: "A vibemate about to start a turn waits while the human is typing." },
   agentsWakeEachOther: { kind: "boolean", default: true, brief: true, agent: true, doc: "A vibemate's message without @ wakes the others, as the human's does; off: only @Name wakes a vibemate." },
   replyDelay: { kind: "number", min: 0, max: 120, default: 4, brief: false, agent: true, doc: "Seconds (a random 0..N) every vibemate waits before a turn, so replies cross less; a vibemate's own delay overrides it." },
+  transcripts: { kind: "enum", values: ["inherit", "off", "errors", "full"], default: "inherit", brief: false, agent: false, doc: "Save diagnostic details to investigate problems with a vibemate: use the app setting, turn logging off, save details when something fails, or record all activity. Conversations are saved with any option." },
+  foldAfter: { kind: "integer-or-null", min: 100, max: 20_000, default: null, brief: false, agent: false, doc: "How many of the newest messages the window draws at once; older ones wait above a ceiling and come in as you scroll up, pinned ones always shown. Empty means the app setting." },
 };
 
 function defaultsFromSpec(): Omit<RoomSettings, "name" | "humanName"> {
@@ -323,15 +329,15 @@ function skillsSection(skills: SkillsForPrompt): string[] {
     for (const s of skills.items) lines.push(`- ${s.name}: ${s.description}`);
     if (skills.channel === "tool") {
       lines.push(
-        `How to load a skill: call the tool ${SKILL_TOOL_NAME} of the "viberoom" MCP server (it may appear as mcp__viberoom__${SKILL_TOOL_NAME} or viberoom_${SKILL_TOOL_NAME}) with the skill name. It returns the skill's instructions; follow them in the same reply. Room skills live only in the hub: do not use any built-in skill tool of your own for them. The hub's skill tools are always allowed, whatever the rule about tools above says.`,
+        `How to load a skill: call the tool ${SKILL_TOOL_NAME} of the "viberoom" MCP server (it may appear as mcp__viberoom__${SKILL_TOOL_NAME} or viberoom_${SKILL_TOOL_NAME}) with the skill name. It returns the skill's instructions; follow them in the same reply. Room skills live only in the room: do not use any built-in skill tool of your own for them. The room's skill tools are always allowed, whatever the rule about tools above says.`,
       );
     } else {
       lines.push(
-        "How to load a skill: reply with exactly [skill:name] and nothing else. The hub answers in a hidden turn with the skill's instructions and the same messages again; then post your actual message.",
+        "How to load a skill: reply with exactly [skill:name] and nothing else. The room answers in a hidden turn with the skill's instructions and the same messages again; then post your actual message.",
       );
     }
     lines.push(
-      'When a participant writes "/name …", the hub attaches that skill to the prompt of everyone who has it (look for a <skill> block); a "/name" you do not have is meant for other participants.',
+      'When a participant writes "/name …", the room attaches that skill to the prompt of everyone who has it (look for a <skill> block); a "/name" you do not have is meant for other participants.',
     );
   } else {
     lines.push("Skills: none are attached to you yet.");
@@ -347,7 +353,7 @@ function skillsSection(skills: SkillsForPrompt): string[] {
       `You may also design looks (how the human's window is drawn: colours, shadows, corners, fonts): load the built-in skill "${LOOK_DESIGNER_NAME}" first, then describe_looks for the facts, lint_look to check a draft (it measures whether the words read), create_look to save a look the human can pick under Settings, and propose_look_changes to suggest wearing a look or fine-tuning one: a card the human applies or rejects.`,
     );
   } else if (skills.items.length) {
-    lines.push("Skills are created by the human or by agents that have the hub's tools; if you want a new one, describe it in the room.");
+    lines.push("Skills are created by the human or by agents that have the room's tools; if you want a new one, describe it in the room.");
   }
   return lines;
 }
@@ -362,13 +368,14 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
   const tools =
     settings.tools === "never"
       ? "do not use tools."
-      : `use tools only when a participant explicitly asks for something that requires them; the hub shows every tool call to the room and may ask ${human} for permission.`;
+      : `use tools only when a participant explicitly asks for something that requires them; the room shows every tool call to everyone and may ask ${human} for permission.`;
 
   const lines: string[] = [];
   lines.push("<room-brief>");
   lines.push(
-    `You are ${persona.name}, a participant in the group chat room "${settings.name}". One human, ${human}, and several AI agents take part. A hub program relays messages between participants. You see the room only through these prompts, and the room sees you only through your replies, which are posted verbatim under your name.`,
+    `You are ${persona.name}, a participant in the group chat room "${settings.name}". One human, ${human}, and several AI agents take part. A program called viberoom relays messages between participants. You see the room only through these prompts, and the room sees you only through your replies, which are posted verbatim under your name.`,
   );
+  lines.push("The room keeps conversation history, including messages from before you joined; access to other rooms depends on the human's sharing settings.");
   lines.push("");
   const role = persona.role.trim();
   lines.push(role ? `Your role: ${role} Stay in character as ${persona.name} at all times.` : `Stay in character as ${persona.name} at all times.`);
@@ -378,8 +385,8 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
   lines.push(`- Language: ${language}`);
   lines.push(
     settings.agentsWakeEachOther
-      ? "- Addressing: use @Name to address a participant. A message without @ goes to everyone: every other agent reads it and may answer or stay silent. Every message to agents costs them a turn; the hub limits how long agents can go back and forth without the human."
-      : "- Addressing: use @Name to address a participant. A message without @ is heard by everyone but invites nobody in particular to answer. Every @ to an agent costs that agent a turn; the hub limits how long agents can go back and forth without the human.",
+      ? "- Addressing: use @Name to address a participant. A message without @ goes to everyone: every other agent reads it and may answer or stay silent. Every message to agents costs them a turn; the room limits how long agents can go back and forth without the human."
+      : "- Addressing: use @Name to address a participant. A message without @ is heard by everyone but invites nobody in particular to answer. Every @ to an agent costs that agent a turn; the room limits how long agents can go back and forth without the human.",
   );
   lines.push(
     "- A reply addressed only to the human wakes nobody else. When what you say concerns another participant's work, or they should hear it now, @ them too, or write without @ so everyone hears it.",
@@ -406,15 +413,17 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
   if (skills && (skills.items.length || skills.canCreate)) lines.push(...skillsSection(skills));
   lines.push("");
   lines.push(
-    `How prompts look: <room-header> (who you are, who is here, the hop counter, hub notes), then <messages> (everything posted since your previous turn, oldest first, as "Name -> @Target: text"; room events as "· text"), then "Reply as ${persona.name}." Your own earlier messages are not repeated. Reply with the text of your message only.`,
+    `How prompts look: <room-header> (who you are, who is here, the hop counter, the room's notes), then <messages> (everything posted since your previous turn, oldest first, as "Name -> @Target: text"; room events as "· text"), then "Reply as ${persona.name}." Your own earlier messages are not repeated. Reply with the text of your message only.`,
   );
   lines.push(
-    `A line "> Name (#N, date time): …" inside a message quotes an earlier message of this room, pasted by the writer: those are Name's words, not the writer's, and #N is the hub's number of that message. ${
+    `A line "> Name (#N, date time): …" inside a message quotes an earlier message of this room, pasted by the writer: those are Name's words, not the writer's, and #N is the room's number of that message. ${
       skills?.channel === "tool"
         ? "When the fragment is not enough, the viberoom tool read_message takes the number and returns the whole message (around: N adds its neighbours)."
         : "When the fragment is not enough, ask in the room for the whole message."
     }`,
   );
+  if (skills?.channel === "tool") lines.push('Use search_history for earlier conversation (rooms: "all" includes shared rooms), then read_message with the result\'s room and seq for the full text; recent messages are searchable too.');
+  if (skills?.channel === "tool") lines.push("New room messages arrive automatically on your next turn, not while you work. If you expect an update sooner, you may call check_messages.");
   if (previousNotes && previousNotes.trim()) {
     lines.push("");
     lines.push(`Notes from your previous session (written by you): ${previousNotes.trim()}`);
@@ -449,7 +458,7 @@ export function buildHeader(
     const how = skills.channel === "tool" ? `${SKILL_TOOL_NAME} tool` : "reply exactly [skill:name] to load one";
     lines.push(`· skills: ${skills.items.map((s) => s.name).join(", ")} (${how})`);
   }
-  for (const note of notes) lines.push(`· hub: ${note}`);
+  for (const note of notes) lines.push(`· room: ${note}`);
   lines.push("</room-header>");
   return lines.join("\n");
 }
@@ -508,8 +517,8 @@ export function composePrompt(parts: {
 export function composeCorrectionPrompt(parts: { header: string; originalText: string; corrections: string[]; personaName: string }): string {
   const lines: string[] = [];
   lines.push(parts.header);
-  lines.push("<hub-correction>");
-  lines.push("Your previous reply was held back by the hub; nobody in the room saw it. Problems found:");
+  lines.push("<room-correction>");
+  lines.push("Your previous reply was held back by the room; nobody in the room saw it. Problems found:");
   for (const c of parts.corrections) lines.push(`- ${c.replace(/^reminder:\s*/i, "")}`);
   lines.push("Your reply was:");
   lines.push('"""');
@@ -518,7 +527,7 @@ export function composeCorrectionPrompt(parts: { header: string; originalText: s
   lines.push(
     `Post the corrected message now, as the complete message you want the room to see (not a comment about the correction). Reply with exactly ${SILENT_MARKER} to withdraw it instead.`,
   );
-  lines.push("</hub-correction>");
+  lines.push("</room-correction>");
   lines.push(`Reply as ${parts.personaName} (or ${SILENT_MARKER}).`);
   return lines.join("\n");
 }

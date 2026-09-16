@@ -4,6 +4,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from "n
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { findChromium } from "./launcher.js";
+import { ensureDataRoot } from "./data-root.js";
 
 export interface ShortcutOptions {
   root: string;
@@ -23,7 +24,7 @@ export interface ShortcutResult {
 }
 
 export function vbsLauncher(node: string, main: string, workingDir: string): string {
-  return ["' viberoom: start the hub without a console window and open the app window.", 'Set sh = CreateObject("WScript.Shell")', `sh.CurrentDirectory = "${workingDir}"`, `sh.Run """${node}"" ""${main}"" start", 0, False`, ""].join("\r\n");
+  return ["' viberoom: start the room without a console window and open the app window.", 'Set sh = CreateObject("WScript.Shell")', `sh.CurrentDirectory = "${workingDir}"`, `sh.Run """${node}"" ""${main}"" start", 0, False`, ""].join("\r\n");
 }
 
 const AUMID_BASE: Record<string, string> = { "chrome.exe": "Chrome", "msedge.exe": "MSEdge", "brave.exe": "Brave", "chromium.exe": "Chromium" };
@@ -131,6 +132,7 @@ export function installShortcuts(o: ShortcutOptions): ShortcutResult {
   const main = join(o.root, "dist", "main.js");
   const launcherDir = join(o.dataDir, "launcher");
   const result: ShortcutResult = { files: [], notes: [] };
+  ensureDataRoot(o.dataDir);
   mkdirSync(launcherDir, { recursive: true });
   const icoSrc = join(o.root, "assets", "icon.ico");
   const pngSrc = join(o.root, "assets", "icon-256.png");

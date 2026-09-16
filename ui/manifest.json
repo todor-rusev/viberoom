@@ -1,7 +1,7 @@
 {
   "name": "viberoom",
   "short_name": "viberoom",
-  "description": "Group chat rooms for a human and several coding agents over the Agent Client Protocol",
+  "description": "Bring your AI assistants together in one conversation",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f3f2fb",

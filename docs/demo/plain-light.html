@@ -30,7 +30,7 @@
       </div>
       <div class="rail-foot">
         <button class="rail-item me" data-nav="me" title="Your vibe" id="rail-me"><span class="ico" id="rail-me-avatar"></span><span class="label" id="rail-me-label">You</span></button>
-        <div class="rail-status"><span class="conn" id="conn" title="Connection to the hub"></span><span class="label conn-label" id="conn-label">connected</span></div>
+        <div class="rail-status"><span class="conn" id="conn" title="Connection to the room"></span><span class="label conn-label" id="conn-label">connected</span></div>
         <button class="rail-toggle" id="rail-toggle" title="Expand the menu"><span data-icon="expand"></span></button>
       </div>
     </nav>
@@ -84,6 +84,7 @@
         <div id="cast-banner" class="cast-banner" hidden></div>
         <div id="messages" class="messages"></div>
         <div id="pins-panel" class="pins-panel" hidden></div>
+        <div id="search-panel" class="search-panel" hidden></div>
         <div id="timeline-left" class="timeline left" hidden>
           <div class="tl-view"></div>
           <div class="tl-ticks"></div>
@@ -129,7 +130,7 @@
         <div id="pf-avatar-picker"></div>
         <input id="pf-avatar" type="text" maxlength="8" placeholder="custom emoji (optional)"></label>
       <label>Your vibe line <span class="hint">(a sentence or two about you)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The vibemates get this line in every room's brief, so they know who they are talking to. A room can add its own line or replace it (Your vibe, in the room).</span>
-        <textarea id="pf-desc" rows="3" maxlength="200" placeholder="e.g. software engineer, curious about agent protocols; likes short answers"></textarea></label>
+        <textarea id="pf-desc" rows="3" maxlength="200" placeholder="e.g. software engineer, enjoys learning; likes short answers"></textarea></label>
       <p class="error" id="pf-error" hidden></p>
       <div class="actions"><button type="submit" data-ui="button" data-kind="primary" data-size="lg">Start vibing</button></div>
     </form>
@@ -158,8 +159,9 @@
       <h3><span class="h-ico" data-icon="rooms"></span>Open a room</h3>
       <p class="lead">A room is a shared space for you and the vibemates you summon. Give it a name.</p>
       <label>Room name<input id="room-name" type="text" maxlength="60" required placeholder="e.g. Architecture review"></label>
-      <label>Working directory <span class="hint">(optional)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The folder the vibemates work in (their cwd). Leave it empty and the hub keeps a folder per room. Instruction files in it (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules) are read by the vibemates by their own conventions; the hub tells you if it finds any.</span>
+      <label>Working directory <span class="hint">(optional)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The folder the vibemates work in (their cwd). Leave it empty and viberoom keeps a folder per room. Instruction files in it (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules) are read by the vibemates by their own conventions; the room tells you if it finds any.</span>
         <span class="dir-row"><input id="room-dir" type="text" placeholder="C:\projects\my-app"><button type="button" data-ui="button" data-kind="ghost" class="browse-btn" id="room-dir-browse" title="Choose a folder"><span data-icon="folder"></span>Browse</button></span></label>
+      <label class="switch"><span class="label">Share this room's history with the other rooms<span class="hint">The vibemates here may search the other rooms that also share theirs, and those rooms' vibemates may find messages written here. Hidden and deleted messages are never shared. You can change this later in the room's settings.</span></span><input type="checkbox" id="room-share-history" checked></label>
       <p class="error" id="room-error" hidden></p>
       <div class="actions"><button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button><button type="submit" data-ui="button" data-kind="primary">Open the room</button></div>
     </form>
@@ -264,7 +266,7 @@
       <p class="lead" id="rc-intro"></p>
       <div class="choice-list">
         <label class="choice"><input type="radio" name="rc-mode" value="replay" checked> <span><strong>Replay the last</strong> <span data-ui="number-field" class="rc-num"><input id="rc-replay" type="number" min="0" max="500" value="10"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span> <strong>chat messages</strong> — a fresh start with the recent history.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="replay" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>A new vibemate session that reads the recent room history (room events in between come along), like a person coming back from a break. Cheap and works for every vibemate.</span></span></label>
-        <label class="choice"><input type="radio" name="rc-mode" value="load"> <span><strong>Restore the full session</strong> — the vibemate comes back with everything it knew.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="load" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>ACP <code>session/load</code>: the vibemate reloads its own stored conversation, with tool results and reasoning. Its next turn pays for the whole history again. Falls back to replay if the vibemate cannot load it.</span></span></label>
+        <label class="choice"><input type="radio" name="rc-mode" value="load"> <span><strong>Restore the full session</strong> — the vibemate continues its saved session.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="load" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Continue the vibemate's saved conversation, including its previous work. A long conversation can make the next reply more costly. If it cannot be restored, the vibemate starts a new session with recent messages from this room.</span></span></label>
       </div>
       <table class="rc-table" id="rc-table"></table>
       <p class="error" id="rc-error" hidden></p>
@@ -327,6 +329,8 @@
   <script src="ui.js"></script>
   <script src="components.js"></script>
   <script src="avatars.js"></script>
+  <script src="fold.js"></script>
+  <script src="history-window.js"></script>
   <script src="demo-data.js"></script>
   <script>window.DEMO_LOOK = "plain-light";</script>
   <script src="demo.js"></script>

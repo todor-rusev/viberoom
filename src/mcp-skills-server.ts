@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
+import { parseReadMessageArgs } from "./message-read.js";
+import { parseMessageCheckArgs } from "./message-check.js";
+import { parseAgentSearchArgs } from "./agent-history.js";
+import { McpHttpClient } from "./mcp-http.js";
 
 const HUB = (process.env.VIBEROOM_HUB ?? "").replace(/\/+$/, "");
 const TOKEN = process.env.VIBEROOM_TOKEN ?? "";
+const http = new McpHttpClient(HUB, TOKEN);
 const VERSION = "0.2.0";
 const TOOL_NAME = "load_skill";
 
@@ -72,7 +77,7 @@ const TOOLS = [
   {
     name: "create_skill",
     description:
-      "Create a new skill in the shared skill library (reusable instructions for one kind of task, usable by you later and by other agents). Load the built-in skill \"skill-writer\" first for the rules. The hub lints the skill and returns the problems if it cannot be saved. The human sees every new skill in Settings.",
+      "Create a new skill in the shared skill library (reusable instructions for one kind of task, usable by you later and by other agents). Load the built-in skill \"skill-writer\" first for the rules. The room lints the skill and returns the problems if it cannot be saved. The human sees every new skill in Settings.",
     inputSchema: { type: "object", properties: SKILL_FIELDS, required: ["name", "description", "instructions"] },
   },
   {
@@ -110,7 +115,7 @@ const TOOLS = [
   {
     name: "create_template",
     description:
-      "Save a room template into the human's library: a file the human picks under New room to create a room with these settings, rules and vibemates. No effect on any existing room. The hub checks the design first (errors stop the save, warnings come back with it). A taken name gets a numbered id unless replace is true and the template is one you or the human made.",
+      "Save a room template into the human's library: a file the human picks under New room to create a room with these settings, rules and vibemates. No effect on any existing room. The room checks the design first (errors stop the save, warnings come back with it). A taken name gets a numbered id unless replace is true and the template is one you or the human made.",
     inputSchema: {
       type: "object",
       properties: {
@@ -127,7 +132,7 @@ const TOOLS = [
   {
     name: "propose_room_changes",
     description:
-      "Propose changes to this room: settings by key (rules in customRules, one per line) and vibemates to add, update or remove. The hub checks the change set like a template, then shows the human a card with the diff and the warnings; nothing changes until the human clicks Apply, and the room gets a line with the outcome. A new vibemate is added waiting for the human to pick its coding agent. Say in why what the change fixes.",
+      "Propose changes to this room: settings by key (rules in customRules, one per line) and vibemates to add, update or remove. The room checks the change set like a template, then shows the human a card with the diff and the warnings; nothing changes until the human clicks Apply, and the room gets a line with the outcome. A new vibemate is added waiting for the human to pick its coding agent. Say in why what the change fixes.",
     inputSchema: {
       type: "object",
       properties: {
@@ -166,7 +171,7 @@ const TOOLS = [
   {
     name: "create_look",
     description:
-      "Save a look among the human's own looks: a file the human picks under Settings → Appearance, listed after the looks viberoom ships with the human's name on it. The spec extends a shipped look and changes only what it gives. The hub checks it first (an error stops the save, warnings come back with it). Nothing is worn until the human picks it (or applies a propose_look_changes card). A taken id needs replace: true (one of the human's own looks may be replaced; a look viberoom ships never).",
+      "Save a look among the human's own looks: a file the human picks under Settings → Appearance, listed after the looks viberoom ships with the human's name on it. The spec extends a shipped look and changes only what it gives. The room checks it first (an error stops the save, warnings come back with it). Nothing is worn until the human picks it (or applies a propose_look_changes card). A taken id needs replace: true (one of the human's own looks may be replaced; a look viberoom ships never).",
     inputSchema: {
       type: "object",
       properties: {
@@ -194,16 +199,49 @@ const TOOLS = [
     },
   },
   {
+    name: "search_history",
+    description: "Find earlier conversation in this room by words, quoted phrase or prefix*. Returns ranked snippets and message numbers; the top hit includes up to two visible neighbours on each side. The response has a size limit and flags shortened text. Recent messages are included. Use read_message for the full text or more neighbours. Hidden, deleted and human-only messages are never returned. With rooms=\"all\" it also searches the rooms that share their history with this one, and each result names its room. If nothing relevant is found, try different wording and report the limits of the search. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1, description: "words, quoted phrase or prefix* to find" },
+        rooms: { type: "string", enum: ["this", "all"], description: "optional: this room only (default), or all the rooms open to you" },
+        kinds: { type: "string", enum: ["chat", "chat,system"], description: "optional: chat by default; include room events explicitly" },
+        author: { type: "string", description: "optional: the writer's name" },
+        limit: { type: "integer", minimum: 1, maximum: 10, default: 3 },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "check_messages",
+    description: "Check new messages while working. status (default) gives snapshot-wide counts and headers: direct to you first, then broadcast, other, event; no bodies or acknowledgement. Broadcast includes @All and unaddressed chat. You decide whether to check and what to read: use read_message for a chosen seq, or mode=read for chronological bodies. nextCursor continues as after; status leaves it unchanged. nextPage continues headers as page with the same after; omit page for a fresh snapshot. Addressees are a clue, not grounds to ignore others or interrupt immediately. Responses stay within 16 KiB; truncation is explicit. Cursors belong to one turn; edits reset them. Normal next-turn delivery stays unchanged; do not poll in a waiting loop.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        mode: { type: "string", enum: ["status", "read"], default: "status", description: "status (default): inspect who wrote to whom without reading bodies; read: receive message bodies" },
+        after: { type: "string", minLength: 1, maxLength: 1024, description: "optional: nextCursor from a previous check in this turn" },
+        page: { type: "string", minLength: 1, maxLength: 1024, description: "status only: nextPage for more headers from the same snapshot; keep the same after. Omit to check new arrivals. Never pass as after." },
+        limit: { type: "integer", minimum: 1, maximum: 20, default: 10, description: "maximum bodies or headers in this page; status counts always cover the whole range" },
+      },
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: "read_message",
     description:
-      "One message of this room by its number: the whole of a message that was quoted to you as \"> Name (#N, time): …\", or any message whose #N you have seen. Returns who wrote it, to whom, when, its text, its images as file paths and, with around > 0, up to that many messages before and after it. Read-only; the human sees the call like any other tool call.",
+      "Read a full message by seq. Omit room for this room, or pass the room ID from search_history (preferred) or an exact, unique accessible room name. IDs take precedence over names. Other rooms must share history with yours and have an available record. Returns the room's identity, author, addressees, time, text, images as file paths, quotes, and up to around visible neighbours on each side. Hidden, deleted and human-only rows are excluded. Unknown or inaccessible rooms return the same error; there is no fallback to this room. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
         seq: { type: "integer", description: "the message number, the N of #N" },
+        room: { type: "string", minLength: 1, maxLength: 200, description: "optional: room ID from a search result (preferred), or exact unique accessible room name; omitted means this room" },
         around: { type: "integer", minimum: 0, maximum: 5, description: "optional: how many neighbouring messages to include on each side (default 0, at most 5)" },
       },
       required: ["seq"],
+      additionalProperties: false,
     },
     annotations: { readOnlyHint: true },
   },
@@ -231,19 +269,7 @@ function fail(id: number | string | null | undefined, code: number, message: str
 }
 
 async function hub(path: string, init?: RequestInit): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> {
-  if (!HUB || !TOKEN) return { ok: false, status: 0, body: { error: "viberoom hub address or token missing" } };
-  try {
-    const res = await fetch(`${HUB}${path}`, { ...init, signal: AbortSignal.timeout(10_000) });
-    let body: Record<string, unknown> = {};
-    try {
-      body = (await res.json()) as Record<string, unknown>;
-    } catch {
-      body = {};
-    }
-    return { ok: res.ok, status: res.status, body };
-  } catch (error) {
-    return { ok: false, status: 0, body: { error: `hub unreachable: ${error instanceof Error ? error.message : String(error)}` } };
-  }
+  return http.request(path, init);
 }
 
 function announceReady(): void {
@@ -379,11 +405,37 @@ async function handle(message: JsonRpcMessage): Promise<void> {
         reply(id, { content: [{ type: "text", text: String(res.body.message ?? "proposed") }] });
         return;
       }
+      if (name === "search_history") {
+        let parsed: ReturnType<typeof parseAgentSearchArgs>;
+        try { parsed = parseAgentSearchArgs(args); }
+        catch (error) { return fail(id, -32602, error instanceof Error ? error.message : String(error)); }
+        const query = new URLSearchParams({ token: TOKEN, q: parsed.query, rooms: parsed.rooms, kinds: parsed.kinds, limit: String(parsed.limit) });
+        if (parsed.author !== undefined) query.set("author", parsed.author);
+        const res = await hub(`/api/mcp/search?${query}`);
+        if (!res.ok) return errorResult("the history could not be searched", res);
+        reply(id, { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] });
+        return;
+      }
+      if (name === "check_messages") {
+        let parsed: ReturnType<typeof parseMessageCheckArgs>;
+        try { parsed = parseMessageCheckArgs(args); }
+        catch (error) { return fail(id, -32602, error instanceof Error ? error.message : String(error)); }
+        const query = new URLSearchParams({ token: TOKEN, mode: parsed.mode, limit: String(parsed.limit) });
+        if (parsed.after !== undefined) query.set("after", parsed.after);
+        if (parsed.page !== undefined) query.set("page", parsed.page);
+        const res = await hub(`/api/mcp/check-messages?${query}`);
+        if (!res.ok) return errorResult("messages could not be checked", res);
+        reply(id, { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] });
+        return;
+      }
       if (name === "read_message") {
-        const seq = Number(args.seq);
-        if (!Number.isInteger(seq)) return fail(id, -32602, "read_message needs seq: the message number, the N of #N");
-        const around = Number(args.around);
-        const res = await hub(`/api/mcp/message?token=${encodeURIComponent(TOKEN)}&seq=${seq}${Number.isInteger(around) && around > 0 ? `&around=${around}` : ""}`);
+        let parsed: ReturnType<typeof parseReadMessageArgs>;
+        try { parsed = parseReadMessageArgs(args); }
+        catch (error) { return fail(id, -32602, error instanceof Error ? error.message : String(error)); }
+        const query = new URLSearchParams({ token: TOKEN, seq: String(parsed.seq) });
+        if (parsed.around > 0) query.set("around", String(parsed.around));
+        if (parsed.room !== undefined) query.set("room", parsed.room);
+        const res = await hub(`/api/mcp/message?${query}`);
         if (!res.ok) return errorResult("the message could not be read", res);
         reply(id, { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] });
         return;

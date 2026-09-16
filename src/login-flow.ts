@@ -131,7 +131,7 @@ export class LoginFlows extends EventEmitter {
       if (r.flow.state === "running") {
         if (installedAt) { r.flow.looked = true; this.end(r, "done", `${r.flow.vendor} is installed (${installedAt}). Asking whether it is logged in…`); }
         else {
-          r.flow.detail = `${r.flow.vendor} is still not found on this machine. Finish the install in the terminal window, then press "I'm done" once more; if it went somewhere unusual, \`viberoom doctor\` lists where the hub looked.`;
+          r.flow.detail = `${r.flow.vendor} is still not found on this machine. Finish the install in the terminal window, then press "I'm done" once more; if it went somewhere unusual, \`viberoom doctor\` lists where the room looked.`;
           this.changed(r.flow);
         }
       } else if (r.flow.state === "done" && r.flow.kind !== "terminal" && !r.flow.looked) {
@@ -139,7 +139,7 @@ export class LoginFlows extends EventEmitter {
         if (installedAt) r.flow.detail = `${r.flow.vendor} is installed (${installedAt}). Asking whether it is logged in…`;
         else {
           r.flow.state = "failed";
-          r.flow.detail = `The installer finished, but ${r.flow.vendor} is still not found on this machine: \`viberoom doctor\` lists where the hub looked. "Open a terminal instead" runs the same install where you can see it.`;
+          r.flow.detail = `The installer finished, but ${r.flow.vendor} is still not found on this machine: \`viberoom doctor\` lists where the room looked. "Open a terminal instead" runs the same install where you can see it.`;
         }
         this.changed(r.flow);
       }
@@ -224,7 +224,7 @@ export class LoginFlows extends EventEmitter {
     void (async () => {
       try {
         await agent.initialize({ name: "viberoom", version: "0.2.0" });
-        if (!agent.authMethods.some((m) => m.id === spec.methodId)) throw new Error(`${target.vendor} offers no sign-in named "${spec.methodId}" over ACP (${agent.authMethods.map((m) => m.id).join(", ") || "none"})`);
+        if (!agent.authMethods.some((m) => m.id === spec.methodId)) throw new Error(`${target.vendor} does not support this sign-in method. Check its sign-in options and try again.`);
         await agent.authenticate(spec.methodId);
         if (entry.flow.state === "running") this.end(entry, "done", `${target.vendor} says it is signed in. Checking…`);
       } catch (error) {

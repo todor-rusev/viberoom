@@ -1,12 +1,20 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
+import { cursorOf, type Cursor, type PageQuery } from "./history-store.js";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { parseAgentSearchArgs, searchAgentHistory } from "./agent-history.js";
+import { parseReadMessageArgs } from "./message-read.js";
+import { parseMessageCheckArgs } from "./message-check.js";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { Logger } from "./log.js";
+import { Logger, requestLogPath } from "./log.js";
+import { clearDiagnosticLogs, diagnosticLogStats } from "./diagnostic-logs.js";
+import { parseClientTraces, traceOperation, TRACE_ID_HEADER, TRACE_REPORT_PATH, TRACE_SINCE_HEADER, validTraceId, type RequestTrace } from "./mcp-diagnostics.js";
 import type { Hub, HubEvent } from "./hub.js";
 import { createReadStream, existsSync as fileExists } from "node:fs";
 import { createInterface } from "node:readline";
@@ -19,6 +27,15 @@ import { commandTarget, parseRoomCommand } from "./commands.js";
 import { acceptUpgrade, type WebSocketPeer } from "./ws.js";
 
 let editorFound: DetectedEditor | null | undefined;
+
+export function parseHistoryCursor(raw: string | null, name = "cursor"): Cursor | undefined {
+  if (raw === null) return undefined;
+  if (!/^\d+(?::\d+)?$/.test(raw)) throw new Error(`${name} must be a place in the list, order:seq`);
+  const [orderText, seqText = orderText] = raw.split(":");
+  const order = Number(orderText), seq = Number(seqText);
+  if (!Number.isSafeInteger(order) || !Number.isSafeInteger(seq)) throw new Error(`${name} is outside the supported range`);
+  return { order, seq };
+}
 function currentEditor(): DetectedEditor | null {
   if (editorFound === undefined) editorFound = detectEditor(process.env, process.platform, fileExists);
   return editorFound;
@@ -72,6 +89,7 @@ export interface BuildInfo {
   version: string;
   build: string;
   staleSource?: string | null;
+  sourceCheckout?: boolean;
 }
 
 export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo, onShutdownRequest: () => void, onRestartRequest?: () => void): Promise<RunningServer> {
@@ -105,11 +123,32 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
   }, 20_000);
 
   const server = createServer(async (req, res) => {
+    const path = requestLogPath(req.url), operation = traceOperation(path);
+    let trace: RequestTrace | undefined;
+    if (path.startsWith("/api/mcp/")) res.setHeader(TRACE_SINCE_HEADER, String(hub.requestDiagnostics.clearedAt));
+    if (operation && (req.method === "GET" || req.method === "POST")) {
+      const offered = req.headers[TRACE_ID_HEADER];
+      const requestId = validTraceId(offered) ? offered : randomUUID();
+      trace = { requestId, side: "server", operation, method: req.method, startedAt: Date.now(), outcome: "pending" };
+      res.setHeader(TRACE_ID_HEADER, requestId);
+      hub.requestDiagnostics.put(trace);
+      const started = performance.now();
+      let ended = false;
+      const finish = (closed: boolean) => {
+        if (ended) return;
+        ended = true;
+        hub.requestDiagnostics.put({ ...trace!, durationMs: Math.round(performance.now() - started),
+          outcome: closed ? "aborted" : res.statusCode < 400 ? "ok" : "http_error",
+          ...(res.headersSent ? { status: res.statusCode } : {}) });
+      };
+      res.once("finish", () => finish(false));
+      res.once("close", () => finish(true));
+    }
     try {
       await handle(req, res);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      log.warn(`${req.method} ${req.url}: ${message}`);
+      log.warn(`${req.method} ${path}: ${message}${trace ? ` [request ${trace.requestId}]` : ""}`);
       if (!res.headersSent) sendJson(res, 400, { error: message });
       else res.end();
     }
@@ -341,7 +380,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       log.info(`installing viberoom ${latest} (npm install -g)`);
       const result = await installUpdate(latest, hub.dataDir);
       if (!result.ok) throw new Error(`npm install failed: ${result.output.slice(-600) || "no output"}`);
-      log.info(`viberoom ${latest} installed; starting the new build, which replaces this hub`);
+      log.info(`viberoom ${latest} installed; starting the new build, which replaces this room`);
       sendJson(res, 200, { ok: true, version: latest });
       setTimeout(() => restartWithNewBuild(mainUrl, port, hub.dataDir), 300);
       return;
@@ -388,15 +427,43 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (req.method === "GET" && path === "/api/mcp/search") {
+      const target = hub.resolveMcpToken(url.searchParams.get("token") ?? "");
+      if (!target) {
+        sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+        return;
+      }
+      const params = Object.fromEntries(url.searchParams);
+      delete params.token;
+      const args = parseAgentSearchArgs(params, true);
+      sendJson(res, 200, target.room.searchHistoryForAgent(target.participantId, args,
+        () => searchAgentHistory(hub.historyForAgent(target.room.id), target.room, params, () => hub.roomsForAgentSearch(target.room.id))));
+      return;
+    }
+
+    if (req.method === "GET" && path === "/api/mcp/check-messages") {
+      const target = hub.resolveMcpToken(url.searchParams.get("token") ?? "");
+      if (!target) {
+        sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+        return;
+      }
+      const params = Object.fromEntries(url.searchParams);
+      delete params.token;
+      const args = parseMessageCheckArgs(params, true);
+      sendJson(res, 200, target.room.checkMessagesForAgent(target.participantId, { ...args }));
+      return;
+    }
+
     if (req.method === "GET" && path === "/api/mcp/message") {
       const target = hub.resolveMcpToken(url.searchParams.get("token") ?? "");
       if (!target) {
         sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
         return;
       }
-      const seq = Number(url.searchParams.get("seq"));
-      if (!Number.isInteger(seq)) throw new Error("seq must be the message number, the N of #N");
-      sendJson(res, 200, target.room.readMessageForAgent(target.participantId, seq, Number(url.searchParams.get("around") ?? 0)));
+      const params = Object.fromEntries(url.searchParams);
+      delete params.token;
+      const { seq, around, room } = parseReadMessageArgs(params, true);
+      sendJson(res, 200, hub.readMessageForAgent(target.room.id, target.participantId, seq, around, room));
       return;
     }
 
@@ -416,12 +483,76 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (req.method === "GET" && path === "/api/diagnostic-logs") {
+      sendJson(res, 200, diagnosticLogStats(hub.dataDir));
+      return;
+    }
+    if (req.method === "GET" && path === "/api/diagnostic-requests") {
+      sendJson(res, 200, hub.requestDiagnostics.snapshot());
+      return;
+    }
+
     const recipeOptions = req.method === "GET" && path.match(/^\/api\/recipes\/([^/]+)\/options$/);
     if (recipeOptions) {
       const anyRoom = [...hub.rooms.values()][0];
       if (!anyRoom) throw new Error("create a room first");
       const info = await anyRoom.discoverOptions(decodeURIComponent(recipeOptions[1]), url.searchParams.get("refresh") === "1");
       sendJson(res, 200, info);
+      return;
+    }
+
+    const storeGet = req.method === "GET" && path.match(/^\/api\/rooms\/([^/]+)\/(history|pinned|fold|export)$/);
+    if (storeGet) {
+      const room = hub.getRoom(decodeURIComponent(storeGet[1]));
+      const store = hub.history;
+      if (!store) {
+        sendJson(res, 503, { error: "the conversation store is off (SQLite is not available in this Node)" });
+        return;
+      }
+      if (hub.staleHistoryRoomsAfterRetry([room.id]).length) {
+        sendJson(res, 503, { error: "the conversation store is out of sync for this room after a failed write; it is reconciled again shortly, try once more" });
+        return;
+      }
+      const q = url.searchParams;
+      const stamp = room.historyStamp();
+      if (q.has("version") && q.get("version") !== stamp.version) {
+        sendJson(res, 409, { error: "The conversation changed while its history was loading. Try again.", code: "history_changed", ...stamp });
+        return;
+      }
+      const int = (name: string, fallback: number, lo: number, hi: number): number => {
+        const n = Number(q.get(name));
+        return Number.isFinite(n) && q.has(name) ? Math.min(hi, Math.max(lo, Math.floor(n))) : fallback;
+      };
+      if (storeGet[2] === "history") {
+        const limit = int("limit", 200, 1, 1000);
+        const cursor = (name: string) => parseHistoryCursor(q.get(name), name);
+        const page: PageQuery = { limit };
+        if (q.has("around")) {
+          sendJson(res, 200, { messages: store.around(room.id, int("around", 0, 0, Number.MAX_SAFE_INTEGER), int("window", 25, 0, 500)), ...stamp });
+          return;
+        }
+        if (q.has("before")) page.before = cursor("before");
+        else if (q.has("after")) page.after = cursor("after");
+        const messages = store.page(room.id, page);
+        sendJson(res, 200, { messages, ...stamp, remainingBefore: messages.length ? store.countBefore(room.id, cursorOf(messages[0])) : 0 });
+        return;
+      }
+      if (storeGet[2] === "pinned") {
+        sendJson(res, 200, { messages: store.pinned(room.id) });
+        return;
+      }
+      if (storeGet[2] === "fold") {
+        sendJson(res, 200, store.foldBoundary(room.id, { maxMessages: int("max", 1200, 1, 100_000), maxWeight: q.has("maxWeight") ? int("maxWeight", 4_000_000, 1, Number.MAX_SAFE_INTEGER) : undefined, atLeastSeq: q.has("atLeast") ? int("atLeast", 0, 0, Number.MAX_SAFE_INTEGER) : undefined }));
+        return;
+      }
+      const format = q.get("format") === "md" ? "md" : "jsonl";
+      const body = format === "md" ? store.exportMarkdown(room.id, room.name) : store.exportJsonl(room.id);
+      const safeName = room.name.replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "") || room.id;
+      res.writeHead(200, {
+        "Content-Type": format === "md" ? "text/markdown; charset=utf-8" : "application/x-ndjson; charset=utf-8",
+        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${safeName}.${format}`)}`,
+      });
+      res.end(body);
       return;
     }
 
@@ -434,7 +565,15 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     const roomGet = req.method === "GET" && path.match(/^\/api\/rooms\/([^/]+)$/);
     if (roomGet) {
-      sendJson(res, 200, hub.getRoom(decodeURIComponent(roomGet[1])).snapshot());
+      const room = hub.getRoom(decodeURIComponent(roomGet[1]));
+      const q = url.searchParams;
+      if (q.has("epoch") && q.get("epoch") !== room.historyStamp().epoch) {
+        sendJson(res, 409, { error: "This room changed while its history was loading. Open it again.", code: "room_changed" });
+        return;
+      }
+      const seq = q.has("seq") ? Number(q.get("seq")) : undefined;
+      if (seq !== undefined && (!Number.isSafeInteger(seq) || seq < 0)) throw new Error("seq must be a message number");
+      sendJson(res, 200, room.snapshot({ from: parseHistoryCursor(q.get("from"), "from"), all: q.get("all") === "1", seq }));
       return;
     }
 
@@ -452,6 +591,11 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (req.method === "GET" && path === "/api/search") {
+      sendJson(res, 200, hub.searchHistory(Object.fromEntries(url.searchParams)));
+      return;
+    }
+
     if (req.method === "GET" && path === "/api/rooms") {
       sendJson(res, 200, [...hub.rooms.values()].map((r) => r.snapshot()));
       return;
@@ -463,6 +607,28 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     }
 
     const body = (await readJson(req)) as Record<string, unknown>;
+
+    if (path === TRACE_REPORT_PATH) {
+      const target = hub.resolveMcpToken(typeof body?.token === "string" ? body.token : "");
+      if (!target) { sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" }); return; }
+      if (Object.keys(body).some(key => key !== "token" && key !== "traces")) throw new Error("invalid diagnostic report fields");
+      const traces = parseClientTraces(body.traces);
+      for (const trace of traces) hub.requestDiagnostics.put(trace);
+      sendJson(res, 200, { ok: true, clearedAt: hub.requestDiagnostics.clearedAt });
+      return;
+    }
+
+    if (path === "/api/diagnostic-logs/clear") {
+      const origin = req.headers.origin;
+      if (req.headers["sec-fetch-site"] === "cross-site" || (origin && origin !== `http://${req.headers.host}`)) {
+        sendJson(res, 403, { error: "Open Settings in this viberoom to clear its diagnostic details." });
+        return;
+      }
+      if (body?.confirm !== true || Object.keys(body).some(key => key !== "confirm")) throw new Error("Confirm clearing the saved diagnostic details.");
+      hub.requestDiagnostics.clear();
+      sendJson(res, 200, clearDiagnosticLogs(hub.dataDir));
+      return;
+    }
 
     if (path === "/api/settings") {
       sendJson(res, 200, { ok: true, settings: hub.updateSettings(body) });
@@ -649,6 +815,12 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    const recovery = path.match(/^\/api\/rooms\/([^/]+)\/recovery$/);
+    if (recovery) {
+      sendJson(res, 200, await hub.adoptRoomCopy(decodeURIComponent(recovery[1])));
+      return;
+    }
+
     const proposal = path.match(/^\/api\/rooms\/([^/]+)\/proposals\/([^/]+)$/);
     if (proposal) {
       const room = hub.getRoom(decodeURIComponent(proposal[1]));
@@ -701,7 +873,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     if (path === "/api/restart") {
       if (!onRestartRequest) {
-        sendJson(res, 400, { error: "this hub cannot restart itself" });
+        sendJson(res, 400, { error: "this room cannot restart itself" });
         return;
       }
       log.info("restart requested from the window");
@@ -843,7 +1015,11 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       const id = decodeURIComponent(participantAction[2]);
       const action = participantAction[3];
       if (action === "cancel") {
-        sendJson(res, 200, { ok: true, stopped: room.cancelTurn(id) });
+        if (body.turnId !== undefined && (typeof body.turnId !== "string" || !body.turnId || body.turnId.length > 200)) throw new Error("turnId must identify the reply to stop");
+        const waiting = body.messageId !== undefined || body.bodyVersion !== undefined;
+        if (waiting && (!body.turnId || typeof body.messageId !== "string" || !body.messageId || body.messageId.length > 200 || !Number.isSafeInteger(body.bodyVersion) || Number(body.bodyVersion) < 1)) throw new Error("messageId and bodyVersion must identify the waiting message");
+        sendJson(res, 200, { ok: true, stopped: room.cancelTurn(id, body.turnId as string | undefined,
+          waiting ? { id: body.messageId as string, version: body.bodyVersion as number } : undefined) });
         return;
       } else if (action === "retry") {
         sendJson(res, 200, { ok: true, participant: room.retryTurn(id) });
@@ -931,7 +1107,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         close: () => {
           clearInterval(heartbeat);
           for (const res of clients) res.end();
-          for (const peer of sockets) peer.close(1001, "hub closing");
+          for (const peer of sockets) peer.close(1001, "room closing");
           server.close();
         },
       });
@@ -1014,7 +1190,8 @@ function quoteList(value: unknown): QuoteInput[] {
   return value.slice(0, QUOTES_PER_MESSAGE).map((entry) => {
     const quote = (entry ?? {}) as Record<string, unknown>;
     const n = Number(quote.n);
-    return { seq: Number(quote.seq), text: String(quote.text ?? ""), n: Number.isInteger(n) && n > 0 ? n : undefined };
+    const id = typeof quote.id === "string" && quote.id ? quote.id.slice(0, 200) : undefined;
+    return { id, seq: Number(quote.seq), text: String(quote.text ?? ""), n: Number.isInteger(n) && n > 0 ? n : undefined };
   });
 }
 

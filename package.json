@@ -1,10 +1,10 @@
 {
   "name": "viberoom",
-  "version": "0.9.6",
-  "description": "viberoom: group chat rooms for a human and several coding agents over the Agent Client Protocol",
+  "version": "0.10.0",
+  "description": "viberoom: bring your AI assistants together in one conversation",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.16"
   },
   "bin": {
     "viberoom": "dist/main.js"

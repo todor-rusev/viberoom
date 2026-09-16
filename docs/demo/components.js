@@ -93,16 +93,17 @@
 
   UI.define("unseen-line", {
     group: "unseenLine",
-    describe: "The line across the room above which a vibemate (or several) has seen nothing: a rule on either side of a small label. The rule's drawing is the look's (a wave in VibeClassic, a dashed rule in Terminal); the label names who, and its tooltip says why.",
+    describe: "A vibemate's starting position in the conversation, with a separate note about earlier history. The rule's drawing belongs to the look; this is distinct from the boundary of the history loaded in the window.",
     props: {
-      label: { type: "string", required: true, note: "who has not seen what is above" },
-      title: { type: "string", note: "the tooltip: where a vibemate's knowledge of the room starts" },
+      label: { type: "string", required: true, note: "who started from this position" },
+      detail: { type: "string", note: "how earlier messages can be reached" },
+      title: { type: "string", note: "explanation of the starting context" },
     },
-    build: ({ label, title }, ui) => ui.h("div", { title }, ui.h("span", { class: "line" }), ui.h("span", { class: "label" }, `↑ ${label}`), ui.h("span", { class: "line" })),
+    build: ({ label, detail, title }, ui) => ui.h("div", { title }, ui.h("span", { class: "line", "aria-hidden": "true" }), ui.h("span", { class: "label" }, ui.h("span", { class: "caption" }, label), detail ? ui.h("span", { class: "detail" }, detail) : null), ui.h("span", { class: "line", "aria-hidden": "true" })),
     states: ["rest"],
     samples: [
-      { label: "one vibemate", props: { label: "Maken has not seen anything above this line" } },
-      { label: "two", props: { label: "Maken and Sam have not seen anything above this line" } },
+      { label: "one vibemate", props: { label: "Maken started from here", detail: "but it can still read the earlier messages." } },
+      { label: "two", props: { label: "Maken and Sam started from here", detail: "Earlier messages remain in the room history." } },
     ],
   });
 
@@ -137,7 +138,7 @@
     group: "adjustRow",
     describe: "One thing the human may adjust in a look (U125): its name and what it colours on the left, the control on the right — a swatch with its value for a colour, a slider with its value for a scale — and, once the value differs from the look's own, the way back. Settings → Appearance lists them by group from the adjustables in tokens.js; the page keeps data-state and the value in step as the human picks.",
     props: {
-      key: { type: "string", required: true, note: "the adjustable's key (data-key), what the hub keeps it under" },
+      key: { type: "string", required: true, note: "the adjustable's key (data-key), what the room keeps it under" },
       label: { type: "string", required: true },
       hint: { type: "string", note: "what it colours" },
       kind: { type: "enum", values: ["colour", "scale"], default: "colour" },
@@ -188,10 +189,10 @@
 
   UI.define("hub-row", {
     group: "hubRow",
-    describe: "A line the hub writes into the room (U114): news in muted words; a tone colours it (attention, error, hush); the one row that leads somewhere carries a ref and is a button with a backing, the only row that ever wears one.",
+    describe: "A line the room writes into the chat (U114): news in muted words; a tone colours it (attention, error, hush); the one row that leads somewhere carries a ref and is a button with a backing, the only row that ever wears one.",
     props: {
       text: { type: "string", required: true },
-      tone: { type: "enum", values: ["news", "attention", "error", "hush"], default: "news", note: "what kind of news the hub says it is" },
+      tone: { type: "enum", values: ["news", "attention", "error", "hush"], default: "news", note: "what kind of news the room says it is" },
       ref: { type: "string", note: "the id of the message the row leads to; with it the row is a button" },
       face: { type: "node", note: "markup of a face before the words (ui.raw): the vibemate's, or the shushing one" },
       title: { type: "string", note: "the tooltip: when, and where a click goes" },
@@ -394,7 +395,7 @@
     props: {
       name: { type: "string", required: true },
       lines: { type: "string", note: "what part is shown, in words: 'lines 120–160', or a picture's size once it loaded" },
-      kind: { type: "enum", values: ["code", "image"], default: "code" },
+      kind: { type: "enum", values: ["code", "image", "doc"], default: "code", note: "doc: a rendered Markdown page or a CSV table instead of source" },
       body: { type: "html", note: "the code view or the picture: markup the caller vouches for" },
       error: { type: "string", note: "why the file could not be shown; takes the body's place" },
       act: { type: "string", default: "open-file", note: "the head button's act" },
@@ -410,6 +411,7 @@
     samples: [
       { label: "a fragment", props: { name: "room.ts", lines: "lines 120–124", body: "<pre style=\"margin:0;padding:10px 12px\">120  const key = randomUUID();\n121  const entry = { key, ts: Date.now() };\n122  this.pending.set(key, entry);\n123  this.push({ type: \"permission\", key });\n124  return entry;</pre>" } },
       { label: "a picture", props: { name: "mockup.png", lines: "640×400", kind: "image", openTitle: "Open it big", body: "<div style=\"width:200px;height:90px;border-radius:8px;background:var(--lav)\"></div>" } },
+      { label: "a rendered document", props: { name: "notes.md", lines: "first 40 of 380 lines", kind: "doc", body: "<div class=\"file-view markdown doc-preview\"><h1>Tuesday</h1><p><b>What we decided.</b> The list keeps the reader where they are; a jump says who asked for it.</p></div>" } },
       { label: "could not be shown", props: { name: "gone.ts", error: "gone.ts could not be shown here: no such file." } },
     ],
   });
@@ -422,14 +424,15 @@
       id: { type: "string", required: true, note: "the call's id; the chip carries it as data-tool for the page's handler" },
       title: { type: "string", required: true },
       kind: { type: "string" },
+      variant: { type: "enum", values: ["tool", "message-check", "history-search"], default: "tool", note: "room-recorded message checks and history searches have their own icon and informational tone" },
       status: { type: "enum", values: ["pending", "in_progress", "completed", "failed"], default: "pending" },
       open: { type: "boolean", default: false, note: "open, the card shows the call; the body is built only then" },
       input: { type: "string", note: "shown up to 4000 characters" },
       output: { type: "string" },
     },
-    build: ({ id, title, kind, status, open, input, output }, ui) =>
-      ui.h("div", { "data-status": status, "data-state": open ? "open" : null },
-        ui.build("chip", { label: `${title}${kind ? ` · ${kind}` : ""} · ${status}`, icon: "tool", tone: TOOL_TONE[status] || "plain", button: true, title: open ? "Collapse" : "Expand", data: { tool: id } }),
+    build: ({ id, title, kind, variant, status, open, input, output }, ui) =>
+      ui.h("div", { "data-status": status, "data-state": open ? "open" : null, "data-variant": variant !== "tool" ? variant : null },
+        ui.build("chip", { label: variant !== "tool" ? title : `${title}${kind ? ` · ${kind}` : ""} · ${status}`, icon: variant === "message-check" ? "inbox" : variant === "history-search" ? "search" : "tool", tone: TOOL_TONE[status] || "plain", button: true, title: open ? "Collapse" : "Expand", data: { tool: id } }),
         open
           ? ui.h("div", { class: "body" },
               ui.h("div", { class: "sec" }, ui.h("b", null, "call"), ui.h("pre", null, title)),
@@ -443,6 +446,10 @@
       { label: "running", props: { id: "t3", title: "Grep", kind: "search", status: "in_progress" } },
       { label: "pending", props: { id: "t4", title: "Edit", kind: "edit" } },
       { label: "open", props: { id: "t5", title: "Read file", kind: "read", status: "completed", open: true, input: "{ \"path\": \"src/room.ts\" }", output: "export class Room { … }" } },
+      { label: "checked, empty", props: { id: "c1", title: "Checked messages · Nothing new", variant: "message-check", status: "completed" } },
+      { label: "checked, available", props: { id: "c2", title: "Checked messages · 3 new", variant: "message-check", status: "completed" } },
+      { label: "returned", props: { id: "c3", title: "Returned 3 messages", variant: "message-check", status: "completed" } },
+      { label: "check failed", props: { id: "c4", title: "Message check failed", variant: "message-check", status: "failed" } },
     ],
   });
 
@@ -471,7 +478,7 @@
     group: "askCard",
     describe: "A card the room puts in front of you for a decision: a permission a vibemate asks for, a proposal it makes. It says who asks and what, shows the details, and offers the choices as buttons; decided, it dims and keeps the outcome in the choices' place.",
     props: {
-      kind: { type: "enum", values: ["permission", "proposal"], required: true },
+      kind: { type: "enum", values: ["permission", "proposal", "recovery"], required: true },
       who: { type: "string", required: true, note: "who asks, by name" },
       lead: { type: "string", note: "what is asked, in words after the name; the default fits the kind" },
       subject: { type: "string", note: "what the ask is about, in bold: the tool call's title" },
@@ -484,7 +491,7 @@
     },
     build: ({ kind, who, lead, subject, subjectKind, input, body, choices, outcome, data }, ui) =>
       ui.h("div", { "data-kind": kind, "data-state": outcome ? "resolved" : null, ...ui.dataAttrs(data) },
-        ui.h("div", { class: "title" }, ui.icon(kind === "permission" ? "lock" : "pencil"), " ", who, " ", lead || (kind === "permission" ? "asks for permission:" : "proposes changes to the room"), subject ? [" ", ui.h("strong", null, subject)] : null, subjectKind ? [" ", ui.h("span", { class: "kind" }, subjectKind)] : null),
+        ui.h("div", { class: "title" }, ui.icon(kind === "permission" ? "lock" : kind === "recovery" ? "info" : "pencil"), " ", who, " ", lead || (kind === "permission" ? "asks for permission:" : kind === "recovery" ? "has a decision for you" : "proposes changes to the room"), subject ? [" ", ui.h("strong", null, subject)] : null, subjectKind ? [" ", ui.h("span", { class: "kind" }, subjectKind)] : null),
         input ? ui.h("pre", { class: "input" }, input.slice(0, 1200)) : null,
         body ? ui.raw(body) : null,
         ui.h("div", { class: "choices" },
@@ -563,7 +570,7 @@
     },
     states: ["rest"],
     samples: [
-      { label: "before anything runs", props: { vendor: "Grok", state: "idle", scene: "browser", kind: "acp", words: "Grok opens your browser. Sign in there and come back; viberoom waits.", status: "You are not authenticated.", geek: "The hub asks Grok to sign you in over ACP (grok.com). viberoom never sees your password or keys." } },
+      { label: "before anything runs", props: { vendor: "Grok", state: "idle", scene: "browser", kind: "acp", words: "Grok opens your browser. Sign in there and come back; viberoom waits.", status: "You are not signed in.", geek: "Sign in on Grok's website, then return here to continue." } },
       { label: "a code to type", props: { vendor: "Codex", state: "running", scene: "code", words: "Open the page and enter the code there; Codex notices when you are done.", url: "https://auth.openai.com/codex/device", code: "ABCD-1234", lines: ["Follow these steps to sign in with ChatGPT using device code authorization:", "1. Open this link in your browser", "   https://auth.openai.com/codex/device", "2. Enter this one-time code", "   ABCD-1234"] } },
       { label: "a question", props: { vendor: "Fake", state: "running", scene: "question", words: "Fake is asking you something: answer below.", wantsInput: true, lines: ["Paste the code here:"] } },
       { label: "in a terminal", props: { vendor: "Hermes", state: "running", scene: "terminal", kind: "terminal", words: "Finish the sign-in in the terminal window, then press I'm done.", lines: ["\"C:\\Users\\me\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\hermes.exe\" model"] } },
@@ -575,7 +582,7 @@
 
   UI.define("reply-note", {
     group: "replyNote",
-    describe: "A line the hub attaches to a reply, inside its bubble: an adapter's notice before the words, or the fact that the reply was stopped, right after them. The words stay; the note says what happened to them.",
+    describe: "A line the room attaches to a reply, inside its bubble: an adapter's notice before the words, or the fact that the reply was stopped, right after them. The words stay; the note says what happened to them.",
     props: {
       text: { type: "string", required: true },
       tone: { type: "enum", values: ["info", "attention"], default: "info", note: "info: a quiet fact; attention: something that changed the reply" },

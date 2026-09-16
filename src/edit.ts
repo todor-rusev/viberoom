@@ -8,6 +8,7 @@ export interface AgentReadState {
   id: string;
   name: string;
   lastSeenSeq: number;
+  suppliedThrough?: number;
   active: boolean;
   online: boolean;
 }
@@ -24,7 +25,7 @@ export function affectedByEdit(agents: AgentReadState[], editedSeq: number): { r
   const untouched: AgentReadState[] = [];
   const offline: AgentReadState[] = [];
   for (const a of agents) {
-    const saw = a.lastSeenSeq >= editedSeq || a.active;
+    const saw = Math.max(a.lastSeenSeq, a.suppliedThrough ?? -1) >= editedSeq || a.active;
     if (!a.online) (saw ? offline : untouched).push(a);
     else (saw ? restart : untouched).push(a);
   }
@@ -32,7 +33,7 @@ export function affectedByEdit(agents: AgentReadState[], editedSeq: number): { r
 }
 
 const QUOTE_MAX = 240;
-const FULL_MAX = 4000;
+export const EDIT_NOTICE_MAX = 4000;
 
 function quote(text: string): string {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -41,13 +42,13 @@ function quote(text: string): string {
 
 function full(text: string): string {
   const trimmed = text.trim();
-  return trimmed.length > FULL_MAX ? `${trimmed.slice(0, FULL_MAX)}…` : trimmed;
+  return trimmed.length > EDIT_NOTICE_MAX ? `${trimmed.slice(0, EDIT_NOTICE_MAX)}…` : trimmed;
 }
 
 export function editNotice(humanName: string, previous: string, next: string): string {
-  const added = next.startsWith(previous) ? next.slice(previous.length).trim() : "";
+  const added = next.startsWith(previous) ? next.slice(previous.length) : "";
   const body = added
-    ? `They added to the end of it:\n\n"${full(added)}"`
+    ? `They added to the end of it:\n\n"${added.length > EDIT_NOTICE_MAX ? added.slice(0, EDIT_NOTICE_MAX) + "…" : added}"`
     : `It now reads:\n\n"${full(next)}"\n\nBefore: "${quote(previous)}"`;
   return `${humanName} edited an earlier message. ${body}\n\nReply only if the change matters to you; otherwise [silent].`;
 }

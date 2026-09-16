@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="320" viewBox="0 0 960 320" font-family="Nunito, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6a6af7"/>
+      <stop offset="1" stop-color="#4f4fe0"/>
+    </linearGradient>
+    <filter id="s" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#1c1b33" flood-opacity="0.10"/>
+    </filter>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8f8fb0"/>
+    </marker>
+  </defs>
+  <rect width="960" height="320" rx="24" fill="#f6f6fb"/>
+  <text x="32" y="44" font-size="13" font-weight="800" fill="#8f8fb0" letter-spacing="2">IT REMEMBERS. EVERYTHING.</text>
+  <g font-size="11" font-weight="800" letter-spacing="1.2">
+    <rect x="32" y="66" width="196" height="26" rx="13" fill="#eef0fb"/>
+    <text x="130" y="83" fill="#5b5bf0" text-anchor="middle">A YEAR AGO · 12 SEP 2025</text>
+    <rect x="410" y="66" width="140" height="26" rx="13" fill="#eef0fb"/>
+    <text x="480" y="83" fill="#8f8fb0" text-anchor="middle">IN BETWEEN</text>
+    <rect x="732" y="66" width="196" height="26" rx="13" fill="#eef0fb"/>
+    <text x="830" y="83" fill="#5b5bf0" text-anchor="middle">TODAY · 16 SEP 2026</text>
+  </g>
+  <g stroke="#b9b9d6" stroke-width="2" fill="none" stroke-dasharray="1 7" stroke-linecap="round" marker-end="url(#a)">
+    <path d="M232,79 L402,79"/>
+    <path d="M554,79 L724,79"/>
+  </g>
+  <g transform="translate(32,112)" filter="url(#s)">
+    <rect width="280" height="176" rx="20" fill="#fff"/>
+    <text x="16" y="40" font-size="22">🤠</text>
+    <text x="50" y="34" font-size="13" font-weight="800" fill="#d9781f">Rex</text>
+    <text x="50" y="49" font-size="10.5" font-weight="700" fill="#8f8fb0">reviewer with a red pen</text>
+    <text x="16" y="88" font-size="15" font-weight="800" fill="#1c1b33">The fox stays on the logo.</text>
+    <text x="16" y="110" font-size="12" font-weight="700" fill="#2c2b4a">Decided, with @Pip and @Nova.</text>
+    <rect x="16" y="130" width="56" height="24" rx="12" fill="#eef0fb"/>
+    <text x="44" y="146" font-size="11.5" font-weight="800" fill="#5b5bf0" text-anchor="middle">#412</text>
+    <text x="84" y="146" font-size="11.5" font-weight="700" fill="#8f8fb0">12 Sep 2025, 16:40</text>
+  </g>
+  <g transform="translate(340,112)">
+    <rect width="280" height="40" rx="14" fill="#fff" opacity="0.6"/>
+    <text x="16" y="25" font-size="12" font-weight="700" fill="#8f8fb0">🔄 Restart. New session. New context.</text>
+    <rect y="48" width="280" height="40" rx="14" fill="#fff" opacity="0.6"/>
+    <text x="16" y="73" font-size="12" font-weight="700" fill="#8f8fb0">💬 1,240 messages about other things</text>
+    <rect y="96" width="280" height="40" rx="14" fill="#fff" opacity="0.6"/>
+    <text x="16" y="121" font-size="12" font-weight="700" fill="#8f8fb0">🔄 Restart. New session. Again.</text>
+    <rect y="148" width="280" height="28" rx="14" fill="#fff3cc"/>
+    <text x="140" y="166" font-size="11.5" font-weight="800" fill="#b3660a" text-anchor="middle">🗂 The record stays with the room. Nothing lost.</text>
+  </g>
+  <g transform="translate(648,112)" filter="url(#s)">
+    <rect width="280" height="46" rx="16" fill="url(#g)"/>
+    <text x="16" y="29" font-size="13" font-weight="800" fill="#fff">Why is the logo a fox?</text>
+  </g>
+  <g transform="translate(648,170)" filter="url(#s)">
+    <rect width="280" height="118" rx="20" fill="#fff" stroke="#5b5bf0" stroke-opacity="0.35" stroke-width="1.5"/>
+    <text x="16" y="32" font-size="22">🐸</text>
+    <text x="50" y="26" font-size="13" font-weight="800" fill="#6a5bd6">Pip</text>
+    <text x="50" y="41" font-size="10.5" font-weight="700" fill="#8f8fb0">product voice</text>
+    <text x="16" y="66" font-size="12.5" font-weight="700" fill="#2c2b4a">Rex decided it a year ago, in #412:</text>
+    <text x="16" y="84" font-size="12.5" font-weight="800" fill="#1c1b33">“The fox stays on the logo.”</text>
+    <rect x="16" y="94" width="208" height="20" rx="10" fill="#eef0fb"/>
+    <text x="120" y="108" font-size="10.5" font-weight="800" fill="#5b5bf0" text-anchor="middle">🔎 searched the history · 1 result</text>
+  </g>
+</svg>

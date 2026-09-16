@@ -11,9 +11,9 @@ export interface MenuItem {
 
 export const MENU: MenuItem[] = [
   { id: "shortcut", label: "Install the desktop icon", hint: "Start Menu and Desktop entry that opens the app window" },
-  { id: "window", label: "Open in the app window", hint: "the hub in the background, a Chromium window of its own" },
-  { id: "browser", label: "Open in your browser", hint: "the hub in the background, a tab in your default browser" },
-  { id: "terminal", label: "Run here, in this terminal", hint: "the hub in the foreground with its log; Ctrl+C stops it" },
+  { id: "window", label: "Open in the app window", hint: "the room in the background, a Chromium window of its own" },
+  { id: "browser", label: "Open in your browser", hint: "the room in the background, a tab in your default browser" },
+  { id: "terminal", label: "Run here, in this terminal", hint: "the room in the foreground with its log; Ctrl+C stops it" },
   { id: "quit", label: "Quit", hint: "" },
 ];
 
@@ -130,8 +130,8 @@ export function renderInstalled(o: { files: string[]; notes: string[]; platform:
     ...steps.map((t) => `${bar}  ${t}`),
     bar,
     `${green(g.done)}  ${bold("What happens")}`,
-    `${bar}  The icon starts the hub in the background and opens the app window.`,
-    `${bar}  Closing the window keeps the hub running; "viberoom stop" in a terminal ends it.`,
+    `${bar}  The icon starts the room in the background and opens the app window.`,
+    `${bar}  Closing the window keeps the room running; "viberoom stop" in a terminal ends it.`,
     `${bar}  A newer version: the app tells you with a bubble over your avatar (Settings → Updates).`,
   ];
   if (o.browserAdvice) lines.push(bar, `${paint(opts.color, "33", "!")}  ${o.browserAdvice}`);

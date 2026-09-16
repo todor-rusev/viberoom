@@ -322,6 +322,8 @@
   --file-card-image-body-bg: rgba(244, 242, 255, 0.04);
   --file-card-image-bg: #ffffff;
   --file-card-shadow: var(--edge);
+  --tool-call-check-bg: #eef0fb;
+  --tool-call-check-ink: #1c1b33;
   --tool-call-ready-bg: #d9f7e8;
   --tool-call-ready-ink: #1d8f6a;
   --tool-call-error-bg: #fff0ee;

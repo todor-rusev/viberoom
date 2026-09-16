@@ -301,6 +301,8 @@
   --file-card-image-body-bg: rgba(244, 242, 255, 0.04);
   --file-card-image-bg: #202142;
   --file-card-shadow: var(--edge);
+  --tool-call-check-bg: #2c2e56;
+  --tool-call-check-ink: #f1efff;
   --tool-call-ready-bg: #1a4235;
   --tool-call-ready-ink: #6ee8b3;
   --tool-call-error-bg: #401c1e;
@@ -905,6 +907,8 @@
   --file-card-image-body-bg: rgba(245, 241, 232, 0.04);
   --file-card-image-bg: #ffffff;
   --file-card-shadow: var(--edge);
+  --tool-call-check-bg: #ebe7db;
+  --tool-call-check-ink: #1f1e1d;
   --tool-call-ready-bg: #dff0e1;
   --tool-call-ready-ink: #2f7a4f;
   --tool-call-error-bg: #f9e3df;
@@ -1509,6 +1513,8 @@
   --file-card-image-body-bg: rgba(43, 42, 39, 0.04);
   --file-card-image-bg: #f9f6ef;
   --file-card-shadow: var(--edge);
+  --tool-call-check-bg: #e8e1d3;
+  --tool-call-check-ink: #2b2a27;
   --tool-call-ready-bg: #e0ebe2;
   --tool-call-ready-ink: #2f6b4f;
   --tool-call-error-bg: #f2e0dc;
@@ -2113,6 +2119,8 @@
   --file-card-image-body-bg: rgba(249, 241, 228, 0.04);
   --file-card-image-bg: #f9f0e1;
   --file-card-shadow: inset 0 1.5px 2px rgba(249, 240, 225, 0.95), inset 1px 0 1px rgba(249, 240, 225, 0.5), inset 0 -4px 5px -2px rgba(122, 85, 64, 0.2), inset -1px 0 2px -1px rgba(122, 85, 64, 0.08), 0 0 0 1px rgba(122, 85, 64, 0.07), 0 1px 2px rgba(122, 85, 64, 0.14), 0 6px 12px -4px rgba(122, 85, 64, 0.3);
+  --tool-call-check-bg: #f1e4d2;
+  --tool-call-check-ink: #5a3e36;
   --tool-call-ready-bg: #c9e8c4;
   --tool-call-ready-ink: #3f7a4a;
   --tool-call-error-bg: #f7c9d8;
@@ -2717,6 +2725,8 @@
   --file-card-image-body-bg: rgba(215, 227, 217, 0.04);
   --file-card-image-bg: #0f1411;
   --file-card-shadow: var(--edge);
+  --tool-call-check-bg: #172019;
+  --tool-call-check-ink: #d7e3d9;
   --tool-call-ready-bg: #123a26;
   --tool-call-ready-ink: #3ddc84;
   --tool-call-error-bg: #3a1512;
@@ -3321,6 +3331,8 @@
   --file-card-image-body-bg: rgba(23, 24, 26, 0.02);
   --file-card-image-bg: #ffffff;
   --file-card-shadow: var(--edge);
+  --tool-call-check-bg: #f0f0f1;
+  --tool-call-check-ink: #17181a;
   --tool-call-ready-bg: #e7f3ec;
   --tool-call-ready-ink: #186a4c;
   --tool-call-error-bg: #fbeeec;
@@ -3925,6 +3937,8 @@
   --file-card-image-body-bg: rgba(242, 242, 243, 0.02);
   --file-card-image-bg: #17171a;
   --file-card-shadow: var(--edge);
+  --tool-call-check-bg: #1c1c20;
+  --tool-call-check-ink: #f2f2f3;
   --tool-call-ready-bg: #123a2a;
   --tool-call-ready-ink: #5fd6a0;
   --tool-call-error-bg: #3c1c1a;

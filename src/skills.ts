@@ -1,6 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Logger } from "./log.js";
 
@@ -104,7 +104,7 @@ export function lintSkill(input: {
   if (!body) errors.push({ code: "body-empty", message: "the instructions are empty" });
   else if (body.length > BODY_MAX) errors.push({ code: "body-too-long", message: `the instructions must be at most ${BODY_MAX} characters` });
   if (/\[skill:/i.test(body) || /<\/?skill[\s>]/i.test(body)) {
-    errors.push({ code: "body-contains-delivery-syntax", message: "the instructions must not contain [skill:…] or <skill> tags (they are the hub's delivery syntax)" });
+    errors.push({ code: "body-contains-delivery-syntax", message: "the instructions must not contain [skill:…] or <skill> tags (they are the room's delivery syntax)" });
   }
   const usesArguments = /(^|[^\\])\$ARGUMENTS/.test(body);
   if (usesArguments && !hint) warnings.push({ code: "arguments-without-hint", message: "the instructions use $ARGUMENTS but there is no argument hint for the / menu" });
@@ -124,7 +124,7 @@ export const SKILL_WRITER: SkillDraft = {
     "- name: short, lowercase, hyphenated (e.g. pr-review, daily-summary). It becomes the /command.",
     "- description: one or two sentences that say WHAT the skill does and WHEN to use it. This is the only thing agents see before loading it, so it must let them decide (e.g. \"Review a pull request for correctness and post findings as a numbered list. Use when someone asks for a code review.\").",
     "- instructions: imperative, concrete steps or a format. Say what the reply should contain, in what order, how long. Include an example when the format is non-obvious. Write \\$ARGUMENTS where the caller's text (what follows /name) belongs; give an argument hint like [PR number] when you use it. To mention the placeholder without filling it in, put a backslash before it.",
-    "- Do not put chat greetings, room rules or secrets in a skill, and do not write the hub's own delivery markers (the bracketed skill marker or skill tags) in it.",
+    "- Do not put chat greetings, room rules or secrets in a skill, and do not write the room's own delivery markers (the bracketed skill marker or skill tags) in it.",
     "- Keep it under ~300 words; put long reference material in separate files in the skill's folder instead.",
     "",
     "Before creating: check that no existing skill already covers the task (your brief lists the skills you have). Prefer updating an agent-made skill over creating a near-duplicate.",
@@ -142,7 +142,7 @@ export const ROOM_DESIGNER: SkillDraft = {
   description: "How to design a good viberoom room: rules, vibemates and settings, as a template or as a change to this room. Load it before lint_room_design, create_template or propose_room_changes.",
   argumentHint: "",
   body: [
-    "A room is a protocol between one human and a few vibemates. The hub already tells every vibemate the mechanics (who it is, @Name addressing, the [silent] reply, tools, language, Markdown); your design adds only what the mechanics do not say. Facts about the settings (keys, bounds, defaults, current values) come from the describe_room tool; do not guess them.",
+    "A room is a protocol between one human and a few vibemates. The room already tells every vibemate the mechanics (who it is, @Name addressing, the [silent] reply, tools, language, Markdown); your design adds only what the mechanics do not say. Facts about the settings (keys, bounds, defaults, current values) come from the describe_room tool; do not guess them.",
     "",
     "Rules are the protocol; roles are the people. Write how the vibemates work together once, in the room rules, where all of them read it. A role says who this one is and which way it leans, then ends with \"Everything else is in the room rules\". Two roles that each restate the protocol drift apart.",
     "",
@@ -255,7 +255,31 @@ export const LOOK_DESIGNER: SkillDraft = {
   draft: false,
 };
 
-export const BUILTIN_SKILLS: SkillDraft[] = [SKILL_WRITER, ROOM_DESIGNER, LOOK_DESIGNER];
+export const ROOM_LIBRARIAN: SkillDraft = {
+  name: "room-librarian",
+  description:
+    "Find what this room already discussed or decided about a topic and answer with checkable message numbers. Use when someone asks what was said, decided or tried about something, or when you need earlier context before you answer.",
+  argumentHint: "[topic]",
+  body: [
+    "Find what the room already knows about: $ARGUMENTS",
+    "",
+    "1. Ask search_history in two or three different ways, not one. Use the words the asker used; the words the room would have used (a file, a setting, a person's name); and one exact phrase in quotes. Add rooms: \"all\" when the topic may belong to another room.",
+    "2. If nothing comes back, change the angle before you conclude anything: a prefix like deploy*, an author, or kinds: \"chat,system\" for room events.",
+    "3. Open the promising hits with read_message and around: 1 or 2. A hit from another room needs its room as well as its seq: a number alone means a different message in every room. The decision is usually in the reply under the matching line, not in the line itself.",
+    "4. Answer in this shape: one sentence with the answer; then two to five bullets, oldest first, each \"#seq — who — what in one clause\", naming the room when it is not this one; then one line on what is still open, if anything is.",
+    "5. Say what you did not find, and name the words you tried. Not found is not the same as not discussed; the asker may know a better word.",
+    "6. When the hits disagree, give both and say which is newer. Do not pick one silently.",
+    "7. Quote a clause, not a paragraph. The number is the link; the reader opens the rest.",
+    "8. If search_history is unavailable, say that you cannot verify the archive and ask the room for help. Distinguish information in your current context from findings verified through history tools.",
+  ].join("\n"),
+  userInvocable: true,
+  agentInvocable: true,
+  author: BUILTIN_AUTHOR,
+  reviewed: true,
+  draft: false,
+};
+
+export const BUILTIN_SKILLS: SkillDraft[] = [SKILL_WRITER, ROOM_DESIGNER, LOOK_DESIGNER, ROOM_LIBRARIAN];
 
 export function isBuiltinSkill(name: string): boolean {
   const lower = name.trim().toLowerCase();
@@ -358,14 +382,51 @@ export class SkillLibrary {
     });
   }
 
-  seedBuiltins(): void {
+  seedBuiltins(): { name: string; kept: string }[] {
+    const moved: { name: string; kept: string }[] = [];
     for (const builtin of BUILTIN_SKILLS) {
       const folder = this.folderFor(builtin.name);
       const current = folder ? this.load(folder) : undefined;
-      if (current && current.description === builtin.description && current.body === builtin.body && (current.argumentHint ?? "") === (builtin.argumentHint ?? "")) continue;
+      const same = current && current.description === builtin.description && current.body === builtin.body && (current.argumentHint ?? "") === (builtin.argumentHint ?? "");
+      if (same && current.author === BUILTIN_AUTHOR) continue;
+      if (current && folder && current.author !== BUILTIN_AUTHOR) {
+        const kept = this.keepAside(folder, builtin.name);
+        if (!kept) {
+          this.log.error(`built-in skill "${builtin.name}" was not installed: your own skill of that name could not be copied aside first`);
+          continue;
+        }
+        this.log.warn(`"${builtin.name}" is a built-in skill from this version; your own skill of that name is kept as "${kept}"`);
+        moved.push({ name: builtin.name, kept });
+      }
       this.save(builtin);
       if (current) this.log.info(`built-in skill "${builtin.name}" updated to the shipped text`);
     }
+    return moved;
+  }
+
+  private keepAside(folder: string, name: string): string | null {
+    const from = join(this.dir, folder);
+    for (let n = 1; n <= 20; n++) {
+      const kept = n === 1 ? `${name}-yours` : `${name}-yours-${n}`;
+      if (!SKILL_NAME_PATTERN.test(kept)) return null;
+      if (existsSync(join(this.dir, kept))) continue;
+      const to = join(this.dir, kept);
+      try {
+        cpSync(from, to, { recursive: true });
+        const { meta, body } = parseFrontmatter(readFileSync(join(to, SKILL_FILE), "utf8"));
+        writeFileSync(join(to, SKILL_FILE), `${renderFrontmatter({ ...meta, name: kept })}\n\n${body.trim()}\n`);
+        this.cache.delete(kept);
+        return kept;
+      } catch (error) {
+        this.log.warn(`skill "${name}" could not be copied aside: ${String(error)}`);
+        try {
+          rmSync(to, { recursive: true, force: true });
+        } catch {
+        }
+        return null;
+      }
+    }
+    return null;
   }
 
   remove(name: string): void {

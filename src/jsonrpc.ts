@@ -68,6 +68,12 @@ export class JsonRpcPeer {
     rl.on("line", (line) => {
       void this.onLine(line);
     });
+    rl.on("close", () => this.close("the agent closed its output"));
+    const failed = (error: Error) => this.close(`the agent's output failed: ${error.message}`);
+    rl.on("error", failed);
+    output.on("error", failed);
+    output.on("close", () => this.close("the agent closed its output"));
+    input.on("error", (error: Error) => this.close(`the connection to the agent failed: ${error.message}`));
   }
 
   request(method: string, params?: unknown): Promise<unknown> {

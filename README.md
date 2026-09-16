@@ -29,6 +29,17 @@ Open a room, summon the agents you already have, give each one a role, and let t
 
 <br>
 
+<p align="center"><strong>It remembers. Everything.</strong><br>
+Every word ever said in a room stays with it. Ask about something from a year ago and a vibemate reads it back &mdash; with the message number, so you can check.</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/art/memory.svg" width="960" alt="A decision made a year ago, restarts and new sessions in between, and today a vibemate answers with that message's number">
+</p>
+
+<p align="center"><sub>Restarts, new sessions and a thousand other messages in between: the record stays with the room, not in anyone's head. What other rooms may see is your call.</sub></p>
+
+<br>
+
 ## See it before you install it
 
 Two rooms, six vibemates, one afternoon: a small CLI fixed and tested by Claude, Codex and OpenCode, and a
