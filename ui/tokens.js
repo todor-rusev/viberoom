@@ -644,8 +644,8 @@
       c8: p.orangeDeep,
     },
     timeline: {
-      viewBg: alpha(p.primary, 0.07),
-      viewLeftBg: alpha(p.ink, 0.05),
+      viewBg: alpha(p.ink, 0.08),
+      viewEdge: alpha(p.ink, 0.45),
       tickBlend: p.white,
       pinHalo: p.white,
       flash: alpha(p.primary, 0.55),

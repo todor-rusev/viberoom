@@ -1,0 +1,143 @@
+<!-- viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>viberoom · your phone, your rooms</title>
+  <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48 64x64 128x128 256x256">
+  <link rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="/looks.css">
+  <link rel="stylesheet" href="/looks-custom.css">
+  <link rel="stylesheet" href="/components.css">
+  <link rel="stylesheet" href="/app.css">
+  <style>    html, body { overflow: auto; }
+    .guide { max-width: 780px; margin: 0 auto; padding: 28px 24px 90px; }
+    .g-back { margin: 0 0 18px; font-size: var(--fs-sm); font-weight: 700; }
+    .g-back a { color: var(--muted); text-decoration: none; }
+    .g-back a:hover { color: var(--primary); }
+    .guide h1 { font-size: 28px; margin: 0 0 10px; }
+    .guide .lead { font-size: var(--fs-lg); color: var(--ink-2); margin: 0 0 10px; line-height: 1.5; }
+    .guide p { line-height: 1.5; }
+    .g-cta { margin: 16px 0 6px; }
+    .g-cta a[data-ui="button"], .g-door a[data-ui="button"] { text-decoration: none; }
+    .g-cta .g-aside { margin-left: 10px; }
+    .g-door { margin: 8px 0 0; }
+    .guide p a:not([data-ui]) { color: var(--primary); }
+    .g-step { display: grid; grid-template-columns: 250px 1fr; gap: 22px; align-items: start; margin: 34px 0 0; }
+    .g-step .su-stage { margin: 0; padding: 12px 10px; }
+    .g-step .su-stage svg { width: 230px; height: 153px; }
+    .g-step h2 { font-size: 19px; margin: 0 0 6px; }
+    .g-aside { font-size: var(--fs-sm); color: var(--muted); }
+    .g-see { margin-top: 10px; }
+    .g-after { margin: 40px 0 0; padding-top: 22px; border-top: 2px solid var(--lav-2); }
+    .g-after h2 { font-size: 17px; margin: 0 0 8px; }
+    .g-after ul { margin: 0 0 22px; padding-left: 20px; line-height: 1.55; }
+    .g-after li { margin: 0 0 8px; }
+    @media (max-width: 640px) { .g-step { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main class="guide">
+    <p class="g-back"><a href="/">← viberoom</a></p>
+    <h1>Your phone, your rooms</h1>
+    <p class="lead">Your rooms live on this computer. A Telegram bot carries what you write on the phone to a room here, and the vibemates' replies back to the phone. The bot is yours; this computer answers for it.</p>
+    <p><b>Before you start:</b> Telegram on your phone, signed in. Nothing else — you make the bot in it, in a minute.</p>
+    <p><b>About ten minutes.</b> Once it is on, the messages of any room you open on the phone travel through Telegram.</p>
+    <p class="g-cta"><a data-ui="button" data-kind="primary" href="/?setup=telegram">Set up Telegram…</a> <span class="g-aside">opens the wizard where you left it</span></p>
+
+    <section class="g-step">
+      <div class="su-stage" data-scene="bot" aria-hidden="true"></div>
+      <div>
+        <h2>1 · Make the bot</h2>
+        <p>In Telegram, open <a href="https://t.me/BotFather" target="_blank" rel="noopener">BotFather</a> and send <code>/newbot</code>. It asks for a name, then a username ending in <i>bot</i>, and answers with the key.</p>
+        <p class="g-aside">Username taken? <a href="https://t.me/BotFather" target="_blank" rel="noopener">BotFather</a> asks again — pick another one ending in <i>bot</i>.</p>
+        <p class="su-sign ok g-see"><span class="su-check"><span class="i i-check"></span></span><span><b>You will see:</b> a reply with a long line, numbers, a colon and a secret.</span></p>
+      </div>
+    </section>
+
+    <section class="g-step">
+      <div class="su-stage" data-scene="key" aria-hidden="true"></div>
+      <div>
+        <h2>2 · Give viberoom the key</h2>
+        <p>In Settings → Channels press <b>Set up Telegram…</b> and paste <a href="https://t.me/BotFather" target="_blank" rel="noopener">BotFather</a>'s message in the key field. viberoom takes the key out of it and starts the bot. The key is never shown to the vibemates and never enters the conversation, the record or a model's context.</p>
+        <p class="su-sign ok g-see"><span class="su-check"><span class="i i-check"></span></span><span><b>You will see:</b> <i>Connected as @yourbot</i>.</span></p>
+        <p class="g-door"><a data-ui="button" data-kind="secondary" data-size="xs" href="/?setup=telegram&amp;step=key">This step in the wizard</a></p>
+        <p class="g-aside">Lost or leaked the key? Send <code>/revoke</code> to <a href="https://t.me/BotFather" target="_blank" rel="noopener">BotFather</a> and paste the new one in the same place; the old one stops working.</p>
+      </div>
+    </section>
+
+    <section class="g-step">
+      <div class="su-stage" data-scene="name" aria-hidden="true"></div>
+      <div>
+        <h2>3 · Name the bot</h2>
+        <p>One bot is one computer. Name it so the chats on your phone tell your computers apart: <i>viberoom home</i>, <i>viberoom work</i>. Anyone who opens the bot sees this name.</p>
+        <p class="su-sign ok g-see"><span class="su-check"><span class="i i-check"></span></span><span><b>You will see:</b> <i>On the phone the bot is called “…”</i>.</span></p>
+        <p class="g-door"><a data-ui="button" data-kind="secondary" data-size="xs" href="/?setup=telegram&amp;step=name">This step in the wizard</a></p>
+      </div>
+    </section>
+
+    <section class="g-step">
+      <div class="su-stage" data-scene="phone" aria-hidden="true"></div>
+      <div>
+        <h2>4 · Pair your phone</h2>
+        <p>The wizard shows a QR code. Scan it with the phone's camera, then press <b>Start</b> in Telegram.</p>
+        <p>What pairs is a <b>Telegram account</b>: every device signed in to it can write to your rooms.</p>
+        <p>Anyone who opens the code pairs, so do not show it on a shared screen.</p>
+        <p>Close the wizard and the code is withdrawn, unless you copied the link.</p>
+        <p class="su-sign ok g-see"><span class="su-check"><span class="i i-check"></span></span><span><b>You will see:</b> <i>Paired: your name</i> on this computer, and <i>Paired.</i> on the phone.</span></p>
+        <p class="g-door"><a data-ui="button" data-kind="secondary" data-size="xs" href="/?setup=telegram&amp;step=pair">This step in the wizard</a></p>
+      </div>
+    </section>
+
+    <section class="g-step">
+      <div class="su-stage" data-scene="rooms" aria-hidden="true"></div>
+      <div>
+        <h2>5 · Open a room and talk</h2>
+        <p>Send <code>/rooms</code> to the bot and press a room. Write a line; the vibemates answer there as they do here. While one is writing you see its reply grow, with a <b>Stop</b> button under it. <code>/close</code> detaches the chat; the room stays.</p>
+        <p class="su-sign ok g-see"><span class="su-check"><span class="i i-check"></span></span><span><b>You will see:</b> <i>Opened &lt;room&gt;</i>, then the last messages of that room.</span></p>
+      </div>
+    </section>
+
+    <section class="g-step">
+      <div class="su-stage" data-scene="files" aria-hidden="true"></div>
+      <div>
+        <h2>6 · Files</h2>
+        <p>A photo or a document you send from the phone lands in the room. A file named in a room gets a <b>Send</b> button on the phone, when it is in the room's own files, in its working folder, or in a folder you listed in Settings → Channels. No file leaves this computer without your press.</p>
+        <p class="su-sign ok g-see"><span class="su-check"><span class="i i-check"></span></span><span><b>You will see:</b> a <i>Send &lt;name&gt;</i> button under the message that names the file.</span></p>
+      </div>
+    </section>
+
+    <section class="g-after">
+      <h2>When something is different</h2>
+      <ul>
+        <li><b>Another computer is listening to this bot.</b> One bot is one computer: make a second bot in <a href="https://t.me/BotFather" target="_blank" rel="noopener">BotFather</a> for the other one. (Two viberooms on the same computer count as two, too.)</li>
+        <li><b>A vibemate is offline</b> (after a restart): the bot says so and offers <b>Reconnect</b>.</li>
+        <li><b>The pairing code has run out</b> (ten minutes): ask for a new one in the wizard.</li>
+        <li><b>A card you did not ask for:</b> a card for the key or for pairing that you did not start, close it. The room's record says who asked.</li>
+        <li><b>Removing or moving viberoom:</b> switch off <i>Start viberoom when you sign in to this computer</i> first, so the sign-in entry does not stay behind.</li>
+      </ul>
+      <h2>What this does not do</h2>
+      <ul>
+        <li>It does not give the vibemates any new access. What they may read or write is their own setting.</li>
+        <li>It does not hide your key from a vibemate that can read files on this computer; it keeps the key out of the conversation, the record and the model's context. If you ever suspect it, <code>/revoke</code> in <a href="https://t.me/BotFather" target="_blank" rel="noopener">BotFather</a> ends it in seconds.</li>
+      </ul>
+    </section>
+  </main>
+  <script src="/tokens.js"></script>
+  <script src="/icons.js"></script>
+  <script>
+    Icons.install();
+    if (window.self !== window.top) {
+      document.querySelector(".g-back").hidden = true;
+      for (const a of document.querySelectorAll("a[href]")) a.target = "_top";
+    }
+    for (const el of document.querySelectorAll("[data-scene]")) el.innerHTML = Icons.scene(el.dataset.scene);
+    fetch("/api/settings").then((r) => r.json()).then((res) => {
+      const a = ((res && res.settings) || {}).appearance || {};
+      const look = TOKENS.looks[a.look] ? a.look : TOKENS.current.id;
+      if (look !== TOKENS.current.id) document.documentElement.dataset.look = look;
+    }).catch(() => {});
+  </script>
+</body>
+</html>

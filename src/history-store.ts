@@ -90,11 +90,26 @@ const LATER_COLUMNS: Array<[string, string]> = [
   ["weight", "integer"],
 ];
 
-export type PendingOp =
+const LATER_APPLIED_COLUMNS: Array<[string, string]> = [
+  ["message_id", "text"],
+  ["seq", "integer"],
+  ["kind", "text"],
+];
+
+export type PendingOp = (
   | { kind: "upsert"; message: StoredMessage }
   | { kind: "truncate"; fromSeq: number; deletedAt: number }
-  | { kind: "rewrite"; fromSeq: number; deletedAt: number; message: StoredMessage };
+  | { kind: "rewrite"; fromSeq: number; deletedAt: number; message: StoredMessage }
+) & {
+  opId?: string;
+  accept?: true;
+};
 export type DivertOp = PendingOp & { opId: string };
+
+export interface AppliedReceipt {
+  messageId: string;
+  seq: number;
+}
 
 export interface MigrationMark {
   at: number;
@@ -188,6 +203,11 @@ export function sanitizeQuery(raw: string): string {
   return out.join(" ");
 }
 
+export function andedTerms(sanitized: string): number {
+  if (/(^|\s)(OR|NOT)(\s|$)/.test(sanitized)) return 0;
+  return (sanitized.match(/"[^"]*"/g) ?? []).length;
+}
+
 function trigramQuery(raw: string): string {
   const words = (raw.match(QUERY_TOKEN) ?? [])
     .map((t) => t.replace(/"/g, "").replace(/\*$/, "").trim())
@@ -219,7 +239,7 @@ export class HistoryStore {
     this.db.exec(SCHEMA);
     this.reconcileColumns();
     const version = this.meta("schema_version");
-    if (version === null) this.setMeta("schema_version", String(SCHEMA_VERSION));
+    if (version === null || Number(version) < SCHEMA_VERSION) this.setMeta("schema_version", String(SCHEMA_VERSION));
     else if (Number(version) > SCHEMA_VERSION) {
       this.db.close();
       throw new Error(`history.db was written by a newer viberoom (schema ${version}, this one knows ${SCHEMA_VERSION})`);
@@ -227,6 +247,8 @@ export class HistoryStore {
   }
 
   private reconcileColumns(): void {
+    const appliedHave = new Set((this.db.prepare("pragma table_info(applied_ops)").all() as Row[]).map((r) => String(r.name)));
+    for (const [name, type] of LATER_APPLIED_COLUMNS) if (!appliedHave.has(name)) this.db.exec(`alter table applied_ops add column ${name} ${type}`);
     const have = new Set((this.db.prepare("pragma table_info(messages)").all() as Row[]).map((r) => String(r.name)));
     const added = LATER_COLUMNS.filter(([name]) => !have.has(name));
     if (!added.length) return;
@@ -355,6 +377,10 @@ export class HistoryStore {
   count(roomId: string, options: { includeDeleted?: boolean } = {}): number {
     const row = this.db.prepare(`select count(*) as n from messages where room = ?${options.includeDeleted ? "" : " and deleted_at is null"}`).get(roomId) as Row;
     return Number(row.n);
+  }
+
+  indexableCount(): number {
+    return Number((this.db.prepare("select count(*) as n from messages where kind in ('chat', 'system')").get() as Row).n);
   }
 
   indexedCount(): number {
@@ -514,7 +540,11 @@ export class HistoryStore {
       if (op.kind === "upsert") this.upsert(roomId, op.message);
       else if (op.kind === "rewrite") this.rewrite(roomId, op.message, op.fromSeq, op.deletedAt);
       else this.truncateFrom(roomId, op.fromSeq, op.deletedAt);
-      this.db.prepare("insert into applied_ops(op_id, room, applied_at) values (?, ?, ?)").run(op.opId, roomId, Date.now());
+      const message = op.kind === "truncate" ? null : op.message;
+      const kind = op.accept ? "accept" : "divert";
+      this.db
+        .prepare("insert into applied_ops(op_id, room, applied_at, message_id, seq, kind) values (?, ?, ?, ?, ?, ?)")
+        .run(op.opId, roomId, Date.now(), message?.id ?? null, message?.seq ?? null, kind);
       return "applied";
     });
   }
@@ -523,8 +553,19 @@ export class HistoryStore {
     return !!this.db.prepare("select 1 from applied_ops where op_id = ?").get(opId);
   }
 
-  appliedOps(roomId: string): number {
-    return Number((this.db.prepare("select count(*) as n from applied_ops where room = ?").get(roomId) as Row).n);
+  appliedReceipt(opId: string): AppliedReceipt | null {
+    const row = this.db.prepare("select message_id, seq from applied_ops where op_id = ? and kind = 'accept'").get(opId) as Row | undefined;
+    if (!row || row.message_id === null || row.message_id === undefined) return null;
+    return { messageId: String(row.message_id), seq: Number(row.seq) };
+  }
+
+  appliedOps(roomId: string, kind?: "divert" | "accept"): number {
+    const where = kind === "accept" ? " and kind = 'accept'" : kind === "divert" ? " and (kind is null or kind = 'divert')" : "";
+    return Number((this.db.prepare(`select count(*) as n from applied_ops where room = ?${where}`).get(roomId) as Row).n);
+  }
+
+  purgeAcceptedOps(before: number): number {
+    return Number(this.db.prepare("delete from applied_ops where kind = 'accept' and applied_at < ?").run(before).changes);
   }
 
 

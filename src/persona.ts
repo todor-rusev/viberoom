@@ -51,6 +51,9 @@ export interface RoomSettings {
   waitWhileHumanTypes: boolean;
   agentsWakeEachOther: boolean;
   searchOtherRooms: boolean;
+  reachableFromMessengers: boolean;
+  startWithHub: boolean;
+  reconnectMode: "inherit" | "load" | "replay";
   replyDelay: number;
 }
 
@@ -86,7 +89,10 @@ export const ROOM_SETTINGS_SPEC: Record<keyof RoomSettings, SettingSpec> = {
   customRules: { kind: "text", max: 32_000, default: "", brief: true, agent: true, doc: "The room rules, one per line, at most briefTextLimit characters; every vibemate gets them under 'Room rules (set by the human)'. @Name inside a rule is a live reference." },
   refereeAction: { kind: "enum", values: ["next-header", "retry-hidden"], default: "next-header", brief: false, agent: true, doc: "On a mechanical violation (wrong language, too long): remind in the next header, or hold the reply and ask for a corrected one in a hidden turn." },
   turnTaking: { kind: "enum", values: ["parallel", "one-at-a-time"], default: "parallel", brief: false, agent: true, doc: "parallel: every addressed vibemate answers at once; one-at-a-time: one speaks, the others queue and see the earlier replies first." },
-  searchOtherRooms: { kind: "boolean", default: true, brief: false, agent: false, doc: "Vibemates here may search the other rooms that also share theirs, and those rooms' vibemates may find this room's messages; hidden and deleted messages are never shared. Off: this room is searched only from inside it, and its vibemates see no other room." },
+  searchOtherRooms: { kind: "boolean", default: true, brief: false, agent: true, doc: "Vibemates here may search the other rooms that also share theirs, and those rooms' vibemates may find this room's messages; hidden and deleted messages are never shared. Off: this room is searched only from inside it, and its vibemates see no other room." },
+  reachableFromMessengers: { kind: "boolean", default: true, brief: false, agent: true, doc: "The room can be opened from a phone paired to viberoom (Telegram): listed there, written to and read from. Off: the phone neither sees nor reaches this room." },
+  startWithHub: { kind: "boolean", default: false, brief: false, agent: true, doc: "The room's vibemates are started when viberoom starts, one room after another; they pay nothing until the first turn, but their processes and memory stay while they wait." },
+  reconnectMode: { kind: "enum", values: ["inherit", "load", "replay"], default: "inherit", brief: false, agent: false, doc: "How this room's vibemates come back when it starts itself: use the app's Welcome back setting, continue their saved sessions, or start fresh with the last messages replayed." },
   waitWhileHumanTypes: { kind: "boolean", default: true, brief: false, agent: true, doc: "A vibemate about to start a turn waits while the human is typing." },
   agentsWakeEachOther: { kind: "boolean", default: true, brief: true, agent: true, doc: "A vibemate's message without @ wakes the others, as the human's does; off: only @Name wakes a vibemate." },
   replyDelay: { kind: "number", min: 0, max: 120, default: 4, brief: false, agent: true, doc: "Seconds (a random 0..N) every vibemate waits before a turn, so replies cross less; a vibemate's own delay overrides it." },
@@ -423,7 +429,7 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
     }`,
   );
   if (skills?.channel === "tool") lines.push('Use search_history for earlier conversation (rooms: "all" includes shared rooms), then read_message with the result\'s room and seq for the full text; recent messages are searchable too.');
-  if (skills?.channel === "tool") lines.push("New room messages arrive automatically on your next turn, not while you work. If you expect an update sooner, you may call check_messages.");
+  if (skills?.channel === "tool") lines.push("New room messages arrive automatically on your next turn, not while you work. If you expect an update sooner, you may call check_room.");
   if (previousNotes && previousNotes.trim()) {
     lines.push("");
     lines.push(`Notes from your previous session (written by you): ${previousNotes.trim()}`);

@@ -1,5 +1,5 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
-import type { HistoryStore } from "./history-store.js";
+import { andedTerms, type HistoryStore } from "./history-store.js";
 
 export const AGENT_SEARCH_RESPONSE_BYTES = 16 * 1024;
 const SNIPPET_BYTES = 800;
@@ -37,6 +37,14 @@ function excerpt(text: string, budget: number): { text: string; truncated: boole
   return { text: text.slice(0, end) + suffix, truncated: true, bytes: used };
 }
 
+function emptyAdvice(hits: number, query: string): string {
+  if (hits) return "";
+  const together = andedTerms(query);
+  return together > 1
+    ? `No message holds all ${together} of these words together — a search asks for every word of it at once. Ask again with the two or three words that matter most; or widen this one with OR (one OR two), an exact phrase in quotes, NOT to leave a word out, or word* for the start of a word. `
+    : "Nothing matched. Try other wording, or match the start of a word with word*. ";
+}
+
 export function searchAgentHistory(
   store: HistoryStore | null,
   room: { id: string; name: string },
@@ -68,6 +76,7 @@ export function searchAgentHistory(
     searched: { rooms: searched.length, messages: searched.reduce((sum, r) => sum + store.agentSearchCount(r.id, kinds), 0) },
     usedTrigram: found.usedTrigram,
     hint:
+      emptyAdvice(found.hits.length, found.query) +
       "Use read_message with seq, room (the result's room ID) and optional around (0–5) for full text; omit room for this room. " +
       (searched.length > 1
         ? `Searched ${searched.length} rooms: ${searched.map((r) => r.name).join(", ")}; each result names its room.`

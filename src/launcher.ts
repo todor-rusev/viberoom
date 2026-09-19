@@ -3,14 +3,24 @@
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, posix, resolve, win32 } from "node:path";
 
-export type Command = "run" | "serve" | "start" | "stop" | "status" | "open" | "logs" | "doctor" | "help";
+export type Command = "run" | "serve" | "start" | "stop" | "status" | "open" | "logs" | "doctor" | "autostart" | "help";
 
-const COMMANDS = new Set<Command>(["run", "serve", "start", "stop", "status", "open", "logs", "doctor", "help"]);
+const COMMANDS = new Set<Command>(["run", "serve", "start", "stop", "status", "open", "logs", "doctor", "autostart", "help"]);
 
 export function splitCommand(argv: string[]): { command: Command; rest: string[] } {
   const first = argv[0];
   if (first && !first.startsWith("-") && COMMANDS.has(first as Command)) return { command: first as Command, rest: argv.slice(1) };
   return { command: "run", rest: argv };
+}
+
+export type StartReason = "at-login" | "replacing-another" | "by-hand";
+
+export const runId = (pid: number, startedAt: number): string => `${pid}.${startedAt}`;
+
+export function startReason(options: { autostart?: boolean; force?: boolean }): StartReason {
+  if (options.autostart) return "at-login";
+  if (options.force) return "replacing-another";
+  return "by-hand";
 }
 
 export function pidFilePath(dataDir: string): string {
@@ -21,6 +31,9 @@ export function browserProfileDir(dataDir: string): string {
   return join(dataDir, "browser");
 }
 
+export function runtimeLogPath(dataDir: string): string {
+  return join(dataDir, "hub.stderr.log");
+}
 export function logFilePath(dataDir: string): string {
   return join(dataDir, "hub.log");
 }
@@ -63,6 +76,10 @@ export interface HubIdentity {
   pid: number | null;
 }
 
+export interface ForeignHub {
+  dataDir: string | null;
+}
+
 export function sameDataDir(a: string, b: string): boolean {
   const norm = (p: string): string => {
     const r = resolve(p).replace(/[\\/]+$/, "");
@@ -76,9 +93,10 @@ export function hubPortFor(port: number, portGiven: boolean, liveRecord: PidReco
   return liveRecord.port;
 }
 
-export function foreignHub(identity: HubIdentity | null, dataDir: string): string | null {
-  if (!identity || !identity.dataDir) return null;
-  return sameDataDir(identity.dataDir, dataDir) ? null : identity.dataDir;
+export function foreignHub(identity: HubIdentity | null, dataDir: string): ForeignHub | null {
+  if (!identity) return null;
+  if (!identity.dataDir) return { dataDir: null };
+  return sameDataDir(identity.dataDir, dataDir) ? null : { dataDir: identity.dataDir };
 }
 
 const LOG_ROTATE_BYTES = 5 * 1024 * 1024;

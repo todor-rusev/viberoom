@@ -27,6 +27,8 @@
 [data-ui="button"][data-kind="ghost"] { background-color: var(--btn-ghost-bg); color: var(--btn-ghost-ink); font-weight: 700; }
 [data-ui="button"][data-kind="ghost"]:is(:hover, [data-state="hover"]):not(:disabled) { background-color: var(--btn-ghost-hover-bg); color: var(--btn-hover-ink); }
 [data-ui="button"][data-kind="danger"] { background-color: var(--btn-danger-bg); color: var(--btn-danger-ink); }
+[data-ui="button"][data-kind="danger-quiet"] { background-color: var(--btn-secondary-bg); color: var(--btn-ghost-ink); box-shadow: var(--shadow-tile); font-weight: 700; }
+[data-ui="button"][data-kind="danger-quiet"]:is(:hover, [data-state="hover"]):not(:disabled) { background-color: var(--btn-danger-bg); color: var(--btn-danger-ink); }
 [data-ui="button"][data-kind="danger"]:is(:hover, [data-state="hover"]):not(:disabled) { background-color: var(--btn-danger-hover-bg); color: var(--btn-danger-ink); }
 [data-ui="button"][data-kind="danger-solid"] { background-color: var(--btn-danger-ink); color: var(--btn-danger-solid-ink); box-shadow: var(--btn-danger-solid-shadow); }
 [data-ui="button"][data-kind="danger-solid"]:is(:hover, [data-state="hover"]):not(:disabled) { background-color: var(--btn-danger-solid-hover-bg); color: var(--btn-danger-solid-ink); box-shadow: var(--btn-danger-solid-hover-shadow); }

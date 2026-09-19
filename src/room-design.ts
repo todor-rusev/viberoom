@@ -202,6 +202,10 @@ export function applyVibemateChanges(current: TemplateVibemate[], changes: RoomC
     set("avatar", u.avatar);
     set("skills", u.skills);
     set("replyDelay", u.replyDelay);
+    set("model", u.model);
+    set("effort", u.effort);
+    set("mode", u.mode);
+    set("muted", u.muted);
     if (fields.length) {
       next[i] = after;
       ops.push({ op: "update", name: before.name, fields });

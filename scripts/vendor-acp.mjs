@@ -164,6 +164,53 @@ function patchClaudeAdapter(file) {
                                     }
                                 }`,
   );
+  once(
+    "                        const viberoomResults = (session.viberoomResultUuids ??= new Set());",
+    `                        console.error("viberoom-trace result uuid=" + (typeof message.uuid === "string" ? message.uuid : "none") + " turn=" + (session.activeTurn ? (session.activeTurn.settled ? "settled" : "open") : "none")
+                            + " origin=" + (message.origin && message.origin.kind ? message.origin.kind : "none")
+                            + " absorbed=" + ((session.turnQueue ?? []).filter((t) => !t.settled && t.commandStarted && !t.commandFinished && !t.commandResultSeen).length)
+                            + " seen=" + (session.viberoomResultUuids && typeof message.uuid === "string" && session.viberoomResultUuids.has(message.uuid) ? "again" : "first"));
+                        const viberoomResults = (session.viberoomResultUuids ??= new Set());`,
+  );
+  once(
+    `            if (isSteering(session.activeTurn)) {
+                session.activeTurn.steeredSettle = outcome;
+                return;
+            }`,
+    `            if (isSteering(session.activeTurn)) {
+                session.activeTurn.viberoomHeldAt ??= Date.now();
+                console.error("viberoom-trace held store=steeredSettle reason=steered");
+                session.activeTurn.steeredSettle = outcome;
+                return;
+            }`,
+  );
+  once(
+    "                session.activeTurn.deferredSettle = outcome;",
+    `                session.activeTurn.viberoomHeldAt ??= Date.now();
+                console.error("viberoom-trace held store=deferredSettle reason=subagents tasks=" + [...(session.activeTurn.spawnedTaskIds ?? [])].join(","));
+                session.activeTurn.deferredSettle = outcome;`,
+  );
+  once(
+    `            if (isHeldOpen(turn) && !turnAwaitingSubagents(turn)) {
+                settleActive(turn.deferredSettle);
+            }`,
+    `            if (isHeldOpen(turn) && !turnAwaitingSubagents(turn)) {
+                console.error("viberoom-trace released after=" + (turn.viberoomHeldAt ? Math.round((Date.now() - turn.viberoomHeldAt) / 1000) + "s" : "unknown"));
+                turn.viberoomHeldAt = undefined;
+                settleActive(turn.deferredSettle);
+            }`,
+  );
+  once(
+    "                this.logger.error(`Session ${params.sessionId}: cancel floor elapsed without the SDK yielding; forcing \"cancelled\". The underlying query may still be wedged — a new session may be required.`);",
+    `                const forced = session.activeTurn;
+                console.error("viberoom-trace forced turn=" + (forced ? (forced.settled ? "settled" : "open") : "none")
+                    + " result=" + (forced && forced.commandResultSeen ? "seen" : "none")
+                    + " command=" + ((forced && forced.commandFinished) || "dispatched")
+                    + " held=" + (forced && forced.deferredSettle !== undefined ? "deferredSettle" : forced && forced.steeredSettle !== undefined ? "steeredSettle" : "no")
+                    + " owedIdles=" + (session.owedTrailingIdles || 0));
+                this.logger.error(\`Session \${params.sessionId}: cancel floor elapsed without the SDK yielding; forcing "cancelled". The underlying query may still be wedged — a new session may be required.\`);`,
+  );
   writeFileSync(file, source);
-  console.log("patched claude-agent-acp: a prompt absorbed into an autonomous cycle completes (experiments/69)");
+  console.log("patched claude-agent-acp: a prompt absorbed into an autonomous cycle completes");
+  console.log("patched claude-agent-acp: the result, the hold and its release say so in the room's record (F28)");
 }

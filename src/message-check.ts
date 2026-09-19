@@ -1,6 +1,9 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { canAutoApproveRoomTool, isDirectRoomTool, type ToolIdentity } from "./room-tool-identity.js";
+import { oldNamesFor } from "./tool-spec.js";
+
+const MESSAGE_CHECK_TOOL = "check_room";
 
 export const MESSAGE_CHECK_BYTES = 16 * 1024;
 export interface MessageCheckArgs { mode: "read" | "status"; limit: number; after?: string; page?: string }
@@ -23,12 +26,12 @@ export interface MessageCheckResult {
 }
 
 export function parseMessageCheckArgs(params: Record<string, unknown>, query = false): MessageCheckArgs {
-  for (const key of Object.keys(params)) if (!["mode", "limit", "after", "page"].includes(key)) throw new Error(`unsupported check_messages argument: ${key}`);
+  for (const key of Object.keys(params)) if (!["mode", "limit", "after", "page"].includes(key)) throw new Error(`unsupported check_room argument: ${key}`);
   const mode = params.mode === undefined ? "status" : params.mode;
   if (mode !== "read" && mode !== "status") throw new Error("mode must be read or status");
   const limit = params.limit === undefined ? 10 : query && typeof params.limit === "string" && /^\d+$/.test(params.limit) ? Number(params.limit) : params.limit;
   if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error("limit must be an integer from 1 to 20");
-  if (params.after !== undefined && (typeof params.after !== "string" || !params.after || params.after.length > 1024)) throw new Error("after must be a cursor returned by check_messages");
+  if (params.after !== undefined && (typeof params.after !== "string" || !params.after || params.after.length > 1024)) throw new Error("after must be a cursor returned by check_room");
   if (params.page !== undefined && (mode !== "status" || typeof params.page !== "string" || !params.page || params.page.length > 1024)) throw new Error("page must be a nextPage cursor and is only supported with mode=status");
   return { mode, limit, ...(params.after !== undefined ? { after: params.after as string } : {}), ...(params.page !== undefined ? { page: params.page as string } : {}) };
 }
@@ -60,7 +63,7 @@ export function messageCheckPosition(key: string, context: MessageCheckContext, 
     if (seq < context.baseline || seq > context.latest) throw new Error();
     return { seq, reset: false };
   } catch {
-    throw new Error("invalid or expired check_messages cursor; omit after to check from this turn's prompt");
+    throw new Error("invalid or expired check_room cursor; omit after to check from this turn's prompt");
   }
 }
 
@@ -81,7 +84,7 @@ export function messageCheckPagePosition(key: string, context: MessageCheckConte
     if (point.from !== from || seq < from || seq > until || until > context.latest || priority < 0 || priority > 3) throw new Error();
     return { seq, priority, until, reset: false };
   } catch {
-    throw new Error("invalid or expired check_messages page cursor; keep the same after and omit page to restart the headers");
+    throw new Error("invalid or expired check_room page cursor; keep the same after and omit page to restart the headers");
   }
 }
 
@@ -120,7 +123,7 @@ export function packMessageCheck(
       || (priority(row) === position.pagePriority && row.seq > (position.pageSeq ?? position.seq)))
       .sort((a, b) => priority(a) - priority(b) || a.seq - b.seq);
     result = { ...result, counts, headers: [], previewed: 0, moreHeaders: pendingHeaders.length > 0, snapshotThrough: latest,
-      hint: "Counts cover this snapshot's whole range after 'after', through snapshotThrough. Headers contain no body: direct first, then broadcast (@All or unaddressed chat), other, event; each group by seq. You decide what is useful; other messages may still matter. Use read_message(seq) for a selected body, or check_messages with mode=read and after=nextCursor for a chronological page of bodies. more means bodies are available in this range, not that another header page exists; only moreHeaders/nextPage indicate more headers. For more headers pass nextPage as page with the same after. Omit page to check for later arrivals. nextCursor remains the read starting point; headers do not acknowledge content. Normal next-turn delivery is unchanged." };
+      hint: "Counts cover this snapshot's whole range after 'after', through snapshotThrough. Headers contain no body: direct first, then broadcast (@All or unaddressed chat), other, event; each group by seq. You decide what is useful; other messages may still matter. Use read_message(seq) for a selected body, or check_room with mode=read and after=nextCursor for a chronological page of bodies. more means bodies are available in this range, not that another header page exists; only moreHeaders/nextPage indicate more headers. For more headers pass nextPage as page with the same after. Omit page to check for later arrivals. nextCursor remains the read starting point; headers do not acknowledge content. Normal next-turn delivery is unchanged." };
     for (const row of pendingHeaders.slice(0, args.limit)) {
       let header = messageCheckHeader(row);
       const moreHeaders = result.headers!.length + 1 < pendingHeaders.length;
@@ -173,12 +176,13 @@ export function messageCheckTitle(result: MessageCheckResult): string {
 }
 
 export function isDirectMessageCheck(name: string | null | undefined): boolean {
-  return isDirectRoomTool(name, "check_messages");
+  return [MESSAGE_CHECK_TOOL, ...oldNamesFor(MESSAGE_CHECK_TOOL)].some((tool) => isDirectRoomTool(name, tool));
 }
 
 export function canAutoApproveMessageCheck(call: ToolIdentity, known?: ToolIdentity): boolean {
-  return canAutoApproveRoomTool(call, known, "check_messages", input => {
+  const ok = (tool: string): boolean => canAutoApproveRoomTool(call, known, tool, input => {
     try { parseMessageCheckArgs(input); return true; }
     catch { return false; }
   });
+  return [MESSAGE_CHECK_TOOL, ...oldNamesFor(MESSAGE_CHECK_TOOL)].some(ok);
 }

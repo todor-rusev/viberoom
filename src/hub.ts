@@ -4,9 +4,11 @@ import { EventEmitter } from "node:events";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { writeFileAtomic } from "./atomic.js";
+import { qrSvg } from "./qr.js";
+import { pickBotKey } from "./bot-key.js";
 import { ensureDataRoot } from "./data-root.js";
 import { RequestTraceRing } from "./mcp-diagnostics.js";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Logger, type TranscriptMode } from "./log.js";
 import { HISTORY_DB_FILE, HistoryStore, type SearchHit, type SearchQuery } from "./history-store.js";
@@ -18,10 +20,14 @@ import { checkLogin } from "./login-status.js";
 import { LoginFlows, type LoginFlow } from "./login-flow.js";
 import { openTerminal } from "./terminal.js";
 import { DEFAULT_ROOM_SETTINGS, type RoomSettings } from "./persona.js";
+import { CREATED_MODE, type NewRoomPlan } from "./new-room.js";
 import { Room, type ChatMessage, type DiscoveredOptions, type RoomEvent, type SkillsBridge, type StoredParticipant, type RoomRecovery } from "./room.js";
 import { SkillLibrary, type SkillDraft, type SkillMeta } from "./skills.js";
 import { TemplateLibrary, roomSettingsFromTemplate, type RoomTemplate } from "./templates.js";
 import { LookLibrary, checkLookSpec, loadTokens, type LookCheck, type LookSpec } from "./looks.js";
+import { ChannelRouter, type ChannelsView } from "./channels/router.js";
+import { ChannelsStore, fileRootRefusal, type FileRoot } from "./channels/state.js";
+import { TelegramAdapter, TelegramApiError } from "./channels/telegram.js";
 
 export interface VendorPreset {
   model: string | null;
@@ -87,19 +93,45 @@ interface RoomsFile {
 
 import type { UpdateInfo } from "./update.js";
 
+export const SECRET_CARD_MS = 10 * 60_000;
+
+export interface SecretRequest {
+  id: string;
+  purpose: "telegram-token" | "telegram-pair";
+  askedBy: { kind: "window" } | { kind: "vibemate"; roomId: string; participantId: string; name: string };
+  askedAt: number;
+  expiresAt: number;
+  state: "open" | "done" | "closed" | "expired";
+  outcome?: string;
+  refusal?: string;
+  link?: { url: string; expiresAt: number; svg: string };
+}
+
 export type HubEvent =
   | { type: "update"; update: UpdateInfo }
   | { type: "room.event"; roomId: string; event: RoomEvent }
   | { type: "room.created"; room: unknown }
   | { type: "room.removed"; roomId: string }
   | { type: "rooms.opened"; roomIds: string[] }
+  | { type: "secret"; request: SecretRequest }
   | { type: "settings"; settings: ProgramSettings }
   | { type: "skills"; skills: SkillMeta[] }
   | { type: "templates" }
   | { type: "looks"; looks: LookSpec[] }
   | { type: "recipes"; recipes: unknown[] }
   | { type: "login"; flow: LoginFlow }
-  | { type: "reset" };
+  | { type: "restart"; restart: RestartView | null }
+  | { type: "reset" }
+  | { type: "channels"; channels: ChannelsView };
+
+export interface RestartView {
+  askedBy: string;
+  from: "window" | "telegram" | "discord";
+  waitingFor: string[];
+  since: number;
+  quietSince?: number;
+  sessions?: "load" | "replay";
+}
 
 interface McpTokenEntry {
   roomId: string;
@@ -147,6 +179,16 @@ export function nextAppearance(current: AppearanceSettings, a: Record<string, un
   return { chatFontSize: Math.round(chatFontSize * 2) / 2, font, mono, look, custom };
 }
 
+const CHANNEL_RETRY_MS = [5_000, 15_000, 60_000, 300_000];
+const RESTART_POLL_MS = 2_000;
+const RESTART_GIVE_UP_MS = 30_000;
+const RESTART_QUIET_MS = 5 * 60_000;
+
+function nameList(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 export class Hub extends EventEmitter {
   readonly dataDir: string;
   readonly requestDiagnostics = new RequestTraceRing();
@@ -161,6 +203,7 @@ export class Hub extends EventEmitter {
   private readonly optionCache = new Map<string, DiscoveredOptions>();
   private readonly mcpTokens = new Map<string, McpTokenEntry>();
   private hubUrl: string | null = null;
+  private run: { id: string; build: string } | null = null;
   private readonly renamedSkills = new Map<string, string>();
   private renamedAttachments = false;
   private readonly skillsBridge: SkillsBridge;
@@ -175,7 +218,7 @@ export class Hub extends EventEmitter {
     this.templates = new TemplateLibrary(join(this.dataDir, "templates"), log.child("templates"));
     this.looks = new LookLibrary(join(this.dataDir, "looks"), log.child("looks"));
     this.history = this.openHistory();
-    setTimeout(() => void this.checkLogins().catch((error) => log.warn(`login checks: ${String(error)}`)), 2500);
+    setTimeout(() => void this.checkLogins().catch((error) => log.warn(`login checks: ${String(error)}`)), 2500).unref();
     this.logins.on("change", (flow: LoginFlow) => {
       this.emit("event", { type: "login", flow } satisfies HubEvent);
       if (flow.state === "done" && flow.purpose === "install" && !flow.looked) {
@@ -239,6 +282,376 @@ export class Hub extends EventEmitter {
     this.settings = this.loadSettings(initialHumanName);
     this.loadRooms();
     if (this.renamedAttachments) this.saveRooms();
+    this.channelsStore = new ChannelsStore(join(this.dataDir, "channels.json"));
+    this.channels = new ChannelRouter(
+      {
+        rooms: () => [...this.rooms.values()],
+        room: (id) => this.rooms.get(id),
+        markOpened: (id) => this.markOpened(id),
+        reconnectOptions: () => ({ mode: this.settings.reconnectMode }),
+        dataDir: () => this.dataDir,
+        onRoomEvent: (handler) => this.on("event", (event: HubEvent) => { if (event.type === "room.event") handler(event.roomId, event.event); }),
+        channelsChanged: () => this.emit("event", { type: "channels", channels: this.channels.view() } satisfies HubEvent),
+        paired: (_platform, name) => this.settlePairingCards(name),
+        restart: {
+          writingNow: () => this.writingNow(),
+          request: (input) => this.requestRestart(input),
+          now: (by) => this.restartNow(by),
+          cancel: (by) => this.cancelRestart(by),
+          pending: () => !!this.restartPending(),
+        },
+      },
+      this.channelsStore,
+      log.child("channels"),
+    );
+  }
+
+  async setTelegram(patch: { enabled?: unknown; token?: unknown; fileRoots?: unknown; name?: unknown; phoneApprovals?: unknown }): Promise<ChannelsView> {
+    if (patch.name !== undefined && (typeof patch.name !== "string" || patch.name.length > 64)) throw new Error("the bot's name is up to 64 characters");
+    if (patch.phoneApprovals !== undefined && typeof patch.phoneApprovals !== "boolean") throw new Error("phoneApprovals must be true or false");
+    if (typeof patch.token === "string" && patch.token.trim()) patch = { ...patch, token: pickBotKey(patch.token) };
+    if (patch.token !== undefined && (typeof patch.token !== "string" || (patch.token && !/^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(patch.token)))) throw new Error("that does not look like a bot token from BotFather (digits, a colon, then the secret)");
+    if (patch.enabled !== undefined && typeof patch.enabled !== "boolean") throw new Error("enabled must be true or false");
+    let roots: FileRoot[] | undefined;
+    if (patch.fileRoots !== undefined) {
+      if (!Array.isArray(patch.fileRoots)) throw new Error("fileRoots must be a list of folders");
+      roots = [];
+      for (const item of patch.fileRoots as unknown[]) {
+        const path = typeof item === "string" ? item.trim() : item && typeof item === "object" && typeof (item as { path?: unknown }).path === "string" ? (item as { path: string }).path.trim() : null;
+        if (path === null) throw new Error("fileRoots must be a list of folders");
+        if (!path) continue;
+        const subfolders = item && typeof item === "object" && typeof (item as { subfolders?: unknown }).subfolders === "boolean" ? (item as { subfolders: boolean }).subfolders : true;
+        if (!isAbsolute(path)) throw new Error(`a folder the phone may receive files from must be an absolute path: ${path}`);
+        const refusal = fileRootRefusal(path, this.dataDir);
+        if (refusal) throw new Error(refusal);
+        roots.push({ path, subfolders });
+      }
+    }
+    this.channelsStore.update((s) => {
+      const current = s.telegram ?? { enabled: false, token: "" };
+      s.telegram = { ...current, enabled: typeof patch.enabled === "boolean" ? patch.enabled : current.enabled, token: patch.token !== undefined ? (patch.token as string) : current.token, name: patch.name !== undefined ? ((patch.name as string).trim() || undefined) : current.name };
+      if (roots) s.fileRoots = roots;
+      if (typeof patch.phoneApprovals === "boolean") s.phoneApprovals = patch.phoneApprovals;
+    });
+    if (patch.enabled !== undefined || patch.token !== undefined || patch.name !== undefined) {
+      await this.channels.stop();
+      await this.startChannels();
+    }
+    const view = this.channels.view();
+    this.emit("event", { type: "channels", channels: view } satisfies HubEvent);
+    return view;
+  }
+
+  pairLink(): { url: string; expiresAt: number; svg: string } {
+    const { url, link } = this.channels.pairLink("telegram");
+    return { url, expiresAt: link.expiresAt, svg: qrSvg(url) };
+  }
+
+  cancelPairLink(): void {
+    this.channels.cancelPairLink("telegram");
+    for (const request of this.openSecrets()) {
+      if (request.purpose !== "telegram-pair") continue;
+      request.outcome = "closed: the link was withdrawn";
+      this.settleSecret(request, "closed");
+    }
+  }
+
+  unpair(senderId: string, stopTurns = false): boolean {
+    return this.channels.unpair("telegram", senderId, { stopTurns });
+  }
+
+  readonly channelsStore: ChannelsStore;
+  reconnectModeFor(room: Room): "load" | "replay" {
+    const own = room.settings.reconnectMode;
+    return own === "load" || own === "replay" ? own : this.settings.reconnectMode;
+  }
+
+  async startRoomsAtBoot(reconnect: (room: Room, id: string) => Promise<unknown> = (room, id) => room.reconnect(id, { mode: this.reconnectModeFor(room) })): Promise<string[]> {
+    const started: string[] = [];
+    for (const room of this.rooms.values()) {
+      if (!room.settings.startWithHub) continue;
+      const offline = [...room.participants.values()].filter((p) => p.kind === "agent" && p.status === "offline");
+      if (!offline.length) continue;
+      this.markOpened(room.id);
+      room.noteStartingWithHub(true);
+      try {
+        for (const p of offline) {
+          try {
+            await reconnect(room, p.id);
+          } catch (error) {
+            this.log.warn(`room ${room.id}: ${p.name} did not start with viberoom: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      } finally {
+        room.noteStartingWithHub(false);
+      }
+      room.noteStartedWithHub(this.reconnectModeFor(room));
+      started.push(room.id);
+    }
+    return started;
+  }
+
+
+  restartWith: ((sessions?: "load" | "replay") => void) | null = null;
+  private restart: (RestartView & { timer: NodeJS.Timeout | null; marks: string; quietSince: number; toldOfWait: boolean }) | null = null;
+
+  get canRestart(): boolean {
+    return !!this.restartWith;
+  }
+
+  writingNow(): string[] {
+    const names: string[] = [];
+    for (const room of this.rooms.values()) {
+      for (const p of room.participants.values()) if (p.kind === "agent" && (p.status === "thinking" || p.status === "queued")) names.push(p.name);
+    }
+    return names;
+  }
+
+  restartPending(): RestartView | null {
+    if (!this.restart) return null;
+    const { timer: _timer, marks: _marks, quietSince, toldOfWait: _told, ...view } = this.restart;
+    return { ...view, ...(view.waitingFor.length ? { quietSince } : {}) };
+  }
+
+  private writingMarks(): string {
+    const marks: string[] = [];
+    for (const room of this.rooms.values()) {
+      for (const p of room.participants.values()) {
+        if (p.kind !== "agent" || (p.status !== "thinking" && p.status !== "queued")) continue;
+        const draft = room.messages.find((m) => m.streaming && m.from === p.id);
+        marks.push(`${room.id}:${p.id}:${p.status}:${draft ? draft.text.length : 0}:${draft?.toolCalls?.length ?? 0}`);
+      }
+    }
+    return marks.join("|");
+  }
+
+  requestRestart(input: { askedBy: string; from: RestartView["from"]; sessions?: "load" | "replay"; when: "now" | "idle" }): RestartView {
+    if (!this.restartWith) throw new Error("this viberoom cannot restart itself");
+    if (this.restart) return this.restartPending()!;
+    const waiting = input.when === "idle" ? this.writingNow() : [];
+    this.restart = { askedBy: input.askedBy, from: input.from, ...(input.sessions ? { sessions: input.sessions } : {}), since: Date.now(), waitingFor: waiting, timer: null, marks: this.writingMarks(), quietSince: Date.now(), toldOfWait: false };
+    const where = input.from === "window" ? "" : ` from ${input.from === "telegram" ? "Telegram" : "Discord"}`;
+    this.recordEverywhere(waiting.length
+      ? `${input.askedBy} asked${where} for viberoom to restart when ${nameList(waiting)} ${waiting.length > 1 ? "finish" : "finishes"}.`
+      : `${input.askedBy} asked${where} for viberoom to restart now; a reply being written this moment is cut short.`);
+    this.announceRestart();
+    if (waiting.length) this.restart.timer = setInterval(() => this.checkRestart(), RESTART_POLL_MS).unref();
+    else this.goRestart();
+    return this.restartPending()!;
+  }
+
+  restartNow(by: string): void {
+    if (!this.restart || !this.restart.waitingFor.length) return;
+    this.recordEverywhere(`${by} chose not to wait: a reply being written this moment is cut short.`);
+    this.goRestart();
+  }
+
+  cancelRestart(by: string): void {
+    if (!this.restart) return;
+    this.clearRestart();
+    this.recordEverywhere(`${by} called off the restart of viberoom.`);
+    this.announceRestart();
+  }
+
+  private restartFailed(): void {
+    if (!this.restart) return;
+    this.clearRestart();
+    this.recordEverywhere("The restart did not happen: this viberoom is still the one running. Its log says why.");
+    this.announceRestart();
+  }
+
+  private clearRestart(): void {
+    if (this.restart?.timer) clearInterval(this.restart.timer);
+    this.restart = null;
+  }
+
+  private checkRestart(): void {
+    const req = this.restart;
+    if (!req) return;
+    const writing = this.writingNow();
+    if (!writing.length) return this.goRestart();
+    const marks = this.writingMarks();
+    const changed = writing.join("|") !== req.waitingFor.join("|");
+    if (marks !== req.marks) {
+      req.marks = marks;
+      req.quietSince = Date.now();
+    }
+    req.waitingFor = writing;
+    if (changed) this.announceRestart();
+    if (!req.toldOfWait && Date.now() - req.quietSince >= RESTART_QUIET_MS) {
+      req.toldOfWait = true;
+      const minutes = Math.round((Date.now() - req.quietSince) / 60_000);
+      const words = `Nothing new from ${nameList(writing)} for ${minutes} minutes; viberoom is still waiting to restart.`;
+      this.recordEverywhere(words);
+      if (req.from !== "window") void this.channels.restartStillWaiting(`<b>Still waiting.</b> ${words}`).catch(() => undefined);
+      this.announceRestart();
+    }
+  }
+
+  private goRestart(): void {
+    const req = this.restart;
+    if (!req || !this.restartWith) return;
+    if (req.timer) clearInterval(req.timer);
+    req.waitingFor = [];
+    req.timer = setTimeout(() => this.restartFailed(), RESTART_GIVE_UP_MS).unref();
+    this.recordEverywhere("viberoom is restarting; it comes back in a few seconds.");
+    this.announceRestart();
+    this.restartWith(req.sessions);
+  }
+
+  private announceRestart(): void {
+    this.emit("event", { type: "restart", restart: this.restartPending() } satisfies HubEvent);
+  }
+
+  noteBackAfterRestart(build: string): void {
+    this.recordEverywhere(`viberoom is back (build ${build}).`);
+  }
+
+  private recordEverywhere(text: string): void {
+    for (const room of this.rooms.values()) room.hubRecord(text);
+  }
+
+  readonly channels: ChannelRouter;
+
+  async startChannels(): Promise<void> {
+    if (this.channelsRetry) {
+      clearTimeout(this.channelsRetry);
+      this.channelsRetry = null;
+    }
+    const telegram = this.channelsStore.get().telegram;
+    if (!telegram?.enabled || !telegram.token) return;
+    for (const room of this.rooms.values()) if (room.historyDiverted) this.log.warn(`room ${room.id}: the divert journal is still waiting; messages from messengers will queue behind it until the store answers`);
+    try {
+      await this.channels.start(new TelegramAdapter({ token: telegram.token, apiBase: telegram.apiBase, name: telegram.name, log: this.log.child("telegram") }));
+      this.channelsRetryAttempt = 0;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof TelegramApiError && (error.code === 401 || error.code === 404)) {
+        this.log.error(`telegram channel not started: ${message}; the bot token is not accepted, paste a new one in Settings → Channels`);
+        this.channels.noteStartFailure("telegram", "Telegram did not accept the bot token: check it at BotFather (after /revoke, paste the new one), or paste the key on a line of its own");
+        return;
+      }
+      const delay = CHANNEL_RETRY_MS[Math.min(this.channelsRetryAttempt++, CHANNEL_RETRY_MS.length - 1)];
+      this.log.error(`telegram channel not started: ${message}; again in ${Math.round(delay / 1000)} s`);
+      this.channels.noteStartFailure("telegram", `viberoom could not reach Telegram (${message}); trying again in ${Math.round(delay / 1000)} s`);
+      this.channelsRetry = setTimeout(() => {
+        this.channelsRetry = null;
+        void this.startChannels();
+      }, delay);
+      this.channelsRetry.unref?.();
+    }
+  }
+
+  private channelsRetry: NodeJS.Timeout | null = null;
+  private channelsRetryAttempt = 0;
+
+
+  private readonly secrets = new Map<string, SecretRequest>();
+
+  openSecrets(): SecretRequest[] {
+    return [...this.secrets.values()].filter((r) => r.state === "open");
+  }
+
+  askSecret(purpose: SecretRequest["purpose"], askedBy: SecretRequest["askedBy"]): SecretRequest {
+    const open = this.openSecrets().find((r) => r.purpose === purpose);
+    if (open) return open;
+    const now = Date.now();
+    const request: SecretRequest = { id: randomBytes(9).toString("base64url"), purpose, askedBy, askedAt: now, expiresAt: now + SECRET_CARD_MS, state: "open" };
+    if (purpose === "telegram-pair") {
+      const { url, link } = this.channels.pairLink("telegram");
+      request.link = { url, expiresAt: link.expiresAt, svg: qrSvg(url) };
+      request.expiresAt = link.expiresAt;
+    }
+    this.secrets.set(request.id, request);
+    this.log.info(`secret card ${request.id} (${purpose}) asked by ${askedBy.kind === "window" ? "the window" : `${askedBy.name} in room ${askedBy.roomId}`}`);
+    this.emit("event", { type: "secret", request } satisfies HubEvent);
+    if (askedBy.kind === "vibemate") {
+      const room = this.rooms.get(askedBy.roomId);
+      const human = room?.settings.humanName;
+      if (room) room.channelRecord(purpose === "telegram-pair"
+        ? `${askedBy.name} asked to pair a phone: a card with the link and its QR code is on ${human}'s screen.`
+        : `${askedBy.name} asked for the Telegram bot key: a card is on ${human}'s screen.`);
+    }
+    const timer = setTimeout(() => this.expireSecrets(), request.expiresAt - now + 50);
+    timer.unref();
+    return request;
+  }
+
+  async answerSecret(id: string, value: string): Promise<SecretRequest> {
+    const request = this.secrets.get(id);
+    if (!request || request.state !== "open") throw new Error("that card is no longer open");
+    if (request.purpose !== "telegram-token") throw new Error("that card takes no value");
+    try {
+      const view = await this.setTelegram({ token: value, enabled: true });
+      const tg = view.telegram;
+      if (!tg || (tg.state !== "connected" && tg.state !== "listening")) throw new Error(tg?.detail || "the bot did not start");
+      request.outcome = `connected as @${tg.account}`;
+    } catch (error) {
+      request.refusal = error instanceof Error ? error.message : String(error);
+      this.emit("event", { type: "secret", request } satisfies HubEvent);
+      throw error;
+    }
+    request.refusal = undefined;
+    this.settleSecret(request, "done");
+    return request;
+  }
+
+  closeSecret(id: string, options: { copied?: boolean } = {}): SecretRequest {
+    const request = this.secrets.get(id);
+    if (!request) throw new Error("no such card");
+    if (request.state !== "open") return request;
+    if (request.purpose === "telegram-pair") {
+      request.outcome = options.copied ? "closed: the link was copied and stays good until it runs out" : "closed without pairing";
+      this.settleSecret(request, "closed");
+      if (!options.copied) this.channels.cancelPairLink("telegram");
+      return request;
+    }
+    request.outcome = "closed without a key";
+    this.settleSecret(request, "closed");
+    return request;
+  }
+
+  private settlePairingCards(name: string): void {
+    for (const request of this.openSecrets()) {
+      if (request.purpose !== "telegram-pair") continue;
+      request.outcome = `paired: ${name}`;
+      this.settleSecret(request, "done");
+    }
+  }
+
+  expireSecrets(now = Date.now()): void {
+    for (const request of this.openSecrets()) {
+      if (request.expiresAt > now) continue;
+      request.outcome = request.purpose === "telegram-pair" ? "expired: not used within ten minutes" : "not answered within ten minutes";
+      this.settleSecret(request, "expired");
+    }
+  }
+
+  private settleSecret(request: SecretRequest, state: "done" | "closed" | "expired"): void {
+    request.state = state;
+    this.log.info(`secret card ${request.id}: ${state} (${request.outcome})`);
+    this.emit("event", { type: "secret", request } satisfies HubEvent);
+    if (request.askedBy.kind !== "vibemate") return;
+    const room = this.rooms.get(request.askedBy.roomId);
+    if (!room) return;
+    const human = room.settings.humanName;
+    if (request.purpose === "telegram-pair") {
+      room.channelRecord(
+        state === "done" ? `${human} paired the phone from the card: ${request.outcome}.`
+          : state === "closed" ? `${human}'s pairing card closed: ${request.outcome}.`
+          : "The pairing card was not used within ten minutes and closed by itself.",
+      );
+      return;
+    }
+    room.channelRecord(
+      state === "done" ? `${human} entered the Telegram bot key on the card: ${request.outcome}.`
+        : state === "closed" ? `${human} closed the key card without a key.`
+        : "The key card was not answered within ten minutes and closed by itself.",
+    );
+  }
+
+  setRun(run: { id: string; build: string }): void {
+    this.run = run;
   }
 
   setHubUrl(url: string): void {
@@ -505,7 +918,10 @@ export class Hub extends EventEmitter {
 
   startBackups(): void {
     if (this.backupTimer) return;
-    this.backupTimer = setInterval(() => void this.backupHistory().catch((error) => this.log.warn(`history backup failed: ${error instanceof Error ? error.message : String(error)}`)), this.historyBackupEveryMs);
+    this.backupTimer = setInterval(() => {
+      void this.backupHistory().catch((error) => this.log.warn(`history backup failed: ${error instanceof Error ? error.message : String(error)}`));
+      for (const room of this.rooms.values()) room.purgeAcceptReceipts();
+    }, this.historyBackupEveryMs);
     this.backupTimer.unref();
   }
 
@@ -616,6 +1032,7 @@ export class Hub extends EventEmitter {
       humanName: this.settings.humanName,
       programHumanDescription: this.settings.humanDescription,
       bypassPermissionsByDefault: this.settings.bypassPermissionsByDefault,
+      hubRun: () => this.run,
       programTranscripts: this.settings.transcripts,
       programFoldAfter: this.settings.foldAfter,
       settings: { ...this.settings.roomDefaults, ...settings },
@@ -718,6 +1135,40 @@ export class Hub extends EventEmitter {
     if (room.settings.customRules.length > room.settings.briefTextLimit) notices.push(`The room rules from the template are ${room.settings.customRules.length} characters, over this room's limit of ${room.settings.briefTextLimit}; kept as they are, but the next edit has to fit.`);
     this.saveRooms();
     return { room, notices };
+  }
+
+  async createProposedRoom(plan: NewRoomPlan, by: { proposer: string; human: string }): Promise<{ room: Room; notices: string[] }> {
+    const { room, notices } = this.createRoom({ name: plan.name, dir: null, settings: { reachableFromMessengers: false } });
+    const installed = new Set(listRecipes().filter((r) => !r.unavailableReason).map((r) => r.id));
+    for (const one of plan.vibemates) {
+      const agentType = one.agentType && installed.has(one.agentType as AgentTypeId) ? one.agentType : "";
+      if (one.agentType && !agentType) notices.push(`${one.name}: ${one.agentType} is not installed here; it waits in the roster until you cast it.`);
+      try {
+        const seated = agentType
+          ? await room.inviteAgent({ agentType, name: one.name, tagline: one.tagline, role: one.role, avatar: one.avatar, model: one.model, effort: one.effort, mode: CREATED_MODE, textCheck: "notice" })
+          : room.addUnstaffed({ name: one.name, tagline: one.tagline, role: one.role, avatar: one.avatar, textCheck: "notice" });
+        seated.createdByVibemate = true;
+      } catch (error) {
+        notices.push(`${one.name} could not be added: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    this.markOpened(room.id);
+    room.hubRecord(`${by.proposer} proposed this room; ${by.human} created it.`);
+    this.saveRooms();
+    return { room, notices };
+  }
+
+  async resolveNewRoom(roomId: string, key: string, create: boolean): Promise<{ status: "created" | "refused"; room?: string; notices: string[] }> {
+    const from = this.getRoom(roomId);
+    const proposal = from.pendingNewRoom(key);
+    if (!proposal) throw new Error("no such proposed room");
+    if (!create) {
+      from.settleNewRoom(key, "refused");
+      return { status: "refused", notices: [] };
+    }
+    const { room, notices } = await this.createProposedRoom(proposal.plan, { proposer: proposal.participantName, human: this.settings.humanName });
+    from.settleNewRoom(key, "created", room.id);
+    return { status: "created", room: room.id, notices };
   }
 
   saveRoomAsTemplate(roomId: string, input: { name: string; description: string; emoji?: string; template?: Partial<Pick<RoomTemplate, "dir" | "settings" | "vibemates">> }): RoomTemplate {
@@ -879,10 +1330,17 @@ export class Hub extends EventEmitter {
       roomDefaults: { ...DEFAULT_ROOM_SETTINGS, ...this.settings.roomDefaults },
       rooms: [...this.rooms.values()].map((room) => room.snapshot()),
       openRooms: [...this.openRooms],
+      channels: this.channels.view(),
+      secrets: this.openSecrets(),
+      restart: { can: this.canRestart, pending: this.restartPending() },
     };
   }
 
   async shutdown(): Promise<void> {
+    this.clearRestart();
+    if (this.channelsRetry) clearTimeout(this.channelsRetry);
+    this.channelsRetry = null;
+    await this.channels.stop();
     for (const room of this.rooms.values()) await room.shutdown();
     this.saveRooms();
     if (this.backupTimer) {
@@ -898,6 +1356,8 @@ export class Hub extends EventEmitter {
   }
 
   async reset(): Promise<void> {
+    if (this.channelsRetry) clearTimeout(this.channelsRetry);
+    this.channelsRetry = null;
     this.log.warn("erasing the whole data folder on the human's request");
     for (const room of this.rooms.values()) await room.shutdown();
     for (const id of this.rooms.keys()) this.history?.dropRoom(id);
@@ -913,6 +1373,9 @@ export class Hub extends EventEmitter {
     this.skills.seedBuiltins();
     rmSync(this.settingsPath(), { force: true });
     this.settings = this.loadSettings();
+    await this.channels.stop();
+    rmSync(join(this.dataDir, "channels.json"), { force: true });
+    this.channelsStore.reload();
     this.emit("event", { type: "reset" } satisfies HubEvent);
   }
 }

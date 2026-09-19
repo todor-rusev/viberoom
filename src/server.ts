@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { Logger, requestLogPath } from "./log.js";
+import { checkGate, keyFrom, OPENING_PARAM } from "./local-gate.js";
+import { keyMatches, loadOrCreateKey, openingNonce, openingValid } from "./local-key.js";
 import { clearDiagnosticLogs, diagnosticLogStats } from "./diagnostic-logs.js";
 import { parseClientTraces, traceOperation, TRACE_ID_HEADER, TRACE_REPORT_PATH, TRACE_SINCE_HEADER, validTraceId, type RequestTrace } from "./mcp-diagnostics.js";
 import type { Hub, HubEvent } from "./hub.js";
@@ -21,6 +23,9 @@ import { createInterface } from "node:readline";
 import { classifyOpenTarget, describeOpen, detectEditor, editorCommand, isExecutablePath, openCommand, type DetectedEditor } from "./open.js";
 import { imageMediaType, languageOf, looksBinary, parseCsv, sliceLines, viewerKind, IMAGE_VIEW_MAX_BYTES, STREAM_MAX_BYTES, VIEWER_MAX_BYTES, WINDOW_MAX_LINES } from "./viewer.js";
 import { createFolder, homeFolder, listFolders, listRoots } from "./fsbrowse.js";
+import { autostartStatus, installAutostart, type AutostartOptions } from "./autostart.js";
+import { findingReading, recordFinding } from "./findings.js";
+import type { StartReason } from "./launcher.js";
 import { contentTypeOf, isStoredFileName, IMAGE_MAX_BYTES, IMAGES_PER_MESSAGE, type ImageInput } from "./files.js";
 import { QUOTES_PER_MESSAGE, type QuoteInput } from "./quotes.js";
 import { commandTarget, parseRoomCommand } from "./commands.js";
@@ -44,6 +49,7 @@ function currentEditor(): DetectedEditor | null {
 const STATIC_FILES: Record<string, { file: string; type: string; dir?: "ui" | "assets" | "node_modules" }> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/styleguide": { file: "styleguide.html", type: "text/html; charset=utf-8" },
+  "/guide": { file: "guide.html", type: "text/html; charset=utf-8" },
   "/manifest.json": { file: "manifest.json", type: "application/manifest+json; charset=utf-8" },
   "/icon.svg": { file: "icon.svg", type: "image/svg+xml", dir: "assets" },
   "/icon-256.png": { file: "icon-256.png", type: "image/png", dir: "assets" },
@@ -78,21 +84,30 @@ const UI_TYPES: Record<string, string> = {
 export interface RunningServer {
   url: string;
   server: Server;
+  key: string;
   close(): void;
 }
 
-import { checkForUpdate, installUpdate, restartWithNewBuild, runsFromSourceCheckout } from "./update.js";
+import { checkForUpdate, installUpdate, newerBuildThanRunning, restartWithNewBuild, runsFromSourceCheckout } from "./update.js";
 import { publicRecipes } from "./recipes.js";
+import { qrSvg } from "./qr.js";
 
 export interface BuildInfo {
   name: string;
   version: string;
   build: string;
   staleSource?: string | null;
+  staleBuild?: string | null;
   sourceCheckout?: boolean;
 }
 
-export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo, onShutdownRequest: () => void, onRestartRequest?: () => void): Promise<RunningServer> {
+export interface DataFolderAccess {
+  path: string;
+  state: () => { others: string[]; known: boolean };
+  narrow: () => { others: string[]; known: boolean };
+}
+
+export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo, onShutdownRequest: () => void, extras: { autostart?: AutostartOptions; dataFolder?: DataFolderAccess; run?: { startedAs: StartReason; startedAt: number } } = {}): Promise<RunningServer> {
   const uiDir = fileURLToPath(new URL("../ui/", import.meta.url));
   const assetsDir = fileURLToPath(new URL("../assets/", import.meta.url));
   const resolveModule = createRequire(import.meta.url).resolve;
@@ -104,7 +119,10 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
   };
   const clients = new Set<ServerResponse>();
   const sockets = new Set<WebSocketPeer>();
-  const snapshot = (): unknown => ({ ...(hub.snapshot() as Record<string, unknown>), version: { ...info, pid: process.pid } });
+  const dataFolder = (): unknown => (extras.dataFolder ? { path: extras.dataFolder.path, ...extras.dataFolder.state() } : null);
+  const startedAt = extras.run ? extras.run.startedAt : Date.now();
+  const startedAs: StartReason = extras.run ? extras.run.startedAs : "by-hand";
+  const snapshot = (): unknown => ({ ...(hub.snapshot() as Record<string, unknown>), autostart: extras.autostart ? autostartStatus(extras.autostart) : null, dataFolder: dataFolder(), version: { ...info, pid: process.pid, startedAt, startedAs } });
 
   const broadcast = (event: HubEvent): void => {
     const json = JSON.stringify(event);
@@ -121,6 +139,22 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       else peer.ping();
     }
   }, 20_000);
+
+  const localKey = loadOrCreateKey(hub.dataDir);
+  const livePort = (): number => {
+    const at = server.address();
+    return at && typeof at === "object" ? at.port : port;
+  };
+  const spentOpenings = new Map<string, number>();
+  const spendOpening = (value: string): boolean => {
+    const now = Date.now();
+    if (!openingValid(localKey.value, value, now)) return false;
+    for (const [nonce, until] of spentOpenings) if (until <= now) spentOpenings.delete(nonce);
+    const nonce = openingNonce(value);
+    if (spentOpenings.has(nonce)) return false;
+    spentOpenings.set(nonce, Number(value.split(".")[1]));
+    return true;
+  };
 
   const server = createServer(async (req, res) => {
     const path = requestLogPath(req.url), operation = traceOperation(path);
@@ -155,9 +189,16 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
   });
 
   server.on("upgrade", (req, socket, head) => {
-    const path = new URL(req.url ?? "/", "http://localhost").pathname;
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const path = url.pathname;
     if (path !== "/ws") {
       socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    const gate = checkGate({ method: "GET", path, opening: url.searchParams.get(OPENING_PARAM), headers: req.headers }, localKey.value, livePort(), keyMatches, spendOpening);
+    if (!gate.ok) {
+      socket.write(`HTTP/1.1 ${gate.status} ${gate.status === 401 ? "Unauthorized" : "Forbidden"}\r\nConnection: close\r\n\r\n`);
       socket.destroy();
       return;
     }
@@ -171,6 +212,19 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname;
+
+    const gate = checkGate({ method: req.method ?? "GET", path, opening: url.searchParams.get(OPENING_PARAM), headers: req.headers }, localKey.value, livePort(), keyMatches, spendOpening);
+    if (!gate.ok) {
+      sendJson(res, gate.status, { error: gate.message });
+      return;
+    }
+    if (gate.setCookie) res.setHeader("Set-Cookie", gate.setCookie);
+    if (url.searchParams.has(OPENING_PARAM)) {
+      url.searchParams.delete(OPENING_PARAM);
+      res.writeHead(302, { Location: `${path}${url.search}` });
+      res.end();
+      return;
+    }
 
     const font = req.method === "GET" && path.match(/^\/fonts\/([a-z0-9-]+\.(woff2|css))$/i);
     if (font) {
@@ -386,8 +440,26 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (req.method === "POST" && path === "/api/data-folder/narrow") {
+      if (!extras.dataFolder) throw new Error("this viberoom cannot narrow its own data folder");
+      const after = extras.dataFolder.narrow();
+      log.info(after.others.length
+        ? `${extras.dataFolder.path} is still open to ${after.others.join(", ")}`
+        : `${extras.dataFolder.path} is now open to this account alone`);
+      sendJson(res, 200, { ok: true, dataFolder: { path: extras.dataFolder.path, ...after } });
+      return;
+    }
+
     if (req.method === "GET" && path === "/api/version") {
-      sendJson(res, 200, { ...info, dataDir: hub.dataDir, pid: process.pid });
+      const mine = keyMatches(localKey.value, keyFrom(req.headers));
+      sendJson(res, 200, { ...info, keyed: mine, staleBuild: newerBuildThanRunning(new URL("./main.js", import.meta.url).href, info.build), ...(mine ? { dataDir: hub.dataDir, pid: process.pid, startedAt, startedAs } : {}) });
+      return;
+    }
+
+    if (req.method === "GET" && path === "/api/qr") {
+      const text = url.searchParams.get("text") ?? "";
+      if (!/^https:[/][/]t[.]me[/][A-Za-z0-9_]{5,32}$/.test(text)) throw new Error("only a t.me page without a query can be drawn as a QR code");
+      sendJson(res, 200, { svg: qrSvg(text) });
       return;
     }
 
@@ -450,7 +522,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       const params = Object.fromEntries(url.searchParams);
       delete params.token;
       const args = parseMessageCheckArgs(params, true);
-      sendJson(res, 200, target.room.checkMessagesForAgent(target.participantId, { ...args }));
+      sendJson(res, 200, { ...target.room.checkMessagesForAgent(target.participantId, { ...args }), vibemates: target.room.whoIsBusy() });
       return;
     }
 
@@ -480,6 +552,16 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     if (req.method === "GET" && path === "/api/settings") {
       sendJson(res, 200, hub.settings);
+      return;
+    }
+
+    if (req.method === "GET" && path === "/api/channels") {
+      sendJson(res, 200, hub.channels.view());
+      return;
+    }
+
+    if (req.method === "GET" && path === "/api/secrets") {
+      sendJson(res, 200, { ok: true, requests: hub.openSecrets() });
       return;
     }
 
@@ -630,8 +712,78 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (path === "/api/autostart") {
+      if (!extras.autostart) throw new Error("autostart is not available for this room");
+      sendJson(res, 200, { ok: true, autostart: installAutostart(extras.autostart, body.enabled === true) });
+      return;
+    }
+
     if (path === "/api/settings") {
       sendJson(res, 200, { ok: true, settings: hub.updateSettings(body) });
+      return;
+    }
+
+    if (path === "/api/channels/telegram") {
+      sendJson(res, 200, { ok: true, channels: await hub.setTelegram({ enabled: body.enabled, token: body.token, fileRoots: body.fileRoots, name: body.name, phoneApprovals: body.phoneApprovals }) });
+      return;
+    }
+    if (path === "/api/secrets") {
+      if (body.purpose !== "telegram-token" && body.purpose !== "telegram-pair") throw new Error("say which card is asked for");
+      sendJson(res, 200, { ok: true, request: hub.askSecret(body.purpose, { kind: "window" }) });
+      return;
+    }
+    const secret = path.match(/^\/api\/secrets\/([A-Za-z0-9_-]+)(\/close)?$/);
+    if (secret) {
+      if (secret[2]) {
+        sendJson(res, 200, { ok: true, request: hub.closeSecret(secret[1], { copied: body.copied === true }) });
+        return;
+      }
+      if (typeof body.value !== "string" || !body.value.trim()) throw new Error("the card is empty: paste the key, or close it without one");
+      sendJson(res, 200, { ok: true, request: await hub.answerSecret(secret[1], body.value.trim()) });
+      return;
+    }
+    if (path === "/api/mcp/ask-bot-token") {
+      const target = hub.resolveMcpToken(String(body.token ?? ""));
+      if (!target) {
+        sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+        return;
+      }
+      const who = ((target.room.snapshot() as { participants?: { id: string; name: string }[] }).participants ?? []).find((p) => p.id === target.participantId)?.name ?? "A vibemate";
+      const human = target.room.settings.humanName;
+      hub.askSecret("telegram-token", { kind: "vibemate", roomId: target.room.id, participantId: target.participantId, name: who });
+      sendJson(res, 200, {
+        ok: true,
+        message: `The key card is on ${human}'s screen. The key goes straight into viberoom's settings; you will not see it. A row in this room will say how it went: connected as @name, refused, or closed without a key. Until then, tell ${human} what to look for in BotFather's reply and wait for their word.`,
+      });
+      return;
+    }
+    if (path === "/api/mcp/show-pairing-link") {
+      const target = hub.resolveMcpToken(String(body.token ?? ""));
+      if (!target) {
+        sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+        return;
+      }
+      const who = ((target.room.snapshot() as { participants?: { id: string; name: string }[] }).participants ?? []).find((p) => p.id === target.participantId)?.name ?? "A vibemate";
+      const human = target.room.settings.humanName;
+      hub.askSecret("telegram-pair", { kind: "vibemate", roomId: target.room.id, participantId: target.participantId, name: who });
+      sendJson(res, 200, {
+        ok: true,
+        message: `The pairing card is on ${human}'s screen: a QR code and a one-time link, good for ten minutes. You do not see the link. A row in this room will say how it went: paired: <name>, closed, or expired. Tell ${human} to scan the code with the phone's camera, or open the link on the phone, and press Start.`,
+      });
+      return;
+    }
+    if (path === "/api/channels/pair-link") {
+      sendJson(res, 200, { ok: true, ...hub.pairLink() });
+      return;
+    }
+    if (path === "/api/channels/pair-link/cancel") {
+      hub.cancelPairLink();
+      sendJson(res, 200, { ok: true, channels: hub.channels.view() });
+      return;
+    }
+    if (path === "/api/channels/unpair") {
+      if (typeof body.senderId !== "string" || !body.senderId) throw new Error("say which phone to unpair");
+      sendJson(res, 200, { ok: true, unpaired: hub.unpair(body.senderId, body.stopTurns === true), channels: hub.channels.view() });
       return;
     }
 
@@ -665,6 +817,34 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     if (path === "/api/window") {
       hub.saveWindowPlacement(body);
       sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (path === "/api/window/finding") {
+      const roomId = String(body.roomId ?? "");
+      const messageId = String(body.messageId ?? "");
+      const room = hub.rooms.get(roomId);
+      if (!room || !messageId) throw new Error("that finding names no room or no message");
+      const ended = room.endOfTurn(messageId);
+      const finding = {
+        kind: "held-live",
+        key: `held-live:${roomId}:${messageId}`,
+        at: new Date().toISOString(),
+        room: room.name,
+        roomId,
+        messageId,
+        window: {
+          heldSince: Number(body.heldSince) || null,
+          lastStreamSequence: Number(body.lastStreamSequence),
+          afterReload: body.afterReload === true,
+        },
+        hub: ended ? { endedAt: new Date(ended.at).toISOString(), streamSequence: ended.streamSequence } : null,
+        heldBy: ["record", "screen", "both"].includes(String(body.heldBy)) ? String(body.heldBy) : "record",
+        reading: findingReading({ heldBy: String(body.heldBy), lastStreamSequence: Number(body.lastStreamSequence) }, ended),
+      };
+      recordFinding(hub.dataDir, finding);
+      log.warn(`a window held a finished turn: ${finding.reading} (room ${room.name}, message ${messageId})`);
+      sendJson(res, 200, { ok: true, reading: finding.reading });
       return;
     }
 
@@ -792,6 +972,17 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (path === "/api/mcp/new-room") {
+      const target = hub.resolveMcpToken(String(body.token ?? ""));
+      if (!target) {
+        sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+        return;
+      }
+      const { token: _token, ...asked } = body as Record<string, unknown>;
+      sendJson(res, 200, target.room.proposeNewRoom(target.participantId, asked));
+      return;
+    }
+
     if (path === "/api/mcp/propose") {
       const target = hub.resolveMcpToken(String(body.token ?? ""));
       if (!target) {
@@ -818,6 +1009,12 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     const recovery = path.match(/^\/api\/rooms\/([^/]+)\/recovery$/);
     if (recovery) {
       sendJson(res, 200, await hub.adoptRoomCopy(decodeURIComponent(recovery[1])));
+      return;
+    }
+
+    const newRoom = path.match(/^\/api\/rooms\/([^/]+)\/new-rooms\/([^/]+)$/);
+    if (newRoom) {
+      sendJson(res, 200, await hub.resolveNewRoom(decodeURIComponent(newRoom[1]), decodeURIComponent(newRoom[2]), body.create === true || body.create === "true"));
       return;
     }
 
@@ -864,6 +1061,15 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (path === "/api/mcp/miss") {
+      const target = hub.resolveMcpToken(String(body.token ?? ""));
+      const tool = String(body.tool ?? "").slice(0, 40).replace(/[^\w-]/g, "");
+      const reason = ["unknown-tool", "bad-arguments", "refused", "old-name"].includes(String(body.reason)) ? String(body.reason) : "other";
+      if (target && tool) log.info(`mcp miss: ${tool} — ${reason} (${target.room.participants.get(target.participantId)?.name ?? target.participantId} in ${target.room.settings.name})`);
+      sendJson(res, 200, { ok: !!target });
+      return;
+    }
+
     if (path === "/api/profile/erase") {
       if (String(body.confirm ?? "") !== "erase") throw new Error('type "erase" to confirm');
       await hub.reset();
@@ -872,13 +1078,23 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     }
 
     if (path === "/api/restart") {
-      if (!onRestartRequest) {
+      if (!hub.canRestart) {
         sendJson(res, 400, { error: "this room cannot restart itself" });
         return;
       }
-      log.info("restart requested from the window");
+      const sessions = body.sessions === "load" || body.sessions === "replay" ? body.sessions : undefined;
+      const when = body.when === "now" ? "now" : "idle";
+      const who = hub.settings.humanName || "The human";
+      if (when === "now" && hub.restartPending()) hub.restartNow(who);
+      const pending = hub.requestRestart({ askedBy: who, from: "window", when, ...(sessions ? { sessions } : {}) });
+      log.info(`restart requested from the window (${pending.waitingFor.length ? `waiting for ${pending.waitingFor.join(", ")}` : "now"}${sessions ? `, vibemates come back: ${sessions}, this once` : ""})`);
+      sendJson(res, 200, { ok: true, restart: pending });
+      return;
+    }
+
+    if (path === "/api/restart/cancel") {
+      hub.cancelRestart(hub.settings.humanName || "The human");
       sendJson(res, 200, { ok: true });
-      setTimeout(onRestartRequest, 50);
       return;
     }
 
@@ -926,7 +1142,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         const command = parseRoomCommand(text);
         if (command) {
           const target = room.findByName(commandTarget(command.args));
-          if (!target) throw new Error(`/${command.name} needs the name of a vibemate in this room, like /${command.name} @Name`);
+          if (!target) throw new Error(`/${command.typed} needs the name of a vibemate in this room, like /${command.typed} @Name`);
           await room.respawnAgent(target.id);
           hub.saveRooms();
           sendJson(res, 200, { ok: true, command: command.name, participant: target.name });
@@ -1009,7 +1225,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
-    const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|remove|config|persona|reconnect|mute|unmute|respawn|retry|staff|restaff|notes|take-notes)$/);
+    const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|nudge|remove|config|persona|reconnect|mute|unmute|respawn|retry|staff|restaff|notes|take-notes)$/);
     if (participantAction) {
       const room = hub.getRoom(decodeURIComponent(participantAction[1]));
       const id = decodeURIComponent(participantAction[2]);
@@ -1020,6 +1236,9 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         if (waiting && (!body.turnId || typeof body.messageId !== "string" || !body.messageId || body.messageId.length > 200 || !Number.isSafeInteger(body.bodyVersion) || Number(body.bodyVersion) < 1)) throw new Error("messageId and bodyVersion must identify the waiting message");
         sendJson(res, 200, { ok: true, stopped: room.cancelTurn(id, body.turnId as string | undefined,
           waiting ? { id: body.messageId as string, version: body.bodyVersion as number } : undefined) });
+        return;
+      } else if (action === "nudge") {
+        sendJson(res, 200, { ok: true, nudge: await room.nudge(id, typeof body.by === "string" ? body.by.slice(0, 80) : undefined) });
         return;
       } else if (action === "retry") {
         sendJson(res, 200, { ok: true, participant: room.retryTurn(id) });
@@ -1104,6 +1323,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       resolve({
         url,
         server,
+        key: localKey.value,
         close: () => {
           clearInterval(heartbeat);
           for (const res of clients) res.end();

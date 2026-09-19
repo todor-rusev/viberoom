@@ -23,7 +23,7 @@ export function loginState(probe: LoginProbe | undefined, evidence: LoginEvidenc
   return probe.files.length ? "missing" : "unknown";
 }
 
-export type TroubleKind = "login" | "not-installed" | "timeout" | "crash" | "limit" | "network" | "unknown";
+export type TroubleKind = "login" | "not-installed" | "node-version" | "timeout" | "crash" | "limit" | "network" | "unknown";
 export type TroubleAction = "login" | "retry" | "respawn";
 
 export interface Trouble {
@@ -40,6 +40,7 @@ const LOGIN_CODES = /(auth\w*[_-]?(error|required|failed)|unauthenticated|unauth
 const NETWORK_CODES = /(econn\w+|etimedout|enotfound|eai_again|network[_-]?error|service[_-]?unavailable|bad[_-]?gateway|gateway[_-]?timeout|\b50[234]\b)/i;
 
 const LOGIN_WORDS = /\b(not logged in|log ?in required|login required|please log ?in|unauthori[sz]ed|authentication (failed|required|error)|invalid api key|api key (is )?(missing|not set|invalid)|no credentials|credentials not found|no (llm )?provider (configured|available)|401|403|oauth|token (expired|invalid))\b/i;
+const NODE_WORDS = /\b(requires? node|unsupported engine|engine\s+"?node|node(\.js)? version|minimum node|node >=?)|\bnode['"‘’]?\s*:?\s*(command not found|not found|no such file|is not recognized)|spawn node ENOENT/i;
 const MISSING_WORDS = /\b(enoent|not found|no such file|is not recognized|command not found|spawn\w* (failed|error))\b/i;
 const TIMEOUT_WORDS = /\b(timed out|timeout|took too long|did not answer|no response)\b/i;
 
@@ -69,9 +70,9 @@ export function classifyTurnFailure(input: { error: string; code?: string; vendo
     return { stage, kind: "network", what: `${v} could not reach its service.`, advice: "Check the connection, then press Retry: the messages it missed are sent again.", actions: input.alive ? ["retry"] : ["respawn"] };
   }
   if (!input.alive) {
-    return { stage, kind: "crash", what: `${v}'s program stopped in the middle of the turn.`, advice: "Respawn it: a fresh session with its notes and the last messages; the history stays.", actions: ["respawn"] };
+    return { stage, kind: "crash", what: `${v}'s program stopped in the middle of the turn.`, advice: "Give it a fresh start: a new session with its notes and the last messages; the history stays.", actions: ["respawn"] };
   }
-  return { stage, kind: "unknown", what: `${v} could not finish the turn: ${text.replace(/\s+/g, " ").slice(0, 160)}`, advice: "Press Retry to send it the messages again; if it fails the same way, respawn it.", actions: ["retry", "respawn"] };
+  return { stage, kind: "unknown", what: `${v} could not finish the turn: ${text.replace(/\s+/g, " ").slice(0, 160)}`, advice: "Press Retry to send it the messages again; if it fails the same way, give it a fresh start.", actions: ["retry", "respawn"] };
 }
 
 export function classifyStartFailure(input: { error: string; stderr?: string[]; vendor: string; loginCommand?: string; installHint?: string; loginState?: LoginState; loginFromHere?: boolean }): Trouble {
@@ -86,6 +87,13 @@ export function classifyStartFailure(input: { error: string; stderr?: string[]; 
         ? `Press "Log in to ${input.vendor}" below: ${input.vendor} signs you in, and the room starts it again by itself. The room never asks for credentials: it uses the login the vendor's own CLI keeps on this machine.`
         : `${login}. The room never asks for credentials itself: it uses the login the vendor's own CLI keeps on this machine.`,
       actions: ["login", "respawn"],
+    };
+  }
+  if (NODE_WORDS.test(text)) {
+    return {
+      stage, kind: "node-version", actions: ["respawn"],
+      what: `${input.vendor} did not get a usable Node on this machine.`,
+      advice: `viberoom is running on Node ${process.versions.node}, but ${input.vendor} starts through a command shim, which uses the \`node\` on your PATH — and that one can be older, or missing. Check it with \`node -v\` in a terminal: if it answers nothing, or a smaller number than ${process.versions.node}, install or select a newer Node and try again.`,
     };
   }
   if (MISSING_WORDS.test(text)) {

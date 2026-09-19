@@ -279,7 +279,35 @@ export const ROOM_LIBRARIAN: SkillDraft = {
   draft: false,
 };
 
-export const BUILTIN_SKILLS: SkillDraft[] = [SKILL_WRITER, ROOM_DESIGNER, LOOK_DESIGNER, ROOM_LIBRARIAN];
+export const SET_UP_ON_MESSENGER: SkillDraft = {
+  name: "set-up-on-messenger",
+  description:
+    "Walk the human through connecting Telegram (on a phone or this computer) to viberoom: make the bot, hand its key over on a card (you never see it), name it, pair the phone. Use when the human asks to set up, connect or pair a phone, a messenger or Telegram, or /rooms from the phone gets no answer.",
+  argumentHint: "[bot | key | name | pair]",
+  body: [
+    "You are an experienced friend at the human's side, not a brochure. One action per message, at most two sentences, then stop and wait for the human's word; never list the steps ahead. Every message ends with what success looks like. The key never appears in the chat: it goes through the card, and you learn only the outcome. \"The phone\" is wherever the human uses Telegram: a phone, or the Telegram app on this computer.",
+    "",
+    "0. Offer the wizard once, in one line: Settings → Channels → Set up Telegram… walks the same steps with pictures and QR codes; you can also guide them here. Ask which they prefer, then stop. If they choose the wizard, stay available and say nothing more unless asked.",
+    "1. Open BotFather in Telegram (https://t.me/BotFather) and press Start. Success: BotFather greets them. Stop and wait.",
+    "2. Send /newbot. BotFather asks for a name: any name they like. Stop and wait.",
+    "3. BotFather asks for a username ending in bot (for example viberoom_home_bot). Success: a reply with a long line that has a colon in it; that line is the key. Say why they make the bot themselves: the key never passes through anyone else's server. Stop and wait.",
+    "4. Call ask_for_bot_token: a card opens on the human's screen. Tell them to paste BotFather's whole reply into it; the key is taken out of it. Wait for the outcome. \"connected as @name\": go on. \"refused: <reason>\": say the smallest next thing to try, then wait. \"closed without a key\": ask whether to continue or stop, without pressing.",
+    "5. Suggest a neutral name that tells their computers apart (viberoom home, viberoom work), in one sentence, and where to set it (Settings → Channels → Rename…). Anyone who opens the bot sees this name. Stop and wait.",
+    "6. Call show_pairing_link: the QR code appears on the human's screen. Tell them to scan it with the phone's camera (or open the link on the phone) and press Start; the account that does it is paired on every device signed in to it. Wait for the outcome: \"paired: <name>\" means done; \"expired\" means call it again.",
+    "7. Done: ask them to send /rooms to the bot and /open a room; if the bot says a vibemate is offline, point at the Reconnect button under that message. Stop here; do not repeat the steps.",
+    "",
+    "When something goes wrong, say only the smallest next thing to try: the bot is busy (another computer is listening with this key) → make a new bot in BotFather, not a new key; the key is refused → paste BotFather's whole reply; the pairing code has run out → call show_pairing_link again; the username is taken → another one ending in bot; no Telegram on the phone → the Telegram app on this computer does the same. For anything else, point at the guide in viberoom on the computer: Settings → Channels → Open the guide.",
+    "",
+    "Start at: $ARGUMENTS (one of bot, key, name, pair; nothing means from step 0).",
+  ].join("\n"),
+  userInvocable: true,
+  agentInvocable: true,
+  author: BUILTIN_AUTHOR,
+  reviewed: true,
+  draft: false,
+};
+
+export const BUILTIN_SKILLS: SkillDraft[] = [SKILL_WRITER, ROOM_DESIGNER, LOOK_DESIGNER, ROOM_LIBRARIAN, SET_UP_ON_MESSENGER];
 
 export function isBuiltinSkill(name: string): boolean {
   const lower = name.trim().toLowerCase();

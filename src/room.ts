@@ -5,7 +5,9 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { HistoryStore, type DivertOp, type PendingOp, cursorOf, type Cursor } from "./history-store.js";
 import { foldIndex } from "./fold.js";
-import { NOTES_ONLY_PROMPT, NOTES_REQUEST, crossedThreshold, emptyUsageReport, extractNotes, isBareContextFullError, isContextFullError, looksCompacted, overThreshold, visibleChunk } from "./context.js";
+import { NOTES_ONLY_PROMPT, NOTES_REQUEST, crossedThreshold, emptyUsageReport, extractNotes, isBareContextFullError, isContextFullError, looksCompacted, overThreshold, settledVisible } from "./context.js";
+import { spokenText } from "./spoken-text.js";
+import { planNewRoom, type NewRoomPlan } from "./new-room.js";
 import { formatDuration } from "./duration.js";
 import { affectedByEdit, editNotice, EDIT_NOTICE_MAX, partitionHistory, rewriteNotice, type AgentReadState, type EditMode } from "./edit.js";
 import { bodyRefs, registerBodyReader, resetBodyDelivery, supplyBodies, type BodyDelivery, type BodyEdit, type BodyRef } from "./body-delivery.js";
@@ -20,7 +22,7 @@ import { errorCode, errorDetail, RemoteError } from "./jsonrpc.js";
 import { getRecipe, listRecipes, publicRecipes, type AgentRecipe } from "./recipes.js";
 import { classifyStartFailure, classifyTurnFailure, type Trouble } from "./agent-health.js";
 import { legacyRowTone } from "./rows.js";
-import { composeSkillBlock, skillPull, SKILL_TOOL_NAME, type SkillsForPrompt } from "./persona.js";
+import { composeSkillBlock, formatQuoteTime, skillPull, SKILL_TOOL_NAME, type SkillsForPrompt } from "./persona.js";
 import {
   BUILTIN_AUTHOR,
   parseSkillInvocation,
@@ -86,6 +88,14 @@ export interface LaunchPrefs {
   mode: string | null;
 }
 
+export interface QuietTurn {
+  since: number;
+  turnId: string;
+  processAlive: boolean;
+  nudge?: "asking" | "answered" | "silent";
+  stopping?: "asked" | "forcing";
+}
+
 export interface Participant {
   id: string;
   name: string;
@@ -112,6 +122,7 @@ export interface Participant {
   role?: string;
   avatar?: string;
   muted?: boolean;
+  createdByVibemate?: boolean;
   replyDelay?: number;
   skills?: string[];
   skillChannel?: "tool" | "marker" | "pending";
@@ -132,6 +143,9 @@ export interface Participant {
   deliveryEpoch?: string;
   suppliedThrough?: number;
   activeTurnId?: string;
+  quiet?: QuietTurn;
+  runSeen?: string;
+  buildSeen?: string;
   sawFromSeq?: number;
 }
 
@@ -146,12 +160,15 @@ export interface StoredParticipant {
   colorSlot?: number;
   launch: LaunchPrefs;
   muted: boolean;
+  createdByVibemate?: boolean;
   replyDelay?: number;
   skills?: string[];
   sessionId?: string;
   deliveryEpoch?: string;
   suppliedThrough?: number;
   supportsLoad?: boolean;
+  runSeen?: string;
+  buildSeen?: string;
   lastSeenSeq?: number;
   sawFromSeq?: number;
   notes?: string;
@@ -183,8 +200,66 @@ export interface ToolCallView {
   status?: string | null;
   rawInput?: unknown;
   output?: string;
+  locations?: string[];
   messageCheck?: { mode: "read" | "status"; checkedAt: string; available?: number; returned?: number; more?: boolean; reset?: boolean; counts?: MessageCheckCounts; previewed?: number; moreHeaders?: boolean };
   historySearch?: HistorySearchReceipt;
+}
+
+export interface MessageVia {
+  platform: string;
+  account: string;
+  chatId: string;
+  threadId?: string;
+  updateId: string;
+  messageId: string;
+  senderId: string;
+}
+
+export type StoreOutcome = "record" | "journal" | "memory";
+
+const ACCEPT_RECEIPT_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+
+export type ExternalReceipt =
+  | {
+      id: string;
+      seq: number;
+      stored: StoreOutcome;
+      repeated: boolean;
+      rerouted: boolean;
+    }
+  | {
+      stored: "rejected";
+      reason: string;
+      repeated: false;
+      rerouted: false;
+      transient: boolean;
+    };
+
+export function hubChangeNote(seen: { runSeen?: string; buildSeen?: string }, run: { id: string; build: string } | null): string | null {
+  if (!run || !seen.runSeen || seen.runSeen === run.id) return null;
+  const head = "viberoom restarted (a new hub process).";
+  if (seen.buildSeen === run.build) return `${head} It runs the same build as before: ${run.build}.`;
+  if (!seen.buildSeen) return `${head} It runs the build from ${run.build}; which build you were running under was not recorded.`;
+  return `${head} It runs the build from ${run.build}; you were running under the build from ${seen.buildSeen}.`;
+}
+
+export function readJournal(text: string): { ops: DivertOp[]; unreadable: number } {
+  const ops: DivertOp[] = [];
+  let unreadable = 0;
+  for (const line of text.split(String.fromCharCode(10))) {
+    if (!line.trim()) continue;
+    try {
+      ops.push(JSON.parse(line) as DivertOp);
+    } catch {
+      unreadable++;
+    }
+  }
+  return { ops, unreadable };
+}
+export class RoomRefusal extends Error {
+  constructor(message: string, readonly transient = false) {
+    super(message);
+  }
 }
 
 export interface ChatMessage {
@@ -198,11 +273,12 @@ export interface ChatMessage {
   ts: number;
   displayOrder?: number;
   kind: "chat" | "system" | "hidden";
-  details?: { original?: string; corrections?: string[]; outcome?: string; skill?: string; via?: "tool" | "marker"; refId?: string; agentId?: string; tone?: "attention" | "error" | "hush" };
+  details?: { original?: string; corrections?: string[]; outcome?: string; skill?: string; via?: "tool" | "marker"; refId?: string; agentId?: string; tone?: "attention" | "error" | "hush"; about?: "room" };
   skill?: { name: string; args: string };
   edited?: { ts: number; previous: string };
   bodyDelivery?: BodyDelivery;
   bodyEdit?: BodyEdit;
+  via?: MessageVia;
   pinned?: true;
   images?: Attachment[];
   quotes?: Quote[];
@@ -225,6 +301,16 @@ export interface PendingPermission {
   toolCall: ToolCallUpdate;
   options: PermissionOption[];
   ts: number;
+}
+
+export interface NewRoomProposal {
+  key: string;
+  participantId: string;
+  participantName: string;
+  ts: number;
+  plan: NewRoomPlan;
+  status: "pending" | "created" | "refused";
+  roomId?: string;
 }
 
 export interface RoomProposal {
@@ -265,7 +351,9 @@ export type RoomEvent =
   | { type: "permission.resolved"; key: string; optionId: string | null }
   | { type: "proposal"; proposal: RoomProposal }
   | { type: "proposal.resolved"; key: string; status: "applied" | "rejected"; skipped?: string[] }
-  | { type: "room"; hopLimit: number; hops: number; settings: RoomSettings; customRulesText: string; focused: boolean; name: string; dir: string }
+  | { type: "new-room"; proposal: NewRoomProposal }
+  | { type: "new-room.resolved"; key: string; status: "created" | "refused"; roomId?: string }
+  | { type: "room"; hopLimit: number; hops: number; settings: RoomSettings; customRulesText: string; focused: boolean; startingWithHub: boolean; name: string; dir: string }
   | { type: "notice"; text: string; level: "info" | "warn" | "error"; ts: number };
 
 export type BriefTextCheck = "refuse" | "notice" | "keep";
@@ -369,6 +457,7 @@ export interface RoomOptions {
   humanName: string;
   programHumanDescription: string;
   bypassPermissionsByDefault: boolean;
+  hubRun?: () => { id: string; build: string } | null;
   programTranscripts?: TranscriptMode;
   programFoldAfter?: number;
   settings?: Partial<Omit<RoomSettings, "name" | "humanName">>;
@@ -388,12 +477,14 @@ interface AgentRuntime {
   lastSeenSeq: number;
   turnStartSeq: number;
   turnActive: boolean;
+  pendingConfig?: { configId: string; value: string | boolean; from?: string }[];
   workBusy?: boolean;
   notesPending?: boolean;
   workCancelled?: boolean;
   usageSeenThisTurn?: boolean;
   pendingTurn: boolean;
-  turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; published: boolean; publishedAt?: number; hidden?: boolean; messagesFromSeq: number } | null;
+  turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; lastSignAt?: number; published: boolean; publishedAt?: number; hidden?: boolean; messagesFromSeq: number; shownLength?: number } | null;
+  quiet?: { turnId: string; nudge?: "asking" | "answered" | "silent" };
   strayMessageId: string | null;
   turnsSinceBrief: number;
   usedAtBrief: number;
@@ -432,9 +523,16 @@ interface PermissionEntry extends PendingPermission {
   resolve: (response: RequestPermissionResponse) => void;
 }
 
+const ADAPTER_TRACE = "viberoom-trace ";
+const SILENCE_CHECK_MS = 60_000;
+const STOP_GRACE_MS = 30_000;
+const SILENCE_MS = 10 * 60_000;
+const NUDGE_WAIT_MS = 10_000;
+
 const COLORS = ["#6d5dfc", "#16a34a", "#d97706", "#dc2626", "#0891b2", "#be185d", "#4d7c0f", "#7c3aed"];
 export const CAST_SIZE = 8;
 const MENTION_PATTERN = /@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu;
+export { spokenText };
 const RULE_REF_TOKEN = /@\{p:([^}]+)\}/g;
 const ADAPTER_ERROR_PATTERN =
   /^(?:Warning: Falling back from WebSockets|unexpected status \d{3}|Error when talking to|API Error|You have exhausted your (?:daily )?quota|Rate limit|429 |5\d\d )/i;
@@ -452,11 +550,31 @@ export function tokensCarried(result: { usage?: { inputTokens?: number | null; c
   return typeof fromMeta === "number" && fromMeta > 0 ? fromMeta : null;
 }
 
+const STOPPED_WORK_KINDS = 3;
+
+function callName(call: ToolCallView): string {
+  const named = (call.name ?? "").trim();
+  if (named) return named.split(/[._]/).length > 1 && named.includes(".") ? named.slice(named.lastIndexOf(".") + 1) : named;
+  return (call.kind ?? "").trim() || "tool";
+}
+
+function stoppedWork(message: ChatMessage): string {
+  const calls = message.toolCalls ?? [];
+  if (!calls.length) return "; it had written nothing";
+  const byName = new Map<string, number>();
+  for (const call of calls) byName.set(callName(call), (byName.get(callName(call)) ?? 0) + 1);
+  const ranked = [...byName].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const shown = ranked.slice(0, STOPPED_WORK_KINDS).map(([name, times]) => (times > 1 ? `${name} ×${times}` : name));
+  if (ranked.length > STOPPED_WORK_KINDS) shown.push("…");
+  return `; it had made ${calls.length} tool call${calls.length === 1 ? "" : "s"} (${shown.join(", ")}) and had written nothing`;
+}
+
 export class Room extends EventEmitter {
   readonly id: string;
   name: string;
   dir: string;
   readonly dataDir: string;
+  private readonly hubRun: () => { id: string; build: string } | null;
   readonly createdAt: number;
   settings: RoomSettings;
   hops = 0;
@@ -485,6 +603,7 @@ export class Room extends EventEmitter {
   private readonly drafts = new Map<string, ChatMessage>();
   private readonly permissions = new Map<string, PermissionEntry>();
   private readonly proposals = new Map<string, RoomProposal>();
+  private readonly newRooms = new Map<string, NewRoomProposal>();
   private readonly proposalPlans = new Map<string, { settings: SettingChange[]; vibemates: TemplateVibemate[]; ops: VibemateChange[]; ids: Record<string, string>; appearance?: Record<string, unknown> }>();
   private readonly optionCache: Map<string, DiscoveredOptions>;
   private readonly log: Logger;
@@ -505,6 +624,7 @@ export class Room extends EventEmitter {
     this.createdAt = options.createdAt;
     this.programHumanDescription = options.programHumanDescription;
     this.bypassPermissionsByDefault = options.bypassPermissionsByDefault;
+    this.hubRun = options.hubRun ?? (() => null);
     this.programTranscripts = options.programTranscripts ?? "off";
     this.programFoldAfter = options.programFoldAfter ?? 1200;
     this.skills = options.skills;
@@ -554,6 +674,7 @@ export class Room extends EventEmitter {
 
   private loadHistory(): void {
     this.drainDivert();
+    this.purgeAcceptReceipts();
     let copyAwaits = false;
     if (!this.history.migration(this.id)) {
       try {
@@ -587,7 +708,12 @@ export class Room extends EventEmitter {
       this.loadNotices.push(this.recordHold);
     }
     if (this.divertPending) {
-      for (const op of this.journalOps()) {
+      const journal = this.journalOps();
+      if (journal.unreadable) {
+        this.loadNotices.push(`${journal.unreadable} line(s) of this room's pending-changes journal could not be read and were skipped; everything else in it is here.`);
+        this.log.warn(`divert.jsonl: ${journal.unreadable} unreadable line(s) skipped`);
+      }
+      for (const op of journal.ops) {
         if (this.opApplied(op)) continue;
         this.applyOpToMemory(op);
         if (op.kind !== "truncate") {
@@ -598,10 +724,10 @@ export class Room extends EventEmitter {
     }
   }
 
-  private journalOps(): DivertOp[] {
+  private journalOps(): { ops: DivertOp[]; unreadable: number } {
     const path = this.divertPath();
-    if (!existsSync(path)) return [];
-    return readFileSync(path, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as DivertOp);
+    if (!existsSync(path)) return { ops: [], unreadable: 0 };
+    return readJournal(readFileSync(path, "utf8"));
   }
 
   private opApplied(op: DivertOp): boolean {
@@ -624,40 +750,49 @@ export class Room extends EventEmitter {
     }
   }
 
-  private persist(op: PendingOp): void {
-    this.persistMany([op]);
+  private persist(op: PendingOp): StoreOutcome {
+    return this.persistMany([op]);
   }
 
-  private persistMany(ops: PendingOp[]): void {
-    if (!ops.length) return;
+  private persistMany(ops: PendingOp[]): StoreOutcome {
+    if (!ops.length) return "record";
+    const keys = ops.map((op) => op.opId).filter((k): k is string => !!k);
+    if (new Set(keys).size !== keys.length) throw new Error("the same accept key on two writes in one batch");
     this.historyRevision += ops.length;
-    const divertAll = (error: unknown) => {
-      for (const op of ops) this.divert({ ...op, opId: randomUUID() }, error);
+    const divertAll = (error: unknown): StoreOutcome => {
+      let outcome: StoreOutcome = "journal";
+      for (const op of ops) if (!this.divert({ ...op, opId: op.opId ?? randomUUID() }, error)) outcome = "memory";
+      return outcome;
     };
     if (this.divertPending) {
       this.drainDivert();
       if (this.divertPending) return divertAll(new Error("earlier writes are still waiting in the divert journal"));
     }
+    this.retryUnsavedExternal();
     try {
       const apply = () => {
         for (const op of ops) {
-          if (op.kind === "upsert") this.history.upsert(this.id, op.message);
+          if (op.opId) this.history.applyOp(this.id, op as DivertOp);
+          else if (op.kind === "upsert") this.history.upsert(this.id, op.message);
           else if (op.kind === "rewrite") this.history.rewrite(this.id, op.message, op.fromSeq, op.deletedAt);
           else this.history.truncateFrom(this.id, op.fromSeq, op.deletedAt);
         }
       };
       if (ops.length === 1) apply();
       else this.history.transaction(apply);
+      return "record";
     } catch (error) {
-      divertAll(error);
+      return divertAll(error);
     }
   }
 
-  private divert(op: DivertOp, error: unknown): void {
+  private divert(op: DivertOp, error: unknown): boolean {
     const why = describeError(error);
+    let journaled = false;
     try {
       appendFileSync(this.divertPath(), JSON.stringify(op) + "\n");
       this.divertPending = true;
+      journaled = true;
       this.log.warn(`the conversation store refused a write (${why}); kept in divert.jsonl to apply later`);
       this.notice(`The conversation store refused a write (${why}). The change is kept in the room's divert journal and applied when the store answers again.`, "error");
     } catch (second) {
@@ -665,6 +800,33 @@ export class Room extends EventEmitter {
       this.notice(`The conversation store refused a write (${why}) and the divert journal could not be written either: this change is NOT saved.`, "error");
     }
     this.onHistoryFailure?.(this.id, error);
+    return journaled;
+  }
+
+  private readonly unsavedExternal = new Map<string, { message: ChatMessage; stored: StoreOutcome }>();
+
+  purgeAcceptReceipts(before = Date.now() - ACCEPT_RECEIPT_KEEP_MS): number {
+    try {
+      return this.history.purgeAcceptedOps(before);
+    } catch (error) {
+      this.log.warn(`accept receipts not purged: ${describeError(error)}`);
+      return 0;
+    }
+  }
+
+  retryUnsavedExternal(): number {
+    for (const [opId, entry] of this.unsavedExternal) {
+      if (entry.stored !== "memory") continue;
+      try {
+        this.history.applyOp(this.id, { kind: "upsert", message: entry.message, opId, accept: true });
+        this.unsavedExternal.delete(opId);
+        this.log.info(`an external message kept in memory only is now in the store (${opId})`);
+      } catch {
+      }
+    }
+    let left = 0;
+    for (const entry of this.unsavedExternal.values()) if (entry.stored === "memory") left++;
+    return left;
   }
 
   private drainDivert(): void {
@@ -673,9 +835,9 @@ export class Room extends EventEmitter {
       this.divertPending = false;
       return;
     }
-    const lines = readFileSync(path, "utf8").split("\n").filter((l) => l.trim());
+    const journal = this.journalOps();
     try {
-      for (const line of lines) this.history.applyOp(this.id, JSON.parse(line) as DivertOp);
+      for (const op of journal.ops) this.history.applyOp(this.id, op);
     } catch (error) {
       this.divertPending = true;
       this.log.warn(`divert.jsonl could not be applied yet: ${describeError(error)}`);
@@ -683,7 +845,8 @@ export class Room extends EventEmitter {
     }
     rmSync(path, { force: true });
     this.divertPending = false;
-    if (lines.length) this.log.info(`divert.jsonl applied: ${lines.length} operation(s)`);
+    if (journal.ops.length) this.log.info(`divert.jsonl applied: ${journal.ops.length} operation(s)${journal.unreadable ? `, ${journal.unreadable} unreadable line(s) dropped` : ""}`);
+    for (const [opId, entry] of this.unsavedExternal) if (entry.stored === "journal") this.unsavedExternal.delete(opId);
   }
 
   get historyDiverted(): boolean {
@@ -713,6 +876,7 @@ export class Room extends EventEmitter {
         role: s.role,
         avatar: s.avatar || undefined,
         muted: s.muted,
+        createdByVibemate: s.createdByVibemate,
         replyDelay: s.replyDelay,
         skills: normalizeSkillList(s.skills),
         launch: s.launch,
@@ -721,6 +885,8 @@ export class Room extends EventEmitter {
         suppliedThrough: s.suppliedThrough,
         supportsLoad: s.supportsLoad,
         sawFromSeq: s.sawFromSeq,
+        runSeen: s.runSeen,
+        buildSeen: s.buildSeen,
         notes: s.notes,
         notesAt: s.notesAt,
         notesSeq: s.notesSeq,
@@ -785,6 +951,7 @@ export class Room extends EventEmitter {
           colorSlot: p.colorSlot,
           launch: p.launch ?? { model: p.model ?? null, effort: p.effort ?? null, mode: p.mode ?? null },
           muted: !!p.muted,
+          createdByVibemate: p.createdByVibemate || undefined,
           replyDelay: p.replyDelay,
           skills: p.skills && p.skills.length ? [...p.skills] : undefined,
           sessionId: p.sessionId,
@@ -793,6 +960,8 @@ export class Room extends EventEmitter {
           supportsLoad: p.supportsLoad,
           lastSeenSeq: this.runtimes.get(p.id)?.lastSeenSeq ?? this.restoredSeen.get(p.id),
           sawFromSeq: p.sawFromSeq,
+          runSeen: p.runSeen,
+          buildSeen: p.buildSeen,
           notes: p.notes,
           notesAt: p.notesAt,
           notesSeq: p.notesSeq,
@@ -800,11 +969,12 @@ export class Room extends EventEmitter {
     };
   }
 
-  private commit(message: ChatMessage): void {
+  private commit(message: ChatMessage, opId?: string): StoreOutcome {
     message.displayOrder ??= ++this.displayOrder;
     this.messages.push(message);
-    this.persist({ kind: "upsert", message });
+    const stored = this.persist(opId ? { kind: "upsert", message, opId, accept: true } : { kind: "upsert", message });
     this.push({ type: "message", message });
+    return stored;
   }
 
   private messagesWithLiveDrafts(): ChatMessage[] {
@@ -880,12 +1050,14 @@ export class Room extends EventEmitter {
       hopLimit: this.hopLimit,
       hops: this.hops,
       focused: this.focused,
+      startingWithHub: this.startingWithHub,
       settings: this.settings,
       customRulesText: this.renderRuleReferences(this.settings.customRules),
       participants: [...this.participants.values()].map(p => this.participantView(p)),
       messages: shown,
       permissions: [...this.permissions.values()].map(({ resolve: _r, ...p }) => p),
       proposals: [...this.proposals.values()],
+      newRooms: [...this.newRooms.values()],
       recovery: this.recovery,
       readOnly: this.readOnly,
       recipes: publicRecipes(),
@@ -955,7 +1127,92 @@ export class Room extends EventEmitter {
   }
 
   private assertRecordOpen(): void {
-    if (this.recordHold) throw new Error(this.recordHold);
+    if (this.recordHold) throw new RoomRefusal(this.recordHold, true);
+  }
+
+  channelNotice(text: string, level: "info" | "warn" | "error"): void {
+    this.notice(text, level);
+  }
+
+  channelRecord(text: string): void {
+    this.postRoomEvent(text);
+  }
+
+  shownStatus(id: string): ParticipantStatus | "working" | "writing" | "notes" {
+    const participant = this.participants.get(id);
+    if (!participant) return "left";
+    if (participant.status !== "thinking") return participant.status;
+    if (participant.notesTurn) return "notes";
+    const draft = [...this.drafts.values()].find((m) => m.streaming && m.from === id);
+    if (!draft) return "thinking";
+    if ((draft.toolCalls ?? []).some((c) => c.status === "pending" || c.status === "in_progress")) return "working";
+    return draft.text ? "writing" : "thinking";
+  }
+
+  whoIsBusy(): { name: string; state: string; line: string }[] {
+    const now = Date.now();
+    const out: { name: string; state: string; line: string }[] = [];
+    for (const p of this.participants.values()) {
+      if (p.kind !== "agent" || p.status === "left") continue;
+      const state = p.muted ? "muted" : this.shownStatus(p.id);
+      const turn = this.runtimes.get(p.id)?.turn;
+      const parts = [state];
+      if (turn && !turn.hidden) {
+        const quiet = Math.floor((now - (turn.lastSignAt ?? turn.startedAt)) / 60_000);
+        if (quiet >= 1) parts.push(`nothing new for ${quiet} min`);
+        parts.push(`since ${formatQuoteTime(turn.startedAt).slice(-5)}`);
+      }
+      out.push({ name: p.name, state, line: parts.join(" · ") });
+    }
+    return out;
+  }
+
+  private silenceWatch: NodeJS.Timeout | null = null;
+  private readonly toldOfSilence = new Set<string>();
+
+  private watchForSilence(): void {
+    if (this.silenceWatch) return;
+    this.silenceWatch = setInterval(() => this.checkSilence(), SILENCE_CHECK_MS);
+    this.silenceWatch.unref?.();
+  }
+
+  private checkSilence(): void {
+    let active = false;
+    for (const [id, runtime] of this.runtimes) {
+      const turn = runtime.turn;
+      if (!runtime.turnActive || !turn || turn.hidden) continue;
+      active = true;
+      const quiet = Date.now() - (turn.lastSignAt ?? turn.startedAt);
+      if (quiet < SILENCE_MS) continue;
+      const participant = this.participants.get(id);
+      if (!participant || participant.muted) continue;
+      if (!runtime.quiet || runtime.quiet.turnId !== turn.message.id) {
+        runtime.quiet = { turnId: turn.message.id };
+        this.push({ type: "participant", participant });
+      }
+      if (this.toldOfSilence.has(turn.message.id)) continue;
+      this.toldOfSilence.add(turn.message.id);
+      const minutes = Math.round(quiet / 60_000);
+      const kept = runtime.transcript.dump(`nothing new from ${participant.name} for ${minutes} minutes`);
+      if (kept) this.log.info(`protocol kept: ${kept}`);
+      this.postSystem(`${participant.name}: nothing new for ${minutes} minutes; its turn started at ${formatQuoteTime(turn.startedAt).slice(-5)}.`, "human", false, { agentId: id, tone: "attention" });
+    }
+    if (active) return;
+    if (this.silenceWatch) clearInterval(this.silenceWatch);
+    this.silenceWatch = null;
+    this.toldOfSilence.clear();
+  }
+
+  hubRecord(text: string): void {
+    this.postRoomEvent(text);
+  }
+
+  noteStartedWithHub(mode: string): void {
+    this.postRoomEvent(`Started with viberoom: the vibemates are back (${mode}).`);
+  }
+
+  exportMarkdown(): string {
+    return this.history.exportMarkdown(this.id, this.settings.name);
   }
 
   private assertRecordOpenForAgents(): void {
@@ -986,11 +1243,54 @@ export class Room extends EventEmitter {
   }
 
   postHumanMessage(text: string, images: ImageInput[] = [], quotes: QuoteInput[] = []): ChatMessage {
+    const message = this.buildHumanMessage(text, images, quotes);
+    this.commit(message);
+    this.route(message);
+    return message;
+  }
+
+  acceptExternalMessage(input: { opId: string; via: MessageVia; text: string; images?: ImageInput[]; quotes?: QuoteInput[] }): ExternalReceipt {
+    const held = this.unsavedExternal.get(input.opId);
+    if (held) return { id: held.message.id, seq: held.message.seq, stored: held.stored, repeated: true, rerouted: false };
+    const applied = this.appliedReceipt(input.opId);
+    if (applied) return { id: applied.messageId, seq: applied.seq, stored: "record", repeated: true, rerouted: this.rerouteIfNeverSeen(applied.messageId) };
+    let message: ChatMessage;
+    try {
+      message = this.buildHumanMessage(input.text, input.images ?? [], input.quotes ?? []);
+    } catch (error) {
+      if (error instanceof RoomRefusal) return { stored: "rejected", reason: error.message, repeated: false, rerouted: false, transient: error.transient };
+      throw error;
+    }
+    message.via = input.via;
+    const stored = this.commit(message, input.opId);
+    if (stored !== "record") this.unsavedExternal.set(input.opId, { message, stored });
+    this.route(message);
+    return { id: message.id, seq: message.seq, stored, repeated: false, rerouted: false };
+  }
+
+  private rerouteIfNeverSeen(messageId: string): boolean {
+    const message = this.messages.find((m) => m.id === messageId);
+    if (!message || message.kind !== "chat") return false;
+    const live = this.agentReadStates().filter((s) => s.online);
+    if (!live.length || live.some((s) => s.lastSeenSeq >= message.seq || s.active)) return false;
+    this.route(message);
+    return true;
+  }
+
+  private appliedReceipt(opId: string): { messageId: string; seq: number } | null {
+    try {
+      return this.history.appliedReceipt(opId);
+    } catch (error) {
+      throw new Error(`the conversation store cannot say whether this message was accepted before (${describeError(error)}); nothing was written`);
+    }
+  }
+
+  private buildHumanMessage(text: string, images: ImageInput[], quotes: QuoteInput[]): ChatMessage {
     this.assertRecordOpen();
     const waiting = this.unstaffed();
-    if (waiting.length) throw new Error(`${waiting.map((p) => p.name).join(", ")} ${waiting.length === 1 ? "has" : "have"} no coding agent yet: summon ${waiting.length === 1 ? "it" : "them"} from the roster to start the conversation`);
+    if (waiting.length) throw new RoomRefusal(`${waiting.map((p) => p.name).join(", ")} ${waiting.length === 1 ? "has" : "have"} no coding agent yet: summon ${waiting.length === 1 ? "it" : "them"} from the roster to start the conversation`);
     const trimmed = text.trim();
-    if (!trimmed && !images.length && !quotes.length) throw new Error("empty message");
+    if (!trimmed && !images.length && !quotes.length) throw new RoomRefusal("empty message");
     const quoted = quotes.length ? resolveQuotes(quotes, this.messages, new Set(this.drafts.keys())) : [];
     const attachments = images.length ? saveImages(ensureDir(this.filesDir()), images) : [];
     this.humanTypingUntil = 0;
@@ -1018,8 +1318,6 @@ export class Room extends EventEmitter {
       this.focused = false;
       this.push(this.roomEvent());
     }
-    this.commit(message);
-    this.route(message);
     return message;
   }
 
@@ -1261,14 +1559,14 @@ export class Room extends EventEmitter {
       participant.status = "error";
       participant.statusDetail = "its context filled up again right after a respawn; it needs you (respawn it by hand, with fewer replayed messages)";
       this.push({ type: "participant", participant });
-      this.postSystem(`${participant.name} ran out of context again (${detail.slice(0, 120)}); it was respawned once already and now needs you.`, "human", false, { tone: "error" });
+      this.postRoomEvent(`${participant.name} ran out of context again (${detail.slice(0, 120)}); it was respawned once already and now needs you.`, "human", false, { tone: "error" });
       runtime.log.warn(`context full again within 10 minutes: no automatic respawn`);
       return;
     }
     participant.autoRespawnAt = Date.now();
     this.push({ type: "participant", participant });
     const memory = !!participant.notes;
-    this.postSystem(`${participant.name} ran out of context (${detail.slice(0, 120)}); it is respawned ${memory ? `with its notes and the last ${this.settings.replayAfterRestart} messages` : `with the last ${this.settings.replayAfterRestart} messages (it had no notes)`}.`, "human", false, { tone: "error" });
+    this.postRoomEvent(`${participant.name} ran out of context (${detail.slice(0, 120)}); it is respawned ${memory ? `with its notes and the last ${this.settings.replayAfterRestart} messages` : `with the last ${this.settings.replayAfterRestart} messages (it had no notes)`}.`, "human", false, { tone: "error" });
     runtime.log.warn(`context full: ${detail}; respawn with ${memory ? "notes" : "no notes"}`);
     setImmediate(() => {
       void (memory ? this.respawnAgent(participant.id, { memory: true }) : this.reconnectAfterFull(participant.id)).catch((error) => this.notice(`${participant.name}: respawn after a full context failed: ${describeError(error)}`, "error"));
@@ -1285,11 +1583,31 @@ export class Room extends EventEmitter {
     await this.reconnect(id, { mode: "replay", reason: "its context was full; it comes back with the last messages" });
   }
 
+  private watchTheStop(id: string): void {
+    const turnAtStop = this.runtimes.get(id)?.turn?.message.id;
+    const timer = setTimeout(() => {
+      const runtime = this.runtimes.get(id);
+      const participant = this.participants.get(id);
+      if (!runtime || !participant || !runtime.turnActive || runtime.turn?.message.id !== turnAtStop) return;
+      this.postRoomEvent(`${participant.name} did not answer the stop; it is being started again with the same session.`, "human", false, { tone: "attention" });
+      void (async () => {
+        try {
+          await this.retireRuntime(id);
+          await this.reconnect(id, { mode: "load" });
+        } catch (error) {
+          this.notice(`${participant.name} could not be started again: ${describeError(error)}`, "error");
+        }
+      })();
+    }, STOP_GRACE_MS);
+    timer.unref?.();
+  }
+
   private async retireRuntime(id: string): Promise<void> {
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
     if (!runtime || !participant) return;
     runtime.retiring = true;
+    if (runtime.quiet) this.push({ type: "participant", participant });
     if (runtime.turnActive) runtime.agent.cancel(runtime.sessionId);
     try {
       await Promise.race([runtime.agent.closeSession(runtime.sessionId), delay(1500)]);
@@ -1301,7 +1619,7 @@ export class Room extends EventEmitter {
     participant.statusDetail = undefined;
   }
 
-  focus(): void {
+  focus(from?: string): void {
     let stopped = 0;
     for (const [id, runtime] of this.runtimes) {
       this.dropScheduledTurn(id);
@@ -1313,7 +1631,7 @@ export class Room extends EventEmitter {
     }
     this.focused = true;
     this.push(this.roomEvent());
-    this.postSystem(`Hush: ${stopped ? `${stopped} repl${stopped > 1 ? "ies" : "y"} stopped; ` : ""}everyone waits until ${this.humanName} writes again.`, undefined, false, { tone: "hush" });
+    this.postRoomEvent(`Hush${from ? ` from ${from}` : ""}: ${stopped ? `${stopped} repl${stopped > 1 ? "ies" : "y"} stopped; ` : ""}everyone waits until ${this.humanName} writes again.`, undefined, false, { tone: "hush" });
   }
 
   rename(name: string): void {
@@ -1375,7 +1693,7 @@ export class Room extends EventEmitter {
       const taken = this.findByName(name);
       if (taken && taken.id !== id) throw new Error(`name "${name}" is already taken`);
       if (name !== participant.name) {
-        this.postSystem(`${participant.name} is now called ${name}.`);
+        this.postRoomEvent(`${participant.name} is now called ${name}.`);
         participant.name = name;
         changed.push("name");
         if (this.settings.customRules.includes(`@{p:${id}}`)) {
@@ -1451,7 +1769,7 @@ export class Room extends EventEmitter {
     if (why) this.notice(`${participant.name} is back in the conversation (${why}).`, "info");
   }
 
-  setMuted(id: string, muted: boolean): Participant {
+  setMuted(id: string, muted: boolean, from?: string): Participant {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
     if (!!participant.muted === muted) return participant;
@@ -1465,7 +1783,8 @@ export class Room extends EventEmitter {
       }
     }
     this.push({ type: "participant", participant });
-    this.postSystem(muted ? `${participant.name} is muted and receives no prompts.` : `${participant.name} is unmuted.`);
+    const where = from ? ` (${from})` : "";
+    this.postRoomEvent(muted ? `${participant.name} is muted and receives no prompts${where}.` : `${participant.name} is unmuted${where}.`);
     return participant;
   }
 
@@ -1688,11 +2007,14 @@ export class Room extends EventEmitter {
         {
           onSessionUpdate: (_sessionId, update) => this.onSessionUpdate(id, update),
           onPermissionRequest: (params) => this.onPermissionRequest(id, params),
-          onStderr: (line) => {
-            log.info(`stderr: ${line}`);
-            stderrTail.push(line);
-            if (stderrTail.length > 10) stderrTail.shift();
-          },
+          onStderr: (line) => routeAdapterStderr(line, {
+            note: (text) => transcript.note(text),
+            say: (text) => log.info(text),
+            keep: (text) => {
+              stderrTail.push(text);
+              if (stderrTail.length > 10) stderrTail.shift();
+            },
+          }),
           onExit: (code, signal) => this.onAgentExit(id, code, signal, agent),
           onRaw: (direction, message) => transcript.record(direction, message),
           onProtocolError: (text) => log.warn(`protocol: ${text}`),
@@ -1803,22 +2125,30 @@ export class Room extends EventEmitter {
       this.push({ type: "participant", participant });
       if (fresh) {
         const detail = this.settings.showVendorInRoster ? `${recipe.label}${participant.model ? `, model ${participant.model}` : ""}` : "agent";
-        this.postSystem(`${name} joined the room (${detail}${participant.tagline ? `; "${participant.tagline}"` : ""}).`);
+        this.postRoomEvent(`${name} joined the room (${detail}${participant.tagline ? `; "${participant.tagline}"` : ""}).`);
         runtime.lastSeenSeq = this.seq;
         participant.sawFromSeq = this.seq + 1;
       } else if (origin === "loaded") {
         runtime.lastSeenSeq = storedSeen ?? Math.max(0, this.seq - this.settings.replayAfterRestart);
         runtime.firstTurnDone = true;
         runtime.briefPending = "reconnected: your stored session was restored";
-        this.postSystem(`${name} is back in the room (session restored).`);
+        this.postRoomEvent(`${name} is back in the room (session restored).`);
         if (participant.sawFromSeq === undefined) participant.sawFromSeq = runtime.lastSeenSeq + 1;
       } else {
-        this.postSystem(reconnectOptions?.reason ? `${name} restarted: ${reconnectOptions.reason}.` : `${name} is back in the room.`);
+        this.postRoomEvent(reconnectOptions?.reason ? `${name} restarted: ${reconnectOptions.reason}.` : `${name} is back in the room.`);
         const replay = Math.max(0, reconnectOptions?.replay ?? this.settings.replayAfterRestart);
         const chats = this.messages.filter((m) => m.kind === "chat");
         const firstReplayed = replay > 0 && chats.length ? chats[Math.max(0, chats.length - replay)] : undefined;
         runtime.lastSeenSeq = firstReplayed ? Math.max(0, firstReplayed.seq - 1) : this.seq;
         participant.sawFromSeq = runtime.lastSeenSeq + 1;
+      }
+
+      const run = this.hubRun();
+      if (run) {
+        const note = fresh ? null : hubChangeNote(participant, run);
+        if (note) runtime.headerNotes.push(note);
+        participant.runSeen = run.id;
+        participant.buildSeen = run.build;
       }
       this.restoredSeen.delete(id);
       this.push({ type: "participant", participant });
@@ -1855,7 +2185,7 @@ export class Room extends EventEmitter {
     this.participants.delete(id);
     this.departed.set(id, participant.name);
     this.push({ type: "participant.removed", id });
-    this.postSystem(`${participant.name} left the room.`);
+    this.postRoomEvent(`${participant.name} left the room.`);
     if (RULE_REF_TOKEN.test(this.settings.customRules)) {
       RULE_REF_TOKEN.lastIndex = 0;
       if (this.settings.customRules.includes(`@{p:${id}}`)) {
@@ -1879,7 +2209,11 @@ export class Room extends EventEmitter {
     }
     if (runtime.turnActive || runtime.workBusy) {
       runtime.workCancelled = true;
-      if (runtime.turnActive) runtime.agent.cancel(runtime.sessionId);
+      if (runtime.turnActive) {
+        runtime.agent.cancel(runtime.sessionId);
+        this.watchTheStop(id);
+        if (runtime.quiet) this.push({ type: "participant", participant });
+      }
       this.cancelPermissionsOf(id);
       this.notice(`${participant.name}: stop requested.`, "info");
       return "turn";
@@ -1887,17 +2221,53 @@ export class Room extends EventEmitter {
     if (runtime.pendingTurn || runtime.delayTimer || this.floorQueue.includes(id)) {
       this.dropScheduledTurn(id);
       this.notice(`${participant.name}: stopped before it began; the turn is dropped.`, "info");
-      this.postSystem(`${participant.name} was stopped by ${this.humanName} before it began.`, undefined, false, { tone: "attention" });
+      this.postRoomEvent(`${participant.name} was stopped by ${this.humanName} before it began.`, undefined, false, { tone: "attention" });
       return "queued";
     }
     this.notice(`${participant.name}: nothing to stop, it is not writing.`, "info");
     return "nothing";
   }
 
-  async setConfig(id: string, configId: string, value: string | boolean): Promise<void> {
+  async nudge(id: string, by?: string): Promise<"answered" | "silent"> {
+    const runtime = this.runtimes.get(id);
+    const participant = this.participants.get(id);
+    if (!runtime || !participant) throw new Error("no such agent");
+    if (!runtime.quiet || runtime.quiet.turnId !== runtime.turn?.message.id) throw new RoomRefusal("that turn is over");
+    const call = unchangingCall(participant);
+    if (!call) throw new RoomRefusal(`${participant.name} offers no setting to ask about, so there is nothing that can be asked without changing something`);
+    const quiet = runtime.quiet;
+    quiet.nudge = "asking";
+    this.push({ type: "participant", participant });
+    const answered = await Promise.race([
+      (call.kind === "config"
+        ? runtime.agent.setConfigOption(runtime.sessionId, call.id, call.value)
+        : runtime.agent.setMode(runtime.sessionId, call.id)
+      ).then(() => true, (error) => {
+        this.log.info(`${participant.name}: nudge refused: ${describeError(error)}`);
+        return true;
+      }),
+      delay(NUDGE_WAIT_MS).then(() => false),
+    ]);
+    const outcome = answered ? "answered" : "silent";
+    if (runtime.quiet === quiet && runtime.quiet.turnId === runtime.turn?.message.id) {
+      quiet.nudge = outcome;
+      this.push({ type: "participant", participant });
+    }
+    this.postSystem(`${participant.name} ${answered
+      ? "still answers — what is stuck is the request to the provider. Stop should work."
+      : "does not answer. Stop replaces its process and keeps its session; Fresh start replaces it too and begins a new one."}${by ? ` (nudged by ${by})` : ""}`, "human", false, { agentId: id, tone: "attention" });
+    return outcome;
+  }
+
+  async setConfig(id: string, configId: string, value: string | boolean, from?: string): Promise<void> {
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
     if (!runtime || !participant) throw new Error("no such agent (offline?)");
+    if (runtime.turnActive) {
+      runtime.pendingConfig = [...(runtime.pendingConfig ?? []).filter((p) => p.configId !== configId), { configId, value, ...(from ? { from } : {}) }];
+      this.postSystem(`${participant.name}: ${this.configName(participant, configId)} → ${configShown(value)}; when this reply is finished${from ? ` (${from})` : ""}`, "human", false, { agentId: participant.id });
+      return;
+    }
     const recipe = getRecipe(participant.agentType ?? "");
     if (recipe?.modeAtLaunch && configId === "mode") {
       if (!recipe.modePresets.includes(String(value))) throw new Error(`${participant.name}: no mode "${value}" (${recipe.modePresets.join(", ")})`);
@@ -1917,9 +2287,47 @@ export class Room extends EventEmitter {
     }
     participant.launch = { model: participant.model ?? null, effort: participant.effort ?? null, mode: participant.mode ?? null };
     this.push({ type: "participant", participant });
-    const optionName = configId === "mode" ? "mode" : participant.configOptions?.find((o) => o.id === configId)?.name || configId;
-    const shown = typeof value === "boolean" ? (value ? "on" : "off") : String(value);
-    this.postSystem(`${participant.name}: ${optionName} → ${shown}; from its next turn`, "human", false, { agentId: participant.id });
+    this.postSystem(`${participant.name}: ${this.configName(participant, configId)} → ${configShown(value)}; from its next turn${from ? ` (${from})` : ""}`, "human", false, { agentId: participant.id });
+  }
+
+  setLaunch(id: string, patch: { model?: string | null; effort?: string | null; mode?: string | null }, from?: string): Participant {
+    const participant = this.participants.get(id);
+    if (!participant || participant.kind !== "agent") throw new Error("no such vibemate");
+    if (this.runtimes.get(id)) throw new Error(`${participant.name} is running: this is one of its settings now, not a choice for its next start`);
+    const launch: LaunchPrefs = { model: participant.launch?.model ?? null, effort: participant.launch?.effort ?? null, mode: participant.launch?.mode ?? null };
+    for (const field of ["model", "effort", "mode"] as const) {
+      const value = patch[field];
+      if (value === undefined) continue;
+      launch[field] = value === null || value === "" ? null : String(value).slice(0, 80);
+      participant[field] = launch[field] ?? undefined;
+      this.postSystem(`${participant.name}: ${field} → ${launch[field] ?? "the agent's own"}; when it comes back${from ? ` (${from})` : ""}`, "human", false, { agentId: participant.id });
+    }
+    participant.launch = launch;
+    this.push({ type: "participant", participant });
+    return participant;
+  }
+
+  private configName(participant: Participant, configId: string): string {
+    return configId === "mode" ? "mode" : participant.configOptions?.find((o) => o.id === configId)?.name || configId;
+  }
+
+  private async applyPendingConfig(id: string): Promise<void> {
+    const runtime = this.runtimes.get(id);
+    const participant = this.participants.get(id);
+    if (!runtime || !participant) return;
+    const waiting = runtime.pendingConfig ?? [];
+    runtime.pendingConfig = undefined;
+    for (const entry of waiting) {
+      try {
+        await this.setConfig(id, entry.configId, entry.value, entry.from);
+      } catch (error) {
+        this.postSystem(`${participant.name}: ${this.configName(participant, entry.configId)} → ${configShown(entry.value)} was refused (${describeError(error)})`, "human", false, { agentId: participant.id, tone: "error" });
+      }
+    }
+  }
+
+  permissionPending(key: string): boolean {
+    return this.permissions.has(key);
   }
 
   resolvePermission(key: string, optionId: string | null): void {
@@ -1936,6 +2344,8 @@ export class Room extends EventEmitter {
 
   async shutdown(): Promise<void> {
     this.closing = true;
+    if (this.silenceWatch) clearInterval(this.silenceWatch);
+    this.silenceWatch = null;
     if (this.typingTimer) {
       clearTimeout(this.typingTimer);
       this.typingTimer = null;
@@ -1988,7 +2398,7 @@ export class Room extends EventEmitter {
       if (wanted.length) {
         if (this.hops >= this.hopLimit) {
           const who = agentTargets.length ? message.toNames.join(", ") : "the other vibemates";
-          this.postSystem(`Hop limit ${this.hopLimit} reached: ${who} will not be prompted until ${this.humanName} writes again.`, undefined, false, { tone: "attention" });
+          this.postRoomEvent(`Hop limit ${this.hopLimit} reached: ${who} will not be prompted until ${this.humanName} writes again.`, undefined, false, { tone: "attention" });
         } else {
           this.hops += 1;
           targets = this.settings.turnTaking === "one-at-a-time" && !agentTargets.length && wanted.length > 1 ? shuffle(wanted) : wanted;
@@ -2209,7 +2619,7 @@ export class Room extends EventEmitter {
     const runtime = this.runtimes.get(participantId)!;
     const turn = runtime.turn;
     if (!runtime.agent.alive || !runtime.turnActive || !turn || turn.hidden || runtime.retiring || runtime.workCancelled || !Number.isSafeInteger(turn.messagesFromSeq)) {
-      throw new Error("check_messages is available only during an active visible room turn");
+      throw new Error("check_room is available only during an active visible room turn");
     }
     const args = parseMessageCheckArgs(params);
     try {
@@ -2251,7 +2661,7 @@ export class Room extends EventEmitter {
     });
     const view = candidates.length === 1 ? candidates[0] : { toolCallId: `room-check-${randomUUID()}`, title: "Check messages" } as ToolCallView;
     if (!calls.includes(view)) calls.push(view);
-    view.name = "viberoom.check_messages";
+    view.name = "viberoom.check_room";
     view.title = result ? messageCheckTitle(result) : "Message check failed";
     view.kind = "read";
     view.status = result ? "completed" : "failed";
@@ -2357,7 +2767,7 @@ export class Room extends EventEmitter {
     this.proposals.set(proposal.key, proposal);
     this.push({ type: "proposal", proposal });
     const what = [...settingChanges.map((c) => c.key), ...vibes.ops.map((o) => `${o.op} ${o.name}`)].join(", ");
-    this.postSystem(`${participant.name} proposes changes to the room (${what}); apply or reject them on the card.`, "human", false, { tone: "attention" });
+    this.postRoomEvent(`${participant.name} proposes changes to the room (${what}); apply or reject them on the card.`, "human", false, { tone: "attention" });
     this.log.info(`proposal ${proposal.key} from ${participant.name}: ${what}`);
     return {
       ok: true,
@@ -2365,6 +2775,49 @@ export class Room extends EventEmitter {
       key: proposal.key,
       warnings: proposal.warnings,
     };
+  }
+
+
+  proposeNewRoom(participantId: string, request: Record<string, unknown>): { ok: true; message: string; key: string } {
+    const participant = this.agentInRoom(participantId);
+    const plan = planNewRoom(request, {
+      proposerWasCreated: participant.createdByVibemate === true,
+      openCard: [...this.newRooms.values()].some((waiting) => waiting.status === "pending"),
+      proposerName: participant.name,
+    });
+    const proposal: NewRoomProposal = { key: randomUUID(), participantId, participantName: participant.name, ts: Date.now(), plan, status: "pending" };
+    this.newRooms.set(proposal.key, proposal);
+    this.push({ type: "new-room", proposal });
+    const cast = plan.vibemates.map((one) => one.name).join(", ");
+    const price = plan.price.byModel.map((one) => `${one.sessions} on ${one.model}`).join(", ");
+    this.log.info(`new room proposed by ${participant.name}: ${plan.name} (${cast}; ${plan.price.sessions} sessions — ${price})`);
+    return {
+      ok: true,
+      key: proposal.key,
+      message: `Proposed to ${this.settings.humanName} as a card: a room called ${plan.name} with ${cast}. ${plan.price.sessions} new session${plan.price.sessions === 1 ? "" : "s"} (${price}). Nothing is created until they press it, and nothing here changes either way.`,
+    };
+  }
+
+  newRoomProposals(): NewRoomProposal[] {
+    return [...this.newRooms.values()];
+  }
+
+  pendingNewRoom(key: string): NewRoomProposal | undefined {
+    const proposal = this.newRooms.get(key);
+    return proposal && proposal.status === "pending" ? proposal : undefined;
+  }
+
+  settleNewRoom(key: string, status: "created" | "refused", madeAs?: string): NewRoomProposal {
+    const proposal = this.newRooms.get(key);
+    if (!proposal) throw new Error("no such proposed room");
+    if (proposal.status !== "pending") return proposal;
+    proposal.status = status;
+    if (madeAs) proposal.roomId = madeAs;
+    this.push({ type: "new-room.resolved", key, status, ...(madeAs ? { roomId: madeAs } : {}) });
+    this.postRoomEvent(status === "created"
+      ? `${this.settings.humanName} created the room ${proposal.plan.name} that ${proposal.participantName} proposed.`
+      : `${this.settings.humanName} did not create the room ${proposal.plan.name} that ${proposal.participantName} proposed.`);
+    return proposal;
   }
 
 
@@ -2458,7 +2911,7 @@ export class Room extends EventEmitter {
     this.proposals.set(proposal.key, proposal);
     this.push({ type: "proposal", proposal });
     const what = rows.map((c) => c.key).join(", ");
-    this.postSystem(`${participant.name} proposes a change to how the window looks (${what}); apply or reject it on the card.`, "human", false, { tone: "attention" });
+    this.postRoomEvent(`${participant.name} proposes a change to how the window looks (${what}); apply or reject it on the card.`, "human", false, { tone: "attention" });
     this.log.info(`look proposal ${proposal.key} from ${participant.name}: ${what}`);
     return {
       ok: true,
@@ -2478,7 +2931,7 @@ export class Room extends EventEmitter {
       proposal.status = "rejected";
       this.proposalPlans.delete(key);
       this.push({ type: "proposal.resolved", key, status: "rejected" });
-      this.postSystem(`${this.settings.humanName} rejected ${proposal.participantName}'s proposal (${what}).`);
+      this.postRoomEvent(`${this.settings.humanName} rejected ${proposal.participantName}'s proposal (${what}).`);
       return proposal;
     }
     const skipped: string[] = [];
@@ -2504,6 +2957,17 @@ export class Room extends EventEmitter {
           else if (f.field === "replyDelay") patch.replyDelay = target?.replyDelay ?? null;
         }
         this.updatePersona(existing.id, patch);
+        const mute = (op.fields ?? []).find((f) => f.field === "muted");
+        if (mute) this.setMuted(existing.id, mute.to === "true", "an applied proposal");
+        const runs = (op.fields ?? []).filter((f) => f.field === "model" || f.field === "effort" || f.field === "mode");
+        for (const f of runs) {
+          try {
+            if (this.runtimes.get(existing.id)) await this.setConfig(existing.id, f.field, f.to, "an applied proposal");
+            else this.setLaunch(existing.id, { [f.field]: f.to }, "an applied proposal");
+          } catch (error) {
+            skipped.push(`${f.field} of ${op.name} (${describeError(error)})`);
+          }
+        }
       } else {
         const v = plan.vibemates.find((x) => x.name === op.name);
         if (!v || this.findByName(op.name)) skipped.push(`add ${op.name} (the name is taken now)`);
@@ -2527,7 +2991,7 @@ export class Room extends EventEmitter {
     proposal.skipped = skipped;
     this.proposalPlans.delete(key);
     this.push({ type: "proposal.resolved", key, status: "applied", skipped });
-    this.postSystem(`${this.settings.humanName} applied ${proposal.participantName}'s proposal (${what}).${skipped.length ? ` Not applied: ${skipped.join("; ")}.` : ""}`);
+    this.postRoomEvent(`${this.settings.humanName} applied ${proposal.participantName}'s proposal (${what}).${skipped.length ? ` Not applied: ${skipped.join("; ")}.` : ""}`);
     return proposal;
   }
 
@@ -3005,6 +3469,7 @@ export class Room extends EventEmitter {
     const id = participant.id;
     runtime.turnActive = true;
     runtime.usageSeenThisTurn = false;
+    this.watchForSilence();
     participant.status = "thinking";
     participant.statusDetail = undefined;
 
@@ -3048,6 +3513,7 @@ export class Room extends EventEmitter {
     const publishedAt = turn.publishedAt ?? null;
     runtime.turn = null;
     runtime.turnActive = false;
+    if (runtime.pendingConfig?.length) void this.applyPendingConfig(id).catch((error) => runtime.log.warn(`settings chosen during the reply: ${describeError(error)}`));
     this.drafts.delete(draft.id);
     participant.turns += 1;
     if (!retry) runtime.turnsSinceBrief += 1;
@@ -3098,9 +3564,9 @@ export class Room extends EventEmitter {
       this.push({ type: "participant", participant });
       if (paused) {
         runtime.log.warn(`paused after ${trouble.streak} ${trouble.kind} failure(s): waiting for the human`);
-        this.postSystem(`${participant.name} needs you: ${trouble.what} ${trouble.advice}`, "human", false, { tone: "attention" });
+        this.postRoomEvent(`${participant.name} needs you: ${trouble.what} ${trouble.advice}`, "human", false, { tone: "attention" });
       } else {
-        this.postSystem(`${participant.name} could not answer: ${(failure ?? "no result").slice(0, 240)}`, undefined, false, { tone: "error" });
+        this.postRoomEvent(`${participant.name} could not answer: ${(failure ?? "no result").slice(0, 240)}`, undefined, false, { tone: "error" });
       }
       return null;
     }
@@ -3189,12 +3655,17 @@ export class Room extends EventEmitter {
     }
 
     if (!text || text.toLowerCase() === SILENT_MARKER) {
-      if (published) this.push({ type: "message.removed", id: draft.id });
+      const keepBubble = cancelled && !retry && !!draft.toolCalls?.length;
+      if (published && !keepBubble) this.push({ type: "message.removed", id: draft.id });
+      if (keepBubble) {
+        this.commit({ ...draft, seq: ++this.seq, to: [], toNames: [], text: "", streaming: false,
+          stopReason: result.stopReason, stoppedBy: this.humanName, audience: "human", usage: result.usage ?? null, durationMs });
+      }
       if (retry) {
         this.closeRetry(retry, cancelled ? "the correction turn was stopped; nothing was posted" : "the agent withdrew the reply");
-        if (cancelled) this.postSystem(`${participant.name} was stopped by ${this.humanName}.`, undefined, false, { tone: "attention" });
+        if (cancelled) this.postRoomEvent(`${participant.name} was stopped by ${this.humanName}${stoppedWork(draft)}.`, undefined, false, { tone: "attention" });
       } else if (cancelled) {
-        this.postSystem(`${participant.name} was stopped by ${this.humanName}.`, undefined, false, { tone: "attention" });
+        this.postRoomEvent(`${participant.name} was stopped by ${this.humanName}${stoppedWork(draft)}.`, undefined, false, { tone: "attention" });
       } else {
         this.postSystem(`${participant.name} read the room and has nothing to add.`);
       }
@@ -3207,7 +3678,7 @@ export class Room extends EventEmitter {
       participant.failedTurns = (participant.failedTurns ?? 0) + 1;
       participant.statusDetail = `agent error: ${text.replace(/\s+/g, " ").slice(0, 120)}${text.length > 120 ? "…" : ""}`;
       this.push({ type: "participant", participant });
-      this.postSystem(`${participant.name}'s agent reported an error instead of a reply: ${text.slice(0, 200)}${text.length > 200 ? "…" : ""}`, undefined, false, { tone: "error" });
+      this.postRoomEvent(`${participant.name}'s agent reported an error instead of a reply: ${text.slice(0, 200)}${text.length > 200 ? "…" : ""}`, undefined, false, { tone: "error" });
       runtime.log.warn(`adapter error text treated as failed turn: ${text.slice(0, 200)}`);
       if (retry) this.closeRetry(retry, "the agent reported an error instead of a corrected reply");
       if (bareContextFull) this.contextFull(participant, runtime, text);
@@ -3280,7 +3751,7 @@ export class Room extends EventEmitter {
       return null;
     }
     if (result.stopReason !== "end_turn") {
-      this.postSystem(`${participant.name} stopped with ${result.stopReason}.`, undefined, false, { tone: "attention" });
+      this.postRoomEvent(`${participant.name} stopped with ${result.stopReason}.`, undefined, false, { tone: "attention" });
     }
     this.route(message);
     return null;
@@ -3332,7 +3803,7 @@ export class Room extends EventEmitter {
   private referee(participant: Participant, text: string, mentions: { ids: string[]; names: string[] }): string[] {
     const corrections: string[] = [];
     const unknown: string[] = [];
-    for (const match of text.matchAll(MENTION_PATTERN)) {
+    for (const match of spokenText(text).matchAll(MENTION_PATTERN)) {
       if (match[1].toLowerCase() === "all") continue;
       if (!this.findByName(match[1]) && !unknown.includes(match[1])) unknown.push(match[1]);
     }
@@ -3366,6 +3837,15 @@ export class Room extends EventEmitter {
     const participant = this.participants.get(id);
     if (!runtime || !participant) return;
     const turn = runtime.turn;
+    if (turn) {
+      if (runtime.quiet && runtime.quiet.turnId === turn.message.id) {
+        const waited = Math.round((Date.now() - (turn.lastSignAt ?? turn.startedAt)) / 60_000);
+        runtime.quiet = undefined;
+        if (this.toldOfSilence.has(turn.message.id)) this.postSystem(`${participant.name} answered after ${waited} minute${waited === 1 ? "" : "s"}.`, "human", false, { agentId: id });
+        this.push({ type: "participant", participant });
+      }
+      turn.lastSignAt = Date.now();
+    }
 
     switch (update.sessionUpdate) {
       case "agent_message_chunk": {
@@ -3381,13 +3861,16 @@ export class Room extends EventEmitter {
           const notices = (turn.message.notices ??= []);
           notices.push(turn.message.text.trim());
           turn.message.text = "";
+          turn.shownLength = 0;
           if (turn.published) this.push({ type: "message", message: turn.message });
         } else if (messageId !== turn.messageId && turn.message.text) {
           text = "\n\n" + text;
         }
         if (messageId) turn.sawMessageId = true;
         turn.messageId = messageId;
-        const shown = visibleChunk(turn.message.text, text);
+        const settled = settledVisible(turn.message.text + text);
+        const shown = settled.slice(turn.shownLength ?? 0);
+        turn.shownLength = settled.length;
         turn.message.text += text;
         if (!turn.published) {
           if (!looksSilent(turn.message.text) && shown) this.showDraft(turn);
@@ -3669,7 +4152,7 @@ export class Room extends EventEmitter {
   private parseMentions(text: string): { ids: string[]; names: string[] } {
     const ids: string[] = [];
     const names: string[] = [];
-    for (const match of text.matchAll(MENTION_PATTERN)) {
+    for (const match of spokenText(text).matchAll(MENTION_PATTERN)) {
       if (match[1].toLowerCase() === "all") {
         for (const p of this.participants.values()) {
           if (p.kind !== "agent" || p.status === "left" || ids.includes(p.id)) continue;
@@ -3691,6 +4174,10 @@ export class Room extends EventEmitter {
     const lower = name.toLowerCase();
     for (const p of this.participants.values()) if (p.name.toLowerCase() === lower) return p;
     return undefined;
+  }
+
+  private postRoomEvent(text: string, audience?: "agents" | "human", wakes?: boolean, details?: ChatMessage["details"], bodyEdit?: BodyEdit): void {
+    this.postSystem(text, audience, wakes, { ...(details ?? {}), about: "room" }, bodyEdit);
   }
 
   private postSystem(text: string, audience?: "agents" | "human", wakes?: boolean, details?: ChatMessage["details"], bodyEdit?: BodyEdit): void {
@@ -3735,10 +4222,12 @@ export class Room extends EventEmitter {
       if (p.kind === "agent" && !this.runtimes.has(p.id)) p.sessionId = undefined;
     }
     this.push(this.roomEvent());
-    this.postSystem(`The room moved to ${next}${restarted.length ? `; ${restarted.join(", ")} restarted there` : ""}.`);
+    this.postRoomEvent(`The room moved to ${next}${restarted.length ? `; ${restarted.join(", ")} restarted there` : ""}.`);
     this.log.info(`working directory: ${previous} -> ${next}`);
     return { dir: next, restarted };
   }
+
+  startingWithHub = false;
 
   private roomEvent(): RoomEvent {
     return {
@@ -3748,9 +4237,16 @@ export class Room extends EventEmitter {
       settings: this.settings,
       customRulesText: this.renderRuleReferences(this.settings.customRules),
       focused: this.focused,
+      startingWithHub: this.startingWithHub,
       name: this.name,
       dir: this.dir,
     };
+  }
+
+  noteStartingWithHub(starting: boolean): void {
+    if (this.startingWithHub === starting) return;
+    this.startingWithHub = starting;
+    this.push(this.roomEvent());
   }
 
   private notice(text: string, level: "info" | "warn" | "error"): void {
@@ -3763,11 +4259,37 @@ export class Room extends EventEmitter {
   private participantView(participant: Participant): Participant & { lastSeenSeq?: number } {
     const runtime = this.runtimes.get(participant.id);
     return { ...participant, lastSeenSeq: runtime?.lastSeenSeq ?? this.restoredSeen.get(participant.id),
-      activeTurnId: runtime?.turn && !runtime.turn.hidden ? runtime.turn.message.id : undefined };
+      activeTurnId: runtime?.turn && !runtime.turn.hidden ? runtime.turn.message.id : undefined,
+      quiet: this.quietTurn(participant.id) };
+  }
+
+  private quietTurn(id: string): QuietTurn | undefined {
+    const runtime = this.runtimes.get(id);
+    const turn = runtime?.turn;
+    if (!runtime?.quiet || !turn || turn.hidden || runtime.quiet.turnId !== turn.message.id) return undefined;
+    const stopping = runtime.retiring ? "forcing" : runtime.workCancelled ? "asked" : undefined;
+    return {
+      since: turn.lastSignAt ?? turn.startedAt,
+      turnId: turn.message.id,
+      processAlive: runtime.agent.alive,
+      ...(runtime.quiet.nudge ? { nudge: runtime.quiet.nudge } : {}),
+      ...(stopping ? { stopping } : {}),
+    };
+  }
+
+  private readonly turnEnds = new Map<string, { at: number; streamSequence: number }>();
+  private static readonly TURN_ENDS_KEPT = 100;
+
+  endOfTurn(messageId: string): { at: number; streamSequence: number } | null {
+    return this.turnEnds.get(messageId) ?? null;
   }
 
   private push(event: RoomEvent): void {
     const streamSequence = ++this.historyStreamSequence;
+    if (event.type === "message" && event.message.streaming === false && event.message.from !== "human") {
+      if (this.turnEnds.size >= Room.TURN_ENDS_KEPT) this.turnEnds.delete(this.turnEnds.keys().next().value as string);
+      this.turnEnds.set(event.message.id, { at: Date.now(), streamSequence });
+    }
     if (event.type === "participant") {
       this.emit("event", { ...event, streamSequence, history: this.historyStamp(), participant: this.participantView(event.participant) });
       return;
@@ -3785,6 +4307,17 @@ export class Room extends EventEmitter {
   }
 }
 
+export function routeAdapterStderr(line: string, to: { note(text: string): void; say(text: string): void; keep(text: string): void }): void {
+  if (line.startsWith(ADAPTER_TRACE)) {
+    const trace = line.slice(ADAPTER_TRACE.length);
+    to.note(trace);
+    to.say(`adapter: ${trace}`);
+    return;
+  }
+  to.say(`stderr: ${line}`);
+  to.keep(line);
+}
+
 function isAuthRequired(error: unknown): boolean {
   if (error instanceof RemoteError) return error.rpc.code === -32000 || /auth/i.test(error.rpc.message);
   return error instanceof Error && /auth/i.test(error.message);
@@ -3799,11 +4332,23 @@ function errorName(error: unknown): string {
   return errorCode(errorData(error));
 }
 
+function configShown(value: string | boolean): string {
+  return typeof value === "boolean" ? (value ? "on" : "off") : String(value);
+}
+
 function describeError(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
   const data = errorData(error);
   const detail = errorDetail(data);
   return detail && !error.message.includes(detail) ? `${error.message}: ${detail}` : error.message;
+}
+
+function unchangingCall(participant: Participant): { kind: "config"; id: string; value: string | boolean } | { kind: "mode"; id: string } | null {
+  const option = (participant.configOptions ?? []).find((o) => o.currentValue !== undefined && o.currentValue !== null);
+  if (option) return { kind: "config", id: option.id, value: option.currentValue };
+  const mode = participant.mode;
+  if (mode && (participant.modes ?? []).some((m) => m.id === mode)) return { kind: "mode", id: mode };
+  return null;
 }
 
 function looksSilent(text: string): boolean {
@@ -3826,6 +4371,8 @@ export function applyToolCallUpdate(view: ToolCallView, u: ToolCallUpdate): bool
   if (u.kind !== undefined) view.kind = u.kind;
   if (u.status !== undefined) view.status = u.status;
   if (u.rawInput !== undefined) view.rawInput = u.rawInput;
+  const touched = [...(u.locations ?? []).map((l) => l.path), ...(u.content ?? []).filter((c) => c.type === "diff").map((c) => (c as { path: string }).path)].filter((path) => typeof path === "string" && path);
+  if (touched.length) view.locations = [...new Set([...(view.locations ?? []), ...touched])];
   const output = toolOutputText(u);
   if (output) view.output = output;
   return JSON.stringify(view) !== before;

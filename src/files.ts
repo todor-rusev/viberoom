@@ -71,6 +71,19 @@ export function saveImage(dir: string, input: ImageInput): Attachment {
   return attachment;
 }
 
+const FILE_MAX_BYTES = 20 * 1024 * 1024;
+
+export function saveDocument(dir: string, name: string | undefined, data: Buffer): { path: string; file: string } {
+  if (!data.length) throw new Error("the file is empty");
+  if (data.length > FILE_MAX_BYTES) throw new Error(`the file is too large (${Math.round(data.length / 1024 / 1024)} MB; the limit is ${FILE_MAX_BYTES / 1024 / 1024} MB)`);
+  const hash = createHash("sha256").update(data).digest("hex").slice(0, 12);
+  const safe = (name ?? "").trim().replace(/[\\/:*?"<>|\r\n\t]/g, "-").replace(/^\.+/, "").slice(0, 80) || "file";
+  const file = `${hash}-${safe}`;
+  const target = join(dir, file);
+  if (!existsSync(target)) writeFileSync(target, data);
+  return { path: target, file };
+}
+
 export function saveImages(dir: string, inputs: ImageInput[]): Attachment[] {
   if (inputs.length > IMAGES_PER_MESSAGE) throw new Error(`up to ${IMAGES_PER_MESSAGE} images per message`);
   return inputs.map((input) => saveImage(dir, input));

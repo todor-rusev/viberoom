@@ -112,6 +112,25 @@ export function newerSourceThanBuild(mainModuleUrl: string): string | null {
   return newest ? relative(root, (newest as { path: string }).path).split("\\").join("/") : null;
 }
 
+export function newerBuildThanRunning(mainModuleUrl: string, runningBuild: string): string | null {
+  const running = Date.parse(runningBuild);
+  if (!Number.isFinite(running)) return null;
+  const dir = join(fileURLToPath(mainModuleUrl), "..");
+  let newest: { path: string; mtime: number } | null = null;
+  const walk = (at: string): void => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      const path = join(at, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.name.endsWith(".js")) {
+        const mtime = statSync(path).mtimeMs;
+        if (mtime > running + 1000 && (!newest || mtime > newest.mtime)) newest = { path, mtime };
+      }
+    }
+  };
+  try { walk(dir); } catch { return null; }
+  return newest ? (newest as { path: string }).path : null;
+}
+
 export function installCommandLine(version: string): string {
   if (!parseVersion(version)) throw new Error(`not a version: ${version}`);
   return `npm install -g viberoom@${version} --no-audit --no-fund`;

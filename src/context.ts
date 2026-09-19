@@ -1,4 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
+import { spokenText } from "./spoken-text.js";
+
 
 export const NOTES_THRESHOLD = 0.8;
 
@@ -9,22 +11,43 @@ export const NOTES_ONLY_PROMPT =
   "Reply with a <notes> block only: up to 10 lines on this room, your task and where you are with it, written for a future you that starts with an empty head. Nothing else; nothing is posted.";
 
 const OPEN = /<notes>/i;
-const BLOCK = /\s*<notes>([\s\S]*?)(?:<\/notes>|$)\s*/i;
+const OPEN_ALL = /<notes>/gi;
+const CLOSE = /<\/notes>/i;
+
+function notesStart(said: string): number {
+  let at = -1;
+  for (const m of said.matchAll(OPEN_ALL)) at = m.index ?? at;
+  return at;
+}
 
 export function extractNotes(text: string): { visible: string; notes: string | null } {
-  const m = BLOCK.exec(text);
-  if (!m) return { visible: text, notes: null };
-  const notes = m[1].trim();
-  const before = text.slice(0, m.index).replace(/\s+$/, "");
-  const after = text.slice(m.index + m[0].length).replace(/^\s+/, "");
+  const said = spokenText(text);
+  const at = notesStart(said);
+  if (at < 0) return { visible: text, notes: null };
+  const bodyAt = at + MARKER.length;
+  const closing = CLOSE.exec(said.slice(bodyAt));
+  const bodyEnd = closing ? bodyAt + closing.index : text.length;
+  const end = closing ? bodyEnd + closing[0].length : text.length;
+  const notes = text.slice(bodyAt, bodyEnd).trim();
+  const before = text.slice(0, at).replace(/\s+$/, "");
+  const after = text.slice(end).replace(/^\s+/, "");
   const visible = before && after ? `${before} ${after}` : before || after;
   return { visible, notes: notes || null };
 }
 
-export function visibleChunk(textBefore: string, chunk: string): string {
-  if (OPEN.test(textBefore)) return "";
-  const at = chunk.search(OPEN);
-  return at < 0 ? chunk : chunk.slice(0, at);
+const MARKER = "<notes>";
+
+function unsettledTail(text: string): number {
+  for (let n = Math.min(MARKER.length - 1, text.length); n > 0; n--) {
+    if (text.slice(-n).toLowerCase() === MARKER.slice(0, n)) return n;
+  }
+  return 0;
+}
+
+export function settledVisible(whole: string): string {
+  const at = spokenText(whole).search(OPEN);
+  if (at >= 0) return whole.slice(0, at);
+  return whole.slice(0, whole.length - unsettledTail(whole));
 }
 
 export function crossedThreshold(previousUsed: number, used: number, size: number, threshold = NOTES_THRESHOLD): boolean {

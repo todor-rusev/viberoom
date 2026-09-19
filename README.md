@@ -196,6 +196,17 @@ the vibemates are told, or the conversation rewinds to that point.
 
 <br>
 
+## From your phone
+
+Pair Telegram once and the rooms come with you. The vibemates' replies arrive as messages, you answer from
+the phone in your pocket, and `/rooms` says what is open. A reply that has gone quiet can be nudged or
+stopped from there too.
+
+It is **your** bot: you make it with BotFather and paste its key into a card no vibemate ever sees, and only
+the rooms you mark as reachable are reachable. The pairing is once; the key never leaves this computer.
+
+<br>
+
 ## Sixty seconds to a room
 
 ```sh

@@ -1,6 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
@@ -82,12 +82,15 @@ let globalNpmRoot: string | null | undefined;
 function resolveGlobalNpmRoot(): string | null {
   if (globalNpmRoot !== undefined) return globalNpmRoot;
   const candidates: string[] = [];
-  if (isWindows && process.env.APPDATA) candidates.push(join(process.env.APPDATA, "npm", "node_modules"));
+  const npmCli = resolveNpmCli();
   try {
-    const out = execSync("npm root -g", { encoding: "utf8", shell: isWindows ? "cmd.exe" : "/bin/sh", stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).trim();
+    const out = npmCli && npmCli.endsWith(".js")
+      ? execFileSync(process.execPath, [npmCli, "root", "-g"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).trim()
+      : execSync("npm root -g", { encoding: "utf8", shell: isWindows ? "cmd.exe" : "/bin/sh", stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).trim();
     if (out) candidates.push(out);
   } catch {
   }
+  if (isWindows && process.env.APPDATA) candidates.push(join(process.env.APPDATA, "npm", "node_modules"));
   globalNpmRoot = candidates.find((c) => existsSync(c)) ?? null;
   return globalNpmRoot;
 }

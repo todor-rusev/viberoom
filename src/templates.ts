@@ -18,6 +18,7 @@ export interface TemplateVibemate {
   effort?: string;
   mode?: string;
   replyDelay?: number;
+  muted?: boolean;
 }
 
 export interface RoomTemplate {
