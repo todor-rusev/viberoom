@@ -211,7 +211,7 @@
     ],
   });
 
-  const BUTTON_KINDS = ["plain", "primary", "secondary", "soft", "ghost", "danger", "danger-solid", "dark", "warn", "inverse", "link", "ok", "paper"];
+  const BUTTON_KINDS = ["plain", "primary", "secondary", "soft", "ghost", "danger", "danger-quiet", "danger-solid", "dark", "warn", "inverse", "link", "ok", "paper"];
   const BUTTON_SIZES = ["md", "sm", "xs", "lg", "cta"];
   UI.define("button", {
     group: "btn",
@@ -268,6 +268,7 @@
       { label: "soft", props: { label: "Browse", kind: "soft", icon: "folder" } },
       { label: "ghost", props: { label: "Cancel", kind: "ghost" } },
       { label: "danger", props: { label: "Respawn", kind: "danger", icon: "bolt", size: "sm" } },
+      { label: "danger-quiet", props: { label: "Unpair", kind: "danger-quiet", size: "xs" } },
       { label: "danger-solid", props: { label: "Erase everything", kind: "danger-solid" } },
       { label: "small", props: { label: "Save", kind: "primary", size: "sm" } },
       { label: "large", props: { label: "Start vibing", kind: "primary", size: "lg" } },
@@ -478,7 +479,7 @@
     group: "askCard",
     describe: "A card the room puts in front of you for a decision: a permission a vibemate asks for, a proposal it makes. It says who asks and what, shows the details, and offers the choices as buttons; decided, it dims and keeps the outcome in the choices' place.",
     props: {
-      kind: { type: "enum", values: ["permission", "proposal", "recovery"], required: true },
+      kind: { type: "enum", values: ["permission", "proposal", "recovery", "new-room"], required: true },
       who: { type: "string", required: true, note: "who asks, by name" },
       lead: { type: "string", note: "what is asked, in words after the name; the default fits the kind" },
       subject: { type: "string", note: "what the ask is about, in bold: the tool call's title" },
@@ -491,7 +492,7 @@
     },
     build: ({ kind, who, lead, subject, subjectKind, input, body, choices, outcome, data }, ui) =>
       ui.h("div", { "data-kind": kind, "data-state": outcome ? "resolved" : null, ...ui.dataAttrs(data) },
-        ui.h("div", { class: "title" }, ui.icon(kind === "permission" ? "lock" : kind === "recovery" ? "info" : "pencil"), " ", who, " ", lead || (kind === "permission" ? "asks for permission:" : kind === "recovery" ? "has a decision for you" : "proposes changes to the room"), subject ? [" ", ui.h("strong", null, subject)] : null, subjectKind ? [" ", ui.h("span", { class: "kind" }, subjectKind)] : null),
+        ui.h("div", { class: "title" }, ui.icon(kind === "permission" ? "lock" : kind === "recovery" ? "info" : kind === "new-room" ? "rooms" : "pencil"), " ", who, " ", lead || (kind === "permission" ? "asks for permission:" : kind === "recovery" ? "has a decision for you" : kind === "new-room" ? "proposes a room" : "proposes changes to the room"), subject ? [" ", ui.h("strong", null, subject)] : null, subjectKind ? [" ", ui.h("span", { class: "kind" }, subjectKind)] : null),
         input ? ui.h("pre", { class: "input" }, input.slice(0, 1200)) : null,
         body ? ui.raw(body) : null,
         ui.h("div", { class: "choices" },
@@ -502,6 +503,7 @@
     samples: [
       { label: "a permission", props: { kind: "permission", who: "Maken", subject: "Bash", subjectKind: "execute", input: "{ \"command\": \"npm test\" }", choices: [{ label: "Allow", tone: "ok", act: "permit", data: { option: "allow" } }, { label: "Deny", tone: "no", act: "permit", data: { option: "deny" } }, { label: "Dismiss (cancelled)", act: "permit" }] } },
       { label: "a proposal", props: { kind: "proposal", who: "Ana", body: "<div class=\"why\">The room keeps forgetting the deploy steps.</div>", choices: [{ label: "Apply", tone: "ok", act: "decide", data: { answer: "apply" } }, { label: "Reject", tone: "no", act: "decide", data: { answer: "reject" } }] } },
+      { label: "a room", props: { kind: "new-room", who: "Ana", lead: "proposes a room called Review", body: "<div class=\"prop-row\">Rex (opus-5) and Wren (sonnet-5) — <b>2 new sessions</b></div><div class=\"prop-line\">No working folder yet · not reachable from a messenger · they all start in a mode that asks before it acts.</div>", choices: [{ label: "Create", tone: "ok", act: "make-room", data: { answer: "create" } }, { label: "No", tone: "no", act: "make-room", data: { answer: "no" } }] } },
       { label: "decided", props: { kind: "permission", who: "Maken", subject: "Bash", outcome: "chosen: allow" } },
     ],
   });

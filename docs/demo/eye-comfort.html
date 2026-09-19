@@ -29,6 +29,7 @@
         <button class="rail-item" data-nav="settings" title="Settings"><span class="ico" data-icon="settings"></span><span class="label">Settings</span></button>
       </div>
       <div class="rail-foot">
+        <div class="rail-pops" id="rail-pops"></div>
         <button class="rail-item me" data-nav="me" title="Your vibe" id="rail-me"><span class="ico" id="rail-me-avatar"></span><span class="label" id="rail-me-label">You</span></button>
         <div class="rail-status"><span class="conn" id="conn" title="Connection to the room"></span><span class="label conn-label" id="conn-label">connected</span></div>
         <button class="rail-toggle" id="rail-toggle" title="Expand the menu"><span data-icon="expand"></span></button>
@@ -82,6 +83,7 @@
           </div>
         </header>
         <div id="cast-banner" class="cast-banner" hidden></div>
+        <div id="wedge-banner" class="wedge-banner" hidden></div>
         <div id="messages" class="messages"></div>
         <div id="pins-panel" class="pins-panel" hidden></div>
         <div id="search-panel" class="search-panel" hidden></div>
@@ -120,6 +122,14 @@
       <div class="details-inner" id="details-inner"></div>
     </aside>
   </div>
+  <section class="no-key" id="no-key" hidden>
+    <div class="nk-card">
+      <img class="nk-mark" src="icon-256.png" alt="">
+      <h1>Open viberoom from its icon</h1>
+      <p>viberoom is running on this computer — this page came from it. This tab has no key, so your rooms stay closed to it. That is what keeps anyone else signed in to this computer out of your conversations.</p>
+      <p class="nk-quiet">A tab your browser restored after a restart lands here every time. Click the <b>viberoom</b> icon and use that window; in a terminal, <code>viberoom open</code> does the same.</p>
+    </div>
+  </section>
   <div class="toasts" id="toasts"></div>
   <dialog id="profile-dialog" class="dialog">
     <form id="profile-form" method="dialog">
@@ -146,6 +156,12 @@
   <dialog id="login-dialog" class="dialog">
     <form id="login-form" method="dialog"><div id="ld-body"></div></form>
   </dialog>
+  <dialog id="secret-dialog" class="dialog">
+    <form id="secret-form" method="dialog"><div id="sd-body"></div></form>
+  </dialog>
+  <dialog id="setup-dialog" class="dialog wide">
+    <form id="setup-form" method="dialog"><div id="su-body"></div></form>
+  </dialog>
   <dialog id="confirm-dialog" class="dialog narrow">
     <form method="dialog">
       <h3 id="cf-title">Are you sure?</h3>
@@ -162,6 +178,7 @@
       <label>Working directory <span class="hint">(optional)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The folder the vibemates work in (their cwd). Leave it empty and viberoom keeps a folder per room. Instruction files in it (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules) are read by the vibemates by their own conventions; the room tells you if it finds any.</span>
         <span class="dir-row"><input id="room-dir" type="text" placeholder="C:\projects\my-app"><button type="button" data-ui="button" data-kind="ghost" class="browse-btn" id="room-dir-browse" title="Choose a folder"><span data-icon="folder"></span>Browse</button></span></label>
       <label class="switch"><span class="label">Share this room's history with the other rooms<span class="hint">The vibemates here may search the other rooms that also share theirs, and those rooms' vibemates may find messages written here. Hidden and deleted messages are never shared. You can change this later in the room's settings.</span></span><input type="checkbox" id="room-share-history" checked></label>
+      <label class="switch"><span class="label">Reachable from messengers<span class="hint">A phone paired to viberoom can open this room, write to it and read its replies. You can change this later in the room's settings.</span></span><input type="checkbox" id="room-reachable" checked></label>
       <p class="error" id="room-error" hidden></p>
       <div class="actions"><button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button><button type="submit" data-ui="button" data-kind="primary">Open the room</button></div>
     </form>
@@ -331,6 +348,7 @@
   <script src="avatars.js"></script>
   <script src="fold.js"></script>
   <script src="history-window.js"></script>
+  <script src="/timeline-slots.js"></script>
   <script src="demo-data.js"></script>
   <script>window.DEMO_LOOK = "comfort";</script>
   <script src="demo.js"></script>

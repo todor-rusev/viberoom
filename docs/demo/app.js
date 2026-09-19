@@ -11,6 +11,7 @@
     skills: [],
     looks: [],
     version: null,
+    dataFolder: null,
     rooms: new Map(),
     currentRoomId: null,
     view: "home",
@@ -21,6 +22,7 @@
     search: "",
     roomSearch: "",
     expanded: new Set(),
+    watched: new Set(),
     skillEditor: null,
     skillsRoom: null,
   };
@@ -28,6 +30,7 @@
   const $ = (selector) => document.querySelector(selector);
   const els = {
     app: $("#app"),
+    noKey: $("#no-key"),
     fileDialog: $("#file-dialog"),
     fvTitle: $("#fv-title"),
     fvPath: $("#fv-path"),
@@ -100,6 +103,7 @@
     roomName: $("#room-name"),
     roomDir: $("#room-dir"),
     roomShareHistory: $("#room-share-history"),
+    roomReachable: $("#room-reachable"),
     roomError: $("#room-error"),
     dialog: $("#invite-dialog"),
     invForm: $("#invite-form"),
@@ -136,6 +140,10 @@
     rcError: $("#rc-error"),
     loginDialog: $("#login-dialog"),
     ldBody: $("#ld-body"),
+    secretDialog: $("#secret-dialog"),
+    sdBody: $("#sd-body"),
+    setupDialog: $("#setup-dialog"),
+    suBody: $("#su-body"),
     rcSubmit: $("#rc-submit"),
     eraseDialog: $("#erase-dialog"),
     eraseForm: $("#erase-form"),
@@ -159,10 +167,75 @@
     }
   }
   function noteSlow(name, ms) {
+    if (blankWatch.since && blankWatch.redraws.length < 6 && /render|drawn|caught up|streamed/.test(name)) blankWatch.redraws.push(name);
     if (!(ms >= 8)) return;
     slowTasks.push({ at: Date.now(), ms: Math.round(ms), name, busy: busyLabel() });
     if (slowTasks.length > 60) slowTasks.splice(0, slowTasks.length - 40);
   }
+  function noteFinding(name) {
+    slowTasks.push({ at: Date.now(), ms: 0, name, busy: busyLabel() });
+    if (slowTasks.length > 60) slowTasks.splice(0, slowTasks.length - 40);
+  }
+
+  const BLANK_MIN_PX = 250;
+  const blankWatch = { since: 0, scrolled: false, redraws: [], clear: 1, wired: false };
+  function measureBlank() {
+    const list = els.messages;
+    if (!list) return null;
+    const b = list.getBoundingClientRect();
+    if (!b.height) return null;
+    const painted = [];
+    const unpainted = [];
+    for (const e of list.querySelectorAll(".msg")) {
+      const r = e.getBoundingClientRect();
+      if (r.bottom < b.top || r.top > b.bottom) continue;
+      const ok = typeof e.checkVisibility === "function" ? e.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true }) : true;
+      const bubble = e.querySelector(".bubble");
+      const br = bubble && bubble.getBoundingClientRect();
+      if (ok && br && br.height > 0) painted.push([Math.max(br.top, b.top), Math.min(br.bottom, b.bottom)]);
+      else if (unpainted.length < 5) unpainted.push({ seq: e.dataset.seq || "", cls: e.className, h: Math.round(r.height), op: getComputedStyle(e).opacity, skipped: !ok });
+    }
+    painted.sort((x, y) => x[0] - y[0]);
+    let gap = 0;
+    let gapAt = b.top;
+    let cover = b.top;
+    for (const [top, bottom] of painted) {
+      if (top - cover > gap) {
+        gap = top - cover;
+        gapAt = cover;
+      }
+      cover = Math.max(cover, bottom);
+    }
+    if (b.bottom - cover > gap) {
+      gap = b.bottom - cover;
+      gapAt = cover;
+    }
+    const under = gap > 40 ? document.elementsFromPoint(Math.round(b.left + b.width / 2), Math.round(gapAt + gap / 2)).slice(0, 5).map((e) => `${e.tagName}.${(e.className || "").toString().split(" ")[0] || ""}`) : [];
+    return { blankPx: Math.round(gap), blankTop: Math.round(gapAt - b.top), listPx: Math.round(b.height), scrollTop: Math.round(list.scrollTop), painted: painted.length, unpainted, under, msgs: list.querySelectorAll(".msg").length };
+  }
+  function watchBlank() {
+    if (!els.messages) return;
+    if (!blankWatch.wired) {
+      blankWatch.wired = true;
+      els.messages.addEventListener("scroll", () => { if (blankWatch.since) blankWatch.scrolled = true; }, { passive: true });
+    }
+    if (document.hidden || state.view !== "room") return;
+    const facts = measureBlank();
+    if (!facts) return;
+    const blank = facts.blankPx > BLANK_MIN_PX && facts.blankPx > facts.listPx / 3;
+    if (blank && !blankWatch.since && blankWatch.clear > 0) {
+      blankWatch.since = Date.now();
+      blankWatch.scrolled = false;
+      blankWatch.redraws = [];
+      const room = currentRoom();
+      noteFinding(`blank fragment began: ${JSON.stringify({ ...facts, streaming: !!room && room.messages.some((m) => m.streaming) })}`);
+    } else if (!blank && blankWatch.since) {
+      noteFinding(`blank fragment ended after ${Math.round((Date.now() - blankWatch.since) / 1000)} s: ${blankWatch.scrolled ? "a scroll came in between" : "no scroll"}; redraws in between: ${blankWatch.redraws.join(" | ") || "none"}`);
+      blankWatch.since = 0;
+      blankWatch.clear = 0;
+    } else if (!blank) blankWatch.clear++;
+  }
+  setInterval(watchBlank, 3000);
   try {
     new PerformanceObserver((list) => {
       for (const e of list.getEntries()) noteSlow("browser task", e.duration);
@@ -171,8 +244,8 @@
   }
 
   const FONTS = globalThis.VIBEROOM_TOKENS.fonts;
-  const STATUS_LABEL = { unstaffed: "needs a coding agent", starting: "starting…", idle: "ready", queued: "waiting…", thinking: "thinking…", writing: "writing…", notes: "taking notes…", error: "needs you", offline: "offline", left: "left" };
-  const STATUS_TONE = { idle: "ready", queued: "waiting", starting: "waiting", thinking: "thinking", writing: "writing", notes: "outline", error: "attention", offline: "asleep", left: "asleep", unstaffed: "attention" };
+  const STATUS_LABEL = { unstaffed: "needs a coding agent", starting: "starting…", idle: "ready", queued: "waiting…", thinking: "thinking…", working: "vibing…", writing: "vibing…", notes: "taking notes…", error: "needs you", offline: "offline", left: "left" };
+  const STATUS_TONE = { idle: "ready", queued: "waiting", starting: "waiting", thinking: "thinking", working: "writing", writing: "writing", notes: "outline", error: "attention", offline: "asleep", left: "asleep", unstaffed: "attention" };
   const TOOL_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
   const TOKENS = globalThis.VIBEROOM_TOKENS;
   const FALLBACK_COLOR = () => TOKENS.active().elements.face.fallback;
@@ -184,11 +257,58 @@
     + '<svg class="working arm near" viewBox="0 0 44 35" aria-hidden="true"><path d="M23 27h10.5" fill="none" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/></svg>'
     + '<svg class="working still" viewBox="0 0 44 35" aria-hidden="true" title="working…"><rect x="26" y="30.2" width="15.5" height="3" rx="1" fill="currentColor"/><path d="M35.9 30.2L41.1 14h2.4l-5.1 16.2z" fill="currentColor"/></svg>'
     + '</span>';
+  const THINKING_DOTS = '<span class="pending" title="thinking…"><i></i><i></i><i></i></span>';
 
-  function shownStatus(room, p) {
+  function rawShownStatus(room, p) {
     if (p.status !== "thinking") return p.status;
     if (p.notesTurn) return "notes";
-    return room.messages.some((m) => m.streaming && m.from === p.id) ? "writing" : "thinking";
+    const draft = room.messages.find((m) => m.streaming && m.from === p.id);
+    if (!draft) return "thinking";
+    if ((draft.toolCalls || []).some((c) => c.status === "pending" || c.status === "in_progress")) return "working";
+    return draft.text ? "writing" : "thinking";
+  }
+  const SHOWN_HOLD_MS = 1000;
+  const shownHold = new Map();
+  function shownStatus(room, p) {
+    const raw = rawShownStatus(room, p);
+    if (raw !== "thinking" && raw !== "working" && raw !== "writing") { shownHold.delete(p.id); return raw; }
+    const now = Date.now();
+    const held = shownHold.get(p.id);
+    if (!held || raw === "working" || raw === held.status) { shownHold.set(p.id, { status: raw, candidate: null, since: now }); return raw; }
+    if (held.candidate !== raw) { held.candidate = raw; held.since = now; }
+    const left = SHOWN_HOLD_MS - (now - held.since);
+    if (left > 0) { scheduleRosterRedraw(left + 50); return held.status; }
+    shownHold.set(p.id, { status: raw, candidate: null, since: now });
+    return raw;
+  }
+  function bubbleWorking(room, m) {
+    const p = findById(room, m.from);
+    const shown = p && p.kind === "agent" ? shownStatus(room, p) : null;
+    if (shown === "working" || shown === "writing") return true;
+    if (shown === "thinking" || shown === "notes") return false;
+    return !!(m.text || (m.toolCalls && m.toolCalls.length));
+  }
+  function stopNoteText(m, humanName) {
+    const who = m.stoppedBy || humanName || "you";
+    return m.text ? `Stopped by ${who}` : `Stopped by ${who} before it wrote anything`;
+  }
+  function refreshLiveTails() {
+    const room = currentRoom();
+    if (!room) return;
+    const byId = new Map(HistoryWindow.knownMessages(room).map((m) => [m.id, m]));
+    for (const tail of els.messages.querySelectorAll(".msg[data-id] .live-tail")) {
+      const m = byId.get(tail.closest(".msg").dataset.id);
+      if (m && m.streaming) tail.classList.toggle("no-figure", !bubbleWorking(room, m));
+    }
+  }
+  let rosterRedrawTimer = null;
+  let rosterRedrawAt = 0;
+  function scheduleRosterRedraw(ms) {
+    const at = Date.now() + ms;
+    if (rosterRedrawTimer && at >= rosterRedrawAt) return;
+    if (rosterRedrawTimer) clearTimeout(rosterRedrawTimer);
+    rosterRedrawAt = at;
+    rosterRedrawTimer = setTimeout(() => { rosterRedrawTimer = null; renderSideRoom(); refreshLiveTails(); }, ms);
   }
   const CHAT_EMOJI = ["😀", "😄", "😂", "🙂", "😉", "😍", "🤔", "😎", "🥳", "😅", "😢", "😡", "👍", "👎", "👋", "🙏", "👏", "💪", "🔥", "✨", "🎉", "❤️", "💜", "✅", "❌", "⚠️", "💡", "🚀", "🐛", "🤖", "🤫", "☕"];
   const ROOM_EMOJI = [
@@ -221,14 +341,35 @@
     }, 8000);
     return promise.finally(() => clearTimeout(timer));
   }
-  async function post(path, body) {
-    const res = await stallWatch(fetch(path, { method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(body || {}) }));
+  const ROOM_DEADLINE_MS = 60000;
+  const deadline = (ms) => AbortSignal.timeout(ms || ROOM_DEADLINE_MS);
+  let resyncedAt = 0;
+  function stoppedWaiting(error) {
+    if (!error || (error.name !== "TimeoutError" && error.name !== "AbortError")) return error;
+    if (Date.now() - resyncedAt > 2000) {
+      resyncedAt = Date.now();
+      resyncStream();
+    }
+    return new Error("The room did not answer in time, so this window stopped waiting and read the room again. If what you asked for went through, it is already here.");
+  }
+  async function post(path, body, options) {
+    let res;
+    try {
+      res = await stallWatch(fetch(path, { method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(body || {}), signal: deadline(options && options.deadline) }));
+    } catch (error) {
+      throw stoppedWaiting(error);
+    }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
   }
-  async function get(path) {
-    const res = await fetch(path);
+  async function get(path, options) {
+    let res;
+    try {
+      res = await fetch(path, { signal: deadline(options && options.deadline) });
+    } catch (error) {
+      throw stoppedWaiting(error);
+    }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const error = new Error(data.error || `HTTP ${res.status}`);
@@ -258,13 +399,18 @@
   function findById(room, id) {
     return (room ? room.participants : []).find((p) => p.id === id) || null;
   }
-  const OPEN_RE = /(?:https?:\/\/|mailto:)[^\s<>"'`]+|(?<![\w:\/.])((?:[A-Za-z]:[\\/]|~[\\/])[^\s<>"'`*?|&]+|\/(?:[\w.@-]+\/)+[\w.@-][^\s<>"'`*?|&]*)/g;
+  const OPEN_RE = /<code>([^<]+)<\/code>|(?:https?:\/\/|mailto:)[^\s<>"'`]+|(?<![\w:\/.])((?:(?:[A-Za-z]:[\\/]|~[\\/])[^\s<>"'`*?|&:]|\/[^\s<>"'`*?|&:\/])[^<>"'`*?|&:\n]*?\.[A-Za-z0-9]{1,8}(?::\d+(?:-\d+)?)?(?=$|[\s,;:!?)\]<»]|\.(?:\s|$))|(?:[A-Za-z]:[\\/]|~[\\/])[^\s<>"'`*?|&]+|\/(?:[\w.@-]+\/)+[\w.@-][^\s<>"'`*?|&]*)/g;
+  const CODE_PATH_RE = /^(?:[A-Za-z]:[\\/]|~[\\/]|\/)[^<>"'`*?|&\n]+$/;
+  function openLink(target, isUrl) {
+    return `<a class="open-link" data-open="${target}" href="#" title="${isUrl ? "Open in your browser" : "Open with the default app"}">${target}</a>`;
+  }
   function linkify(html) {
-    return html.replace(OPEN_RE, (m) => {
+    return html.replace(OPEN_RE, (m, code) => {
+      if (code !== undefined) return CODE_PATH_RE.test(code.trim()) ? `<code>${openLink(code.trim(), false)}</code>` : `<code>${linkify(code)}</code>`;
       const trail = (m.match(/[.,;:!?)\]]+$/) || [""])[0];
       const target = m.slice(0, m.length - trail.length);
       const isUrl = /^(https?:|mailto:)/i.test(target);
-      return `<a class="open-link" data-open="${target}" href="#" title="${isUrl ? "Open in your browser" : "Open with the default app"}">${target}</a>${trail}`;
+      return openLink(target, isUrl) + trail;
     });
   }
   function parseCsv(text) {
@@ -640,7 +786,7 @@
     img.addEventListener("error", async () => {
       let why = "";
       try {
-        const res = await fetch(img.src);
+        const res = await fetch(img.src, { signal: deadline(10000) });
         const text = await res.text();
         try {
           why = JSON.parse(text).error || "";
@@ -1058,6 +1204,57 @@
     return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   }
   let stuck = true;
+  const CALM = (() => { const v = new URLSearchParams(location.search).get("calm"); return ["hold", "reserve", "reserve-cap"].includes(v) ? v : "off"; })();
+  const calm = { held: false, reserve: 0, initial: 0, baseContent: 0 };
+  if (CALM !== "off") document.documentElement.dataset.calm = CALM;
+  function calmStart(id) {
+    if (CALM === "hold") {
+      scrollToBottom("a live reply begins");
+      stuck = false;
+      calm.held = true;
+      els.jumpLatest.hidden = false;
+      return;
+    }
+    const el = els.messages;
+    const bubble = el.querySelector(`.msg[data-id="${id}"]`);
+    if (!bubble) return scrollToBottom("a live reply begins");
+    calmRelease();
+    const third = Math.round(el.clientHeight / 3);
+    let reserve = Math.max(0, el.clientHeight - third - bubble.offsetHeight);
+    if (CALM === "reserve-cap") reserve = Math.min(reserve, Math.round(el.clientHeight / 2));
+    calm.reserve = reserve;
+    calm.initial = reserve;
+    el.style.paddingBottom = `${reserve}px`;
+    calm.baseContent = el.scrollHeight - reserve;
+    el.scrollTop = Math.max(0, topInList(bubble) - third);
+    lastScrollTop = el.scrollTop;
+    stuck = false;
+    calm.held = true;
+    els.jumpLatest.hidden = false;
+  }
+  function calmAfterGrowth() {
+    if (!calm.held || CALM === "hold") return;
+    const el = els.messages;
+    const grown = el.scrollHeight - calm.reserve - calm.baseContent;
+    const next = Math.max(0, calm.initial - grown);
+    if (next !== calm.reserve) {
+      calm.reserve = next;
+      el.style.paddingBottom = next ? `${next}px` : "";
+    }
+    if (next === 0) {
+      calm.held = false;
+      stuck = true;
+      scrollToBottom("the room under the reply is used up");
+    }
+  }
+  function calmRelease() {
+    if (calm.reserve > 0) {
+      calm.reserve = 0;
+      calm.initial = 0;
+      els.messages.style.paddingBottom = "";
+    }
+    calm.held = false;
+  }
   let settling = 0;
   let settled = 0;
   const endJumps = [];
@@ -1066,6 +1263,7 @@
     if (endJumps.length > 30) endJumps.splice(0, endJumps.length - 20);
   }
   function scrollToBottom(why) {
+    calmRelease();
     noteJump(why);
     els.messages.scrollTop = els.messages.scrollHeight;
     els.jumpLatest.hidden = true;
@@ -1187,7 +1385,7 @@
     return [...endJumps].reverse().map((j) => `${new Date(j.at).toLocaleTimeString()} - ${j.why} - ${j.following ? "following the end" : `${j.fromEnd} px above the end`}`).join("\n");
   }
   function slowTasksText() {
-    return [...slowTasks].reverse().map((t) => `${new Date(t.at).toLocaleTimeString()} - ${t.ms} ms - ${t.name}${t.busy ? ` - ${t.busy}` : ""}`).join("\n");
+    return [...slowTasks].reverse().map((t) => `${new Date(t.at).toLocaleTimeString()} - ${t.ms ? `${t.ms} ms - ` : ""}${t.name}${t.busy ? ` - ${t.busy}` : ""}`).join("\n");
   }
   function sectionTitle(iconName, text) {
     return `<h4>${ic(iconName)}${text}</h4>`;
@@ -1527,9 +1725,16 @@
       return null;
     }
   }
+  function forget(key) {
+    try {
+      localStorage.removeItem(`viberoom.${key}`);
+    } catch {
+    }
+  }
 
 
   function setView(view) {
+    if (state.view === "settings" && view !== "settings") dropPairLink(true);
     state.view = view;
     els.app.classList.remove("view-home", "view-rooms", "view-room", "view-skills", "view-settings");
     els.app.classList.add(`view-${view}`);
@@ -1557,6 +1762,17 @@
     } else if (view === "settings") {
       renderSideRooms();
       renderSettingsPage();
+      void refreshBuildAge();
+    }
+  }
+
+  async function refreshBuildAge() {
+    try {
+      const fresh = await (await fetch("/api/version", { signal: AbortSignal.timeout(4000) })).json();
+      const before = (state.version && state.version.staleBuild) || null;
+      state.version = fresh;
+      if ((fresh.staleBuild || null) !== before && state.view === "settings") renderSettingsPage();
+    } catch {
     }
   }
 
@@ -1602,7 +1818,115 @@
     });
     pop.querySelector(".up-settings").addEventListener("click", () => setView("settings"));
     pop.querySelector(".up-go").addEventListener("click", () => installUpdate(pop, u.latest));
-    els.rail.querySelector(".rail-foot").appendChild(pop);
+    $("#rail-pops").appendChild(pop);
+  }
+  const runOf = (version) => (version && version.pid && version.startedAt ? { id: `${version.pid}.${version.startedAt}`, build: version.build || "", startedAs: version.startedAs || "by-hand" } : null);
+  function hubSwap(before, now) {
+    if (!now || !before || !before.id) return null;
+    if (before.id === now.id) return null;
+    return { id: now.id, was: before.build || "", build: now.build || "", startedAs: now.startedAs || "by-hand" };
+  }
+  function buildWhen(build) {
+    const at = new Date(build);
+    if (!build || Number.isNaN(at.getTime())) return "an unknown time";
+    const time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return at.toDateString() === new Date().toDateString() ? time : `${at.toLocaleDateString([], { day: "numeric", month: "short" })}, ${time}`;
+  }
+  function hubSwapWords(swap) {
+    const build = swap.was === swap.build
+      ? "The build is the same one as before."
+      : `The build is now the one from ${esc(buildWhen(swap.build))} — you were on ${esc(buildWhen(swap.was))}.`;
+    const how = swap.startedAs === "at-login" ? "It came up with the computer."
+      : swap.startedAs === "replacing-another" ? "It replaced the one that was running."
+      : "It was started by hand.";
+    return `<b>viberoom restarted.</b> ${build} ${how}`;
+  }
+  function noteHubRun() {
+    const now = runOf(state.version);
+    if (!now) return;
+    let before = null;
+    try {
+      before = JSON.parse(recall("hubRun") || "null");
+    } catch {
+      before = null;
+    }
+    const swap = hubSwap(before, now);
+    if (swap) remember("hubSwap", JSON.stringify(swap));
+    remember("hubRun", JSON.stringify({ id: now.id, build: now.build }));
+    renderHubPop();
+  }
+  function renderHubPop() {
+    const old = $("#hub-pop");
+    let swap = null;
+    try {
+      swap = JSON.parse(recall("hubSwap") || "null");
+    } catch {
+      swap = null;
+    }
+    const now = runOf(state.version);
+    if (swap && now && swap.id !== now.id) {
+      forget("hubSwap");
+      swap = null;
+    }
+    if (!swap) {
+      if (old) old.remove();
+      return;
+    }
+    if (old && old.dataset.run === swap.id) return;
+    if (old) old.remove();
+    const pop = document.createElement("div");
+    pop.id = "hub-pop";
+    pop.className = "update-pop hub-pop";
+    pop.dataset.run = swap.id;
+    pop.innerHTML = `<div class="up-main"><div class="up-text">${hubSwapWords(swap)}</div></div>
+      <div class="up-side">${UI.html("icon-button", { icon: "close", title: "Got it", size: "sm", hook: "hp-x" })}</div>`;
+    pop.querySelector(".hp-x").addEventListener("click", () => {
+      forget("hubSwap");
+      pop.remove();
+    });
+    $("#rail-pops").appendChild(pop);
+  }
+  function renderRestartPop() {
+    const old = $("#restart-pop");
+    const r = state.restart && state.restart.pending;
+    if (!r) {
+      if (old) old.remove();
+      return;
+    }
+    const waiting = r.waitingFor || [];
+    const quiet = r.quietSince ? Date.now() - r.quietSince : 0;
+    const words = !waiting.length
+      ? "<b>viberoom is restarting.</b> It comes back in a few seconds."
+      : `<b>Restart when ${esc(nameList(waiting))} ${waiting.length > 1 ? "finish" : "finishes"}.</b> ${quiet >= QUIET_ENOUGH_MS
+        ? `Nothing new from ${waiting.length > 1 ? "them" : "it"} for ${Math.round(quiet / 60000)} minutes.`
+        : `Waiting ${esc(waitedFor(r.since))}.`}`;
+    const acts = waiting.length
+      ? `<div class="up-acts">${UI.html("button", { label: "Restart now", kind: "secondary", size: "sm", hook: "rp-now" })}${UI.html("button", { label: "Cancel", kind: "ghost", size: "sm", hook: "rp-cancel" })}</div>`
+      : "";
+    const pop = old || document.createElement("div");
+    if (!old) {
+      pop.id = "restart-pop";
+      pop.className = "update-pop restart-pop";
+      $("#rail-pops").appendChild(pop);
+    }
+    pop.innerHTML = `<div class="up-main"><div class="up-text">${words}</div>${acts}</div>`;
+    const now = pop.querySelector(".rp-now");
+    const cancel = pop.querySelector(".rp-cancel");
+    if (now) now.addEventListener("click", () => void post("/api/restart", { when: "now" }).catch(showError));
+    if (cancel) cancel.addEventListener("click", () => void post("/api/restart/cancel", {}).catch(showError));
+    clearTimeout(restartPopTimer);
+    if (waiting.length) restartPopTimer = setTimeout(renderRestartPop, 30000);
+  }
+  let restartPopTimer = null;
+  const QUIET_ENOUGH_MS = 5 * 60000;
+  function nameList(names) {
+    return names.length <= 1 ? (names[0] || "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  }
+  function waitedFor(since) {
+    const s = Math.max(0, Math.round((Date.now() - since) / 1000));
+    if (s < 60) return "a moment";
+    const m = Math.round(s / 60);
+    return m === 1 ? "a minute" : `${m} minutes`;
   }
   async function installUpdate(pop, version) {
     const go = pop.querySelector(".up-go");
@@ -1612,7 +1936,7 @@
     UI.setState(go, "loading");
     text.innerHTML = `Installing <b>viberoom ${esc(version)}</b>… this takes a moment.`;
     try {
-      await post("/api/update/install", {});
+      await post("/api/update/install", {}, { deadline: 10 * 60000 });
       UI.setState(go, null);
       text.innerHTML = `<b>viberoom ${esc(version)}</b> is installed. Restarting…`;
       go.hidden = true;
@@ -1775,6 +2099,7 @@
     { tone: "warm", emoji: "💬", title: "Talk to all, or to one", text: "Write to the room and everyone answers in turn; @Name one of them and the others just listen. They read each other's replies." },
     { tone: "warm", emoji: "🧠", title: "Memory", text: "A room forgets nothing. Every word stays with it, and the vibemates can look back through everything — absolutely everything — even from before they joined or after a restart. What other rooms may see is your choice." },
     { tone: "peach", emoji: "🧩", title: "Skills", text: "Reusable instructions in your library. Attach them to vibemates, invoke one with /name, or let a vibemate write its own." },
+    { tone: "lav", emoji: "📱", title: "From your phone", text: "Pair Telegram and the rooms come with you: read what the vibemates wrote, answer them, stop a reply — from the phone in your pocket. Your own bot, paired once under Settings → Channels." },
     { tone: "rose", emoji: "🤫", title: "Hush", text: "Too much at once? One click stops every running reply. The vibemates stay quiet until you write again." },
     { tone: "sky", emoji: "📊", title: "Links and diagrams", text: "Links and file paths open on your machine with one click. A ```mermaid block in a reply turns into a diagram." },
     { tone: "orchid", emoji: "🎨", title: "Looks", text: "VibeClassic and its dark twin, Terminal, Clay, Eye Comfort (the look the research on tired eyes asks for) or 3D clayful (soft clay objects, with weight): pick one with the button above or under Settings → Appearance, and fine-tune its paper, bubbles, ink and corners." },
@@ -1805,7 +2130,7 @@
           <div class="hero-art" aria-hidden="true">
             <div class="ha-bubble ha-a"><span class="ha-face">🦊</span><span>Ship the login fix today?</span></div>
             <div class="ha-bubble ha-b"><span class="ha-face">🤖</span><span>On it — tests first.</span></div>
-            <div class="ha-bubble ha-c"><span class="ha-face">🐼</span><span>@Nova I'll review your diff.</span></div>
+            <div class="ha-bubble ha-c"><span class="ha-face">🐼</span><span>Reviewing the diff now.</span></div>
             <div class="ha-spark">✦</div>
           </div>
         </section>
@@ -1904,6 +2229,7 @@
 
   function renderSideRoom() {
     updateCastGate(currentRoom());
+    renderWedgeBanner(currentRoom());
     const room = currentRoom();
     if (!room) return;
     const st = roomStats(room);
@@ -1931,7 +2257,7 @@
         ? `<span class="zzz" title="${esc(STATUS_LABEL[p.status] || p.status)}">zzz</span>`
         : p.kind === "agent" && p.status !== "idle" ? UI.html("badge", { label: STATUS_LABEL[shown] || shown, tone: STATUS_TONE[shown] || "plain", dot: p.status === "thinking" }) : "";
       const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true, muted: p.muted, unplugged, me: p.kind === "human", alert: p.kind === "agent" && (p.status === "error" || (p.status === "offline" && !!(p.trouble && p.trouble.actions && p.trouble.actions.length))), dim: unstaffed ? "unstaffed" : asleep ? "asleep" : undefined });
-      const statusValue = p.kind === "agent" ? shown || "idle" : "";
+      const statusValue = p.kind === "agent" ? (shown === "working" ? "writing" : shown) || "idle" : "";
       const bodyHtml = `<div class="p-body">
           <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? UI.html("badge", { label: "muted", tone: "muted" }) : ""}${status}</div>
           <div class="p-sub">${esc(sub)}</div>
@@ -2057,6 +2383,7 @@
     el.dataset.seq = m.seq;
     el.dataset.from = m.from;
     el.dataset.streaming = m.streaming ? "1" : "0";
+    if (state.watched.has(m.id)) watchedLeave.observe(el);
     if (m.kind === "hidden") {
       el.className = "msg hidden";
       renderHidden(el, m);
@@ -2081,7 +2408,7 @@
     el.className = "msg " + (mine ? "mine" : "agent");
     el.innerHTML = `
       <div class="bubble-col">
-        <div class="head"><span class="head-av">${avatar(mine ? Object.assign(meAvatarData(), { color: colourOf(p) }) : p, 32, { vendor: true, me: mine })}</span><span class="name" style="color:${p.color}">${esc(m.fromName)}</span><span class="edited" hidden></span>${mine ? UI.html("icon-button", { icon: "pencil", title: "Edit this message", kind: "ghost", size: "xs", act: "edit" }) : ""}${UI.html("icon-button", { icon: "quote", title: "Quote this message in your next one", kind: "ghost", size: "xs", act: "quote" })}${UI.html("icon-button", { icon: "pin", title: "Pin this message", kind: "ghost", size: "xs", act: "pin" })}${UI.html("icon-button", { icon: "copy", title: "Copy this message, formatted; the tool calls stay here", kind: "ghost", size: "xs", act: "copy" })}<span class="time" title="${esc(fullTime(m.ts))}">${time(m.ts)}</span></div>
+        <div class="head"><span class="head-av">${avatar(mine ? Object.assign(meAvatarData(), { color: colourOf(p) }) : p, 32, { vendor: true, me: mine })}</span><span class="name" style="color:${p.color}">${esc(m.fromName)}</span><span class="edited" hidden></span>${mine ? UI.html("icon-button", { icon: "pencil", title: "Edit this message", kind: "ghost", size: "xs", act: "edit" }) : ""}${UI.html("icon-button", { icon: "quote", title: "Quote this message in your next one", kind: "ghost", size: "xs", act: "quote" })}${UI.html("icon-button", { icon: "pin", title: "Pin this message", kind: "ghost", size: "xs", act: "pin" })}${UI.html("icon-button", { icon: "copy", title: "Copy this message, formatted; the tool calls stay here", kind: "ghost", size: "xs", act: "copy" })}${UI.html("icon-button", { icon: "arrow-up", title: "Go to their previous message", kind: "ghost", size: "xs", act: "up" })}${UI.html("icon-button", { icon: "arrow-down", title: "Go to their next message", kind: "ghost", size: "xs", act: "down" })}<span class="time" title="${esc(fullTime(m.ts))}">${time(m.ts)}</span></div>
         <div class="bubble">
           ${m.skill ? `<div class="skill-invoke" title="skill invocation: the vibemates that have this skill got its instructions with this message">${ic("skills")} skill <b>${esc(m.skill.name)}</b></div>` : ""}
           <div class="edit-box" hidden></div>
@@ -2116,8 +2443,46 @@
         showError(error);
       }
     });
+    el.addEventListener("pointerenter", () => refreshWalkArrows(el));
+    for (const [act, back] of [["up", true], ["down", false]]) {
+      el.querySelector(`.head [data-act="${act}"]`).addEventListener("click", () => {
+        const target = walkFrom(el, back);
+        if (!target) return;
+        jumpToMessage(target);
+        refreshWalkArrows(target);
+        const next = target.querySelector(`.head [data-act="${act}"]`);
+        if (next && !next.hidden) next.focus();
+      });
+    }
     updateMessageElement(el, room, m);
     return el;
+  }
+
+  function walkFrom(el, back) {
+    const step = (node) => {
+      const sibling = back ? node.previousElementSibling : node.nextElementSibling;
+      if (sibling) return sibling;
+      let page = node.parentElement;
+      while (page && page.classList.contains("msgs-page")) {
+        page = back ? page.previousElementSibling : page.nextElementSibling;
+        if (!page || !page.classList.contains("msgs-page")) return null;
+        const edge = back ? page.lastElementChild : page.firstElementChild;
+        if (edge) return edge;
+      }
+      return null;
+    };
+    let node = el;
+    while ((node = step(node))) {
+      if (node.classList.contains("msg") && !node.classList.contains("hidden-by-search") && node.dataset.from === el.dataset.from) return node;
+    }
+    return null;
+  }
+
+  function refreshWalkArrows(el) {
+    const up = el.querySelector('.head [data-act="up"]');
+    const down = el.querySelector('.head [data-act="down"]');
+    if (up) up.hidden = !walkFrom(el, true);
+    if (down) down.hidden = !walkFrom(el, false);
   }
 
   function shotUrl(roomId, image) {
@@ -2345,6 +2710,7 @@
       const card = choice.closest('[data-ui="ask-card"]');
       if (choice.dataset.act === "permit") post(roomApi(`/permissions/${encodeURIComponent(card.dataset.key)}`), { optionId: choice.dataset.option || null }).catch(showError);
       else if (choice.dataset.act === "decide") post(roomApi(`/proposals/${encodeURIComponent(card.dataset.key)}`), { accept: choice.dataset.answer === "apply" }).catch(showError);
+      else if (choice.dataset.act === "make-room") post(roomApi(`/new-rooms/${encodeURIComponent(card.dataset.key)}`), { create: choice.dataset.answer === "create" }).catch(showError);
       else if (choice.dataset.act === "try-look") tryLook(choice.dataset.look);
       else if (choice.dataset.act === "adopt-copy") {
         choice.disabled = true;
@@ -2389,7 +2755,7 @@
     if (m.kind === "system") return;
     const text = el.querySelector(".text");
     const more = el.querySelector('[data-act="more"]');
-    const long = !m.streaming && m.text.length > CLAMP_CHARS;
+    const long = !m.streaming && m.text.length > CLAMP_CHARS && !state.watched.has(m.id);
     const expanded = state.expanded.has(m.id);
     let words = text.querySelector(":scope > .words");
     if (!words) {
@@ -2407,24 +2773,25 @@
         if (Date.now() - lastTypedAt < TYPING_WINDOW_MS) setTimeout(() => { if (words.isConnected) finish(); }, TYPING_WINDOW_MS);
         else finish();
       }
-      if (m.streaming && !m.text) words.innerHTML = '<span class="pending" title="thinking…"><i></i><i></i><i></i></span>';
     }
+    const atWork = bubbleWorking(room, m);
     if (m.streaming) {
       let tail = el.liveTail;
       if (!tail) {
         tail = document.createElement("span");
         tail.className = "live-tail";
-        tail.innerHTML = `${WORKING_SVG}${UI.html("button", { label: "Stop", kind: "ghost", size: "xs", act: "stop", title: "Stop this reply; what is written stays in the room" })}`;
+        tail.innerHTML = `${WORKING_SVG}${THINKING_DOTS}${UI.html("button", { label: "Stop", kind: "ghost", size: "xs", act: "stop", title: "Stop this reply; what is written stays in the room" })}`;
         el.liveTail = tail;
       }
-      tail.classList.toggle("no-figure", !m.text);
+      tail.classList.toggle("no-figure", !atWork);
       if (tail.parentElement !== text) text.appendChild(tail);
+      if (CALM !== "off") text.classList.add("streamed");
     } else if (el.liveTail && el.liveTail.parentElement) el.liveTail.remove();
     text.classList.toggle("clamped", long && !expanded);
     more.hidden = !long;
     more.textContent = expanded ? "Show less" : "Show more";
     const stopNote = el.querySelector(".stop-note");
-    if (stopNote) stopNote.innerHTML = !m.streaming && m.stopReason === "cancelled" ? UI.html("reply-note", { text: `Stopped by ${m.stoppedBy || (state.settings || {}).humanName || "you"}`, tone: "attention", icon: "stop" }) : "";
+    if (stopNote) stopNote.innerHTML = !m.streaming && m.stopReason === "cancelled" ? UI.html("reply-note", { text: stopNoteText(m, (state.settings || {}).humanName), tone: "attention", icon: "stop" }) : "";
     renderShots(el.querySelector(".shots"), room, m);
     renderWaiting(el, room, m);
     const thought = el.querySelector(".thought");
@@ -2528,7 +2895,8 @@
   }
   function fillSeen(el, room, m) {
     if (m.kind !== "chat" || m.streaming) return;
-    const html = seenHtml(room, m);
+    const seen = seenHtml(room, m);
+    const html = (m.via ? `<span class="stats" title="written from a phone paired to viberoom">via ${esc(m.via.platform === "telegram" ? "Telegram" : m.via.platform)}</span>${seen ? '<span class="sep">·</span>' : ""}` : "") + seen;
     if (m.from === "human") {
       const meta = el.querySelector(".meta");
       if (!meta) return;
@@ -3125,6 +3493,7 @@
     }
     for (const perm of room.permissions) renderPermission(room, perm);
     for (const prop of room.proposals || []) renderProposal(room, prop);
+    for (const asked of room.newRooms || []) renderNewRoom(room, asked);
     syncRecovery(room);
     refreshSeen(room);
     if (!restoreReader(anchor)) scrollToBottom("the list was rebuilt");
@@ -3172,6 +3541,7 @@
       return;
     }
     const stick = stuck;
+    if (existing && !wasFinal && !m.streaming && m.kind === "chat") watchGrown(existing, m.id);
     if (existing) updateMessageElement(existing, room, room.messages[idx]);
     else {
       const mine = idx >= 0 ? room.messages[idx] : m;
@@ -3187,7 +3557,10 @@
       if (m.streaming && m.from !== "human") renderSideRoom();
       else if (!stick && m.kind === "chat") noteNew(room, m);
     }
-    if (stick) scrollToBottom("a message arrived");
+    if (stick) {
+      if (CALM !== "off" && m.streaming && m.from !== "human" && !existing) calmStart(m.id);
+      else scrollToBottom("a message arrived");
+    } else if (calm.held) calmAfterGrowth();
     if (m.streaming) updateWorkingNow();
     if (!wasFinal && !m.streaming && m.kind === "chat" && m.from !== "human") noteFinished(room, m);
     if (m.from === "human") renderTimeline();
@@ -3211,6 +3584,28 @@
   const STREAM_FLUSH_MS = 30;
   const TYPING_WINDOW_MS = 1500;
   const watchingTheBottom = () => stuck;
+  const watchedLeave = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) continue;
+      const el = entry.target;
+      const id = el.dataset.id;
+      if (!state.watched.has(id)) { watchedLeave.unobserve(el); continue; }
+      const box = els.messages.getBoundingClientRect();
+      const r = entry.boundingClientRect;
+      const below = r.top >= box.bottom;
+      const above = r.bottom <= box.top;
+      if (!below && !(above && stuck)) continue;
+      state.watched.delete(id);
+      watchedLeave.unobserve(el);
+      const room = currentRoom();
+      const m = room && room.messages.find((x) => x.id === id);
+      if (m && el.isConnected) updateMessageElement(el, room, m);
+    }
+  }, { root: els.messages, threshold: 0 });
+  function watchGrown(el, id) {
+    state.watched.add(id);
+    watchedLeave.observe(el);
+  }
   function patchMessage(roomId, id, fn, part, toolId) {
     const room = state.rooms.get(roomId);
     if (!room) return;
@@ -3218,6 +3613,7 @@
     if (!m || !m.streaming) return;
     fn(m);
     if (roomId !== state.currentRoomId || state.view !== "room") return;
+    if (part === "tools" && m.from !== "human") scheduleRosterRedraw(60);
     const entry = dirty.get(id) || { room, parts: new Set(), toolIds: new Set() };
     if (part && entry.parts) entry.parts.add(part);
     else entry.parts = null;
@@ -3250,7 +3646,10 @@
       updateMessageElement(el, room, m, parts, toolIds);
       touched = true;
     }
-    if (touched && stuck) scrollToBottom("a reply grew");
+    if (touched) {
+      if (calm.held) calmAfterGrowth();
+      else if (stuck) scrollToBottom("a reply grew");
+    }
     if (touched) updateWorkingNow();
     if (touched) noteSlow("streamed frame", performance.now() - t0);
   }
@@ -3381,6 +3780,45 @@
     }
     return rows.join("");
   }
+  function modelName(room, agentType, model) {
+    if (!model) return "";
+    for (const other of (room.participants || [])) {
+      if (agentType && other.agentType && other.agentType !== agentType) continue;
+      for (const option of other.configOptions || []) {
+        if (option.type !== "select") continue;
+        const found = flattenOptions(option.options).find((c) => String(c && c.value) === String(model));
+        if (found && found.name) return found.name;
+      }
+    }
+    return model;
+  }
+
+  function renderNewRoom(room, p) {
+    const existing = els.messages.querySelector(`[data-ui="ask-card"][data-kind="new-room"][data-key="${CSS.escape(p.key)}"]`);
+    const plan = p.plan || {};
+    const cast = (plan.vibemates || []).map((v) => `${esc(v.name)}${v.model ? ` (${esc(modelName(room, v.agentType, v.model))})` : ""}`);
+    const who = cast.length > 1 ? `${cast.slice(0, -1).join(", ")} and ${cast[cast.length - 1]}` : cast[0] || "";
+    const sessions = (plan.price && plan.price.sessions) || 0;
+    const wanted = String(plan.name || "").trim().toLowerCase();
+    const nameTaken = [...state.rooms.values()].some((r) => String(r.name || "").trim().toLowerCase() === wanted);
+    const body =
+      (p.plan && p.plan.why ? `<div class="prop-why">${esc(p.plan.why)}</div>` : "") +
+      `<div class="prop-row">${who} — <b>${sessions} new session${sessions === 1 ? "" : "s"}</b></div>` +
+      `<div class="prop-line">No working folder yet · not reachable from a messenger · ${cast.length === 1 ? "it starts in a mode that asks before it acts" : "they all start in a mode that asks before they act"}.</div>` +
+      (nameTaken ? `<div class="prop-line">There is already a room called ${esc(plan.name || "")}.</div>` : "");
+    const outcome = p.status === "pending" ? undefined : p.status === "created" ? "created" : "not created";
+    const card = UI.el("ask-card", {
+      kind: "new-room", who: p.participantName, lead: `proposes a room called ${plan.name || ""}`, body, outcome,
+      choices: [{ label: "Create", tone: "ok", act: "make-room", data: { answer: "create" } }, { label: "No", tone: "no", act: "make-room", data: { answer: "no" } }],
+      data: { key: p.key },
+    });
+    if (existing) existing.replaceWith(card);
+    else {
+      placeCard(card, room, p.ts || Date.now());
+      if (stuck) scrollToBottom("a new-room card");
+    }
+  }
+
   function renderProposal(room, p) {
     const existing = els.messages.querySelector(`[data-ui="ask-card"][data-kind="proposal"][data-key="${CSS.escape(p.key)}"]`);
     const lookRow = (p.appearance || []).find((c) => c.key === "look");
@@ -3528,6 +3966,7 @@
         ${offline ? `<button class="action" data-act="reconnect"><span class="ico">${ic("refresh")}</span>Reconnect</button>` : `<button class="action" data-act="cancel" ${p.status !== "thinking" && p.status !== "queued" ? "disabled" : ""}><span class="ico">${ic("stop")}</span>Stop</button>`}
         <button class="action danger" data-act="remove"><span class="ico">${ic("trash")}</span>Remove</button>
       </div>
+      ${p.quiet ? wedgeCardHtml(p, Date.now()) : ""}
       <div class="section" id="pp-persona">
         ${sectionTitle("user", "Persona")}
         ${field("Vibename", `<input type="text" id="pp-name" maxlength="24" value="${esc(p.name)}">`)}
@@ -3542,7 +3981,7 @@
         ${sectionTitle("spark", "Coding agent")}
         <p class="hint">What runs ${esc(p.name)}${rec ? `: ${esc(rec.vendor)}` : ""}. Its model, how hard it thinks, what it may do without asking.${geekTip("These options come from the coding agent itself: the hub lists the ones it offers and sets your pick on its running session, so a change takes effect from the next turn, without restarting it or losing what it remembers.")}</p>
         <div id="pp-config"></div>
-        ${field("Coding agent", `<div class="agent-grid" id="pp-recipe">${state.recipes.filter((r) => !r.unavailableReason || r.id === p.agentType).map((r) => `<button type="button" class="agent-tile${r.id === p.agentType ? " selected" : ""}" data-agent="${esc(r.id)}" title="${esc(r.label)}">${vendorLogo(r, "lg")}<span class="at-name">${esc(r.vendor)}</span></button>`).join("")}</div>`, "Another vendor: a new session with its notes and the last messages.", "A session cannot cross vendors, so the vibemate first writes its notes, then comes back on the new agent with those notes and the last messages of the room (like Respawn with memory). Its name, vibio, colour and skills stay; model, effort and mode start from the new agent's defaults.")}
+        ${field("Coding agent", `<div class="agent-grid" id="pp-recipe">${state.recipes.filter((r) => !r.unavailableReason || r.id === p.agentType).map((r) => `<button type="button" class="agent-tile${r.id === p.agentType ? " selected" : ""}" data-agent="${esc(r.id)}" title="${esc(r.label)}">${vendorLogo(r, "lg")}<span class="at-name">${esc(r.vendor)}</span></button>`).join("")}</div>`, "Another vendor: a new session with its notes and the last messages.", "A session cannot cross vendors, so the vibemate first writes its notes, then comes back on the new agent with those notes and the last messages of the room (like Fresh start with the last messages). Its name, vibio, colour and skills stay; model, effort and mode start from the new agent's defaults.")}
       </div>
       ${geek(
         "pp-geek",
@@ -3556,9 +3995,9 @@
         ${field("Reply delay override, seconds", `${UI.html("number-field", { id: "pp-delay", value: String(p.replyDelay ?? ""), min: 0, max: 120, step: 0.5, placeholder: `the room's: ${room.settings.replyDelay ?? 4} s` })}`, `Overrides the room's delay (${room.settings.replyDelay ?? 4} s, used only when two or more vibemates are in) for this vibemate only, even when it is alone. Empty: it follows the room.`, "Before each turn the vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive during the wait land in its backlog, so it can react to them or stay silent.")}
       </div>
       <div class="section danger">
-        ${sectionTitle("bolt", "Respawn")}
-        <p class="hint">${esc(p.name)} comes back with an empty head: it forgets this conversation entirely. The room's history stays and you still see everything.${geekTip("A session's context cannot be erased, so the vibemate's process and session are closed and it starts a new one with no replay. Its stored session is dropped too, or a later reconnect would bring the old context back. Same thing as typing /respawn @Name in the composer.")}</p>
-        <div class="row-btns start">${UI.html("button", { label: `Respawn ${p.name}`, icon: "bolt", kind: "danger", size: "sm", act: "respawn" })}<label class="lp-with">${UI.html("button", { label: "With the last", size: "sm", act: "respawn-mem" })}${UI.html("number-field", { id: "pp-respawn-n", value: String(room.settings.replayAfterRestart ?? 10), min: 0, max: 500 })} messages</label></div>
+        ${sectionTitle("bolt", "Fresh start")}
+        <p class="hint">${esc(p.name)} comes back with an empty head: it forgets this conversation entirely. The room's history stays and you still see everything.${geekTip("A session's context cannot be erased, so the vibemate's process and session are closed and it starts a new one with no replay. Its stored session is dropped too, or a later reconnect would bring the old context back. Same thing as typing /fresh-start @Name in the composer (/respawn still works).")}</p>
+        <div class="row-btns start">${UI.html("button", { label: `Fresh start for ${p.name}`, icon: "bolt", kind: "danger", size: "sm", act: "respawn" })}<label class="lp-with">${UI.html("button", { label: "With the last", size: "sm", act: "respawn-mem" })}${UI.html("number-field", { id: "pp-respawn-n", value: String(room.settings.replayAfterRestart ?? 10), min: 0, max: 500 })} messages</label></div>
         <p class="hint">With memory: a new session that gets only ${p.notes ? "its own notes and " : ""}the last N messages of this room; the rest is gone.</p>
       </div>
       <div class="section">
@@ -3776,6 +4215,9 @@
         ${sectionTitle("chat", "Conversation")}
         ${field("Vibemates' own tools (files, shell, web)", `<select id="rp-tools"><option value="on-request"${rs.tools === "on-request" ? " selected" : ""}>Only when someone explicitly asks</option><option value="never"${rs.tools === "never" ? " selected" : ""}>Never (chat only)</option></select>`, null, "An instruction in every vibemate's brief; the vibemate's mode is the real limit.")}
         <label class="switch"><span class="label">Share this room's history with the other rooms<span class="hint">Vibemates here may search the other rooms that also share theirs, and those rooms' vibemates may find messages written here. Hidden and deleted messages are never shared. Off: this room is searched only from inside it.</span></span><input type="checkbox" id="rp-share-history" ${rs.searchOtherRooms !== false ? "checked" : ""}></label>
+        <label class="switch"><span class="label">Reachable from messengers<span class="hint">A phone paired to viberoom (Settings → Channels) can open this room, write to it and read its replies. Off: the phone neither sees nor reaches this room.</span></span><input type="checkbox" id="rp-reachable" ${rs.reachableFromMessengers !== false ? "checked" : ""}></label>
+        <label class="switch"><span class="label">Start this room with viberoom<span class="hint">Its vibemates are started when viberoom starts, one room after another. They pay nothing until the first turn; their processes and memory stay while they wait. With viberoom starting at sign-in, the phone reaches this room without a click.</span></span><input type="checkbox" id="rp-start-with-hub" ${rs.startWithHub ? "checked" : ""}></label>
+        ${field("…and they come back", `<select id="rp-reconnect"><option value="inherit"${(rs.reconnectMode || "inherit") === "inherit" ? " selected" : ""}>As Welcome back is set</option><option value="load"${rs.reconnectMode === "load" ? " selected" : ""}>Continuing their saved sessions</option><option value="replay"${rs.reconnectMode === "replay" ? " selected" : ""}>Fresh, with the last messages replayed</option></select>`, "Only for the start above: when this room brings its own vibemates back, it decides with how much memory.", "A room that decides whether it starts also decides with how much memory its vibemates come back; the app-wide Welcome back setting is what a room follows when it has not chosen. It is not asked again in a dialog, because by the time a window could ask, the room has already begun.")}
         ${field("Max sentences per reply", `${UI.html("number-field", { id: "rp-maxlen", value: String(rs.maxSentences ?? ""), min: 1, max: 100, placeholder: "no limit" })}`)}
         ${field("Hop limit (vibemate-to-vibemate replies per human message)", `${UI.html("number-field", { id: "rp-hops", value: String(rs.hopLimit), min: 0, max: 10000 })}`)}
       </div>
@@ -3853,6 +4295,9 @@
           waitWhileHumanTypes: $("#rp-wait-typing").checked,
           agentsWakeEachOther: $("#rp-wake").checked,
           searchOtherRooms: $("#rp-share-history").checked,
+          reachableFromMessengers: $("#rp-reachable").checked,
+          startWithHub: $("#rp-start-with-hub").checked,
+          reconnectMode: $("#rp-reconnect").value,
           replyDelay: Number($("#rp-delay").value),
           transcripts: $("#rp-transcripts").value,
           foldAfter: $("#rp-fold-after").value === "" ? null : Number($("#rp-fold-after").value),
@@ -3868,6 +4313,32 @@
     });
   }
 
+
+  function dataFolderRow() {
+    const f = state.dataFolder;
+    if (!f || !f.known || !f.others || !f.others.length) return "";
+    return `<div class="section" id="sp-folder">
+      ${sectionTitle("lock", "This folder is not private")}
+      <p class="hint">Another account on this computer — ${esc(f.others.join(", "))} — can open <code>${esc(f.path)}</code>. Everything viberoom keeps is in there: every room's whole record, and the keys of any messenger you have paired.${geekTip("Closing it removes the inherited permissions and grants this account alone, beside the system and administrators, who can read anything on the machine in any case. Nothing else in your profile is touched, and it is undone with one command.")}</p>
+      <div class="row-btns start">${UI.html("button", { label: "Make it private", icon: "lock", kind: "primary", size: "sm", id: "sp-folder-narrow" })}</div>
+      <p class="hint">Other folders in your profile keep the permissions they have: this closes viberoom's own folder and nothing else.</p>
+      <p class="hint" id="sp-folder-result"></p>
+    </div>`;
+  }
+
+  function autostartStatusText() {
+    const a = state.autostart;
+    if (!a) return "Not known yet.";
+    const when = (ts) => (ts ? new Date(ts).toLocaleString() : "never");
+    const parts = [];
+    if (a.enabled) parts.push(`Set up on ${when(a.installedAt)}.`);
+    if (a.foreign) parts.push("Another viberoom, with another data folder, starts at sign-in; switching this on takes its place.");
+    parts.push(`Last automatic start: ${when(a.lastAutoStartAt)}.`);
+    if (a.targetMissing) parts.push(`The sign-in entry points at a missing file (${a.target || a.script}): switch it off, or start viberoom again from where it is now.`);
+    else if (a.stale) parts.push("The entry points at an older copy of viberoom; the next start fixes it.");
+    if (a.note) parts.push(a.note);
+    return esc(parts.join(" "));
+  }
 
   function renderSettingsPage() {
     const s = state.settings || { humanName: "", humanDescription: "", humanAvatar: "", roomDefaults: {}, vendorPresets: {} };
@@ -3961,15 +4432,26 @@
           </div>
         </div>
         <div>
+          <div class="section" id="sp-channels">
+            ${sectionTitle("chat", "Channels")}
+            ${channelsSectionHtml()}
+          </div>
           <div class="section" id="sp-update">
             ${sectionTitle("refresh", "Updates")}
             <label class="switch"><span class="label">Check for updates once a day<span class="hint">At start, one request to the npm registry for the latest viberoom version; nothing else leaves this machine. A newer version shows as a bubble over your avatar.</span></span><input type="checkbox" id="sp-updates" ${s.checkForUpdates !== false ? "checked" : ""}></label>
             <p class="hint" id="sp-update-status">${updateStatusText()}</p>
             ${UI.html("button", { label: "Check now", size: "sm", id: "sp-update-check" })}
           </div>
+          <div class="section" id="sp-autostart">
+            ${sectionTitle("refresh", "Start with the computer")}
+            <label class="switch"><span class="label">Start viberoom when you sign in to this computer<span class="hint">A quiet start, without a window: the icon opens the window when you want it. Rooms with "Start this room with viberoom" bring their vibemates back by themselves, so a paired phone reaches them without a click. A viberoom already running is left alone. Switch this off before you remove or move viberoom.</span></span><input type="checkbox" id="sp-autostart-on" ${state.autostart && state.autostart.enabled ? "checked" : ""}${state.autostart ? "" : " disabled"}></label>
+            <p class="hint" id="sp-autostart-status">${autostartStatusText()}</p>
+          </div>
+          ${dataFolderRow()}
           <div class="section" id="sp-restart">
             ${sectionTitle("refresh", "Restart")}
-            <p class="hint" style="margin-bottom:10px">Starts the room again with what is on disk. The vibemates' sessions end and they come back through "Welcome back"; this window reconnects on its own. Closing the window does not do this: the room keeps running in the background, which is why it can stay on an older build than the one you have.</p>
+            <p class="hint" style="margin-bottom:10px">Starts the room again with what is on disk. The vibemates come back the way Welcome back is set to bring them, and this window reconnects on its own. Closing the window does not do this: the room keeps running in the background, which is why it can stay on an older build than the one you have.</p>
+            ${state.version && state.version.staleBuild ? `<p class="hint warn" style="margin-bottom:10px">Older build running. There is a newer build on this machine — <code>${esc(state.version.staleBuild)}</code> was written after this room started — and the room keeps running the one it started with. Restart takes the new one.</p>` : ""}
             ${state.version && state.version.staleSource ? `<p class="hint warn" style="margin-bottom:10px">This room is older than the code on disk: <code>${esc(state.version.staleSource)}</code> changed after it was built. Restart takes what is built; in a source checkout run <code>node scripts/update.mjs</code>, which builds first.</p>` : ""}
             ${UI.html("button", { label: "Restart viberoom", size: "sm", id: "sp-restart-now" })}
           </div>
@@ -4035,6 +4517,7 @@
       )}
       </div>`;
     bindDiagnosticLogControls();
+    bindChannelControls();
     const editorSection = $("#sp-editor");
     const editorCmdRow = $("#sp-editor-cmd").closest(".field");
     const showEditorCmd = () => (editorCmdRow.hidden = $("#sp-editor-mode").value !== "custom");
@@ -4218,19 +4701,68 @@
       }
     });
     $("#sp-restart-now").addEventListener("click", async () => {
-      const ok = await confirmDialog('Every vibemate loses its session and comes back through "Welcome back". This window reconnects on its own.', { title: "Restart viberoom?", okLabel: "Restart" });
-      if (!ok) return;
+      let once = null;
+      const keeps = (state.settings || {}).reconnectMode === "load";
+      const writing = [...state.rooms.values()].flatMap((r) => (r.participants || []).filter((p) => p.kind === "agent" && p.status === "thinking").map((p) => p.name));
+      const back = keeps
+        ? "Rooms set to start with viberoom come back, and each vibemate returns with its session, so conversations continue. A vibemate whose session cannot be loaded returns with the last few messages instead — the room says which happened."
+        : "Rooms set to start with viberoom come back, and each vibemate starts fresh with the last few messages of the room.";
+      const cut = writing.length
+        ? `${nameList(writing)} ${writing.length > 1 ? "are" : "is"} writing: viberoom can wait for ${writing.length > 1 ? "those replies" : "that reply"}, or restart now and cut ${writing.length > 1 ? "them" : "it"} short.`
+        : "A reply being written right now would be cut short.";
+      const other = keeps ? "Start the vibemates fresh instead" : "Bring the vibemates' sessions back instead";
+      const choice = await choiceDialog(`viberoom closes and opens again on the same port; it takes a few seconds. ${back} ${cut}`, {
+        title: "Restart viberoom?",
+        okLabel: writing.length ? "When they finish" : "Restart",
+        altLabel: writing.length ? "Restart now" : "",
+        extraHtml: `<label class="switch"><span class="label">${other}<span class="hint">For this restart only. Your lasting choice is under Vibemates → Welcome back.</span></span><input type="checkbox" id="cf-sessions-once"></label>`,
+        beforeClose: () => { once = $("#cf-sessions-once") && $("#cf-sessions-once").checked ? (keeps ? "replay" : "load") : null; },
+      });
+      if (choice === "cancel") return;
       const button = $("#sp-restart-now");
       button.disabled = true;
       button.textContent = "Restarting…";
       try {
-        await post("/api/restart");
-        toast("viberoom is restarting; the window reconnects on its own.", "success");
+        const res = await post("/api/restart", { when: choice === "alt" ? "now" : "idle", ...(once ? { sessions: once } : {}) });
+        const held = (res && res.restart && res.restart.waitingFor) || [];
+        toast(held.length ? `viberoom restarts when ${nameList(held)} ${held.length > 1 ? "finish" : "finishes"}.` : "viberoom is restarting; the window reconnects on its own.", "success");
+        if (held.length) { button.disabled = false; button.textContent = "Restart viberoom"; }
       } catch (error) {
         showError(error);
         button.disabled = false;
         button.textContent = "Restart viberoom";
       }
+    });
+    $("#sp-autostart-on")?.addEventListener("change", async (e) => {
+      e.stopPropagation();
+      const box = e.target;
+      box.disabled = true;
+      try {
+        const res = await post("/api/autostart", { enabled: box.checked });
+        state.autostart = res.autostart || state.autostart;
+        toast(res.autostart && res.autostart.enabled ? "viberoom starts when you sign in." : "viberoom no longer starts when you sign in.", "success");
+      } catch (error) {
+        showError(error);
+      }
+      if (state.view === "settings") renderSettingsPage();
+    });
+    const narrowBtn = $("#sp-folder-narrow");
+    if (narrowBtn) narrowBtn.addEventListener("click", async () => {
+      narrowBtn.disabled = true;
+      UI.setState(narrowBtn, "loading");
+      try {
+        const { dataFolder } = await post("/api/data-folder/narrow");
+        state.dataFolder = dataFolder;
+        const left = (dataFolder && dataFolder.others) || [];
+        $("#sp-folder-result").textContent = left.length
+          ? `Still open to ${left.join(", ")}. Your computer refused the change; an administrator can make it.`
+          : "Private: this folder now opens for you alone.";
+        if (!left.length) setTimeout(() => renderSettingsPage(), 1500);
+      } catch (e) {
+        showError(e);
+      }
+      narrowBtn.disabled = false;
+      UI.setState(narrowBtn, null);
     });
     $("#sp-update-check").addEventListener("click", async () => {
       const b = $("#sp-update-check");
@@ -4284,6 +4816,172 @@
     if (u.available) return `viberoom ${u.latest} is available (this is ${u.current}); checked ${when}.`;
     if (u.error) return `Could not reach the registry (${u.error}); checked ${when}.`;
     return `This is viberoom ${u.current}, the latest; checked ${when}.`;
+  }
+
+  const channelsKeep = { newRoot: "", newDeep: true, more: false, rename: false };
+
+  function channelsState(c) {
+    const tg = c.telegram;
+    const paired = (c.pairings || []).filter((p) => !p.unpairedAt);
+    if (!tg || !tg.tokenSet) return { kind: "unset", mark: { label: "Not set up", tone: "outline" }, line: "Make a bot for this computer and pair it; about ten minutes.", action: { label: "Set up Telegram…", act: "ch-setup" } };
+    if (!tg.enabled) return { kind: "off", mark: { label: "Off", tone: "muted" }, line: "Switched off: the phone gets nothing until the channel is on again. The key and the paired accounts are kept.", action: { label: "Switch on", act: "ch-on" } };
+    switch (tg.state) {
+      case "degraded": return { kind: "problem", mark: { label: "Not listening", tone: "error" }, line: "Another computer is listening to this bot. Give this one a bot of its own.", action: { label: "Set up Telegram…", act: "ch-setup" } };
+      case "contested": return { kind: "problem", mark: { label: "Two computers", tone: "error" }, line: "Another computer answers on this bot too: the phone gets every reply twice. Give this one a bot of its own.", action: { label: "Set up Telegram…", act: "ch-setup" } };
+      case "checking": return { kind: "setting", mark: { label: "Checking…", tone: "waiting", dot: true }, line: "Another program answered for this bot; checking whether it lets go (a restart does within seconds).", action: null };
+      case "paused": return { kind: paired.length ? "connected" : "setting", mark: { label: "Paused", tone: "waiting" }, line: "The conversation store is not answering; the channel resumes by itself.", action: null };
+      case "connected":
+      case "listening":
+        if (paired.length) return { kind: "connected", mark: tg.state === "listening" ? { label: "Listening", tone: "ready", dot: true } : { label: "Connected", tone: "ready" }, line: "", action: null };
+        return { kind: "setting", mark: { label: "Half done", tone: "waiting" }, line: "The key is in. Pair a phone to finish.", action: { label: "Continue setup…", act: "ch-continue" } };
+      default:
+        if (tg.detail) return { kind: "problem", mark: { label: "Not listening", tone: "error" }, line: `Not listening: ${tg.detail}.`, action: { label: "Replace the key…", act: "ch-replace-key" } };
+        return { kind: "setting", mark: { label: "Starting…", tone: "waiting", dot: true }, line: "Connecting to Telegram…", action: null };
+    }
+  }
+
+  function channelsSectionHtml() {
+    const c = state.channels || { telegram: null, pairings: [], bindings: [] };
+    const tg = c.telegram;
+    const st = channelsState(c);
+    const active = (c.pairings || []).filter((p) => !p.unpairedAt);
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const when = (ts) => { const d = new Date(ts); return `${d.getDate()} ${MONTHS[d.getMonth()]}${d.getFullYear() === new Date().getFullYear() ? "" : ` ${d.getFullYear()}`}`; };
+    const machine = c.machine || "this computer";
+    const title = tg && tg.tokenSet ? tg.name || tg.wantedName || `viberoom on ${machine}` : "Telegram";
+    const head = `<div class="ch-head">${ic("send", "ch-mark")}<div class="ch-title">${esc(title)}${tg && tg.account ? `<small>@${esc(tg.account)}</small>` : ""}</div>${UI.html("badge", { label: st.mark.label, tone: st.mark.tone, dot: !!st.mark.dot })}</div>`;
+    const line = st.line ? `<p class="ch-line">${esc(st.line)}</p>` : "";
+    const facts = st.kind === "connected" ? `<ul class="ch-facts">
+        <li>${ic("link")}<span>Room messages pass through Telegram.</span></li>
+        <li>${ic("lock")}<span>Permission cards: ${c.phoneApprovals ? "can be answered from the phone." : "answered on this computer."}</span></li>
+      </ul>` : "";
+    const groups = st.kind === "connected" ? `<div class="ch-group"><div class="ch-group-title">Paired account${active.length === 1 ? "" : "s"}</div>
+        ${active.map((p) => `<div class="ch-row">${ic("user")}<span class="grow"><b>${esc(p.name || p.senderId)}</b> — every device signed in to it <span class="hint">· paired ${esc(when(p.pairedAt))}</span></span>${UI.html("button", { label: "Unpair", kind: "danger-quiet", size: "xs", data: { unpair: p.senderId } })}</div>`).join("")}
+        <div class="ch-acts">${UI.html("button", { label: "Pair another phone…", kind: "secondary", size: "sm", act: "ch-pair" })}</div>
+      </div>
+      <div class="ch-group"><div class="ch-group-title">This bot</div>
+        <div class="ch-acts">${UI.html("button", { label: channelsKeep.rename ? "Keep the name" : "Rename…", kind: "secondary", size: "sm", act: "ch-rename" })}${UI.html("button", { label: "Replace the key…", kind: "secondary", size: "sm", act: "ch-replace-key" })}</div>
+      </div>` : "";
+    const acts = [];
+    if (st.action) acts.push(UI.html("button", { label: st.action.label, kind: "primary", size: "sm", act: st.action.act }));
+    if (st.kind === "problem" || st.kind === "setting") acts.push(UI.html("button", { label: "Switch off", kind: "secondary", size: "xs", act: "ch-off", title: "The key and the paired accounts are kept" }));
+    acts.push(UI.html("button", { label: st.kind === "unset" ? "See the guide first" : "Open the guide", kind: "link", size: "xs", act: "ch-guide", title: "The steps, with pictures, inside viberoom" }));
+    const rename = st.kind === "connected" && channelsKeep.rename
+      ? `<div class="ch-rename">${field("Name shown on the phone", `<input type="text" id="sp-tg-name" maxlength="64" spellcheck="false" value="${esc((tg && tg.wantedName) || "")}" placeholder="${esc(`viberoom on ${machine}`)}">`, "One bot is one computer: a name that tells your computers apart. Anyone who opens the bot sees it. Saved when you leave the field; the bot reconnects with it.")}</div>`
+      : "";
+    const geek = st.kind === "unset"
+      ? `<div class="ch-geek">${geekTip("Once it is on, the messages of any room you open on the phone travel through Telegram's servers. The bot's key is kept on this computer only and never shown again; a lost or leaked key is replaced with /revoke at BotFather, then the new one here. Every room is reachable from the phone unless switched off in the room's own settings.")}</div>`
+      : "";
+    const rows = (c.fileRoots || []).map((r) => `<div class="roots-row" data-root><input type="text" class="roots-path" value="${esc(r.path)}" spellcheck="false" aria-label="Folder"><label class="check-row"><input type="checkbox" class="roots-deep" ${r.subfolders ? "checked" : ""}> and its subfolders</label>${UI.html("button", { label: "Remove", size: "xs", kind: "secondary", act: "roots-remove" })}</div>`).join("");
+    const more = st.kind === "connected" ? `<details class="ch-more"${channelsKeep.more ? " open" : ""}><summary>More</summary>
+      ${field("Folders the phone may be sent files from", `<div class="roots-list" id="sp-tg-roots">${rows}<div class="roots-row"><input type="text" id="sp-tg-roots-new" value="${esc(channelsKeep.newRoot)}" placeholder="a folder" spellcheck="false" aria-label="A folder to add">${UI.html("button", { label: "Browse", icon: "folder", kind: "secondary", size: "sm", id: "sp-tg-roots-browse", title: "Choose a folder", hook: "browse-btn" })}${UI.html("button", { label: "Add", size: "sm", act: "roots-add" })}</div><div class="roots-row roots-depth"><label class="check-row"><input type="checkbox" id="sp-tg-roots-new-deep"${channelsKeep.newDeep ? " checked" : ""}> and its subfolders</label><span class="hint">For example ${esc(c.folderExample || "your Downloads folder")}; Browse finds it. The phone gets a Send button for files in these folders; vibemates get no access from this, and no file leaves this computer without your press.</span></div></div>`, "", "Files named in a message, or asked for by name from the phone, get a Send button when they are inside one of these folders (with or without its subfolders), the room's own files or its working folder. What vibemates may read or write is their own matter and does not change here. Keep the list short: with its subfolders, a folder is the whole tree under it.")}
+      <label class="switch"><span class="label">Answer permission questions from the phone<span class="hint">When a vibemate needs your permission — to edit a file, to run a command — the question reaches your phone too, so you do not walk to the computer to press Yes. Whoever holds the paired phone can allow that one action.${c.phoneApprovals ? "" : " Off: the phone only says the question is waiting on this computer."}</span>${geekTip("Only for actions inside the room's folders; the choice for the whole session stays on this computer.")}</span><input type="checkbox" id="sp-tg-approvals" ${c.phoneApprovals ? "checked" : ""}></label>
+      <label class="switch"><span class="label">Channel on<span class="hint">Off keeps the key and the paired accounts; the phone gets nothing until it is on again.</span></span><input type="checkbox" id="sp-tg-enabled" ${tg && tg.enabled ? "checked" : ""}></label>
+    </details>` : "";
+    const intro = `<p class="ch-intro">Reach your rooms from a messenger app, on your phone or on your computer.</p>`;
+    return `${intro}<div class="ch-card" data-state="${st.kind}">${head}${line}${facts}${acts.length ? `<div class="ch-acts">${acts.join("")}</div>` : ""}${groups}${rename}${geek}${more}</div>`;
+  }
+
+  function dropPairLink(cancelAtHub) {
+    const link = state.pairLink;
+    state.pairLink = null;
+    if (pairLinkTimer) { clearTimeout(pairLinkTimer); pairLinkTimer = null; }
+    if (cancelAtHub && link && !link.copied && link.expiresAt > Date.now()) post("/api/channels/pair-link/cancel", {}).catch(() => {});
+  }
+  let pairLinkTimer = null;
+
+  function bindChannelControls() {
+    const section = $("#sp-channels");
+    if (!section) return;
+    for (const type of ["input", "change"]) section.addEventListener(type, (e) => e.stopPropagation());
+    const tg = (state.channels && state.channels.telegram) || null;
+    bindSave(section, async () => {
+      const q = (sel) => section.querySelector(sel);
+      const patch = {};
+      if (q("#sp-tg-enabled") && q("#sp-tg-enabled").checked !== !!(tg && tg.enabled)) patch.enabled = q("#sp-tg-enabled").checked;
+      if (q("#sp-tg-name") && q("#sp-tg-name").value.trim() !== ((tg && tg.wantedName) || "")) patch.name = q("#sp-tg-name").value.trim();
+      if (q("#sp-tg-approvals")) patch.phoneApprovals = q("#sp-tg-approvals").checked;
+      if (q("#sp-tg-roots")) patch.fileRoots = [...section.querySelectorAll("#sp-tg-roots [data-root]")].map((row) => ({ path: row.querySelector(".roots-path").value.trim(), subfolders: row.querySelector(".roots-deep").checked })).filter((r) => r.path);
+      const res = await post("/api/channels/telegram", patch);
+      state.channels = res.channels || state.channels;
+      if (state.view === "settings") renderSettingsPage();
+    });
+    const rootsList = section.querySelector("#sp-tg-roots");
+    const newRoot = section.querySelector("#sp-tg-roots-new");
+    const newDeep = section.querySelector("#sp-tg-roots-new-deep");
+    if (newRoot) for (const type of ["input", "change"]) newRoot.addEventListener(type, (e) => { channelsKeep.newRoot = newRoot.value; e.stopPropagation(); });
+    if (newDeep) for (const type of ["input", "change"]) newDeep.addEventListener(type, (e) => { channelsKeep.newDeep = newDeep.checked; e.stopPropagation(); });
+    const more = section.querySelector(".ch-more");
+    if (more) more.addEventListener("toggle", () => { channelsKeep.more = more.open; });
+    const addRoot = (dir) => {
+      const path = (dir || "").trim();
+      if (!path || !rootsList) return;
+      if ([...rootsList.querySelectorAll("[data-root] .roots-path")].some((input) => input.value.trim().toLowerCase() === path.toLowerCase())) { newRoot.value = ""; channelsKeep.newRoot = ""; return; }
+      const row = document.createElement("div");
+      row.className = "roots-row";
+      row.dataset.root = "";
+      row.innerHTML = `<input type="text" class="roots-path" spellcheck="false" aria-label="Folder"><label class="check-row"><input type="checkbox" class="roots-deep"> and its subfolders</label>${UI.html("button", { label: "Remove", size: "xs", kind: "secondary", act: "roots-remove" })}`;
+      row.querySelector(".roots-path").value = path;
+      row.querySelector(".roots-deep").checked = !newDeep || newDeep.checked;
+      rootsList.insertBefore(row, newRoot.parentElement);
+      newRoot.value = "";
+      channelsKeep.newRoot = "";
+      channelsKeep.newDeep = true;
+      rootsList.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    if (newRoot) newRoot.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); addRoot(newRoot.value); }
+    });
+    const browse = section.querySelector("#sp-tg-roots-browse");
+    if (browse) browse.addEventListener("click", () => openFolderPicker(newRoot.value.trim() || "", (dir) => addRoot(dir)));
+    const setEnabled = async (enabled) => {
+      try {
+        const res = await post("/api/channels/telegram", { enabled });
+        state.channels = res.channels || state.channels;
+        if (state.view === "settings") renderSettingsPage();
+      } catch (error) { showError(error); }
+    };
+    section.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-act]");
+      if (!btn || !section.contains(btn)) return;
+      e.preventDefault();
+      switch (btn.dataset.act) {
+        case "ch-setup": return openSetupWizard();
+        case "ch-continue": return openSetupWizard("next");
+        case "ch-pair": return openSetupWizard("pair");
+        case "ch-guide": openGuide(); return;
+        case "ch-on": return setEnabled(true);
+        case "ch-off": return setEnabled(false);
+        case "ch-replace-key":
+          try { await post("/api/secrets", { purpose: "telegram-token" }); } catch (error) { showError(error); }
+          return;
+        case "ch-rename": {
+          channelsKeep.rename = !channelsKeep.rename;
+          if (state.view === "settings") renderSettingsPage();
+          const name = $("#sp-tg-name");
+          if (name) name.focus();
+          return;
+        }
+        case "roots-add": return addRoot(newRoot.value);
+        case "roots-remove":
+          btn.closest("[data-root]").remove();
+          rootsList.dispatchEvent(new Event("change", { bubbles: true }));
+          return;
+        default:
+      }
+    });
+    section.querySelectorAll("[data-unpair]").forEach((btn) => {
+      btn.onclick = async () => {
+        const senderId = btn.dataset.unpair;
+        const choice = await choiceDialog("From now on that Telegram account is a stranger to the bot, on every device signed in to it: it can neither write to the rooms nor read their replies. What it already asked for keeps running unless you stop it too.", { title: "Unpair this account?", okLabel: "Unpair", altLabel: "Unpair and stop its turns" });
+        if (choice === "cancel") return;
+        try {
+          const res = await post("/api/channels/unpair", { senderId, stopTurns: choice === "alt" });
+          state.channels = res.channels || state.channels;
+          if (state.view === "settings") renderSettingsPage();
+        } catch (error) { showError(error); }
+      };
+    });
   }
 
   function bindDiagnosticLogControls() {
@@ -4401,7 +5099,7 @@
       : "";
     const about = ed
       ? ""
-      : `<p class="hint sk-about">A skill is a folder <code>skills/&lt;name&gt;/SKILL.md</code> in the room's data folder: a description (what triggers it) and the instructions. Attach skills to vibemates in their panels; invoke one with <code>/name</code> in the composer. Vibemates with the room's tools can create skills too (they load <code>skill-writer</code> first).</p>`;
+      : `<p class="hint sk-about">${geekTip(`A skill is a folder <code>skills/&lt;name&gt;/SKILL.md</code> in the room's data folder: a description (what triggers it) and the instructions. Attach skills to vibemates in their panels; invoke one with <code>/name</code> in the composer. Vibemates with the room's tools can create skills too (they load <code>skill-writer</code> first).`)}</p>`;
     els.pageInner.innerHTML = `
       <div class="page-head"><div><h1>${room ? `Skills in ${esc(room.name)}` : "Skills"}</h1><div class="hint">${room ? `${shown.length} of ${skills.length} in the library are attached to a vibemate here` : `${skills.length} skill${skills.length === 1 ? "" : "s"} in the library`}</div></div><div class="row-btns">${room ? UI.html("button", { label: "All skills", icon: "skills", kind: "ghost", id: "sk-all" }) : ""}${UI.html("button", { label: "Reload", icon: "refresh", kind: "ghost", id: "sk-reload", title: "Re-read the skills folder" })}${UI.html("button", { label: "New skill", icon: "plus", kind: "primary", size: "cta", id: "sk-new" })}</div></div>
       <div class="${ed ? "page-cols" : ""}"><div>${list}${about}</div>${editor}</div>`;
@@ -4737,7 +5435,7 @@
       recheck.dataset.bound = "1";
       recheck.addEventListener("click", () => {
         recheck.disabled = true;
-        post("/api/recipes/check", { force: true, rescan: true }).catch(showError).finally(() => { recheck.disabled = false; });
+        post("/api/recipes/check", { force: true, rescan: true }, { deadline: 3 * 60000 }).catch(showError).finally(() => { recheck.disabled = false; });
       });
     }
   }
@@ -4813,6 +5511,373 @@
     return { props, confirmed };
   }
 
+  const SETUP_STEPS = ["what", "bot", "key", "name", "pair", "done"];
+  const SETUP_STOPS = [["bot", "Bot"], ["key", "Key"], ["name", "Name"], ["pair", "Phone"]];
+  const setup = { open: false, step: 0, botfatherQr: "", linkAsked: false, linkFailed: false, linkTimer: null, wantCode: false };
+  const NEWBOT = "/newbot";
+  const BOTFATHER_URL = "https://t.me/BotFather";
+  const GUIDE_PATH = "/guide.html";
+
+  function openGuide() {
+    if (document.getElementById("guide-view")) return;
+    const view = document.createElement("div");
+    view.id = "guide-view";
+    view.className = "guide-view";
+    view.innerHTML = `<div class="gv-bar">${UI.html("button", { label: "Back", icon: "back", kind: "secondary", size: "sm", act: "guide-close", title: "Back to viberoom (Esc)" })}</div><iframe class="gv-frame" src="${GUIDE_PATH}" title="The guide"></iframe>`;
+    const close = () => { view.remove(); document.removeEventListener("keydown", onKey); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    view.querySelector('[data-act="guide-close"]').addEventListener("click", close);
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(view);
+  }
+
+  async function loadBotfatherQr() {
+    if (setup.botfatherQr) return;
+    try {
+      const res = await get(`/api/qr?text=${encodeURIComponent(BOTFATHER_URL)}`);
+      setup.botfatherQr = res.svg || "";
+      renderSetupWizard();
+    } catch {
+    }
+  }
+
+  function setupFacts() {
+    const c = state.channels || {};
+    const tg = c.telegram || null;
+    const card = [...secretCards.values()].find((r) => r.state === "open" && r.askedBy.kind === "window") || null;
+    const paired = (c.pairings || []).filter((p) => !p.unpairedAt).map((p) => p.name || p.senderId);
+    return { tg, machine: c.machine || "this computer", card, paired, link: state.pairLink, now: Date.now(), botfatherQr: setup.botfatherQr, linkFailed: setup.linkFailed, guide: true };
+  }
+
+  function setupKeyStatus(tg) {
+    if (!tg || !tg.enabled || !tg.tokenSet) return { text: "", done: false };
+    switch (tg.state) {
+      case "listening": return { text: `Connected as @${tg.account || "?"}`, done: true };
+      case "contested": return { text: "Another computer answers on this bot too: the phone gets every reply twice. Give this one a bot of its own.", done: true, another: true };
+      case "connected": return { text: "Checking the line to the phone…", done: false };
+      case "checking": return { text: "Another program answered for this bot; checking whether it lets go…", done: false };
+      case "degraded": return { text: "Another computer is listening to this bot. Give this one a bot of its own.", done: false, another: true };
+      case "paused": return { text: `Connected as @${tg.account || "?"}; the conversation store is not answering, it resumes by itself.`, done: true };
+      default: return tg.detail ? { text: `Not listening: ${tg.detail}.`, done: false, bad: true } : { text: "Starting…", done: false };
+    }
+  }
+
+  function setupStopsHtml(step) {
+    const name = SETUP_STEPS[step];
+    const at = SETUP_STOPS.findIndex(([s]) => s === name);
+    const allDone = name === "done";
+    return `<ol class="su-steps" aria-label="Steps">${SETUP_STOPS.map(([s, label], i) => `<li class="${allDone || (at >= 0 && i < at) ? "done" : at === i ? "on" : ""}">${label}</li>`).join("")}</ol>`;
+  }
+  const scene = (name) => `<div class="su-stage" aria-hidden="true">${window.Icons.scene(name)}</div>`;
+  const pairLinkWords = (url) => String(url || "").replace(/(start=)(.{4}).+$/, "$1$2…");
+
+  function setupStepHtml(step, facts) {
+    const { tg, machine, card, paired, link, now, botfatherQr, linkFailed, guide } = facts;
+    const key = setupKeyStatus(tg);
+    const stops = setupStopsHtml(step);
+    const last = step === SETUP_STEPS.length - 1;
+    const nav = (nextLabel, nextOn = true, extra = "") => `<div class="actions">${extra}${UI.html("button", { label: "Close", kind: "ghost", act: "su-close" })}${step > 0 ? UI.html("button", { label: "Back", kind: "ghost", act: "su-back" }) : ""}${UI.html("button", { label: nextLabel, kind: "primary", act: last ? "su-close" : "su-next", disabled: !nextOn })}</div>`;
+    const note = (icon, text) => `<p class="su-note">${ic(icon)}<span>${text}</span></p>`;
+    const sign = (text) => `<p class="su-sign ok"><span class="su-check">${ic("check")}</span><span>${text}</span></p>`;
+    const waiting = (text) => `<p class="su-sign"><span class="su-dot"></span><span>${text}</span></p>`;
+    const bad = (text, id) => `<p class="su-sign bad"${id ? ` id="${id}"` : ""}><b>${text}</b></p>`;
+    const botfather = UI.html("button", { label: "Open BotFather", kind: "primary", size: "sm", act: "su-open-botfather", title: "Opens Telegram on this computer, or the web page" });
+    switch (SETUP_STEPS[step]) {
+      case "what":
+        return `${stops}<div class="su-stage wide" aria-hidden="true"><div>${window.Icons.scene("bot-mini")}<div class="su-cap">a bot</div></div><div class="su-arrow">→</div><div>${window.Icons.scene("key-mini")}<div class="su-cap">its key</div></div><div class="su-arrow">→</div><div>${window.Icons.scene("phone-mini")}<div class="su-cap">your phone</div></div></div>
+      <h3>Set up Telegram</h3>
+      <p class="lead">Three things: a bot, its key, your phone. About ten minutes.</p>
+      ${note("link", "Once it is on, the messages of any room you open on the phone travel through Telegram.")}${nav("Start")}`;
+      case "bot":
+        return `${stops}${scene("bot")}
+      <h3>Make the bot</h3>
+      <p class="lead">In Telegram, send <code>${NEWBOT}</code> to BotFather. It asks for a name, then a username ending in <i>bot</i>.</p>
+      <div class="su-paths">
+        <div class="su-path"><b>On the phone</b>${botfatherQr ? `<div class="su-qr" title="Scan with the phone's camera: BotFather opens there">${botfatherQr}</div><span class="hint">Scan: BotFather opens there.</span>` : `<span class="hint">Open ${esc(BOTFATHER_URL)} there.</span>`}<span class="hint">Made the bot on the phone? The same chat is in Telegram on this computer — copy the key there.</span></div>
+        <div class="su-path"><b>On this computer</b>${botfather}${UI.html("button", { label: `Copy ${NEWBOT}`, kind: "secondary", size: "xs", act: "su-copy-newbot" })}</div>
+      </div>
+      ${note("info", "Username taken? BotFather asks again — pick another one ending in <i>bot</i>.")}
+      <p class="field-note">You make the bot yourself, so the key never passes through anyone else's server.</p>${nav("Next")}`;
+      case "key": {
+        const refusal = card && card.refusal ? bad(esc(card.refusal), "su-refusal") : "";
+        let status = "";
+        if (key.another) status = `${note("alert", esc(key.text))}<div class="su-row">${botfather}</div>`;
+        else if (key.done) status = `${sign(esc(key.text))}<p class="field-note">Another bot? ${UI.html("button", { label: "Replace the key", kind: "secondary", size: "xs", act: "su-replace-key" })}</p>`;
+        else if (key.bad) status = bad(esc(key.text));
+        else if (key.text) status = waiting(esc(key.text));
+        const field = key.done ? "" : `<div class="su-field"><input type="password" id="su-key" autocomplete="off" spellcheck="false" placeholder="paste here" aria-label="The key">${UI.html("button", { label: "Connect", kind: key.another ? "secondary" : "primary", size: "sm", act: "su-connect" })}</div>${refusal}`;
+        return `${stops}${scene("key")}
+      <h3>The key</h3>
+      <p class="lead">BotFather answers with a long line: numbers, a colon, a secret. Paste the whole message here — I will take the key out of it.</p>
+      ${field}${status}
+      <div class="su-geek">${geekTip("Who sees the key: nobody in the chat. It is not shown to the vibemates and does not enter the conversation, the record or the model's context; viberoom keeps it on this computer and uses it to talk to Telegram. Replace it any time with Replace the key…, and /revoke in BotFather makes the old one useless.")}</div>${nav("Next", key.done)}`;
+      }
+      case "name":
+        return `${stops}${scene("name")}
+      <h3>The name</h3>
+      <p class="lead">The name your phone shows for this bot. One bot is one computer.</p>
+      <div class="su-field"><input type="text" id="su-name" maxlength="64" spellcheck="false" value="${esc((tg && (tg.wantedName || tg.name)) || "")}" placeholder="${esc(`viberoom on ${machine}`)}" aria-label="The name">${UI.html("button", { label: "Apply", kind: tg && tg.name ? "secondary" : "primary", size: "sm", act: "su-apply-name" })}</div>
+      ${note("eye", "Anyone who opens the bot sees this name.")}
+      ${tg && tg.name ? sign(`On the phone the bot is called “${esc(tg.name)}”${key.done ? "" : "; reconnecting…"}`) : ""}${nav("Next", key.done)}`;
+      case "pair": {
+        const live = !!(link && link.expiresAt > now);
+        const expired = !!(link && link.expiresAt <= now);
+        const done = paired.length ? `${sign(`Paired: ${esc(paired.join(", "))}`)}<p class="su-sign"><span>Not you? Unpair in Settings → Channels.</span></p>` : "";
+        let body;
+        if (!key.done) body = note("alert", "The bot has to be connected first (the previous steps).");
+        else if (live) body = `<div class="su-pair"><div class="su-qr big" title="Scan with the phone's camera">${link.svg || ""}</div><div class="su-words"><p>Or open the link on the phone, within 10 minutes (until ${esc(time(link.expiresAt))}):</p><p><a href="${esc(link.url)}" target="_blank" rel="noopener">${esc(pairLinkWords(link.url))}</a></p><p>${UI.html("button", { label: link.copied ? "Copied" : "Copy link", kind: "secondary", size: "xs", act: "su-copy-link" })}</p></div></div>
+      ${note("user", "What pairs is a Telegram account: every device signed in to it can write to your rooms.")}
+      ${note("alert", "Anyone who opens this code pairs — do not show it on a shared screen.")}
+      <p class="field-note">${link.copied ? "Copied: the link stays good until it runs out, even if you close this." : "Close this and the link is withdrawn, unless you copied it."}</p>`;
+        else if (expired) body = `${bad("The code has run out.")}<div class="su-row">${UI.html("button", { label: "New code", kind: "primary", size: "sm", act: "su-make-link" })}</div>`;
+        else if (linkFailed) body = `${bad("The code could not be made.")}<div class="su-row">${UI.html("button", { label: "Try again", kind: "primary", size: "sm", act: "su-make-link" })}</div>`;
+        else if (paired.length) body = `<div class="su-row">${UI.html("button", { label: "Pair another phone…", kind: "secondary", size: "sm", act: "su-make-link" })}</div>`;
+        else body = waiting("Making the code…");
+        return `${stops}${scene("phone")}
+      <h3>Pair your phone</h3>
+      <p class="lead">Scan this with your phone's camera, then press Start in Telegram.</p>
+      ${paired.length && !live ? done + body : body + done}${nav("Next", paired.length > 0)}`;
+      }
+      default:
+        return `${stops}${scene("rooms")}
+      <h3>Done</h3>
+      <p class="lead">Send <code>/rooms</code> to the bot, open a room, write a line.</p>
+      ${nav("Done", true, guide ? UI.html("button", { label: "Open the guide", kind: "secondary", act: "su-open-guide" }) : "")}`;
+    }
+  }
+
+  function firstUndoneStep(facts) {
+    if (!facts.tg || !facts.tg.tokenSet) return "bot";
+    if (!setupKeyStatus(facts.tg).done) return "key";
+    if (!facts.paired.length) return "pair";
+    return "done";
+  }
+
+  function openSetupWizard(at) {
+    setup.open = true;
+    setup.wantCode = at === "pair";
+    const step = at === "next" ? firstUndoneStep(setupFacts()) : at || SETUP_STEPS[0];
+    setup.step = Math.max(0, SETUP_STEPS.indexOf(step));
+    bindSetupWizard();
+    renderSetupWizard();
+    openDialog(els.setupDialog);
+    loadBotfatherQr();
+  }
+
+  function closeSetupWizard() {
+    if (!setup.open) return;
+    setup.open = false;
+    setup.wantCode = false;
+    if (setup.linkTimer) { clearTimeout(setup.linkTimer); setup.linkTimer = null; }
+    const card = [...secretCards.values()].find((r) => r.state === "open" && r.askedBy.kind === "window");
+    if (card) post(`/api/secrets/${card.id}/close`, {}).catch(() => {});
+    dropPairLink(true);
+    closeDialog(els.setupDialog);
+    if (state.view === "settings") renderSettingsPage();
+  }
+
+  async function makePairLink() {
+    if (setup.linkAsked) return;
+    setup.linkAsked = true;
+    setup.linkFailed = false;
+    try {
+      const res = await post("/api/channels/pair-link", {});
+      state.pairLink = { url: res.url, expiresAt: res.expiresAt, svg: res.svg || "", copied: false };
+    } catch (error) {
+      setup.linkFailed = true;
+      showError(error);
+    } finally {
+      setup.linkAsked = false;
+    }
+    renderSetupWizard();
+  }
+
+  function renderSetupWizard() {
+    if (!setup.open || !els.suBody) return;
+    const body = els.suBody;
+    const facts = setupFacts();
+    const typed = {};
+    for (const id of ["su-key", "su-name"]) {
+      const input = body.querySelector(`#${id}`);
+      if (input) typed[id] = { value: input.value, focused: document.activeElement === input };
+    }
+    body.innerHTML = setupStepHtml(setup.step, facts);
+    for (const [id, t] of Object.entries(typed)) {
+      const input = body.querySelector(`#${id}`);
+      if (!input) continue;
+      if (t.value) input.value = t.value;
+      if (t.focused) input.focus();
+    }
+    const first = body.querySelector("#su-key, #su-name");
+    if (first && !Object.keys(typed).length) first.focus();
+    if (setup.linkTimer) { clearTimeout(setup.linkTimer); setup.linkTimer = null; }
+    if (SETUP_STEPS[setup.step] === "pair") {
+      if (setupKeyStatus(facts.tg).done && !facts.link && !facts.linkFailed && (setup.wantCode || !facts.paired.length)) makePairLink();
+      if (facts.link && facts.link.expiresAt > facts.now) setup.linkTimer = setTimeout(() => { setup.linkTimer = null; renderSetupWizard(); }, facts.link.expiresAt - facts.now + 50);
+    }
+  }
+
+  function bindSetupWizard() {
+    const body = els.suBody;
+    if (!body || body.dataset.bound) return;
+    body.dataset.bound = "1";
+    const act = async (what) => {
+      const facts = setupFacts();
+      if (what === "su-close") return closeSetupWizard();
+      if (what === "su-back") { setup.step = Math.max(0, setup.step - 1); return renderSetupWizard(); }
+      if (what === "su-next") { setup.step = Math.min(SETUP_STEPS.length - 1, setup.step + 1); return renderSetupWizard(); }
+      if (what === "su-open-botfather") { try { await post("/api/open", { target: BOTFATHER_URL }); } catch (error) { showError(error); } return; }
+      if (what === "su-open-guide") { closeSetupWizard(); openGuide(); return; }
+      if (what === "su-copy-newbot") { try { await navigator.clipboard.writeText(NEWBOT); toast(`${NEWBOT} copied.`, "ok"); } catch (error) { showError(error); } return; }
+      if (what === "su-copy-link") {
+        if (!state.pairLink) return;
+        try { await navigator.clipboard.writeText(state.pairLink.url); state.pairLink.copied = true; toast("Link copied.", "ok"); renderSetupWizard(); } catch (error) { showError(error); }
+        return;
+      }
+      if (what === "su-replace-key") {
+        try { await post("/api/secrets", { purpose: "telegram-token" }); } catch (error) { showError(error); }
+        return;
+      }
+      if (what === "su-connect") {
+        const value = (body.querySelector("#su-key") || {}).value || "";
+        if (!value.trim()) return;
+        try {
+          const card = facts.card || (await post("/api/secrets", { purpose: "telegram-token" })).request;
+          await post(`/api/secrets/${card.id}`, { value: value.trim() });
+        } catch (error) {
+          const note = body.querySelector("#su-refusal");
+          if (note) note.querySelector("b").textContent = error.message || String(error);
+          else renderSetupWizard();
+        }
+        return;
+      }
+      if (what === "su-apply-name") {
+        const name = ((body.querySelector("#su-name") || {}).value || "").trim();
+        try {
+          const res = await post("/api/channels/telegram", { name });
+          state.channels = res.channels || state.channels;
+          renderSetupWizard();
+        } catch (error) { showError(error); }
+        return;
+      }
+      if (what === "su-make-link") { setup.wantCode = true; return makePairLink(); }
+    };
+    body.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-act]");
+      if (!btn) return;
+      e.preventDefault();
+      act(btn.dataset.act);
+    });
+    body.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      if (e.target.id === "su-key") { e.preventDefault(); act("su-connect"); }
+      if (e.target.id === "su-name") { e.preventDefault(); act("su-apply-name"); }
+    });
+    els.setupDialog.addEventListener("cancel", (e) => { e.preventDefault(); closeSetupWizard(); });
+  }
+
+  const secretCards = new Map();
+  const secretCopied = new Set();
+  function openSecretCard() {
+    return [...secretCards.values()].find((r) => r.state === "open") || null;
+  }
+  function loadSecretCards(cards) {
+    secretCards.clear();
+    for (const card of cards || []) secretCards.set(card.id, card);
+    renderSecretDialog();
+  }
+  function renderSecretDialog() {
+    const dialog = els.secretDialog;
+    if (!dialog) return;
+    const card = openSecretCard();
+    if (card && setup.open && card.askedBy.kind === "window") {
+      if (dialog.open) closeDialog(dialog);
+      renderSetupWizard();
+      return;
+    }
+    if (!card) {
+      if (setup.open) renderSetupWizard();
+      if (dialog.open) {
+        closeDialog(dialog);
+        const settled = [...secretCards.values()].filter((r) => r.state !== "open").sort((a, b) => b.askedAt - a.askedAt)[0];
+        if (settled && settled.state === "done") toast(settled.purpose === "telegram-pair" ? `Phone ${settled.outcome}.` : `Telegram bot ${settled.outcome}.`, "success");
+      }
+      return;
+    }
+    const body = els.sdBody;
+    if (card.purpose === "telegram-pair") {
+      const link = card.link || {};
+      const copied = secretCopied.has(card.id);
+      const who = card.askedBy.kind === "vibemate" ? `<b>${esc(card.askedBy.name)}</b> asks you to pair your phone.` : "Pair your phone.";
+      body.innerHTML = `
+      <h3>Pair your phone</h3>
+      <p class="lead">${who} Scan the QR code with the phone's camera, or open the link on the phone. Telegram opens the bot; the account that opens the link and presses Start is paired, on every device signed in to it.</p>
+      <div class="field-note pair-offer">
+        ${link.svg ? `<div class="pair-qr" title="Scan with the phone's camera">${link.svg}</div>` : ""}
+        <div class="pair-words">
+          <p>Good for ten minutes${link.expiresAt ? ` (until ${esc(time(link.expiresAt))})` : ""}: <a href="${esc(link.url || "#")}" target="_blank" rel="noopener">${esc(pairLinkWords(link.url || ""))}</a></p>
+          <p>${copied ? "Copied: the link stays good until it runs out, even if you close this card." : "Closing this card withdraws the link, unless you copy it first."} ${UI.html("button", { label: copied ? "Copied" : "Copy link", size: "sm", act: "secret-copy" })}</p>
+        </div>
+      </div>
+      <div class="actions">${UI.html("button", { label: "Close", kind: "ghost", act: "secret-close" })}</div>`;
+      dialog.dataset.card = card.id;
+      bindSecretDialog();
+      if (!dialog.open) openDialog(dialog);
+      return;
+    }
+    const prior = body.querySelector("#sd-value");
+    const typed = prior && dialog.dataset.card === card.id ? prior.value : "";
+    const asker = card.askedBy.kind === "vibemate" ? `<b>${esc(card.askedBy.name)}</b> asks you for the key of your Telegram bot.` : "The setup asks for the key of your Telegram bot.";
+    body.innerHTML = `
+      <h3><span class="h-ico" data-icon="lock"></span>Telegram bot key</h3>
+      <p class="lead">${asker} Paste the key BotFather gave you: digits, a colon, then letters. It goes straight into viberoom's settings and the bot is started.</p>
+      <p class="field-note">The key is not shown to the vibemates and does not enter the conversation, the record or the model's context. They learn only the outcome: connected, refused, or closed without a key.</p>
+      <label>Key<input type="password" id="sd-value" autocomplete="off" spellcheck="false" placeholder="123456789:AbCdEf…"></label>
+      <p class="field-note" id="sd-error" ${card.refusal ? "" : "hidden"}><b>${esc(card.refusal || "")}</b></p>
+      <div class="actions">${UI.html("button", { label: "Close without a key", kind: "ghost", act: "secret-close" })}${UI.html("button", { label: "Connect", kind: "primary", act: "secret-connect" })}</div>`;
+    dialog.dataset.card = card.id;
+    const input = body.querySelector("#sd-value");
+    input.value = typed;
+    bindSecretDialog();
+    if (!dialog.open) openDialog(dialog);
+    input.focus();
+  }
+  function bindSecretDialog() {
+    const body = els.sdBody;
+    if (body.dataset.bound) return;
+    body.dataset.bound = "1";
+    const act = async (what) => {
+      const card = openSecretCard();
+      if (!card) return;
+      if (what === "secret-close") {
+        try { await post(`/api/secrets/${card.id}/close`, { copied: secretCopied.has(card.id) }); } catch (error) { showError(error); }
+        return;
+      }
+      if (what === "secret-copy") {
+        if (!card.link) return;
+        try { await navigator.clipboard.writeText(card.link.url); secretCopied.add(card.id); toast("Link copied.", "ok"); renderSecretDialog(); } catch (error) { showError(error); }
+        return;
+      }
+      const value = body.querySelector("#sd-value").value.trim();
+      if (!value) return;
+      try { await post(`/api/secrets/${card.id}`, { value }); }
+      catch (error) {
+        const note = body.querySelector("#sd-error");
+        if (note) { note.hidden = false; note.querySelector("b").textContent = error.message || String(error); }
+      }
+    };
+    body.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-act]");
+      if (!btn) return;
+      e.preventDefault();
+      act(btn.dataset.act);
+    });
+    body.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && e.target.id === "sd-value") { e.preventDefault(); act("secret-connect"); }
+    });
+    els.secretDialog.addEventListener("cancel", (e) => { e.preventDefault(); act("secret-close"); });
+  }
+
   function renderLoginDialog(force) {
     if (!loginDialog.recipeId || (!force && !els.loginDialog.open)) return;
     const recipe = state.recipes.find((r) => r.id === loginDialog.recipeId);
@@ -4863,8 +5928,8 @@
         else if (act === "start-login" || (act === "retry-login" && purpose === "login")) { btn.disabled = true; await startLoginFlow(recipeId, false); }
         else if (act === "start-install" || (act === "retry-login" && purpose === "install")) { btn.disabled = true; await startInstallFlow(recipeId, false); }
         else if (act === "terminal-login") { btn.disabled = true; await (purpose === "install" ? startInstallFlow(recipeId, true) : startLoginFlow(recipeId, true)); }
-        else if (act === "rescan" || (act === "recheck-login" && purpose === "install")) { btn.disabled = true; await post("/api/recipes/check", { id: recipeId, rescan: true }); }
-        else if (act === "recheck-login") { btn.disabled = true; await post("/api/recipes/check", { id: recipeId, force: true }); }
+        else if (act === "rescan" || (act === "recheck-login" && purpose === "install")) { btn.disabled = true; await post("/api/recipes/check", { id: recipeId, rescan: true }, { deadline: 3 * 60000 }); }
+        else if (act === "recheck-login") { btn.disabled = true; await post("/api/recipes/check", { id: recipeId, force: true }, { deadline: 3 * 60000 }); }
         else if (act === "cancel-login" && flowId) await post(`/api/login/${encodeURIComponent(flowId)}/cancel`, {});
         else if ((act === "open-login-url" || act === "open-install-url") && btn.dataset.url) window.open(btn.dataset.url, "_blank", "noopener");
         else if (act === "copy-login-code" && btn.dataset.code) { await navigator.clipboard.writeText(btn.dataset.code); toast("Code copied.", "ok"); }
@@ -4950,7 +6015,7 @@
         if (a === "retry") return UI.html("button", { label: "Retry", kind, size: "xs", act: "trouble-retry", icon: "refresh", title: "Send it the messages it missed again" });
         if (a === "respawn") return p.trouble.stage === "start"
           ? UI.html("button", { label: "Start again", kind, size: "xs", act: "trouble-respawn", icon: "bolt", title: "Start it again, with its notes and the last messages" })
-          : UI.html("button", { label: "Respawn", kind, size: "xs", act: "trouble-respawn", icon: "bolt", title: "A fresh session with its notes and the last messages; the history stays" });
+          : UI.html("button", { label: "Fresh start", kind, size: "xs", act: "trouble-respawn", icon: "bolt", title: "A fresh session with its notes and the last messages; the history stays" });
         if (a === "login" && recipe && recipe.loginHow !== "none") return UI.html("button", { label: `Log in to ${recipe.vendor}`, kind, size: "xs", act: "trouble-login", icon: "lock" });
         return "";
       })
@@ -5110,7 +6175,10 @@
 
   const reconnectPrompted = new Set();
   function renderReconnectDefault() {
-    const mode = (state.settings || {}).reconnectMode === "load" ? "load" : "replay";
+    const room = currentRoom();
+    const own = room && room.settings ? room.settings.reconnectMode : "inherit";
+    const chosen = own === "load" || own === "replay" ? own : (state.settings || {}).reconnectMode;
+    const mode = chosen === "load" ? "load" : "replay";
     for (const choice of els.rcForm.querySelectorAll(".choice")) {
       const value = choice.querySelector('input[name="rc-mode"]').value;
       choice.querySelector(".rc-is-default").hidden = value !== mode;
@@ -5239,6 +6307,7 @@
   function maybeOfferReconnect() {
     const room = currentRoom();
     if (!room || state.view !== "room" || reconnectPrompted.has(room.id) || els.rcDialog.open || els.pfDialog.open) return;
+    if (room.startingWithHub) return;
     if (offlineAgents(room).length) openReconnectDialog(room);
   }
 
@@ -5253,7 +6322,7 @@
     tplEls.detail.innerHTML = "";
     openDialog(tplEls.dialog);
     try {
-      tpl.items = (await (await fetch("/api/templates")).json()).templates || [];
+      tpl.items = (await get("/api/templates")).templates || [];
     } catch (error) {
       tplEls.error.textContent = error.message;
       tplEls.error.hidden = false;
@@ -5377,6 +6446,10 @@
       ${stpField("Reply delay, seconds", `${UI.html("number-field", { id: "stp-delay", value: String(st.replyDelay ?? 4), min: 0, max: 120, step: 0.5 })}`)}
       ${stpSwitch("Vibemates wake each other", "stp-wake", st.agentsWakeEachOther !== false)}
       ${stpSwitch("Wait while you are typing", "stp-wait", st.waitWhileHumanTypes !== false)}
+      ${stpSwitch("Share history with the other rooms", "stp-share-history", st.searchOtherRooms !== false)}
+      ${stpSwitch("Reachable from messengers", "stp-reachable", st.reachableFromMessengers !== false)}
+      ${stpSwitch("Start with viberoom", "stp-start-with-hub", st.startWithHub === true)}
+      ${stpField("…and they come back", stpSelect("stp-reconnect", st.reconnectMode || "inherit", [["inherit", "As Welcome back is set"], ["load", "Continuing their saved sessions"], ["replay", "Fresh, with the last messages replayed"]]))}
       ${stpField("Hop limit", `${UI.html("number-field", { id: "stp-hops", value: String(st.hopLimit ?? 100), min: 0, max: 10000 })}`)}
       ${stpField("Max sentences per reply", `${UI.html("number-field", { id: "stp-maxlen", value: String(st.maxSentences ?? ""), min: 1, max: 100, placeholder: "no limit" })}`)}
       ${stpField("Referee", stpSelect("stp-referee", st.refereeAction || "next-header", [["next-header", "Post it; remind in the next header"], ["retry-hidden", "Hold it; retry in a hidden turn"]]))}
@@ -5422,6 +6495,10 @@
       replyDelay: num("#stp-delay"),
       agentsWakeEachOther: $("#stp-wake").checked,
       waitWhileHumanTypes: $("#stp-wait").checked,
+      searchOtherRooms: $("#stp-share-history").checked,
+      reachableFromMessengers: $("#stp-reachable").checked,
+      startWithHub: $("#stp-start-with-hub").checked,
+      reconnectMode: $("#stp-reconnect").value,
       hopLimit: num("#stp-hops"),
       maxSentences: $("#stp-maxlen").value === "" ? null : num("#stp-maxlen"),
       refereeAction: $("#stp-referee").value,
@@ -5472,13 +6549,14 @@
     els.roomName.value = "";
     els.roomDir.value = "";
     els.roomShareHistory.checked = true;
+    els.roomReachable.checked = true;
     openDialog(els.roomDialog);
     els.roomName.focus();
   }
   async function submitRoom(event) {
     event.preventDefault();
     try {
-      const res = await post("/api/rooms", { name: els.roomName.value, dir: els.roomDir.value.trim() || null, settings: { searchOtherRooms: els.roomShareHistory.checked } });
+      const res = await post("/api/rooms", { name: els.roomName.value, dir: els.roomDir.value.trim() || null, settings: { searchOtherRooms: els.roomShareHistory.checked, reachableFromMessengers: els.roomReachable.checked } });
       closeDialog(els.roomDialog);
       if (res.room && res.room.id) {
         state.rooms.set(res.room.id, res.room);
@@ -5697,12 +6775,18 @@
     applyAppearance();
     state.update = snapshot.update || null;
     renderUpdatePop();
+    state.restart = snapshot.restart || null;
+    renderRestartPop();
     state.version = snapshot.version || null;
+    noteHubRun();
     state.skills = snapshot.skills || [];
     state.recipes = snapshot.recipes || [];
     state.logins = new Map((snapshot.logins || []).filter((f) => f.purpose !== "install").map((f) => [f.recipeId, f]));
     state.installs = new Map((snapshot.logins || []).filter((f) => f.purpose === "install").map((f) => [f.recipeId, f]));
     state.roomDefaults = snapshot.roomDefaults || null;
+    state.channels = snapshot.channels || null;
+    state.autostart = snapshot.autostart || null;
+    state.dataFolder = snapshot.dataFolder || null;
     state.rooms = new Map((snapshot.rooms || []).map((r) => [r.id, r]));
     for (const room of state.rooms.values()) {
       const previous = previousRooms.get(room.id);
@@ -5742,10 +6826,28 @@
       state.detailsOpen = true;
       els.details.hidden = false;
     }
+    if (params.get("setup") === "telegram") {
+      const step = params.get("step");
+      history.replaceState(null, "", location.pathname);
+      setView("settings");
+      remember("view", "settings");
+      requestAnimationFrame(() => openSetupWizard(step && SETUP_STEPS.includes(step) ? step : "next"));
+      renderDetails();
+      maybeOfferProfile();
+      return;
+    }
     setView(openRoom && state.currentRoomId && (wanted || state.view === "room") ? "room" : state.view === "room" ? "rooms" : state.view);
     renderDetails();
     maybeOfferProfile();
     if (!els.pfDialog.open) maybeOfferReconnect();
+    const held = recall(HELD_LIVE);
+    if (held) {
+      forget(HELD_LIVE);
+      try {
+        reportHeldTurns(JSON.parse(held));
+      } catch {
+      }
+    }
   }
 
   function onRoomEvent(roomId, event) {
@@ -5871,6 +6973,17 @@
         if (showing) renderProposal(room, event.proposal);
         else toast(`${esc(event.proposal.participantName)} proposes changes to "${room.name}".`, "warn");
         return;
+      case "new-room":
+        room.newRooms = [...(room.newRooms || []), event.proposal];
+        if (showing) renderNewRoom(room, event.proposal);
+        else toast(`${esc(event.proposal.participantName)} proposes a new room from "${room.name}".`, "warn");
+        return;
+      case "new-room.resolved": {
+        const asked = (room.newRooms || []).find((x) => x.key === event.key);
+        if (asked) { asked.status = event.status; asked.roomId = event.roomId; }
+        if (showing && asked) renderNewRoom(room, asked);
+        return;
+      }
       case "recovery":
         applyRecoveryAnswer(room.id, event.recovery);
         return;
@@ -5889,6 +7002,7 @@
         if ((event.settings ? event.settings.foldAfter : null) !== foldBefore) foldSettingChanged(room.id);
         room.customRulesText = event.customRulesText != null ? event.customRulesText : room.customRulesText;
         room.focused = event.focused;
+        room.startingWithHub = event.startingWithHub === true;
         room.name = event.name;
         if (event.dir) room.dir = event.dir;
         if (showing) {
@@ -5911,8 +7025,17 @@
   }
 
   const HUB_EVENTS = {
-    snapshot: (m) => loadSnapshot(m.snapshot),
+    snapshot: (m) => {
+      loadSnapshot(m.snapshot);
+      loadSecretCards(m.snapshot.secrets);
+    },
     "room.event": (m) => onRoomEvent(m.roomId, m.event),
+    restart: (m) => {
+      if (state.restart) state.restart.pending = m.restart || null;
+      else state.restart = { can: true, pending: m.restart || null };
+      renderRestartPop();
+      if (state.view === "settings") renderSettingsPage();
+    },
     recipes: (m) => {
       state.recipes = m.recipes || [];
       if (document.querySelector("#invite-dialog")?.open) {
@@ -5929,6 +7052,10 @@
       (m.flow.purpose === "install" ? state.installs : state.logins).set(m.flow.recipeId, m.flow);
       renderLoginHosts();
       if (document.querySelector("#invite-dialog")?.open) renderInviteTiles();
+    },
+    secret: (m) => {
+      secretCards.set(m.request.id, m.request);
+      renderSecretDialog();
     },
     "room.created": (m) => {
       state.rooms.set(m.room.id, m.room);
@@ -5985,13 +7112,79 @@
       renderUpdatePop();
       if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
     },
+    channels: (m) => {
+      state.channels = m.channels || null;
+      if (state.pairLink && !(m.channels && m.channels.pairLinkUntil)) dropPairLink(false);
+      if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
+      if (setup.open) renderSetupWizard();
+    },
     reset: () => (location.href = "/"),
   };
+  const HELD_LIVE = "heldLive";
+  function heldTurnsNow() {
+    const rooms = new Map();
+    const note = (roomId, id, how) => {
+      if (!roomId || !id) return;
+      const room = state.rooms.get(roomId);
+      const entry = rooms.get(roomId) || { roomId, lastStreamSequence: (room && room.history && room.history.streamSequence) ?? -1, ids: new Map() };
+      entry.ids.set(id, { ...(entry.ids.get(id) || {}), ...how });
+      rooms.set(roomId, entry);
+    };
+    for (const [roomId, room] of state.rooms) {
+      for (const m of room.messages || []) if (m.streaming && m.from !== "human") note(roomId, m.id, { model: true });
+    }
+    for (const stop of document.querySelectorAll('.live-tail [data-act="stop"]')) {
+      const bubble = stop.closest(".msg");
+      if (bubble && bubble.dataset.id) note(state.currentRoomId, bubble.dataset.id, { onScreen: true });
+    }
+    return [...rooms.values()].map((room) => ({ roomId: room.roomId, lastStreamSequence: room.lastStreamSequence, ids: [...room.ids].map(([id, how]) => ({ id, ...how })) }));
+  }
+  function rememberHeldTurns() {
+    if (!stream) return void forget(HELD_LIVE);
+    const rooms = heldTurnsNow();
+    if (rooms.length) remember(HELD_LIVE, JSON.stringify({ at: Date.now(), rooms }));
+    else forget(HELD_LIVE);
+  }
+  function reportHeldTurns(record) {
+    for (const room of record.rooms || []) {
+      const fresh = state.rooms.get(room.roomId);
+      if (!fresh) continue;
+      for (const held of room.ids || []) {
+        const message = (fresh.messages || []).find((m) => m.id === held.id);
+        if (!message || message.streaming) continue;
+        void post("/api/window/finding", {
+          roomId: room.roomId,
+          messageId: held.id,
+          heldSince: record.at,
+          lastStreamSequence: room.lastStreamSequence,
+          heldBy: held.model ? (held.onScreen ? "both" : "record") : "screen",
+          afterReload: true,
+        }).catch(() => {});
+      }
+    }
+  }
   let stream = null;
   let releaseTimer = null;
   let retryTimer = null;
   let retryDelay = 1000;
+  let keyless = false;
+  const keylessAnswer = (answer) => !!answer && answer.keyed === false;
+  async function askKey() {
+    let answer = null;
+    try {
+      answer = await (await fetch("/api/version", { signal: AbortSignal.timeout(4000) })).json();
+    } catch {
+      return;
+    }
+    if (keyless || !keylessAnswer(answer)) return;
+    keyless = true;
+    clearTimeout(retryTimer);
+    if (stream) { const ws = stream; stream = null; ws.close(); }
+    els.noKey.hidden = false;
+    document.body.classList.add("keyless");
+  }
   function connect() {
+    if (keyless) return;
     if (stream) return;
     clearTimeout(retryTimer);
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
@@ -6012,6 +7205,7 @@
       if (stream !== ws) return;
       els.conn.classList.remove("ok");
       stream = null;
+      void askKey();
       retryTimer = setTimeout(connect, retryDelay);
       retryDelay = Math.min(retryDelay * 2, 10000);
     };
@@ -6402,6 +7596,111 @@
     els.input.placeholder = waiting.length ? `Summon ${waiting.map((p) => p.name).join(" and ")} to start the conversation` : "Message the room… @Name or /skill";
     els.composer.classList.toggle("gated", waiting.length > 0);
   }
+
+
+  function quietMinutes(p, now) {
+    return Math.max(0, Math.floor((now - p.quiet.since) / 60000));
+  }
+  function wedgeWords(p, now) {
+    const q = p.quiet;
+    const minutes = quietMinutes(p, now);
+    const head = `Nothing new from ${p.name} for ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+    const detail = q.stopping === "forcing" ? "It is not yielding; its process is being replaced; it comes back by itself."
+      : q.stopping === "asked" ? "Stopping…"
+      : q.nudge === "asking" ? "Asking it for something that changes nothing…"
+      : q.nudge === "answered" ? "It still answers — what is stuck is the request to the provider. Stop should work."
+      : q.nudge === "silent" ? "It does not answer. Stop replaces its process and keeps its session; Fresh start replaces it too and begins a new one."
+      : q.processAlive ? "Its process is running, so it has not crashed — what is silent is the answer."
+      : "Its process is gone; only a fresh start can bring it back.";
+    return { minutes, head, detail };
+  }
+  function canNudge(p) {
+    return (p.configOptions || []).some((o) => o.currentValue !== undefined && o.currentValue !== null)
+      || !!(p.mode && (p.modes || []).some((m) => m.id === p.mode));
+  }
+  function wedgeButtons(p) {
+    const q = p.quiet;
+    const askable = canNudge(p);
+    return [
+      { act: "nudge", label: "Nudge", kind: "plain", disabled: q.nudge === "asking" || !askable,
+        title: askable ? "Ask it for something that changes nothing: whether it answers says which of the other two is the right one" : `${p.name} offers no setting to ask about` },
+      { act: "stop", label: "Stop", kind: "warn", disabled: !!q.stopping, title: "Cut this reply short" },
+      { act: "reconnect", label: "Fresh start", kind: "danger", disabled: false, title: "A fresh session: its memory of this turn is gone, the room's history is not" },
+    ];
+  }
+  function wedgeCardHtml(p, now) {
+    const words = wedgeWords(p, now);
+    return `<div class="wedge" data-id="${esc(p.id)}" data-turn="${esc(p.quiet.turnId)}">
+      ${avatar(p, 32, { vendor: true })}
+      <div class="wedge-body"><b>${esc(words.head)}</b> <span>${esc(words.detail)}</span></div>
+      <div class="wedge-acts">${wedgeButtons(p)
+        .map((b) => UI.html("button", { label: b.label, size: "xs", kind: b.kind, act: `wedge-${b.act}`, title: b.title, disabled: b.disabled }))
+        .join("")}</div>
+    </div>`;
+  }
+  function wedgedOnes(room) {
+    return room ? room.participants.filter((p) => p.kind === "agent" && p.quiet && !p.muted) : [];
+  }
+  const wedgeBanner = $("#wedge-banner");
+  const wedgeDrawn = new Map();
+  let wedgeTick = null;
+  function renderWedgeBanner(room) {
+    const ones = wedgedOnes(room);
+    const now = Date.now();
+    wedgeBanner.hidden = ones.length === 0;
+    const have = new Map([...wedgeBanner.children].map((el) => [el.dataset.id, el]));
+    for (const p of ones) {
+      const html = wedgeCardHtml(p, now);
+      const el = have.get(p.id);
+      if (!el) wedgeBanner.insertAdjacentHTML("beforeend", html);
+      else if (wedgeDrawn.get(p.id) !== html) el.outerHTML = html;
+      wedgeDrawn.set(p.id, html);
+      have.delete(p.id);
+    }
+    for (const [id, el] of have) {
+      el.remove();
+      wedgeDrawn.delete(id);
+    }
+    if (ones.length && !wedgeTick) wedgeTick = setInterval(refreshWedgeTexts, 30000);
+    if (!ones.length && wedgeTick) {
+      clearInterval(wedgeTick);
+      wedgeTick = null;
+    }
+  }
+  function refreshWedgeTexts() {
+    const room = currentRoom();
+    const now = Date.now();
+    for (const el of document.querySelectorAll(".wedge")) {
+      const p = room && findById(room, el.dataset.id);
+      if (!p || !p.quiet) continue;
+      const words = wedgeWords(p, now);
+      el.querySelector(".wedge-body").innerHTML = `<b>${esc(words.head)}</b> <span>${esc(words.detail)}</span>`;
+      wedgeDrawn.delete(p.id);
+    }
+  }
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest('[data-act^="wedge-"]');
+    const card = btn && btn.closest(".wedge");
+    if (!card) return;
+    const room = currentRoom();
+    const p = room && findById(room, card.dataset.id);
+    if (!p) return;
+    if (!p.quiet || p.quiet.turnId !== card.dataset.turn) return void toast("That turn is over.", "info");
+    const act = btn.dataset.act.slice("wedge-".length);
+    const turnId = p.quiet.turnId;
+    btn.disabled = true;
+    const done = () => { if (p.quiet) btn.disabled = false; };
+    if (act === "nudge") post(roomApi(`/participants/${encodeURIComponent(p.id)}/nudge`), { by: "the window" }).catch(showError).finally(done);
+    else if (act === "stop") post(roomApi(`/participants/${encodeURIComponent(p.id)}/cancel`), { turnId }).catch(showError).finally(done);
+    else {
+      const n = room.settings?.replayAfterRestart ?? 10;
+      confirmDialog(`${p.name} comes back in a fresh session with ${p.notes ? "its own notes and " : ""}the last ${n} messages of this room. Its memory of this turn is gone; the room's history is not.`,
+        { title: `A fresh start for ${p.name}?`, okLabel: "Fresh start", danger: true })
+        .then((ok) => ok && post(roomApi(`/participants/${encodeURIComponent(p.id)}/respawn`), { memory: true, replay: n }))
+        .catch(showError)
+        .finally(done);
+    }
+  });
   els.participants.addEventListener("dblclick", (e) => {
     if (e.target.closest("button, [data-ui=\"row-button\"]")) return;
     const li = e.target.closest("li[data-id]");
@@ -6784,11 +8083,14 @@
   els.messages.addEventListener("scroll", () => {
     const top = els.messages.scrollTop;
     const byHand = Date.now() - lastUserScrollAt < 700;
+    if (byHand && calm.reserve > 0) calmRelease();
     if (byHand) {
       if (top < lastScrollTop) stuck = false;
       else if (els.messages.scrollHeight - top - els.messages.clientHeight < 12) stuck = true;
-    } else if (nearBottom()) stuck = true;
+    } else if (calm.held) { }
+    else if (nearBottom()) stuck = true;
     else if (top < lastScrollTop) stuck = false;
+    if (stuck) calm.held = false;
     lastScrollTop = top;
     els.jumpLatest.hidden = stuck;
     updateTimelineView();
@@ -7013,22 +8315,34 @@
   window.addEventListener("beforeunload", () => remember("view", state.view));
 
   const TICK_H = 5;
+  const MINE_SLOT_H = 2;
+  const PIN_GLYPH_H = 10.5;
+  const VIEW_MIN_H = 6;
+  const DENSITY = 25;
   function createTimeline(root, pick, opts) {
+    const tickH = opts.slotH || TICK_H;
     const t = { el: root, ticks: root.querySelector(".tl-ticks"), view: root.querySelector(".tl-view"), pop: root.querySelector(".tl-pop"), items: [] };
     function render() {
       const room = currentRoom();
       const nodes = room && state.view === "room" ? pick(room) : [];
       t.items = nodes;
+      t.slots = null;
       t.el.hidden = nodes.length === 0;
       t.pop.hidden = true;
+      aim(null);
       if (!nodes.length) return;
       const total = els.messages.scrollHeight || 1;
-      const h = Math.max(0, t.ticks.clientHeight - TICK_H);
+      const h = Math.max(0, t.ticks.clientHeight - tickH);
       const fits = els.messages.scrollHeight <= els.messages.clientHeight + 1;
       const stripTop = fits ? t.ticks.getBoundingClientRect().top : 0;
       const tops = fits ? nodes.map((el) => el.getBoundingClientRect().top - stripTop) : nodes.map(topInList);
       t.pos = fits ? null : tops;
       t.heights = fits ? null : nodes.map((el) => el.offsetHeight);
+      if (!fits && globalThis.VIBEROOM_TIMELINE) {
+        drawSlots(nodes, tops, total);
+        settleLater();
+        return;
+      }
       const frag = document.createDocumentFragment();
       nodes.forEach((el, i) => {
         const tick = document.createElement("div");
@@ -7037,6 +8351,7 @@
         tick.dataset.i = i;
         if (opts.colorOf) tick.style.setProperty("--tick", opts.colorOf(room, el));
         tick.style.top = `${Math.round(fits ? Math.max(0, Math.min(h, tops[i] + (pinned ? 0 : 6))) : (tops[i] / total) * h)}px`;
+
         if (pinned) {
           const glyph = document.createElement("span");
           glyph.className = "tl-pin-glyph";
@@ -7048,17 +8363,86 @@
       t.ticks.replaceChildren(frag);
       t.inView = null;
       updateView();
-      if (fits && !t.following) {
-        t.following = true;
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          render();
-          t.following = false;
-        }));
+      if (fits) settleLater();
+    }
+    function settleLater() {
+      if (t.following) return;
+      t.following = true;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        render();
+        t.following = false;
+      }));
+    }
+    function firstBy(nodes, authors, slot, who) {
+      for (let i = slot.first; i >= 0 && i < slot.first + slot.count && i < nodes.length; i++) {
+        if (authors[i] === who) return i;
       }
+      return slot.first;
+    }
+    function drawSlots(nodes, tops, total) {
+      const { slotsOf, pinGroups, INK_FLOOR } = globalThis.VIBEROOM_TIMELINE;
+      const height = t.ticks.clientHeight;
+      const places = Math.max(1, Math.floor(height / tickH));
+      const authors = opts.colorOf ? nodes.map((el) => el.dataset.from || "") : nodes.map(() => "me");
+      const slots = slotsOf({ pos: tops, authors, total, slots: places });
+      t.slots = slots;
+      t.total = total;
+      if (t.ticks.children.length !== slots.length) {
+        const frag = document.createDocumentFragment();
+        for (let at = 0; at < slots.length; at++) {
+          const fresh = document.createElement("div");
+          fresh.className = "tl-slot";
+          fresh.dataset.at = String(at);
+          frag.appendChild(fresh);
+        }
+        t.ticks.replaceChildren(frag);
+      }
+      const held = [];
+      for (let at = 0; at < slots.length; at++) {
+        const slot = slots[at];
+        let count = 0;
+        for (let i = slot.first; i >= 0 && i < slot.first + slot.count && i < nodes.length; i++) {
+          if (nodes[i].classList.contains("pinned")) count++;
+        }
+        if (count) held.push({ at, count });
+      }
+      const drawnPins = new Map(pinGroups(held, tickH, PIN_GLYPH_H).map((group) => [group.at, group.count]));
+      slots.forEach((slot, at) => {
+        const el = t.ticks.children[at];
+        if (!el) return;
+        el.hidden = !slot.count;
+        if (!slot.count) return;
+        const held = nodes[firstBy(nodes, authors, slot, slot.author)];
+        if (opts.colorOf && held) el.style.setProperty("--tick", opts.colorOf(currentRoom(), held));
+        const ink = INK_FLOOR + (1 - INK_FLOOR) * slot.strength;
+        el.style.setProperty("--mix", `${Math.round(ink * DENSITY)}%`);
+        const before = slot.separator ? 1 : 0;
+        const after = slots[at + 1] && slots[at + 1].separator ? 1 : 0;
+        el.style.top = `${at * tickH + before}px`;
+        el.style.height = `${tickH - before - after}px`;
+        const pins = drawnPins.get(at) || 0;
+        if (pins) {
+          el.classList.add("pinned", "i", "i-pin-long");
+          const glyph = el.querySelector(".tl-pin-glyph") || el.appendChild(document.createElement("span"));
+          glyph.className = "tl-pin-glyph";
+          glyph.title = pins === 1 ? "Pinned · go to it" : `${pins} pinned · go to them`;
+          if (pins > 1) glyph.dataset.many = String(pins);
+          else delete glyph.dataset.many;
+        } else {
+          el.classList.remove("pinned", "i", "i-pin-long");
+          el.querySelector(".tl-pin-glyph")?.remove();
+        }
+      });
+      t.inView = null;
+      updateView();
     }
     function rescale() {
       if (t.el.hidden || !t.pos) return;
       const total = els.messages.scrollHeight || 1;
+      if (t.slots) {
+        drawSlots(t.items, t.pos, total);
+        return;
+      }
       const h = Math.max(0, t.ticks.clientHeight - TICK_H);
       const ticks = t.ticks.children;
       for (let i = 0; i < ticks.length && i < t.pos.length; i++) ticks[i].style.top = `${Math.round((t.pos[i] / total) * h)}px`;
@@ -7072,7 +8456,19 @@
       const top = m.scrollTop;
       const bottom = top + m.clientHeight;
       t.view.style.top = `${(top / total) * h}px`;
-      t.view.style.height = `${Math.max(8, (m.clientHeight / total) * h)}px`;
+      t.view.style.height = `${Math.max(VIEW_MIN_H, (m.clientHeight / total) * h)}px`;
+      if (t.slots) {
+        const seen = t.inView || [];
+        const next = t.slots.map((slot) => slot.count > 0 && slot.to > top && slot.from < bottom);
+        const drawn = t.ticks.children;
+        for (let k = 0; k < drawn.length; k++) {
+          const at = Number(drawn[k].dataset.at);
+          if (seen[at] === next[at]) continue;
+          drawn[k].classList.toggle("in-view", next[at]);
+        }
+        t.inView = next;
+        return;
+      }
       const seen = t.inView || [];
       const next = t.items.map((el, i) => (t.pos ? t.pos[i] + t.heights[i] > top && t.pos[i] < bottom : true));
       next.forEach((on, i) => {
@@ -7088,24 +8484,71 @@
       const pinned = el.classList.contains("pinned");
       return `<div class="tl-row ${cls}${pinned ? " pinned" : ""}" data-i="${k}">${av}<span class="tl-text">${esc(timelineText(el))}</span>${pinned ? `<span class="tl-pin" title="Pinned">${ic("pin")}</span>` : ""}</div>`;
     }
-    function showPop(i, keepPlace) {
+    function showPop(i, keepPlace, overSlot) {
       const rows = [[i - 2, "faded far"], [i - 1, "faded"], [i, "current"], [i + 1, "faded"], [i + 2, "faded far"]].filter(([k]) => t.items[k]);
       t.pop.innerHTML = rows.map(([k, c]) => rowHtml(k, c)).join("");
       t.pop.hidden = false;
-      t.ticks.querySelectorAll(".tl-tick.active").forEach((x) => x.classList.remove("active"));
-      const tick = t.ticks.children[i];
+      t.ticks.querySelectorAll(".active").forEach((x) => x.classList.remove("active"));
+      const tick = (t.slots ? slotAt(i) : t.ticks.children[i]) || overSlot;
+      markMessage(i);
+      aim(t.items[i]);
       if (tick) tick.classList.add("active");
       if (keepPlace) return;
       const current = t.pop.querySelector(".tl-row.current");
-      let top = (tick ? tick.offsetTop : 0) - (current ? current.offsetTop + current.offsetHeight / 2 : 20) + TICK_H / 2;
+      let top = (tick ? tick.offsetTop : 0) - (current ? current.offsetTop + current.offsetHeight / 2 : 20) + tickH / 2;
       top = Math.max(0, Math.min(top, t.el.clientHeight - t.pop.offsetHeight));
       t.pop.style.top = `${top}px`;
     }
     function hidePop() {
       t.pop.hidden = true;
-      t.ticks.querySelectorAll(".tl-tick.active").forEach((x) => x.classList.remove("active"));
+      t.ticks.querySelectorAll(".active").forEach((x) => x.classList.remove("active"));
+      if (t.mark) t.mark.hidden = true;
+      aim(null);
+    }
+    function aim(el) {
+      if (t.aimed === el) return;
+      if (t.aimed) t.aimed.classList.remove("aimed");
+      t.aimed = el || null;
+      if (t.aimed) t.aimed.classList.add("aimed");
+    }
+    function markMessage(i) {
+      if (!t.slots || !t.pos || !t.total) {
+        if (t.mark) t.mark.hidden = true;
+        return;
+      }
+      if (!t.mark) {
+        t.mark = document.createElement("div");
+        t.mark.className = "tl-at";
+        t.el.appendChild(t.mark);
+      }
+      const height = t.ticks.clientHeight;
+      const at = Math.max(0, Math.min(height - 2, ((t.pos[i] ?? 0) / t.total) * height));
+      t.mark.style.top = `${Math.round(at)}px`;
+      const el = t.items[i];
+      if (opts.colorOf && el) t.mark.style.setProperty("--at", opts.colorOf(currentRoom(), el));
+      t.mark.hidden = false;
+    }
+    function slotAt(i) {
+      if (!t.slots) return null;
+      for (let at = 0; at < t.slots.length; at++) {
+        const slot = t.slots[at];
+        if (slot.count && i >= slot.first && i < slot.first + slot.count) return t.ticks.querySelector(`.tl-slot[data-at="${at}"]`);
+      }
+      return null;
+    }
+    function itemUnder(el, clientY) {
+      const { itemAt } = globalThis.VIBEROOM_TIMELINE;
+      const box = el.getBoundingClientRect();
+      const within = box.height ? (clientY - box.top) / box.height : 0.5;
+      return itemAt(t.pos || [], t.slots[Number(el.dataset.at)], within);
     }
     t.ticks.addEventListener("mouseover", (e) => {
+      const slot = t.slots && e.target.closest(".tl-slot");
+      if (slot) {
+        const i = itemUnder(slot, e.clientY);
+        if (i >= 0) showPop(i, false, slot);
+        return;
+      }
       const tick = e.target.closest(".tl-tick");
       if (tick) showPop(Number(tick.dataset.i));
     });
@@ -7116,6 +8559,12 @@
     });
     t.el.addEventListener("mouseenter", () => clearTimeout(hideTimer));
     t.ticks.addEventListener("click", (e) => {
+      const slot = t.slots && e.target.closest(".tl-slot");
+      if (slot) {
+        const i = itemUnder(slot, e.clientY);
+        if (i >= 0) jumpToMessage(t.items[i]);
+        return;
+      }
       const tick = e.target.closest(".tl-tick");
       if (tick) jumpToMessage(t.items[Number(tick.dataset.i)]);
     });
@@ -7137,11 +8586,16 @@
         const row = t.pop.querySelector(".tl-row.current");
         const current = row ? Number(row.dataset.i) : 0;
         const next = Math.max(0, Math.min(t.items.length - 1, current + step));
-        if (next !== current) showPop(next, true);
+        if (next !== current) showPop(next, true, t.slots ? t.ticks.querySelector(".tl-slot.active") : null);
       },
       { passive: false },
     );
-    return { render, rescale, updateView };
+    function follow() {
+      if (t.el.hidden) return;
+      if (t.pos) rescale();
+      else render();
+    }
+    return { render, rescale, updateView, follow };
   }
   function timelineText(el) {
     const t = el.querySelector(".text");
@@ -7218,13 +8672,14 @@
   function jumpToMessage(el) {
     if (!el) return false;
     if (!onScreen(el)) {
+      const from = els.messages.scrollTop;
       el.scrollIntoView({ block: "center" });
       requestAnimationFrame(() => {
         const m = els.messages;
         const r = el.getBoundingClientRect();
         const box = m.getBoundingClientRect();
         const centre = m.scrollTop + (r.top - box.top) - (box.height - r.height) / 2;
-        m.scrollTop = centre - 240;
+        m.scrollTop = centre + (centre < from ? 240 : -240);
         m.scrollTo({ top: centre, behavior: "smooth" });
       });
     }
@@ -7241,7 +8696,7 @@
   }
   const authorOf = (room, el) => findById(room, el.dataset.from);
   const timelines = [
-    createTimeline($("#timeline"), () => [...els.messages.querySelectorAll(".msg.mine:not(.hidden-by-search)")], {}),
+    createTimeline($("#timeline"), () => [...els.messages.querySelectorAll(".msg.mine:not(.hidden-by-search)")], { slotH: MINE_SLOT_H }),
     createTimeline($("#timeline-left"), () => [...els.messages.querySelectorAll(".msg.agent:not(.hidden-by-search)")], {
       colorOf: (room, el) => { const p = authorOf(room, el); return p ? colourOf(p) : FALLBACK_COLOR(); },
       avatarOf: (room, el) => { const p = authorOf(room, el); return p ? avatar(p, 16, {}) : ""; },
@@ -7255,13 +8710,15 @@
   }
   function updateTimelineView() { for (const t of timelines) t.updateView(); }
   function rescaleTimeline() { for (const t of timelines) t.rescale(); }
+  function followComposer() { for (const t of timelines) t.follow(); }
   attachScrollHints(els.pageInner);
   attachScrollHints(els.detailsInner);
   document.querySelectorAll("dialog.dialog").forEach((d) => attachScrollHints(d));
-  const composerFollowers = [$("#timeline"), $("#timeline-left"), els.mentionMenu, els.emojiMenu, els.jumpLatest];
+  const composerFollowers = [$("#timeline"), $("#timeline-left"), els.mentionMenu, els.emojiMenu, els.jumpLatest, els.doneNotes];
   new ResizeObserver(() => {
     const h = `${els.composer.offsetHeight}px`;
     for (const el of composerFollowers) el.style.setProperty("--composer-h", h);
+    followComposer();
     renderTimelineSoon(true);
   }).observe(els.composer);
   new ResizeObserver(() => renderTimelineSoon(true)).observe(els.messages);
@@ -7519,8 +8976,8 @@
         </div>
         ${p.notes ? `<pre class="lp-notes">${esc(p.notes)}</pre><div class="lp-editor" hidden><textarea class="lp-notes-area" rows="6" maxlength="4000">${esc(p.notes)}</textarea><div class="row-btns">${UI.html("button", { label: "Clear", kind: "ghost", size: "sm", hook: "lp-notes-clear" })}${UI.html("button", { label: "Save", kind: "primary", size: "sm", hook: "lp-notes-save" })}</div></div>` : ""}
         ${vendorLoggedOut(p) ? `<div class="lp-respawn lp-login">${UI.html("button", { label: `Log in to ${p.agentVendor || "the vendor"}`, icon: "lock", kind: "primary", size: "sm", act: "open-login-dialog", data: { recipe: p.agentType, purpose: "login" } })}<span class="lp-sub">${esc(p.agentVendor || "The vendor")} is not logged in; a respawn would fail the same way.</span></div>` : `<div class="lp-respawn">
-          ${UI.html("button", { label: "Respawn, empty head", icon: "bolt", kind: "danger", size: "sm", hook: "lp-empty", title: "A new session that knows nothing of this conversation" })}
-          <label class="lp-with">${UI.html("button", { label: "Respawn with the last", size: "sm", hook: "lp-mem", title: `A new session that re-reads only the last N messages${p.notes ? " and its own notes" : ""}` })}${UI.html("number-field", { value: String(n), min: 0, max: 500, hook: "lp-n" })} messages</label>
+          ${UI.html("button", { label: "Fresh start, empty head", icon: "bolt", kind: "danger", size: "sm", hook: "lp-empty", title: "A new session that knows nothing of this conversation" })}
+          <label class="lp-with">${UI.html("button", { label: "Fresh start with the last", size: "sm", hook: "lp-mem", title: `A new session that re-reads only the last N messages${p.notes ? " and its own notes" : ""}` })}${UI.html("number-field", { value: String(n), min: 0, max: 500, hook: "lp-n" })} messages</label>
         </div>`}
       </div>
       <div class="lp-side">${UI.html("icon-button", { icon: "close", title: "Close", size: "sm", hook: "lp-x" })}${UI.html("icon-button", { icon: "settings", title: "Open this vibemate's panel", size: "sm", hook: "lp-more" })}</div>`;
@@ -7574,7 +9031,7 @@
       n > 0
         ? `${p.name} starts over with a new session that gets only ${p.notes ? "its own notes and " : ""}the last ${n} messages of this room. You keep the history; the rest of its memory is gone.`
         : `${p.name} forgets this whole conversation and starts over. You keep the history; it does not.`;
-    const ok = await confirmDialog(text, { title: `Respawn ${p.name}?`, okLabel: "Respawn", danger: true });
+    const ok = await confirmDialog(text, { title: `A fresh start for ${p.name}?`, okLabel: "Fresh start", danger: true });
     if (!ok) return;
     closeLifePop();
     try {
@@ -7836,7 +9293,7 @@
       const json = JSON.stringify(p);
       if (json === lastReport) return;
       lastReport = json;
-      fetch("/api/window", { method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: json, keepalive }).catch(() => {});
+      fetch("/api/window", { method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: json, keepalive, signal: deadline(10000) }).catch(() => {});
     };
     const scheduleReport = () => {
       clearTimeout(reportTimer);
@@ -7849,5 +9306,8 @@
 
   setInterval(tickLive, 1000);
 
+  window.addEventListener("pagehide", rememberHeldTurns);
+
   connect();
+  void askKey();
 })();
