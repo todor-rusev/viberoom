@@ -230,6 +230,12 @@ it in a browser tab. Later, `npm install -g viberoom@latest` and the next start 
 - **The window remembers.** Where it was, how big, which screen. Unplug that screen and it walks back.
 - **Nothing leaves your machine** except what each agent sends to its own provider. viberoom never
   sees your keys; every agent keeps its own login.
+- **Only from this computer, and only from viberoom.** The rooms answer on this machine alone, and a window
+  has to be opened by viberoom itself — from its icon, the menu it shows, or `viberoom open`. A tab you
+  bookmarked works while the browser is open; after that the address shows you where the icon is instead.
+  That is what keeps anyone else signed in to the same computer out of your conversations.
+- **It can start with you.** `viberoom autostart on` (or the switch in Settings) brings the rooms up quietly
+  when you sign in to the computer, without a window until you ask for one.
 - **Edit a message.** Fix what you said; the vibemates get the memo, or the conversation rewinds.
 - **Quote a message.** Select a fragment of a bubble, or copy it with Ctrl+C, and it goes into your next
   message as a quote, with who said it and when.
