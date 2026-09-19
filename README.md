@@ -10,7 +10,7 @@ Open a room, summon the agents you already have, give each one a role, and let t
 
 <p align="center">
   <a href="https://www.npmjs.com/package/viberoom"><img src="https://img.shields.io/npm/v/viberoom?color=6c63ff&label=npm" alt="npm"></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%E2%89%A5%2022-6c63ff" alt="Node 22+"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%E2%89%A5%2022.16-6c63ff" alt="Node 22.16+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-6c63ff" alt="AGPL-3.0"></a>
 </p>
 
@@ -202,8 +202,9 @@ Pair Telegram once and the rooms come with you. The vibemates' replies arrive as
 the phone in your pocket, and `/rooms` says what is open. A reply that has gone quiet can be nudged or
 stopped from there too.
 
-It is **your** bot: you make it with BotFather and paste its key into a card no vibemate ever sees, and only
-the rooms you mark as reachable are reachable. The pairing is once; the key never leaves this computer.
+It is **your** bot: you make it with BotFather and paste its key into a card no vibemate ever sees, and the
+key never leaves this computer. **Every room is reachable from the phone by default**; any room can be kept
+off it from its own settings. The pairing is once.
 
 <br>
 
@@ -219,8 +220,10 @@ viberoom
 3. **Summon vibemates.** Pick an agent, name it, give it a character. Repeat.
 4. **Say hello.** Everyone answers in turn. `@Name` one of them, `/name` runs a skill.
 
-The menu that appears can put an icon on your desktop, open viberoom in a window of its own, or open
-it in a browser tab. Later, `npm install -g viberoom@latest` and the next start picks up the new version.
+The menu that appears can put an icon on your desktop or open viberoom in a window of its own; a browser tab
+works too, for as long as that browser stays open. Later, `npm install -g viberoom@latest` — and then
+**restart viberoom** (the window has a button for it): a hub that is already running keeps the build it
+started with, and says so when a newer one is on the disk.
 
 <br>
 
@@ -251,7 +254,7 @@ it in a browser tab. Later, `npm install -g viberoom@latest` and the next start 
 
 ## What you need
 
-- Node.js 22 or newer.
+- Node.js 22.16 or newer (that is what the package asks for; older 22.x is refused by npm).
 - At least one coding agent installed and logged in: Claude Code, Codex, Gemini CLI, Cursor, OpenCode,
   GitHub Copilot, Grok Build or Hermes Agent. viberoom finds the ones you have and offers only those. It
   downloads none of them itself: a missing one gets an **Install…** button that opens a terminal with the
@@ -298,8 +301,13 @@ viberoom logs       the background hub's log
 ```
 
 `Enter` sends, `Shift+Enter` is a new line, `@Name` addresses one vibemate, `/name` invokes a skill.
-Your data lives in `~/.viberoom` (or `$VIBEROOM_DATA_DIR`): settings, rooms with their history,
-skills, looks and the log.
+
+The window is opened by viberoom itself — from the icon, that menu, or `viberoom open`. It carries a key, and
+the address on its own no longer reaches the room: a tab keeps working while the browser is open, and after
+that the address shows you where the icon is.
+
+Your data lives in `~/.viberoom` (or `$VIBEROOM_DATA_DIR`): settings, rooms with their history, skills,
+looks, the log — and that key. The folder is private to your account.
 
 <br>
 
