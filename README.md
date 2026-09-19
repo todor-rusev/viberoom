@@ -126,7 +126,7 @@ effort and how much it may do on its own. Three vibemates from the same agent wi
 vibios behave like three different people, which is exactly the point.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/summon.png" width="960" alt="Summon a vibemate: eight agents to pick from, then a name, a face and a private brief">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/summon.png" width="640" alt="Summon a vibemate: eight agents to pick from, then a name, a face and a private brief">
 </p>
 
 <br>
