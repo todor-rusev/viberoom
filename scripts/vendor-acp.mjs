@@ -94,8 +94,28 @@ function patchClaudeAdapter(file) {
   };
   once(
     "        const ensureActiveTurn = async (resultUserMessageUuid) => {",
-    "        const ensureActiveTurn = async (resultUserMessageUuid, dispatchedTurn) => {",
+    "        const ensureActiveTurn = async (resultUserMessageUuid, dispatchedTurn, explicitOwnership) => {",
   );
+  once(`        const ensureActiveTurn = async (resultUserMessageUuid, dispatchedTurn, explicitOwnership) => {
+            if (session.activeTurn) {
+                if (!isHeldOpen(session.activeTurn)) {
+                    return;`,
+    `        const ensureActiveTurn = async (resultUserMessageUuid, dispatchedTurn, explicitOwnership) => {
+            if (session.activeTurn) {
+                if (!isHeldOpen(session.activeTurn)) {
+                    if (explicitOwnership && dispatchedTurn && session.activeTurn !== dispatchedTurn) activateTurn(dispatchedTurn);
+                    return;`);
+  once(`                await settleActive(session.activeTurn.deferredSettle);
+            }
+            // Orphan accounting runs BEFORE the head check`,
+    `                await settleActive(session.activeTurn.deferredSettle);
+            }
+            // A live command named by the SDK is not an inferred orphan or a FIFO guess.
+            if (explicitOwnership && dispatchedTurn) {
+                activateTurn(dispatchedTurn);
+                return;
+            }
+            // Orphan accounting runs BEFORE the head check`);
   once(
     `            const head = firstUnsettledQueuedTurn();
             if (!head) {
@@ -110,7 +130,15 @@ function patchClaudeAdapter(file) {
   );
   once(
     "                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind);",
-    `                        // viberoom: never apply one result twice, including a repeated human result.
+    `                        // Prefer the SDK's explicit ownership list; lifecycle inference is for older producers.
+                        const consumedUuids = Array.isArray(message.user_message_uuids)
+                            ? new Set(message.user_message_uuids.filter((uuid) => typeof uuid === "string")) : null;
+                        const absorbedPrompts = (session.turnQueue ?? []).filter((t) =>
+                            !t.settled && !t.commandResultSeen && t.deferredSettle === undefined && t.steeredSettle === undefined
+                            && !["discarded", "refused", "cancelled"].includes(t.commandFinished)
+                            && (consumedUuids ? consumedUuids.has(t.promptUuid)
+                                : (t.commandStarted || t.commandFinished === "completed" || session.activeTurn === t)));
+                        // viberoom: never apply one result twice, including a repeated human result.
                         const viberoomResults = (session.viberoomResultUuids ??= new Set());
                         if (typeof message.uuid === "string") {
                             if (viberoomResults.has(message.uuid)) {
@@ -121,21 +149,22 @@ function patchClaudeAdapter(file) {
                         }
                         // A stamped result of an already cancelled command cannot mark a newer command
                         // as having consumed its result. Drain only that known orphan, before bookkeeping.
-                        if (typeof message.user_message_uuid === "string" && session.orphanCommands?.has(message.user_message_uuid)) {
+                        if (typeof message.user_message_uuid === "string" && session.orphanCommands?.has(message.user_message_uuid)
+                            && !(consumedUuids && absorbedPrompts.length)) {
                             session.orphanCommands.delete(message.user_message_uuid);
                             session.pendingEmptyInterruptionDiagnosticCommands?.delete(message.user_message_uuid);
                             session.owedTrailingIdles++;
                             break;
                         }
                         // Snapshot before result bookkeeping marks dispatched commands as having seen a result.
-                        const absorbedPrompts = (session.turnQueue ?? []).filter((t) => !t.settled && !t.commandResultSeen && (t.commandStarted || t.commandFinished === "completed" || (session.activeTurn === t && t.deferredSettle === undefined && t.steeredSettle === undefined)));
-                        const dispatchedOwner = session.activeTurn && !session.activeTurn.settled && session.activeTurn.deferredSettle === undefined
-                            ? session.activeTurn : absorbedPrompts[0];
-                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind) && absorbedPrompts.length === 0;`,
+                        const dispatchedOwner = absorbedPrompts.includes(session.activeTurn) ? session.activeTurn : absorbedPrompts[0];
+                        const isAutonomousResult = consumedUuids
+                            ? absorbedPrompts.length === 0
+                            : message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind) && absorbedPrompts.length === 0;`,
   );
   once(
     "                                await ensureActiveTurn(message.user_message_uuid);",
-    `                                await ensureActiveTurn(message.user_message_uuid, dispatchedOwner);
+    `                                await ensureActiveTurn(consumedUuids && dispatchedOwner ? dispatchedOwner.promptUuid : message.user_message_uuid, dispatchedOwner, consumedUuids !== null);
                                 // Only after the adapter accepted the owner (orphan/cancel checks included).
                                 // Share its terminal outcome rather than reactivating each command and resetting
                                 // the stop reason/usage, or bypassing early refusal/error/deferral exits.
@@ -164,11 +193,21 @@ function patchClaudeAdapter(file) {
                                     }
                                 }`,
   );
+  once("        const recordResultForOrphanCommands = () => {", "        const recordResultForOrphanCommands = (consumedUuids) => {");
+  once("                if (!turn.settled && turn.commandStarted && !turn.commandFinished) {",
+    "                if (!turn.settled && turn.commandStarted && !turn.commandFinished && (!consumedUuids || consumedUuids.has(turn.promptUuid))) {");
+  once(`            if (session.activeTurn && session.orphanCommands?.size) {
+                for (const [uuid, state] of session.orphanCommands) {
+                    if (state === "started" || state === "zombie") {`,
+    `            if (session.activeTurn && session.orphanCommands?.size) {
+                for (const [uuid, state] of session.orphanCommands) {
+                    if ((state === "started" || state === "zombie") && (!consumedUuids || consumedUuids.has(uuid))) {`);
+  once("                        recordResultForOrphanCommands();", "                        recordResultForOrphanCommands(consumedUuids);");
   once(
     "                        const viberoomResults = (session.viberoomResultUuids ??= new Set());",
     `                        console.error("viberoom-trace result uuid=" + (typeof message.uuid === "string" ? message.uuid : "none") + " turn=" + (session.activeTurn ? (session.activeTurn.settled ? "settled" : "open") : "none")
                             + " origin=" + (message.origin && message.origin.kind ? message.origin.kind : "none")
-                            + " absorbed=" + ((session.turnQueue ?? []).filter((t) => !t.settled && !t.commandResultSeen && (t.commandStarted || t.commandFinished === "completed" || (session.activeTurn === t && t.deferredSettle === undefined && t.steeredSettle === undefined))).length)
+                            + " absorbed=" + absorbedPrompts.length
                             + " activeCmd=" + (session.activeTurn ? (session.activeTurn.commandStarted ? "started" : "-") + "/" + (session.activeTurn.commandFinished || "-") + "/" + (session.activeTurn.commandResultSeen ? "seen" : "-") : "none")
                             + " seen=" + (session.viberoomResultUuids && typeof message.uuid === "string" && session.viberoomResultUuids.has(message.uuid) ? "again" : "first"));
                         const viberoomResults = (session.viberoomResultUuids ??= new Set());`,
