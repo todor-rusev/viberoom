@@ -1,7 +1,9 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
+import { validArguments } from "./tool-validation.js";
 import { EventEmitter } from "node:events";
 import { memoryBlock } from "./shared-memory.js";
+import { instructionBlock, planInstructionDelivery, type InstructionRevisions } from "./instruction-delivery.js";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { HistoryStore, type DivertOp, type PendingOp, cursorOf, type Cursor } from "./history-store.js";
@@ -16,7 +18,7 @@ import { isRoomResourceName, saveImages, type Attachment, type ImageInput } from
 import { agentReadableWindow, resolveQuotes, visibleToAgents, type Quote, type QuoteInput } from "./quotes.js";
 import { canAutoApproveMessageCheck, isDirectMessageCheck, messageAddressing, messageCheckCursor, messageCheckHeader, messageCheckPageCursor, messageCheckPagePosition, messageCheckPosition, messageCheckTitle, packMessageCheck, packLiveDraft, parseMessageCheckArgs, type MessageCheckArgs, type MessageCheckCounts, type MessageCheckResult } from "./message-check.js";
 import { historySearchReceipt, historySearchTitle, parseAgentSearchArgs, type AgentSearchArgs, type AgentSearchResult, type HistorySearchReceipt } from "./agent-history.js";
-import { canAutoApproveRoomTool, isDirectRoomTool } from "./room-tool-identity.js";
+import { canAutoApproveRoomTool, isWrappedRoomCall, roomOperation, roomToolTitle, cursorPermissionInput } from "./room-tool-identity.js";
 import { dirname, join, resolve } from "node:path";
 import { AcpAgent } from "./acp-client.js";
 import { errorCode, errorDetail, RemoteError } from "./jsonrpc.js";
@@ -52,6 +54,8 @@ import {
   NAME_PATTERN,
   SILENT_MARKER,
   buildBrief,
+  buildInstructionContents,
+  buildInstructionPreview,
   buildHeader,
   composeCorrectionPrompt,
   composePrompt,
@@ -504,6 +508,8 @@ interface AgentRuntime {
   briefSentThisTurn: boolean;
   lastUsed: number;
   briefPending: string | null;
+  instructionRevisions?: InstructionRevisions;
+  skillCatalogPending?: boolean;
   memoryStamp?: string;
   headerNotes: string[];
   historyNoticePending: boolean;
@@ -618,6 +624,7 @@ export class Room extends EventEmitter {
   private closing = false;
   private readonly runtimes = new Map<string, AgentRuntime>();
   private readonly drafts = new Map<string, ChatMessage>();
+  private readonly quotesAwaitingNumber = new Map<string, Set<string>>();
   private readonly permissions = new Map<string, PermissionEntry>();
   private readonly proposals = new Map<string, RoomProposal>();
   private readonly newRooms = new Map<string, NewRoomProposal>();
@@ -996,7 +1003,33 @@ export class Room extends EventEmitter {
     this.messages.push(message);
     const stored = this.persist(opId ? { kind: "upsert", message, opId, accept: true } : { kind: "upsert", message });
     this.push({ type: "message", message });
+    this.numberQuotesOf(message);
     return stored;
+  }
+
+  private awaitNumbers(message: ChatMessage): void {
+    for (const id of this.quotesAwaitingNumber.keys()) if (!this.drafts.has(id)) this.quotesAwaitingNumber.delete(id);
+    for (const quote of message.quotes ?? []) {
+      if (quote.seq !== undefined || !quote.id || !this.drafts.has(quote.id)) continue;
+      const waiting = this.quotesAwaitingNumber.get(quote.id) ?? new Set<string>();
+      waiting.add(message.id);
+      this.quotesAwaitingNumber.set(quote.id, waiting);
+    }
+  }
+
+  private numberQuotesOf(landed: ChatMessage): void {
+    const waiting = this.quotesAwaitingNumber.get(landed.id);
+    if (!waiting) return;
+    this.quotesAwaitingNumber.delete(landed.id);
+    if (!visibleToAgents(landed)) return;
+    for (const id of waiting) {
+      const message = this.messages.find((m) => m.id === id);
+      const quotes = (message?.quotes ?? []).filter((q) => q.id === landed.id && q.seq === undefined);
+      if (!message || !quotes.length) continue;
+      for (const quote of quotes) quote.seq = landed.seq;
+      this.persist({ kind: "upsert", message });
+      this.push({ type: "message", message });
+    }
   }
 
   private takeFromRecord(): void {
@@ -1160,7 +1193,6 @@ export class Room extends EventEmitter {
       if (this.settings.humanDescriptionMode !== "override") changed.push("human description");
     }
     if (changed.length) {
-      for (const runtime of this.runtimes.values()) runtime.briefPending = `room rules: ${changed.join(", ")}`;
       this.push(this.roomEvent());
     }
   }
@@ -1402,7 +1434,7 @@ export class Room extends EventEmitter {
     if (waiting.length) throw new RoomRefusal(`${waiting.map((p) => p.name).join(", ")} ${waiting.length === 1 ? "has" : "have"} no coding agent yet: summon ${waiting.length === 1 ? "it" : "them"} from the roster to start the conversation`);
     const trimmed = text.trim();
     if (!trimmed && !images.length && !quotes.length) throw new RoomRefusal("empty message");
-    const quoted = quotes.length ? resolveQuotes(quotes, this.messages, new Set(this.drafts.keys())) : [];
+    const quoted = quotes.length ? resolveQuotes(quotes, this.messages, this.drafts) : [];
     const attachments = images.length ? saveImages(ensureDir(this.filesDir()), images) : [];
     this.humanTypingUntil = 0;
     const human = this.participants.get("human")!;
@@ -1419,6 +1451,7 @@ export class Room extends EventEmitter {
     };
     if (attachments.length) message.images = attachments;
     if (quoted.length) message.quotes = quoted;
+    this.awaitNumbers(message);
     this.decorateHumanMessage(message);
     message.bodyDelivery = { version: 1, readers: {} };
     for (const p of this.participants.values()) {
@@ -1750,7 +1783,6 @@ export class Room extends EventEmitter {
     if (trimmed === this.name) return;
     this.name = trimmed;
     this.settings = { ...this.settings, name: trimmed };
-    for (const runtime of this.runtimes.values()) runtime.briefPending = "room rules: name";
     this.push(this.roomEvent());
   }
 
@@ -1776,7 +1808,6 @@ export class Room extends EventEmitter {
     this.push(this.roomEvent());
     const briefChanges = changed.filter((c) => BRIEF_AFFECTING_SETTINGS.includes(c as keyof RoomSettings));
     if (briefChanges.length) {
-      for (const runtime of this.runtimes.values()) runtime.briefPending = `room rules: ${briefChanges.join(", ")}`;
       this.postSystem(`Room settings updated (${briefChanges.join(", ")}); agents get refreshed instructions on their next turn.`);
     }
     const missing = unknownRefs.filter((n) => n !== "Name");
@@ -1795,9 +1826,7 @@ export class Room extends EventEmitter {
 
   updatePersona(id: string, patch: PersonaPatch): Participant {
     const participant = this.participants.get(id);
-    const runtime = this.runtimes.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
-    const changed: string[] = [];
     if (patch.name !== undefined) {
       const name = patch.name.trim();
       if (!NAME_PATTERN.test(name)) throw new Error("name must be 1-24 letters, digits, _ or - (no spaces)");
@@ -1806,19 +1835,13 @@ export class Room extends EventEmitter {
       if (name !== participant.name) {
         this.postRoomEvent(`${participant.name} is now called ${name}.`);
         participant.name = name;
-        changed.push("name");
-        if (this.settings.customRules.includes(`@{p:${id}}`)) {
-          for (const other of this.runtimes.values()) other.briefPending = other.briefPending ?? "room rules: a referenced participant was renamed";
-        }
       }
     }
     if (patch.tagline !== undefined && patch.tagline.trim() !== (participant.tagline ?? "")) {
       participant.tagline = patch.tagline.trim().slice(0, 80);
-      changed.push("tagline");
     }
     if (patch.role !== undefined && patch.role.trim() !== (participant.role ?? "")) {
       participant.role = this.guardBriefText(`${participant.name}'s vibio`, patch.role.trim());
-      changed.push("role");
     }
     if (patch.avatar !== undefined) {
       participant.avatar = patch.avatar.trim().slice(0, 8) || undefined;
@@ -1836,10 +1859,8 @@ export class Room extends EventEmitter {
       const current = participant.skills ?? [];
       if (next.join("\n") !== current.join("\n")) {
         participant.skills = next;
-        changed.push("skills");
       }
     }
-    if (changed.length && runtime) runtime.briefPending = `your persona: ${changed.join(", ")}`;
     this.push({ type: "participant", participant });
     return participant;
   }
@@ -2352,12 +2373,6 @@ export class Room extends EventEmitter {
     this.departed.set(id, participant.name);
     this.push({ type: "participant.removed", id });
     this.postRoomEvent(`${participant.name} left the room.`);
-    if (RULE_REF_TOKEN.test(this.settings.customRules)) {
-      RULE_REF_TOKEN.lastIndex = 0;
-      if (this.settings.customRules.includes(`@{p:${id}}`)) {
-        for (const runtime of this.runtimes.values()) runtime.briefPending = "room rules: a referenced participant left";
-      }
-    }
   }
 
   cancelTurn(id: string, expectedTurnId?: string, waitingFor?: { id: string; version: number }): "turn" | "queued" | "nothing" {
@@ -2719,7 +2734,7 @@ export class Room extends EventEmitter {
       }),
       skills,
       templates,
-      yourBrief: buildBrief(this.settings, this.personaOf(participant), this.roster(), undefined, this.skillsForPrompt(participant, this.runtimes.get(participant.id)!)),
+      yourBrief: buildInstructionPreview(this.effectiveSettings(), this.personaOf(participant), this.roster(), this.skillsForPrompt(participant, this.runtimes.get(participant.id)!)),
       howTo: "Settings are proposed by key with the values above; rules are one per line in customRules; a vibemate is { name, tagline, role, avatar, skills }. Another vibemate's role is private: you learn only that it has one and how long it is, and you may still propose a new one, which the human reads in full on the card. Check a design with lint_room_design, then create_template (a file for the human to pick) or propose_room_changes (a card the human applies).",
     };
   }
@@ -2838,10 +2853,10 @@ export class Room extends EventEmitter {
   private recordHistorySearch(turn: NonNullable<AgentRuntime["turn"]>, args: AgentSearchArgs, result?: AgentSearchResult, error?: string): void {
     const calls = (turn.message.toolCalls ??= []);
     const candidates = calls.filter(call => {
-      if (call.historySearch || ["completed", "failed"].includes(call.status ?? "") || !isDirectRoomTool(call.name ?? call.title, "search_history")) return false;
+      if (call.historySearch || ["completed", "failed"].includes(call.status ?? "") || roomOperation(call)?.name !== "search_history") return false;
       if (!call.rawInput || typeof call.rawInput !== "object" || Array.isArray(call.rawInput)) return false;
       try {
-        const input = parseAgentSearchArgs(call.rawInput as Record<string, unknown>);
+        const input = parseAgentSearchArgs(roomOperation(call)!.arguments);
         return input.query === args.query && input.rooms === args.rooms && input.kinds === args.kinds && input.author === args.author && input.limit === args.limit;
       }
       catch { return false; }
@@ -2923,9 +2938,9 @@ export class Room extends EventEmitter {
   private recordMessageCheck(turn: NonNullable<AgentRuntime["turn"]>, args: MessageCheckArgs, result?: MessageCheckResult, error?: string): void {
     const calls = (turn.message.toolCalls ??= []);
     const candidates = calls.filter(call => {
-      if (call.messageCheck || ["completed", "failed"].includes(call.status ?? "") || !isDirectMessageCheck(call.name ?? call.title)) return false;
+      if (call.messageCheck || ["completed", "failed"].includes(call.status ?? "") || !(roomOperation(call)?.name === "check_room" || isDirectMessageCheck(call.name ?? call.title))) return false;
       try {
-        const input = parseMessageCheckArgs((call.rawInput ?? {}) as Record<string, unknown>);
+        const input = parseMessageCheckArgs(roomOperation(call)?.arguments ?? (call.rawInput ?? {}) as Record<string, unknown>);
         return input.mode === args.mode && input.limit === args.limit && input.after === args.after && input.page === args.page && JSON.stringify(input.draft) === JSON.stringify(args.draft);
       } catch { return false; }
     });
@@ -3335,8 +3350,6 @@ export class Room extends EventEmitter {
       if (this.hasSkill(target, skill.name)) continue;
       target.skills = [...(target.skills ?? []), skill.name];
       attached.push(target.name);
-      const runtime = this.runtimes.get(target.id);
-      if (runtime) runtime.briefPending = runtime.briefPending ?? `your skills: "${skill.name}" attached${target.id === participant.id ? "" : ` by ${participant.name}`}`;
       this.push({ type: "participant", participant: target });
     }
     const others = attached.filter((n) => n !== participant.name);
@@ -3381,7 +3394,6 @@ export class Room extends EventEmitter {
     participant.skillChannel = "tool";
     for (const wake of runtime.skillReadyWaiters.splice(0)) wake();
     runtime.log.info(`skills: the ${SKILL_TOOL_NAME} tool is available${late ? " (late; brief will be refreshed)" : ""}`);
-    if (late && this.attachedSkills(participant).length) runtime.briefPending = runtime.briefPending ?? "your skills: the load_skill tool became available";
     this.push({ type: "participant", participant });
   }
 
@@ -3443,7 +3455,7 @@ export class Room extends EventEmitter {
   skillChanged(name: string): void {
     for (const [id, runtime] of this.runtimes) {
       const participant = this.participants.get(id);
-      if (participant && this.hasSkill(participant, name)) runtime.briefPending = runtime.briefPending ?? `your skills: "${name}" changed`;
+      if (participant && this.hasSkill(participant, name)) runtime.skillCatalogPending = true;
     }
   }
 
@@ -3451,7 +3463,7 @@ export class Room extends EventEmitter {
     if (!runtime.mcpToken) return false;
     const call = params.toolCall;
     const known = runtime.turn?.message.toolCalls?.find((t) => t.toolCallId === call.toolCallId);
-    return canAutoApproveMessageCheck(call, known) || canAutoApproveRoomTool(call, known, "memory",
+    return canAutoApproveRoomTool(call, known, "tool_search", input => validArguments("tool_search", input)) || canAutoApproveMessageCheck(call, known) || canAutoApproveRoomTool(call, known, "memory",
       input => Object.keys(input).every(key => ["action", "scope", "ticket", "notes", "reason", "acknowledge"].includes(key)) && (input.action === "read" || input.action === "revise")) || canAutoApproveRoomTool(call, known, SKILL_TOOL_NAME,
       input => Object.keys(input).every(key => key === "name") && typeof input.name === "string" && !!input.name.trim());
   }
@@ -3655,11 +3667,15 @@ export class Room extends EventEmitter {
     const userMemory = this.history.memory.read("user"), roomMemory = this.history.memory.read(`room:${this.uuid}`);
     const memoryStamp = `${userMemory.revision}:${roomMemory.revision}`;
     let briefReason: string | null = null;
-    if (!runtime.firstTurnDone) briefReason = "first turn";
+    if (!runtime.firstTurnDone || !runtime.instructionRevisions) briefReason = "first turn";
     else if (runtime.briefPending) briefReason = runtime.briefPending;
-    else if (runtime.memoryStamp !== memoryStamp) briefReason = "shared memory changed";
     else if (runtime.turnsSinceBrief >= this.settings.fullBriefEveryTurns) briefReason = `every ${this.settings.fullBriefEveryTurns} turns`;
     else if (tokensSinceBrief >= this.settings.fullBriefEveryTokens) briefReason = `${tokensSinceBrief} tokens since last brief`;
+
+    const skillsForPrompt = this.skillsForPrompt(participant, runtime);
+    const contents = buildInstructionContents(settings, persona, roster, skillsForPrompt);
+    const delivery = planInstructionDelivery(contents, runtime.instructionRevisions, briefReason !== null, runtime.skillCatalogPending);
+    const sendMemory = delivery.full || runtime.memoryStamp !== memoryStamp;
 
     const notes = [...runtime.headerNotes];
     runtime.headerNotes = [];
@@ -3668,14 +3684,19 @@ export class Room extends EventEmitter {
     if (runtime.notesDue) notes.push(NOTES_REQUEST);
     if (briefReason && runtime.firstTurnDone) {
       if (briefReason.startsWith("requested")) notes.push("full brief re-sent as requested");
-      else if (briefReason.startsWith("room rules") || briefReason.startsWith("your persona") || briefReason.startsWith("your skills")) notes.push(`instructions updated (${briefReason})`);
       else notes.push(`full brief re-attached (${briefReason})`);
     }
+    if (!delivery.full) {
+      const updated = [delivery.brief && "room-brief", delivery.roomRules && "room-rules", delivery.vibio && "vibio"].filter(Boolean);
+      if (updated.length) notes.push(`instructions updated (${updated.join(", ")}); each supplied block replaces its previous version`);
+      if (sendMemory) notes.push("shared memory changed");
+    }
+    notes.push(`instruction versions: room-rules=${delivery.revisions.roomRules}, vibio=${delivery.revisions.vibio}`);
+    if (runtime.skillCatalogPending) notes.push("your skill library changed; reload an affected skill before using its instructions again");
     const attached = runtime.pendingSkills.splice(0);
     for (const s of attached) {
       notes.push(s.invokedBy ? `${s.invokedBy} invoked your skill "${s.name}"; its instructions are attached below, follow them` : `skill "${s.name}" attached below as you asked; the same messages follow`);
     }
-    const skillsForPrompt = this.skillsForPrompt(participant, runtime);
     const offerHistoryNotice = runtime.historyNoticePending && skillsForPrompt?.channel === "tool" && !this.readOnly;
     if (offerHistoryNotice) {
       const firstShownSeq = Math.min(...unread.map(m => m.seq));
@@ -3693,9 +3714,11 @@ export class Room extends EventEmitter {
     const backlogQuotes = (m: ChatMessage): BacklogQuote[] | undefined =>
       m.quotes && m.quotes.length ? m.quotes.map((q) => ({ n: q.n, seq: q.seq, fromName: q.fromName, ts: q.ts, text: q.text })) : undefined;
     const prompt = composePrompt({
-      brief: briefReason ? buildBrief(settings, persona, roster, runtime.notesForBrief ?? (participant.notes && (participant.notesSeq ?? -1) >= runtime.lastBriefSeq ? participant.notes : undefined), skillsForPrompt) : undefined,
+      brief: delivery.brief ? buildBrief(settings, persona, roster, runtime.notesForBrief ?? (participant.notes && (participant.notesSeq ?? -1) >= runtime.lastBriefSeq ? participant.notes : undefined), skillsForPrompt) : undefined,
+      roomRules: delivery.roomRules ? instructionBlock("room-rules", contents.roomRules) : undefined,
+      vibio: delivery.vibio ? instructionBlock("vibio", contents.vibio) : undefined,
       header: buildHeader(settings, persona, roster, this.hops, notes, skillsForPrompt),
-      memory: briefReason ? memoryBlock(userMemory, roomMemory) : undefined,
+      memory: sendMemory ? memoryBlock(userMemory, roomMemory) : undefined,
       skills: attached.map((s) => composeSkillBlock({ name: s.name, text: s.text, invokedBy: s.invokedBy, extraFiles: s.extraFiles })),
       backlog: unread.map<BacklogLine>((m) =>
         m.kind === "system"
@@ -3712,18 +3735,22 @@ export class Room extends EventEmitter {
       omitted,
       personaName: participant.name,
     });
-    if (briefReason) {
-      runtime.memoryStamp = memoryStamp;
+    runtime.instructionRevisions = delivery.revisions;
+    runtime.skillCatalogPending = false;
+    if (sendMemory) runtime.memoryStamp = memoryStamp;
+    if (delivery.full) {
       runtime.briefPending = null;
       runtime.turnsSinceBrief = 0;
       runtime.briefSentThisTurn = true;
+    }
+    if (delivery.brief) {
       runtime.lastBriefSeq = this.seq;
       runtime.notesForBrief = null;
       participant.briefsSent = (participant.briefsSent ?? 0) + 1;
     }
     runtime.firstTurnDone = true;
     runtime.replayOwnUntilSeq = -1;
-    runtime.log.info(`turn: ${unread.length} unread (${omitted} omitted), brief=${briefReason ?? "no"}, notes=${notes.length}`);
+    runtime.log.info(`turn: ${unread.length} unread (${omitted} omitted), full refresh=${briefReason ?? "no"}, blocks=${[delivery.brief && "brief", delivery.roomRules && "rules", delivery.vibio && "vibio"].filter(Boolean).join(",") || "none"}, notes=${notes.length}`);
 
     const retry = await this.executeTurn(participant, runtime, this.promptBlocks(prompt, runtime), null, false, offerHistoryNotice, supplied);
     if (retry) {
@@ -3800,10 +3827,6 @@ export class Room extends EventEmitter {
     this.drafts.delete(draft.id);
     participant.turns += 1;
     if (!retry) runtime.turnsSinceBrief += 1;
-    if (runtime.briefSentThisTurn) {
-      runtime.usedAtBrief = runtime.lastUsed;
-      runtime.briefSentThisTurn = false;
-    }
 
     if (runtime.retiring) {
       this.push({ type: "message.removed", id: draft.id });
@@ -3811,6 +3834,8 @@ export class Room extends EventEmitter {
       return null;
     }
     if (failure || !result) {
+      runtime.briefPending = runtime.briefPending ?? "previous turn failed";
+      runtime.briefSentThisTurn = false;
       participant.statusDetail = `last turn failed: ${(failure ?? "no result").replace(/\s+/g, " ").slice(0, 120)}`;
       participant.failedTurns = (participant.failedTurns ?? 0) + 1;
       this.push({ type: "message.removed", id: draft.id });
@@ -3877,9 +3902,14 @@ export class Room extends EventEmitter {
       const used = tokensCarried(result);
       if (used !== null) {
         participant.contextUsed = used;
+        this.checkForCompaction(participant, runtime, used, participant.contextSize ?? 0);
         runtime.lastUsed = used;
         runtime.log.info(`context from the result: ${used} input tokens${participant.contextSize ? ` of ${participant.contextSize}` : " (window size unknown)"}`);
       }
+    }
+    if (runtime.briefSentThisTurn) {
+      runtime.usedAtBrief = runtime.lastUsed;
+      runtime.briefSentThisTurn = false;
     }
     if (participant.trouble?.stage === "turn") {
       participant.trouble = undefined;
@@ -3957,6 +3987,7 @@ export class Room extends EventEmitter {
 
     const bareContextFull = isBareContextFullError(text);
     if (!(draft.toolCalls?.length) && (ADAPTER_ERROR_PATTERN.test(text) || bareContextFull)) {
+      runtime.briefPending = runtime.briefPending ?? "previous turn returned an adapter error";
       this.push({ type: "message.removed", id: draft.id });
       participant.failedTurns = (participant.failedTurns ?? 0) + 1;
       participant.statusDetail = `agent error: ${text.replace(/\s+/g, " ").slice(0, 120)}${text.length > 120 ? "…" : ""}`;
@@ -4115,6 +4146,15 @@ export class Room extends EventEmitter {
     this.push({ type: "message", message: turn.message });
   }
 
+  private checkForCompaction(participant: Participant, runtime: AgentRuntime, used: number, size: number): void {
+    if (!looksCompacted(runtime.lastUsed, used) || runtime.briefPending) return;
+    runtime.briefPending = `context shrank from ${runtime.lastUsed} to ${used} tokens (compaction?)`;
+    runtime.log.info(`usage dropped ${runtime.lastUsed} -> ${used}; full instructions scheduled`);
+    participant.contextEvent = { kind: "compacted", at: Date.now(), used, size };
+    runtime.notesDue = overThreshold(used, size);
+    this.postSystem(`${participant.name} compacted its context (${Math.round(runtime.lastUsed / 1000)}k → ${Math.round(used / 1000)}k tokens); the room instructions are re-sent with its next turn${participant.notes ? ", with its notes" : ""}.`, "human", false, { tone: "attention" });
+  }
+
   private onSessionUpdate(id: string, update: SessionUpdate): void {
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
@@ -4203,13 +4243,7 @@ export class Room extends EventEmitter {
         participant.contextUsed = u.used;
         participant.contextSize = u.size;
         if (u.cost) participant.cost = { amount: u.cost.amount, currency: u.cost.currency };
-        if (looksCompacted(runtime.lastUsed, u.used) && !runtime.briefPending) {
-          runtime.briefPending = `context shrank from ${runtime.lastUsed} to ${u.used} tokens (compaction?)`;
-          runtime.log.info(`usage dropped ${runtime.lastUsed} -> ${u.used}; brief scheduled`);
-          participant.contextEvent = { kind: "compacted", at: Date.now(), used: u.used, size: u.size };
-          runtime.notesDue = overThreshold(u.used, u.size);
-          this.postSystem(`${participant.name} compacted its context (${Math.round(runtime.lastUsed / 1000)}k → ${Math.round(u.used / 1000)}k tokens); the room rules are re-sent with its next turn${participant.notes ? ", with its notes" : ""}.`, "human", false, { tone: "attention" });
-        }
+        this.checkForCompaction(participant, runtime, u.used, u.size);
         if (crossedThreshold(runtime.lastUsed, u.used, u.size)) {
           runtime.notesDue = true;
           participant.contextEvent = { kind: "threshold", at: Date.now(), used: u.used, size: u.size };
@@ -4243,6 +4277,14 @@ export class Room extends EventEmitter {
   private onPermissionRequest(id: string, params: RequestPermissionParams): Promise<RequestPermissionResponse> {
     const participant = this.participants.get(id);
     const runtime = this.runtimes.get(id);
+    if (participant?.agentType === "cursor") {
+      const normalized = cursorPermissionInput(params.toolCall);
+      if (normalized !== params.toolCall) {
+        params = { ...params, toolCall: normalized };
+        const view = runtime?.turn?.message.toolCalls?.find(call => call.toolCallId === normalized.toolCallId);
+        if (view && applyToolCallUpdate(view, normalized)) this.push({ type: "toolcall", id: runtime!.turn!.message.id, toolCall: view });
+      }
+    }
     if (runtime && this.isSkillToolCall(runtime, params)) {
       const option = params.options.find((o) => o.kind === "allow_once");
       if (option) {
@@ -4254,8 +4296,9 @@ export class Room extends EventEmitter {
       const entry: PermissionEntry = {
         key: randomUUID(),
         participantId: id,
-        toolCall: params.toolCall,
-        options: params.options,
+        toolCall: { ...params.toolCall, title: roomToolTitle(params.toolCall, runtime?.turn?.message.toolCalls?.find(t => t.toolCallId === params.toolCall.toolCallId)) ?? params.toolCall.title },
+        options: isWrappedRoomCall(params.toolCall, runtime?.turn?.message.toolCalls?.find(t => t.toolCallId === params.toolCall.toolCallId))
+          ? params.options.filter(option => option.kind !== "allow_always") : params.options,
         ts: Date.now(),
         resolve,
       };
@@ -4669,6 +4712,11 @@ export function applyToolCallUpdate(view: ToolCallView, u: ToolCallUpdate): bool
   if (u.rawInput !== undefined) view.rawInput = u.rawInput;
   const touched = [...(u.locations ?? []).map((l) => l.path), ...(u.content ?? []).filter((c) => c.type === "diff").map((c) => (c as { path: string }).path)].filter((path) => typeof path === "string" && path);
   if (touched.length) view.locations = [...new Set([...(view.locations ?? []), ...touched])];
+  const operationTitle = roomToolTitle(view);
+  if (operationTitle) {
+    view.name ??= "viberoom.tool_call";
+    view.title = operationTitle;
+  }
   const output = toolOutputText(u);
   if (output) view.output = output;
   return JSON.stringify(view) !== before;

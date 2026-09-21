@@ -1,6 +1,6 @@
 {
   "name": "viberoom",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "viberoom: bring your AI assistants together in one conversation",
   "type": "module",
   "engines": {
@@ -31,6 +31,7 @@
   ],
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
+    "ajv": "8.20.0",
     "marked": "^16.4.2",
     "prismjs": "^1.30.0",
     "zod": "^4.0.0"
@@ -38,10 +39,10 @@
   "devDependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.76.0",
     "@agentclientprotocol/codex-acp": "1.11.0",
-    "mermaid": "^11.17.2",
+    "@anthropic-ai/claude-agent-sdk": "0.3.257",
     "@types/node": "^24.0.0",
-    "typescript": "^5.9.0",
-    "@anthropic-ai/claude-agent-sdk": "0.3.257"
+    "mermaid": "^11.17.2",
+    "typescript": "^5.9.0"
   },
   "license": "AGPL-3.0-or-later",
   "author": "Todor Rusev <todor.rosenov.rusev@gmail.com>",

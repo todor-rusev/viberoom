@@ -68,10 +68,12 @@ export class McpHttpClient {
       this.acceptClear(response);
       let body: Record<string, unknown> = {};
       try {
-        body = await timeout.wait(response.json()) as Record<string, unknown>;
+        const parsed: unknown = await timeout.wait(response.json());
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid response shape");
+        body = parsed as Record<string, unknown>;
       } catch {
         finish(timeout.timedOut ? "timeout" : "invalid_json", response.status);
-        return { ok: response.ok, status: response.status, body };
+        return { ok: false, status: response.status, body: { code: "unconfirmed_result", error: "The room response could not be read. Check the outcome before retrying a write." } };
       }
       finish(response.ok ? "ok" : "http_error", response.status);
       if (response.ok) this.maybeReport();

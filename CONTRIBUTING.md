@@ -44,3 +44,31 @@ viberoom supports (Windows, macOS, Linux) it was run. A recipe nobody here can v
 viberoom is AGPL-3.0-or-later. By proposing a change you agree that, when the author writes it into
 the project, the resulting code is the author's under that licence, and that your name may be used
 to credit the idea.
+
+
+## Room MCP operations
+
+The server advertises five frequent operations (`check_room`, `search_history`,
+`read_message`, `memory`, `load_skill`) plus `tool_search` and `tool_call`.
+Search with short English keywords for the complete compact catalogue. Exact
+operation names return their full schema; execute deferred operations with
+`tool_call({name, arguments})`. Search results do not dynamically register tools
+in the client. Lexical rank is not evidence that a capability exists.
+
+`src/tool-spec.ts` is the registry for both interfaces. Keep a concise purpose
+beside each operation and test completeness as well as ranking. Validation is
+strict and does not coerce, drop, or fill arguments. Hub authorization and human
+proposal cards apply equally to direct and wrapped calls. Legacy direct names
+remain callable for already-connected clients but are no longer advertised.
+Restart agent sessions after changing the server contract.
+
+Client allow/deny rules keyed by old tool names do not automatically transfer to
+`tool_call`. Do not grant it a persistent blanket permission. The room preserves
+per-operation one-shot handling, shows the nested operation and filters persistent
+wrapper grants from its permission cards. Search is read-only. A timeout on a
+write is an unknown outcome: inspect it before retrying.
+
+Diagnostic `mcp tool usage` rows contain a call ID, operation, route, schema
+version, outcome and duration, never arguments or search text. An attempt and its
+result share an ID; reporting is best-effort, so an unmatched attempt is not proof
+of a failed operation. These rows measure tool use, not task correctness.

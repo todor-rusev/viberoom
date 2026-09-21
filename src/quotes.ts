@@ -7,7 +7,7 @@ export const READ_AROUND_MAX = 5;
 export interface QuoteInput {
   n?: number;
   id?: string;
-  seq: number;
+  seq?: number;
   text: string;
 }
 
@@ -15,7 +15,7 @@ export interface Quote {
   id?: string;
   originSeq?: number;
   n: number;
-  seq: number;
+  seq?: number;
   from: string;
   fromName: string;
   ts: number;
@@ -33,26 +33,22 @@ export interface QuotableMessage {
   audience?: "agents" | "human";
 }
 
-export function resolveQuotes(inputs: QuoteInput[], messages: QuotableMessage[], writing?: ReadonlySet<string>): Quote[] {
+export function resolveQuotes(inputs: QuoteInput[], messages: QuotableMessage[], drafts?: ReadonlyMap<string, QuotableMessage>): Quote[] {
   const out: Quote[] = [];
   const used = new Set<number>();
   let next = 1;
   for (const input of inputs.slice(0, QUOTES_PER_MESSAGE)) {
     const wantedId = typeof input?.id === "string" && input.id ? input.id : null;
     const byId = wantedId ? messages.find((m) => m.id === wantedId) : undefined;
-    if (wantedId && !byId) {
-      throw new Error(
-        writing?.has(wantedId)
-          ? "the reply that fragment comes from has not finished yet; send again in a moment (your text is kept)"
-          : "the message that fragment comes from is no longer in this room",
-      );
-    }
-    const seq = byId ? byId.seq : Number(input?.seq);
-    const source = byId ?? (Number.isInteger(seq) && seq > 0 ? messages.find((m) => m.seq === seq) : undefined);
+    const draft = wantedId && !byId ? drafts?.get(wantedId) : undefined;
+    if (wantedId && !byId && !draft) throw new Error("the message that fragment comes from is no longer in this room");
+    const seq = byId ? byId.seq : draft ? undefined : Number(input?.seq);
+    const source = byId ?? draft ?? (seq !== undefined && Number.isInteger(seq) && seq > 0 ? messages.find((m) => m.seq === seq) : undefined);
     if (!source) throw new Error(`quoted message #${String(input?.seq)} is not in this room`);
-    if (source.kind !== "chat") throw new Error(`message #${seq} is not a chat message; only those can be quoted`);
+    const named = seq === undefined ? "the reply still being written" : `message #${seq}`;
+    if (source.kind !== "chat") throw new Error(`${named} is not a chat message; only those can be quoted`);
     const text = String(input.text ?? "").trim().slice(0, QUOTE_MAX_CHARS) || source.text.trim().slice(0, QUOTE_MAX_CHARS);
-    if (!text) throw new Error(`message #${seq} has no text to quote`);
+    if (!text) throw new Error(`${named} has no text to quote${seq === undefined ? " yet" : ""}`);
     const wanted = Number(input.n);
     let n = Number.isInteger(wanted) && wanted > 0 && !used.has(wanted) ? wanted : 0;
     if (!n) {
@@ -60,7 +56,7 @@ export function resolveQuotes(inputs: QuoteInput[], messages: QuotableMessage[],
       n = next;
     }
     used.add(n);
-    out.push({ n, seq, ...(source.id ? { id: source.id } : {}), from: source.from, fromName: source.fromName, ts: source.ts, text });
+    out.push({ n, ...(seq === undefined ? {} : { seq }), ...(source.id ? { id: source.id } : {}), from: source.from, fromName: source.fromName, ts: source.ts, text });
   }
   return out;
 }

@@ -581,6 +581,21 @@
             return "~";
           },
         },
+        {
+          name: "windowsPath",
+          level: "inline",
+          start(src) {
+            return src.search(/(?:[A-Za-z]:\\|~\\)/);
+          },
+          tokenizer(src) {
+            if (!/^(?:[A-Za-z]:\\|~\\)/.test(src)) return;
+            const match = new RegExp(OPEN_RE.source).exec(src);
+            if (match && match.index === 0) return { type: "windowsPath", raw: match[0], text: match[0] };
+          },
+          renderer(token) {
+            return esc(token.text);
+          },
+        },
       ],
       renderer: {
         html(token) {
@@ -688,8 +703,11 @@
     return orphans.length ? out + orphans.map(quoteCard).join("") : out;
   }
   function quoteCard(q) {
-    const head = `${ic("quote")}<b>${esc(q.fromName || "")}</b><span class="q-when">#${esc(String(q.seq))}${q.ts ? ` · ${esc(time(q.ts))}` : ""}</span>`;
-    return `<span class="quote" data-seq="${esc(String(q.seq))}" role="button" tabindex="0" title="Go to the message this comes from"><span class="q-head">${head}</span><span class="q-text">${esc(q.text || "")}</span></span>`;
+    const numbered = Number(q.seq) > 0;
+    const when = `${numbered ? `#${esc(String(q.seq))}` : ""}${q.ts ? `${numbered ? " · " : ""}${esc(time(q.ts))}` : ""}`;
+    const head = `${ic("quote")}<b>${esc(q.fromName || "")}</b><span class="q-when">${when}</span>`;
+    const ref = `${numbered ? ` data-seq="${esc(String(q.seq))}"` : ""}${q.id ? ` data-quoted-id="${esc(String(q.id))}"` : ""}`;
+    return `<span class="quote"${ref} role="button" tabindex="0" title="Go to the message this comes from"><span class="q-head">${head}</span><span class="q-text">${esc(q.text || "")}</span></span>`;
   }
   function imageRefs(html, images) {
     const numbers = new Set(images.map((image, i) => image.n || i + 1));
@@ -1338,6 +1356,7 @@
     return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   }
   let stuck = true;
+  let readingAway = false;
   const CALM = (() => { const v = new URLSearchParams(location.search).get("calm"); return ["hold", "reserve", "reserve-cap"].includes(v) ? v : "off"; })();
   const calm = { held: false, reserve: 0, initial: 0, baseContent: 0 };
   if (CALM !== "off") document.documentElement.dataset.calm = CALM;
@@ -1402,6 +1421,7 @@
     els.messages.scrollTop = els.messages.scrollHeight;
     els.jumpLatest.hidden = true;
     stuck = true;
+    readingAway = false;
     settled = 0;
     if (!settling) settleBottom(20);
   }
@@ -2827,7 +2847,7 @@
     const shot = e.target.closest(".shot");
     if (shot) return void openLightbox(shot.dataset.src, shot.title);
     const quote = e.target.closest(".quote");
-    if (quote) return void revealSeq(Number(quote.dataset.seq));
+    if (quote) return void revealQuote(quote.dataset);
     const ref = e.target.closest(".img-ref");
     if (!ref) return;
     const msg = ref.closest(".msg");
@@ -3641,6 +3661,14 @@
     }));
   }
 
+  async function revealQuote(ref) {
+    const seq = Number(ref.seq);
+    if (seq > 0) return revealSeq(seq);
+    const live = ref.quotedId ? els.messages.querySelector(`.msg[data-id="${CSS.escape(ref.quotedId)}"]`) : null;
+    if (live) return jumpToMessage(live);
+    toast("That reply never finished, so there is no message to go to.", "warn");
+    return false;
+  }
   async function revealSeq(seq) {
     const room = currentRoom();
     if (!room || !Number.isFinite(seq)) return false;
@@ -4197,6 +4225,7 @@
   function leaveTheEndForText() {
     if (!stuck) return;
     stuck = false;
+    readingAway = true;
     calm.held = false;
     els.jumpLatest.hidden = false;
   }
@@ -4727,14 +4756,17 @@
 
 
   function placeCard(card, room, ts) {
-    let anchor = null;
-    for (const m of room.messages) {
-      if (m.ts > ts) break;
-      const el = els.messages.querySelector(`.msg[data-id="${CSS.escape(m.id)}"]`);
-      if (el) anchor = el;
+    let anchorId = null;
+    for (const m of room.messages) if (m.ts <= ts) anchorId = m.id;
+    if (anchorId) {
+      const anchor = els.messages.querySelector(`.msg[data-id="${CSS.escape(anchorId)}"]`);
+      if (anchor) { anchor.insertAdjacentElement("afterend", card); return true; }
+      return false;
     }
-    if (anchor) anchor.insertAdjacentElement("afterend", card);
-    else els.messages.appendChild(card);
+    const firstId = room.messages[0] && room.messages[0].id;
+    const first = firstId ? els.messages.querySelector(`.msg[data-id="${CSS.escape(firstId)}"]`) : null;
+    if (first) { first.insertAdjacentElement("beforebegin", card); return true; }
+    return false;
   }
   const OPTION_TONE = { allow_once: "ok", allow_always: "ok", reject_once: "no", reject_always: "no" };
   function renderPermission(room, perm) {
@@ -5228,7 +5260,7 @@
         ${field("Folder", `<span class="dir-row"><input type="text" id="rp-dir" maxlength="1000" value="${esc(room.dir)}" spellcheck="false">${UI.html("button", { label: "Browse", icon: "folder", kind: "ghost", id: "rp-dir-browse", title: "Choose a folder", hook: "browse-btn" })}</span>`, "Where the vibemates read and write. Changing it restarts them in the new folder; they replay the last messages.")}
       `)}
       ${settingsGroup("rp-rules-section", "Rules and language", `
-        <div class="field mention-host"><span class="label">Room rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">One rule per line; type @ to reference a participant.<span class="count" id="rp-rules-count"></span></span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></div>
+        <div class="field mention-host"><span class="label">Room rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">How the team works together. Vibemates can propose changes for your approval. One rule per line; type @ to reference a participant.<span class="count" id="rp-rules-count"></span></span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></div>
         ${field("Language", `<input type="text" id="rp-lang" value="${esc(lang)}" placeholder="follow the human (default), or e.g. English">`)}
       `)}
       ${settingsGroup("rp-turn-taking", "Turn taking", `
@@ -8613,12 +8645,14 @@
     }
   });
   quotePop.addEventListener("mousedown", (e) => e.preventDefault());
-  quotePop.addEventListener("click", () => {
-    if (quotePopFor) addQuote(quotePopFor.m, quotePopFor.text);
+  function quoteTheSelection() {
+    const found = quotePopFor;
     quotePop.hidden = true;
     quotePopFor = null;
     window.getSelection().removeAllRanges();
-  });
+    if (found) addQuote(found.m, found.text);
+  }
+  quotePop.addEventListener("click", quoteTheSelection);
 
   els.messages.addEventListener("copy", (e) => {
     const found = bubbleSelection();
@@ -9242,11 +9276,19 @@
     const byHand = Date.now() - lastUserScrollAt < 700;
     if (byHand && calm.reserve > 0) calmRelease();
     if (byHand) {
-      if (top < lastScrollTop) stuck = false;
-      else if (!humanHoldsText() && els.messages.scrollHeight - top - els.messages.clientHeight < 12) stuck = true;
+      if (top < lastScrollTop) {
+        stuck = false;
+        readingAway = true;
+      } else if (top > lastScrollTop && !humanHoldsText() && els.messages.scrollHeight - top - els.messages.clientHeight < 12) {
+        stuck = true;
+        readingAway = false;
+      }
     } else if (calm.held) { }
-    else if (!humanHoldsText() && nearBottom()) stuck = true;
-    else if (top < lastScrollTop) stuck = false;
+    else if (!humanHoldsText() && nearBottom() && !readingAway) stuck = true;
+    else if (top < lastScrollTop) {
+      stuck = false;
+      readingAway = true;
+    }
     if (stuck) calm.held = false;
     lastScrollTop = top;
     rememberReader();

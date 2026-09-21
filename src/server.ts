@@ -1,5 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
+import { parseToolUsage } from "./tool-usage.js";
 import { cursorOf, type Cursor, type PageQuery } from "./history-store.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -1177,6 +1178,14 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       const target = hub.resolveMcpToken(token);
       if (target) target.room.skillToolReady(target.participantId, token);
       sendJson(res, 200, { ok: !!target });
+      return;
+    }
+
+    if (path === "/api/mcp/tool-usage") {
+      const target = hub.resolveMcpToken(String(body.token ?? ""));
+      const event = parseToolUsage(body);
+      if (target && event) log.info(`mcp tool usage: ${JSON.stringify({ ...event, participantId: target.participantId, roomId: target.room.id })}`);
+      sendJson(res, target ? 200 : 403, { ok: !!target && !!event });
       return;
     }
 

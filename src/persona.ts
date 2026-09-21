@@ -1,6 +1,8 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
+import { DISCOVERY_INSTRUCTIONS } from "./tool-spec.js";
 import { mkdirSync } from "node:fs";
+import { instructionBlock, type InstructionContents } from "./instruction-delivery.js";
 
 export const SILENT_MARKER = "[silent]";
 export const REQUEST_BRIEF_MARKER = "[request-brief]";
@@ -90,7 +92,7 @@ export const ROOM_SETTINGS_SPEC: Record<keyof RoomSettings, SettingSpec> = {
   backlogCap: { kind: "integer", min: 1, max: 1000, default: 50, brief: false, agent: true, doc: "Most missed messages a vibemate reads on its next turn; older ones are dropped with a note." },
   showVendorInRoster: { kind: "boolean", default: false, brief: true, agent: true, doc: "The roster in the brief names each vibemate's vendor (Claude, Codex, ...)." },
   briefTextLimit: { kind: "integer", min: 500, max: 32_000, default: 8000, brief: false, agent: true, doc: "Most characters a vibio (a vibemate's role) or the room rules may have; both go into every brief. Text over it is refused with the numbers, never cut." },
-  customRules: { kind: "text", max: 32_000, default: "", brief: true, agent: true, doc: "The room rules, one per line, at most briefTextLimit characters; every vibemate gets them under 'Room rules (set by the human)'. @Name inside a rule is a live reference." },
+  customRules: { kind: "text", max: 32_000, default: "", brief: true, agent: true, doc: "The room rules, one per line, at most briefTextLimit characters; every vibemate gets them under 'Room rules (approved by the human)'. @Name inside a rule is a live reference." },
   refereeAction: { kind: "enum", values: ["next-header", "retry-hidden"], default: "next-header", brief: false, agent: true, doc: "On a mechanical violation (wrong language, too long): remind in the next header, or hold the reply and ask for a corrected one in a hidden turn." },
   turnTaking: { kind: "enum", values: ["parallel", "one-at-a-time"], default: "parallel", brief: false, agent: true, doc: "parallel: every addressed vibemate answers at once; one-at-a-time: one speaks, the others queue and see the earlier replies first." },
   searchOtherRooms: { kind: "boolean", default: true, brief: false, agent: true, doc: "Vibemates here may search the other rooms that also share theirs, and those rooms' vibemates may find this room's messages; hidden and deleted messages are never shared. Off: this room is searched only from inside it, and its vibemates see no other room." },
@@ -200,7 +202,7 @@ const MARKER_PATTERN = /\[(img|quote)\s+(\d+)\]/gi;
 
 export interface BacklogQuote {
   n: number;
-  seq: number;
+  seq?: number;
   fromName: string;
   ts: number;
   text: string;
@@ -244,7 +246,7 @@ export function formatQuoteTime(ts: number): string {
 }
 
 export function quoteBlock(quote: BacklogQuote): string {
-  const head = `> ${quote.fromName} (#${quote.seq}, ${formatQuoteTime(quote.ts)}):`;
+  const head = `> ${quote.fromName} (${quote.seq ? `#${quote.seq}` : "no number yet"}, ${formatQuoteTime(quote.ts)}):`;
   const lines = quote.text.split(/\r?\n/);
   if (lines.length === 1) return `${head} ${lines[0]}`;
   return [head, ...lines.map((l) => `> ${l}`)].join("\n");
@@ -334,6 +336,7 @@ function describeEntry(entry: RosterEntry, settings: RoomSettings): string {
 function skillsSection(skills: SkillsForPrompt): string[] {
   const lines: string[] = [];
   lines.push("");
+  if (skills.channel === "tool") lines.push(DISCOVERY_INSTRUCTIONS);
   if (!skills.items.length && !skills.canCreate) return lines;
   if (skills.items.length) {
     lines.push("Skills available to you (each is a set of instructions for one kind of task; load one only when what you are asked to do matches its description):");
@@ -355,13 +358,7 @@ function skillsSection(skills: SkillsForPrompt): string[] {
   }
   if (skills.canCreate) {
     lines.push(
-      `You may also create skills for the shared library when a procedure is worth reusing (by you later, or by other agents): first load the built-in skill "${SKILL_WRITER_NAME}" with the viberoom ${SKILL_TOOL_NAME} tool for the rules of a good skill, then call the viberoom tools create_skill (name, description, instructions) and attach_skill to give it to yourself or to other agents. These are MCP tools of the "viberoom" server, not your own skill commands. The human sees every new skill in Settings.`,
-    );
-    lines.push(
-      `You may also design rooms: load the built-in skill "${ROOM_DESIGNER_NAME}" first, then describe_room for the facts, lint_room_design to check a draft (it previews the brief the vibemates would read), create_template to save a template the human can pick under New room, and propose_room_changes to suggest a change to this room: it becomes a card the human applies or rejects, so nothing here changes without their click.`,
-    );
-    lines.push(
-      `You may also design looks (how the human's window is drawn: colours, shadows, corners, fonts): load the built-in skill "${LOOK_DESIGNER_NAME}" first, then describe_looks for the facts, lint_look to check a draft (it measures whether the words read), create_look to save a look the human can pick under Settings, and propose_look_changes to suggest wearing a look or fine-tuning one: a card the human applies or rejects.`,
+      `Built-in skills are available even when not attached: ${SKILL_WRITER_NAME} for creating or updating reusable shared skills; ${ROOM_DESIGNER_NAME} for rooms, templates and team rules; ${LOOK_DESIGNER_NAME} for colours, shadows, corners and fonts. Before these tasks, call the viberoom ${SKILL_TOOL_NAME} tool with the matching name and follow its instructions. Use viberoom tool_search/tool_call for its operations, not your own skill commands. Room and look changes are proposals the human applies or rejects.`,
     );
   } else if (skills.items.length) {
     lines.push("Skills are created by the human or by agents that have the room's tools; if you want a new one, describe it in the room.");
@@ -388,8 +385,8 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
   );
   lines.push("The room keeps conversation history, including messages from before you joined; access to other rooms depends on the human's sharing settings.");
   lines.push("");
-  const role = persona.role.trim();
-  lines.push(role ? `Your role: ${role} Stay in character as ${persona.name} at all times.` : `Stay in character as ${persona.name} at all times.`);
+  lines.push(`Stay in character as ${persona.name} at all times.`);
+  lines.push("Your additional room rules and personal role arrive in <room-rules> and <vibio>. Each newly delivered block completely replaces the earlier block of the same kind; an explicit withdrawal clears it. The header identifies the current revisions. If you lack a referenced block, request the full instructions with exactly [request-brief].");
   if (settings.topic.trim()) lines.push(`Room topic: ${settings.topic.trim()}`);
   lines.push("");
   lines.push("Rules of the room:");
@@ -410,15 +407,6 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
   lines.push(`- Tools: ${tools}`);
   if (settings.maxSentences) lines.push(`- Length: at most ${settings.maxSentences} sentences.`);
   lines.push("- Format: plain chat text; Markdown is rendered (lists, tables, code, bold), so use it lightly and skip headings. For a diagram, write a ```mermaid block; for tabular data, a Markdown table or a ```csv block: the room renders both. Name files by their absolute path: the human can click them, and .md / .csv files open right in the room.");
-  const custom = settings.customRules
-    .split(/\r?\n/)
-    .map((l) => l.trim().replace(/^[-*•]\s*/, ""))
-    .filter((l) => l.length > 0);
-  if (custom.length) {
-    lines.push("");
-    lines.push(`Room rules (set by ${human}):`);
-    for (const rule of custom) lines.push(`- ${rule}`);
-  }
   lines.push("");
   lines.push(`Participants: ${others.length ? others.map((r) => describeEntry(r, settings)).join("; ") : "nobody else yet"}.`);
   if (skills && (skills.items.length || skills.canCreate)) lines.push(...skillsSection(skills));
@@ -427,20 +415,43 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
     `How prompts look: <room-header> (who you are, who is here, the hop counter, the room's notes), then <messages> (everything posted since your previous turn, oldest first, as "Name -> @Target: text"; room events as "· text"), then "Reply as ${persona.name}." Your own earlier messages are not repeated. Reply with the text of your message only.`,
   );
   lines.push(
-    `A line "> Name (#N, date time): …" inside a message quotes an earlier message of this room, pasted by the writer: those are Name's words, not the writer's, and #N is the room's number of that message. ${
+    `A line "> Name (#N, date time): …" inside a message quotes an earlier message of this room, pasted by the writer: those are Name's words, not the writer's, and #N is the room's number of that message (a reply that had not finished when it was quoted shows "no number yet" until it lands). ${
       skills?.channel === "tool"
         ? "When the fragment is not enough, the viberoom tool read_message takes the number and returns the whole message (around: N adds its neighbours)."
         : "When the fragment is not enough, ask in the room for the whole message."
     }`,
   );
   if (skills?.channel === "tool") lines.push('Use search_history for earlier conversation (rooms: "all" includes shared rooms), then read_message with the result\'s room and seq for the full text; recent messages are searchable too.');
-  if (skills?.channel === "tool") lines.push("New room messages arrive automatically on your next turn, not while you work. If you expect an update sooner, you may call check_room. Its optional draft.name reads one other vibemate's unfinished visible text, not a final reply.");
   if (previousNotes && previousNotes.trim()) {
     lines.push("");
     lines.push(`Notes from your previous session (written by you): ${previousNotes.trim()}`);
   }
+  lines.push("New room messages arrive automatically on your next turn, not while you work.");
+  if (skills?.channel === "tool") lines.push("During long tasks, use check_room at meaningful checkpoints and before finishing; do not poll in a waiting loop. Other agents' unfinished replies are not delivered in <messages>; check_room with draft.name reads their visible draft, not a final reply.");
   lines.push("</room-brief>");
   return lines.join("\n");
+}
+
+export function buildRoomRules(settings: RoomSettings): string {
+  const rules = settings.customRules.split(/\r?\n/).map(line => line.trim().replace(/^[-*•]\s*/, "")).filter(Boolean);
+  return rules.length
+    ? `Room rules (approved by ${settings.humanName}):\n${rules.map(rule => `- ${rule}`).join("\n")}`
+    : "No additional room rules. Any previously supplied additional room rules are withdrawn.";
+}
+
+export function buildVibio(persona: Persona): string {
+  return persona.role.trim()
+    ? `Your role: ${persona.role.trim()}`
+    : "No additional personal role. Any previously supplied additional personal role is withdrawn.";
+}
+
+export function buildInstructionContents(settings: RoomSettings, persona: Persona, roster: RosterEntry[], skills?: SkillsForPrompt): InstructionContents {
+  return { brief: buildBrief(settings, persona, roster, undefined, skills), roomRules: buildRoomRules(settings), vibio: buildVibio(persona) };
+}
+
+export function buildInstructionPreview(settings: RoomSettings, persona: Persona, roster: RosterEntry[], skills?: SkillsForPrompt): string {
+  const contents = buildInstructionContents(settings, persona, roster, skills);
+  return [contents.brief, instructionBlock("room-rules", contents.roomRules), instructionBlock("vibio", contents.vibio)].join("\n");
 }
 
 export function buildHeader(
@@ -490,6 +501,8 @@ export function composeSkillBlock(parts: { name: string; text: string; invokedBy
 
 export function composePrompt(parts: {
   brief?: string;
+  roomRules?: string;
+  vibio?: string;
   memory?: string;
   header: string;
   skills?: string[];
@@ -504,6 +517,8 @@ export function composePrompt(parts: {
     else out.push({ type: "text", text });
   };
   if (parts.brief) push(`${parts.brief}\n`);
+  if (parts.roomRules) push(`${parts.roomRules}\n`);
+  if (parts.vibio) push(`${parts.vibio}\n`);
   if (parts.memory) push(`${parts.memory}\n`);
   push(`${parts.header}\n`);
   for (const block of parts.skills ?? []) push(`${block}\n`);

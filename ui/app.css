@@ -5,7 +5,7 @@
   --side-w: 292px;
   --details-w: 600px;
   --gap: 6px;
-  --chat-head-h: 56px;
+  --chat-head-h: 46px;
   --composer-gap: 6px;
   --composer-min-h: 56px;
 }
@@ -287,7 +287,7 @@ body.keyless #app, body.keyless .toasts { display: none; }
 .tip b { color: var(--primary); font-weight: 800; }
 @media (max-width: 880px) { .hero { grid-template-columns: 1fr; } .hero-art { min-height: 0; } }
 .chat-title { flex: 1 1 320px; min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.chat-sub { flex-basis: 100%; min-width: 0; overflow-wrap: anywhere; color: var(--muted); font-size: calc(12px * var(--fs-scale)); font-weight: 600; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.chat-sub { min-width: 0; overflow-wrap: anywhere; color: var(--muted); font-size: calc(12px * var(--fs-scale)); font-weight: 600; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .chat-sub code { font-size: calc(11px * var(--fs-scale)); }
 .chat-sub .dir-chip { cursor: help; }
 .chat-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; margin-inline-start: auto; }
@@ -346,7 +346,7 @@ body.keyless #app, body.keyless .toasts { display: none; }
 .tl-pop::before { content: ""; position: absolute; top: -6px; bottom: -6px; right: -6px; width: 6px; }
 .timeline.left .tl-pop::before { right: auto; left: -6px; }
 .tl-av { flex: none; width: 16px; height: 16px; margin-top: 1px; }
-.chat-head { position: relative; flex: none; flex-wrap: wrap; min-height: var(--chat-head-h); padding: 10px 18px; }
+.chat-head { position: relative; flex: none; flex-wrap: wrap; min-height: var(--chat-head-h); padding: 6px 18px; }
 .chat-conversation { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .chat-head h1 { font-size: calc(17px * var(--fs-scale)); }
 .working-now { position: absolute; left: 18px; bottom: -13px; display: flex; align-items: flex-end; gap: 6px; margin: 0; z-index: 6; }

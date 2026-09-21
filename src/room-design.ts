@@ -1,6 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { AGENT_SETTINGS, DEFAULT_ROOM_SETTINGS, NAME_PATTERN, ROOM_SETTINGS_SPEC, SILENT_MARKER, REQUEST_BRIEF_MARKER, buildBrief, coerceSetting, type Persona, type RoomSettings, type RosterEntry, type SkillsForPrompt } from "./persona.js";
+import { AGENT_SETTINGS, DEFAULT_ROOM_SETTINGS, NAME_PATTERN, ROOM_SETTINGS_SPEC, SILENT_MARKER, REQUEST_BRIEF_MARKER, buildInstructionPreview, coerceSetting, type Persona, type RoomSettings, type RosterEntry, type SkillsForPrompt } from "./persona.js";
 import type { LintIssue, LintResult } from "./skills.js";
 import type { TemplateVibemate } from "./templates.js";
 
@@ -140,7 +140,7 @@ export function lintRoomDesign(design: RoomDesign, context: RoomDesignContext): 
     channel: context.skills.channel,
     canCreate: context.skills.canCreate,
   };
-  return { errors, warnings, settings, preview: buildBrief(settings, persona, roster, undefined, skills) };
+  return { errors, warnings, settings, preview: buildInstructionPreview(settings, persona, roster, skills) };
 }
 
 

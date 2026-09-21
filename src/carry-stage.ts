@@ -214,7 +214,7 @@ export async function exportCarry(job: ExportJob): Promise<{ bytes: number; encr
           return asset ? { ...image, sha256: asset.hash, bytes: asset.bytes } : image;
         }) };
         if (state.message.quotes) state.message = { ...state.message, quotes: state.message.quotes.map(q => {
-          if (q.id) return q;
+          if (q.id || q.seq === undefined) return q;
           const matches = (bySeq.get(q.seq) ?? []).filter(m => m.from === q.from && m.ts === q.ts);
           return matches.length === 1 ? { ...q, id: matches[0].id } : q;
         }) };

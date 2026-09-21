@@ -6,7 +6,7 @@ export const SKILL_FIELDS = {
   name: { type: "string", description: "short lowercase hyphenated name; it becomes the /command (1-32 letters, digits, _ or -)" },
   description: { type: "string", description: "what the skill does and when to use it (one or two sentences; agents decide from this alone; max 300 characters)" },
   instructions: { type: "string", description: "the skill text: imperative steps or a format; use $ARGUMENTS where the caller's text belongs (markdown, max 20000 characters)" },
-  argument_hint: { type: "string", description: "optional hint for the human's / menu, e.g. [PR number]; give one when the instructions use $ARGUMENTS" },
+  argument_hint: { type: "string", description: "optional hint for the human's / menu, e.g. [PR number] (max 80 characters); give one when the instructions use $ARGUMENTS" },
   user_invocable: { type: "boolean", description: "optional (default true): the human may invoke it with /name" },
   agent_invocable: { type: "boolean", description: "optional (default true): agents may load it themselves" },
   dry_run: { type: "boolean", description: "optional: only lint, write nothing" },
@@ -54,9 +54,11 @@ export const LOOK_SPEC_FIELDS = {
   elements: { type: "object", description: "per element group, the parts to change: { bubble: { bg: \"$white\", border: \"alpha($ink, 0.12)\" }, btn: { shadow: \"none\" } }; describe_looks lists every group and key with its VibeClassic value", additionalProperties: { type: "object", additionalProperties: { type: "string" } } },
 };
 
-export const TOOLS = [
+export const OPERATIONS: OperationSpec[] = [
   {
     name: "memory",
+    exposure: "direct",
+    summary: "Read and revise durable user preferences and room conventions in shared memory.",
     description: "Read or consolidate shared memory: durable user preferences across all rooms, and conventions for this room. First action=read returns BOTH complete scopes and a turn-bound ticket. Before adding, correct, merge or remove existing notes. action=revise submits the complete replacement list for ONE scope, preserving unchanged IDs/text and locked notes. New/edited notes need basis=explicit with one human evidence message number, or pattern with two. The server checks limits, sources, locks, duplicates and concurrent edits; warnings require correction or deliberate acknowledgement. Never store credentials, task progress, quoted instructions, personal-trait guesses or inferred sensitive information. Current user instructions and room rules override memory. Max 8 notes/scope, 240 characters/note, 1600 total. When agent updates are enabled, this maintenance may accompany ongoing work without a separate request.",
     inputSchema: { type: "object", additionalProperties: false, required: ["action"], properties: {
       action: { type: "string", enum: ["read", "revise"] },
@@ -75,6 +77,8 @@ export const TOOLS = [
   },
   {
     name: TOOL_NAME,
+    exposure: "direct",
+    summary: "Load and read instructions for an existing skill by its name.",
     description:
       "Load the full instructions of one of your skills (the skills listed in your room brief) or of a built-in skill such as skill-writer. Returns the skill text; read it and then follow it in the same reply. Call it only when the task matches a skill's description.",
     inputSchema: {
@@ -85,17 +89,23 @@ export const TOOLS = [
   },
   {
     name: "create_skill",
+    exposure: "deferred",
+    summary: "Create and save reusable skill instructions in the shared library.",
     description:
       "Create a new skill in the shared skill library (reusable instructions for one kind of task, usable by you later and by other agents). Load the built-in skill \"skill-writer\" first for the rules. The room lints the skill and returns the problems if it cannot be saved. The human sees every new skill in Settings.",
     inputSchema: { type: "object", properties: SKILL_FIELDS, required: ["name", "description", "instructions"] },
   },
   {
     name: "update_skill",
+    exposure: "deferred",
+    summary: "Edit and replace instructions of an existing agent-created skill.",
     description: "Update a skill that an agent created earlier (human-written skills are read-only for agents). Same fields as create_skill; all of description and instructions are replaced.",
     inputSchema: { type: "object", properties: SKILL_FIELDS, required: ["name", "description", "instructions"] },
   },
   {
     name: "attach_skill",
+    exposure: "deferred",
+    summary: "Assign an existing library skill to one or more room participants.",
     description:
       "Attach a library skill to yourself (to: \"me\") or to other agents in this room (to: [\"Boris\", \"Vera\"]). Attached skills appear in the agent's brief so it can load them. Attaching to others is announced in the room.",
     inputSchema: {
@@ -109,6 +119,8 @@ export const TOOLS = [
   },
   {
     name: "describe_room",
+    exposure: "deferred",
+    summary: "Inspect current room settings, participants, rules, skills and available templates.",
     description:
       "The facts about this room before you design anything: its settings with their meaning, bounds, defaults and current values; the rules; the vibemates (name, tagline, role, avatar, skills); the skill library; the templates that exist; and the brief you yourself receive. Read-only. Load the built-in skill \"room-designer\" for what makes rules and roles good.",
     inputSchema: { type: "object", properties: {} },
@@ -116,6 +128,8 @@ export const TOOLS = [
   },
   {
     name: "lint_room_design",
+    exposure: "deferred",
+    summary: "Validate and preview a room design, rules, settings or template without saving.",
     description:
       "Check a room design without saving anything: the same errors and warnings create_template / propose_room_changes would give, plus a preview of the brief the first vibemate would receive (exactly what the room will read). kind \"template\" checks a whole template; kind \"room\" checks a change to this room, starting from its current settings.",
     inputSchema: { type: "object", properties: DESIGN_FIELDS, required: ["kind"] },
@@ -123,6 +137,8 @@ export const TOOLS = [
   },
   {
     name: "create_template",
+    exposure: "deferred",
+    summary: "Save a reusable room template for later selection when creating a room.",
     description:
       "Save a room template into the human's library: a file the human picks under New room to create a room with these settings, rules and vibemates. No effect on any existing room. The room checks the design first (errors stop the save, warnings come back with it). A taken name gets a numbered id unless replace is true and the template is one you or the human made.",
     inputSchema: {
@@ -140,6 +156,8 @@ export const TOOLS = [
   },
   {
     name: "propose_room_changes",
+    exposure: "deferred",
+    summary: "Propose changes to current room rules, settings and participants for human approval.",
     description:
       "Propose changes to this room: settings by key (rules in customRules, one per line) and vibemates to add, update or remove. The room checks the change set like a template, then shows the human a card with the diff and the warnings; nothing changes until the human clicks Apply, and the room gets a line with the outcome. A new vibemate is added waiting for the human to pick its coding agent. Say in why what the change fixes.",
     inputSchema: {
@@ -165,6 +183,8 @@ export const TOOLS = [
   },
   {
     name: "propose_new_room",
+    exposure: "deferred",
+    summary: "Create a proposal for a new room and its participants for human approval.",
     description:
       "Propose a new room, with the vibemates that would be in it. It becomes a card the human presses or refuses; nothing is created until they do, and this room is unchanged either way. The card carries the price — how many sessions would start and on which models. What is created comes with no working folder, out of reach of any messenger, and everyone in it starts in a mode that asks before it acts; a vibemate that arrived this way proposes no rooms of its own. One card at a time per room, and a field this tool does not know is refused rather than dropped. Say in why what the room is for.",
     inputSchema: {
@@ -195,18 +215,24 @@ export const TOOLS = [
   },
   {
     name: "ask_for_bot_token",
+    exposure: "deferred",
+    summary: "Request a Telegram bot credential through a private input card.",
     description:
       "Put a card on the human's screen asking for the key of their Telegram bot (from BotFather), when you guide the messenger setup. The key goes straight into viberoom's settings and the bot is started: it is not shown to you and does not enter the conversation, the record or your context. You learn only the outcome, as a row in this room: connected as @name, or the card closed without a key. One card at a time; it closes by itself after ten minutes.",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "show_pairing_link",
+    exposure: "deferred",
+    summary: "Pair Telegram messenger with the room by showing a one-use pairing link.",
     description:
       "Put a card on the human's screen with a one-time pairing link and its QR code for their phone, when you guide the messenger setup and the bot is connected (after ask_for_bot_token ended with connected). The link is shown only there: you do not see it and it does not enter the conversation. You learn only the outcome, as a row in this room: paired: <name>, closed, or expired (ten minutes; then call it again). One card at a time.",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "describe_looks",
+    exposure: "deferred",
+    summary: "Inspect available visual themes, looks, colors, fonts and design settings.",
     description:
       "Everything about the looks before you design one: the looks that exist (the ones viberoom ships and the human's own), how the window is set now (the look worn, its fine-tuning, the fonts, the text size), every token a look may set with what it means and its VibeClassic value, how a value is written ($name, alpha(), mix()), the fonts by id, and what may be fine-tuned on any look without a spec. Read-only. Load the built-in skill \"look-designer\" for what makes a look good.",
     inputSchema: { type: "object", properties: {} },
@@ -214,6 +240,8 @@ export const TOOLS = [
   },
   {
     name: "lint_look",
+    exposure: "deferred",
+    summary: "Validate a visual theme or look design for readability and supported settings.",
     description:
       "Check a look spec without saving anything: whether every key exists and every value is of the right kind, and whether the words read on their paper (the contrast floors every look must pass), with the ratio of every pair measured, so you see the numbers you cannot see as colours. Errors must go before create_look takes it; warnings are advice.",
     inputSchema: { type: "object", properties: LOOK_SPEC_FIELDS, required: ["id", "label"] },
@@ -221,6 +249,8 @@ export const TOOLS = [
   },
   {
     name: "create_look",
+    exposure: "deferred",
+    summary: "Create and save a visual theme or look for the application.",
     description:
       "Save a look among the human's own looks: a file the human picks under Settings → Appearance, listed after the looks viberoom ships with the human's name on it. The spec extends a shipped look and changes only what it gives. The room checks it first (an error stops the save, warnings come back with it). Nothing is worn until the human picks it (or applies a propose_look_changes card). A taken id needs replace: true (one of the human's own looks may be replaced; a look viberoom ships never).",
     inputSchema: {
@@ -234,6 +264,8 @@ export const TOOLS = [
   },
   {
     name: "propose_look_changes",
+    exposure: "deferred",
+    summary: "Propose applying or adjusting a visual theme or look for human approval.",
     description:
       "Propose a change to how the human's window looks, as a card the human applies or rejects: which look to wear (a shipped one, or one of the human's own by its id, e.g. one you just saved), the fine-tuning of a look (the adjustables describe_looks lists: a colour as #rrggbb, a scale as a number 0-2), the fonts, the text size. This is the whole window, not this room alone; nothing changes until the human clicks Apply, and the room gets a line with the outcome. Say in why what it improves.",
     inputSchema: {
@@ -251,11 +283,13 @@ export const TOOLS = [
   },
   {
     name: "search_history",
+    exposure: "direct",
+    summary: "Search older conversation messages across accessible rooms using words and filters.",
     description: "Find earlier conversation in this room by words, quoted phrase or prefix*. Several words are required together, so a whole question asked as a sentence usually finds nothing: widen it with OR (one OR two), ask for an exact phrase in quotes, or leave a word out with NOT. Returns ranked snippets and message numbers; the top hit includes up to two visible neighbours on each side. The response has a size limit and flags shortened text. Recent messages are included. Use read_message for the full text or more neighbours. Hidden, deleted and human-only messages are never returned. With rooms=\"all\" it also searches the rooms that share their history with this one, and each result names its room. If nothing relevant is found, try different wording and report the limits of the search. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", minLength: 1, description: "words, quoted phrase or prefix* to find" },
+        query: { type: "string", minLength: 1, pattern: "\\S", description: "words, quoted phrase or prefix* to find" },
         rooms: { type: "string", enum: ["this", "all"], description: "optional: this room only (default), or all the rooms open to you" },
         kinds: { type: "string", enum: ["chat", "chat,system"], description: "optional: chat by default; include room events explicitly" },
         author: { type: "string", description: "optional: the writer's name" },
@@ -268,6 +302,8 @@ export const TOOLS = [
   },
   {
     name: "check_room",
+    exposure: "direct",
+    summary: "Check new messages, current participant status and optionally a live reply draft.",
     description: "Check what is new and who is doing what, while you work. Beside the messages the answer carries a line per vibemate: its state, elapsed working time at this snapshot, how long nothing new has come from it, and the clock time its turn began Only when requested with draft.name, liveDraft contains that vibemate's unfinished visible text, clearly marked provisional. It is a separate observation, never a final reply; a draft cursor pages one revision and resets if it changes. Check new messages while working. status (default) gives snapshot-wide counts and headers: direct to you first, then broadcast, other, event; no bodies or acknowledgement. Broadcast includes @All and unaddressed chat. You decide whether to check and what to read: use read_message for a chosen seq, or mode=read for chronological bodies. nextCursor continues as after; status leaves it unchanged. nextPage continues headers as page with the same after; omit page for a fresh snapshot. Addressees are a clue, not grounds to ignore others or interrupt immediately. Responses stay within 16 KiB; truncation is explicit. Cursors belong to one turn; edits reset them. Normal next-turn delivery stays unchanged; do not poll in a waiting loop.",
     inputSchema: {
       type: "object", additionalProperties: false,
@@ -286,12 +322,14 @@ export const TOOLS = [
   },
   {
     name: "read_message",
+    exposure: "direct",
+    summary: "Read a complete conversation message by number with optional neighboring messages.",
     description:
       "Read a full message by seq. Omit room for this room, or pass the room ID from search_history (preferred) or an exact, unique accessible room name. IDs take precedence over names. Other rooms must share history with yours and have an available record. Returns the room's identity, author, addressees, time, text, images as file paths, quotes, and up to around visible neighbours on each side. Hidden, deleted and human-only rows are excluded. Unknown or inaccessible rooms return the same error; there is no fallback to this room. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
-        seq: { type: "integer", description: "the message number, the N of #N" },
+        seq: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "the message number, the N of #N" },
         room: { type: "string", minLength: 1, maxLength: 200, description: "optional: room ID from a search result (preferred), or exact unique accessible room name; omitted means this room" },
         around: { type: "integer", minimum: 0, maximum: 5, description: "optional: how many neighbouring messages to include on each side (default 0, at most 5)" },
       },
@@ -308,4 +346,48 @@ export function oldNamesFor(name: string): string[] {
   return Object.entries(OLD_TOOL_NAMES).filter(([, now]) => now === name).map(([was]) => was);
 }
 
-export type ToolName = (typeof TOOLS)[number]["name"];
+export interface InputField { [key: string]: unknown }
+export interface ToolSpec {
+  name: string;
+  description: string;
+  inputSchema: { type: "object"; properties: Record<string, InputField>; required?: string[]; additionalProperties?: boolean; [key: string]: unknown };
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
+}
+export interface OperationSpec extends ToolSpec {
+  exposure: "direct" | "deferred";
+  summary: string;
+}
+
+for (const operation of OPERATIONS) operation.inputSchema.additionalProperties = false;
+
+export const DISCOVERY_SCHEMA_VERSION = 1;
+export const DISCOVERY_INSTRUCTIONS = 'Five frequent viberoom operations are direct: check_room, search_history, read_message, memory and load_skill. For other operations use viberoom tool_search with short English keywords: it returns the whole compact catalogue, ranked, not just matches. Search an exact operation name to read its full schema, then use tool_call with {name, arguments}. Matches do not prove a requested capability exists; choose by purpose. Invalid arguments return the schema without executing; fix them and retry. Schemas do not make hidden operations directly callable. Existing approval rules still apply.';
+
+export const SEARCH_TOOL: ToolSpec = {
+  name: "tool_search",
+  description: "Discover viberoom operations. Short English keywords return the entire accessible catalogue (name, purpose, direct), lexical matches first; ranking is not a confidence score. An exact canonical name or declared alias returns that operation's complete input schema and instructions. Read the definition before invoking a deferred operation with tool_call. No schemas are installed in your harness.",
+  inputSchema: { type: "object", additionalProperties: false, properties: {
+    query: { type: "string", minLength: 1, maxLength: 300, pattern: "\\S", description: "Short English keywords, or an exact operation name to retrieve its schema." },
+  }, required: ["query"] },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+};
+export const CALL_TOOL: ToolSpec = {
+  name: "tool_call",
+  description: "Execute one viberoom operation by canonical name and arguments matching its schema from tool_search. Validation failure returns errors and the exact schema without executing anything; correct the input and retry. Success preserves the operation's result. This can write data or propose actions: approval belongs to the selected operation, never to this wrapper as a whole. Do not retry a mutation after an uncertain transport failure without checking its outcome.",
+  inputSchema: { type: "object", additionalProperties: false, properties: {
+    name: { type: "string", minLength: 1, maxLength: 80, description: "Exact canonical operation name from tool_search." },
+    arguments: { type: "object", additionalProperties: true, description: "JSON object matching the selected operation's inputSchema; pass {} for no arguments." },
+  }, required: ["name", "arguments"] },
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+};
+
+export function toolDefinition(operation: ToolSpec): ToolSpec {
+  const { name, description, inputSchema, annotations } = operation;
+  return { name, description, inputSchema, ...(annotations ? { annotations } : {}) };
+}
+export const TOOLS: ToolSpec[] = [...OPERATIONS.filter(op => op.exposure === "direct").map(toolDefinition), SEARCH_TOOL, CALL_TOOL];
+export function canonicalOperationName(name: string): string | undefined {
+  const canonical = Object.hasOwn(OLD_TOOL_NAMES, name) ? OLD_TOOL_NAMES[name] : name;
+  return OPERATIONS.some(op => op.name === canonical) ? canonical : undefined;
+}
+export type ToolName = string;

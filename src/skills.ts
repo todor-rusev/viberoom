@@ -14,6 +14,7 @@ export const BUILTIN_AUTHOR = "viberoom";
 export const HUMAN_AUTHOR = "human";
 const DESCRIPTION_MAX = 300;
 const DESCRIPTION_MIN_USEFUL = 15;
+const ARGUMENT_HINT_MAX = 80;
 const BODY_MAX = 20_000;
 const KNOWN_FIELDS = new Set([
   "name",
@@ -101,6 +102,7 @@ export function lintSkill(input: {
   else if (description.length < DESCRIPTION_MIN_USEFUL || description.toLowerCase() === name.toLowerCase()) {
     warnings.push({ code: "description-thin", message: "description should say what the skill does and when to use it, not just its name" });
   }
+  if (hint.length > ARGUMENT_HINT_MAX) errors.push({ code: "hint-too-long", message: `argument hint must be at most ${ARGUMENT_HINT_MAX} characters` });
   if (!body) errors.push({ code: "body-empty", message: "the instructions are empty" });
   else if (body.length > BODY_MAX) errors.push({ code: "body-too-long", message: `the instructions must be at most ${BODY_MAX} characters` });
   if (/\[skill:/i.test(body) || /<\/?skill[\s>]/i.test(body)) {
@@ -113,11 +115,15 @@ export function lintSkill(input: {
   return { errors, warnings };
 }
 
+const DEFERRED_OPERATIONS = 'For each operation below, first call viberoom tool_search with its exact name to read the schema, then tool_call with {name, arguments}. These names are operations, not directly exposed tools. Human approval requirements still apply.';
+
 export const SKILL_WRITER: SkillDraft = {
   name: "skill-writer",
   description: "How to write a good skill for this library. Load it before creating or updating a skill with create_skill / update_skill.",
   argumentHint: "",
   body: [
+    DEFERRED_OPERATIONS,
+    "",
     "A skill is a reusable set of instructions for one kind of task. Another agent (or you, later, in another room) will get only this text when the skill is invoked, so it must stand on its own.",
     "",
     "Write it like this:",
@@ -139,20 +145,24 @@ export const SKILL_WRITER: SkillDraft = {
 
 export const ROOM_DESIGNER: SkillDraft = {
   name: ROOM_DESIGNER_NAME,
-  description: "How to design a good viberoom room: rules, vibemates and settings, as a template or as a change to this room. Load it before lint_room_design, create_template or propose_room_changes.",
+  description: "Design rooms and templates, or propose and refine durable rules for how a team works together. Load before lint_room_design, create_template or propose_room_changes.",
   argumentHint: "",
   body: [
-    "A room is a protocol between one human and a few vibemates. The room already tells every vibemate the mechanics (who it is, @Name addressing, the [silent] reply, tools, language, Markdown); your design adds only what the mechanics do not say. Facts about the settings (keys, bounds, defaults, current values) come from the describe_room tool; do not guess them.",
+    DEFERRED_OPERATIONS,
     "",
-    "Rules are the protocol; roles are the people. Write how the vibemates work together once, in the room rules, where all of them read it. A role says who this one is and which way it leans, then ends with \"Everything else is in the room rules\". Two roles that each restate the protocol drift apart.",
+    "A room is a protocol between a human and vibemates. Start with describe_room for current rules, roles, settings and limits; do not guess or repeat mechanics already in the brief.",
     "",
-    "Every rule answers a question this room will actually meet. Find the questions before you write the rules: walk through a working day of this particular room and stop wherever two answers are possible. Who acts, who waits, who decides, what \"done\" looks like, what happens when they disagree. The set differs per room: a pair sharing one codebase has to settle ownership and reporting; a room where one drafts and another critiques has to settle when the critique comes and what it is measured against; a room that only answers questions may need almost nothing. A rule that answers no foreseeable question is weight the vibemate carries on every turn.",
+    "When the current task reveals an important, durable team agreement or recurring coordination problem, you may propose a rule without a separate request. Do not review or invent rules after every task. Explain the concrete benefit.",
     "",
-    "Explain, do not enumerate: a rule with its reason generalises (\"Reply only when addressed: every message to agents costs a turn\"); a list of cases fails at the first case not on it. Silence is a design tool: the most useful rule in a multi-mate room is the one that keeps a vibemate at [silent] when a message does not concern it. Pair it with the settings: agentsWakeEachOther off and a low hopLimit for rooms that report to the human; on and higher (about three times the number of vibemates) for rooms that work things out among themselves. Each vibemate works only on its own task and never touches the other's; when a report changes something the other relies on, it is addressed to the other with one line saying what is wanted.",
+    "Rules are human-approved working instructions. Memory holds evidenced preferences and context; current requests and rules take precedence. Keep task progress in project notes and lengthy procedures in a skill or document. Never use memory to impose a new obligation.",
     "",
-    "Names: short, distinct first letters, ideally a hint of the leaning that survives translation. The tagline is the one line the others see in the roster: what this one leans to and what it does when asked. Keep the whole thing short: eight to twelve rules, one per line, is a full protocol; a role is a few sentences; if a rule needs a paragraph it is a skill, not a rule. Do not pin an agent or model in a template: the human picks from what the machine has.",
+    "Before adding a rule, check for overlap and improve or consolidate existing wording. Explain its reason. Keep the whole rules text within briefTextLimit; never silently raise it. Eight to twelve short rules are usually enough. Address foreseeable choices: who acts, waits and decides, what done means, and how disagreements end.",
     "",
-    "Before you write anything: describe_room for the facts, then lint_room_design with your draft and read its warnings and the brief preview (that is exactly what the vibemates will read). Play the risky cases against the rules: an unaddressed task, both starting at once, one finding a bug in the other's work unasked, a question in the middle of a task. Then create_template (a file the human picks from; no effect on any room) or propose_room_changes (a card the human applies or rejects; nothing changes without the click). Say in the room what you made and why, in a few lines.",
+    "Roles describe people and their leanings, not duplicated rules; end with \"Everything else is in the room rules\". Use short, distinct names and clear taglines. Do not pin agents or models in templates.",
+    "",
+    "Coordinate task ownership and address findings to whoever relies on them. Use silence to avoid needless turns. Match agentsWakeEachOther and hopLimit to the collaboration: off and low for reporting rooms, on and roughly three times the participants for joint work.",
+    "",
+    "Run lint_room_design and read its warnings and brief preview. Check unaddressed tasks, simultaneous starts, unsolicited findings and mid-task questions. Then use create_template for a reusable design or propose_room_changes for this room. Preserve unrelated settings. Changes require the human's Apply; a proposal is not an applied rule. Briefly report what you proposed and why.",
   ].join("\n"),
   userInvocable: true,
   agentInvocable: true,
@@ -238,6 +248,8 @@ export const LOOK_DESIGNER: SkillDraft = {
   description: "How to design a good viberoom look (how the window is drawn: colours, light, corners, fonts) as data that extends a shipped look. Load it before lint_look, create_look or propose_look_changes.",
   argumentHint: "",
   body: [
+    DEFERRED_OPERATIONS,
+    "",
     "A look is data, not code: which shipped look it extends, a few hues laid over that look's palette, and what it wants otherwise (corners, fonts, shadows, the chat's paper, a part of an element). Everything the window draws is derived from the palette, so a hue changed there reaches every place that wears it; start from the shipped look closest to what is asked and change as little as says it. The facts (the looks, every hue and element with what it means, the value syntax, the fonts, how the window is set now) come from describe_looks; never guess a name, a key the look does not have is refused.",
     "",
     "Name what a colour looks like, not what it is for: the palette says primary, ink, bg, white, lav; the elements say which part wears which hue (bubble.bg, btn.hoverInk). Prefer changing hues over changing elements: a new accent is palette.primary plus its primaryLight, primaryDeep and primaryDark steps and its tints lav and lav2; a new paper is bg with white (the panels) a shade apart from it, and soft / softer a step off white; a new ink is ink with ink2 for the words in a bubble and ink3, muted and faint growing quieter. Change an element only when a part must differ from what the palette gives it.",
@@ -285,6 +297,8 @@ export const SET_UP_ON_MESSENGER: SkillDraft = {
     "Walk the human through connecting Telegram (on a phone or this computer) to viberoom: make the bot, hand its key over on a card (you never see it), name it, pair the phone. Use when the human asks to set up, connect or pair a phone, a messenger or Telegram, or /rooms from the phone gets no answer.",
   argumentHint: "[bot | key | name | pair]",
   body: [
+    DEFERRED_OPERATIONS,
+    "",
     "You are an experienced friend at the human's side, not a brochure. One action per message, at most two sentences, then stop and wait for the human's word; never list the steps ahead. Every message ends with what success looks like. The key never appears in the chat: it goes through the card, and you learn only the outcome. \"The phone\" is wherever the human uses Telegram: a phone, or the Telegram app on this computer.",
     "",
     "0. Offer the wizard once, in one line: Settings → Channels → Set up Telegram… walks the same steps with pictures and QR codes; you can also guide them here. Ask which they prefer, then stop. If they choose the wizard, stay available and say nothing more unless asked.",
