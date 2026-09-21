@@ -760,6 +760,32 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     }
 
     const body = (await readJson(req)) as Record<string, unknown>;
+    if (path === "/api/agents/updates/check") {
+      await hub.agents.checkUpdates(true);
+      sendJson(res, 200, { updates: hub.agents.view() }); return;
+    }
+    if (path === "/api/agents/updates/claim") {
+      sendJson(res, 200, hub.agents.claimNotification(String(body.windowId ?? ""), String(body.notification ?? "")) ?? {}); return;
+    }
+    if (path === "/api/agents/updates/renew") {
+      sendJson(res, 200, { ok: hub.agents.renewNotification(String(body.token ?? "")) }); return;
+    }
+    if (path === "/api/agents/updates/dismiss") {
+      if (body.action !== "close" && body.action !== "skip") throw new Error("Choose close or skip");
+      const keys = Array.isArray(body.keys) ? body.keys.filter((key): key is string => typeof key === "string").slice(0, 100) : [];
+      hub.agents.dismiss(body.action, keys); sendJson(res, 200, { updates: hub.agents.view() }); return;
+    }
+    if (path === "/api/agents/updates/start") {
+      const flow = await hub.agents.startUpdate(String(body.vendor ?? ""), String(body.key ?? ""));
+      sendJson(res, 200, { flow }); return;
+    }
+    if (path === "/api/agents/updates/start-all") {
+      if (!Array.isArray(body.keys) || body.keys.some(key => typeof key !== "string")) throw new Error("Choose the available updates first.");
+      sendJson(res, 200, { updates: hub.agents.startUpdateBatch(body.keys as string[]) }); return;
+    }
+    if (path === "/api/agents/updates/cancel-all") {
+      sendJson(res, 200, { updates: hub.agents.cancelUpdateBatch(String(body.id ?? "")) }); return;
+    }
     if (path === "/api/memory") {
       sendJson(res, 200, memory.human(typeof body.room === "string" ? body.room : undefined, body));
       return;

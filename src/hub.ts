@@ -17,10 +17,9 @@ import { HISTORY_DB_FILE, HistoryStore, type SearchHit, type SearchQuery } from 
 
 const TRANSCRIPT_MODES: readonly TranscriptMode[] = ["off", "errors", "full"];
 import { DEFAULT_EDITOR_SETTINGS, type EditorSettings } from "./open.js";
-import { listRecipes, loginCheckOf, markLoginChecking, publicRecipes, rememberLoginCheck, rescanRecipes, type AgentTypeId } from "./recipes.js";
-import { checkLogin } from "./login-status.js";
-import { LoginFlows, type LoginFlow } from "./login-flow.js";
-import { openTerminal } from "./terminal.js";
+import { listRecipes, publicRecipes, type AgentTypeId } from "./recipes.js";
+import { AgentManager, type AgentUpdatesView } from "./agent-manager.js";
+import type { LoginFlows, LoginFlow } from "./login-flow.js";
 import { DEFAULT_ROOM_SETTINGS, type RoomSettings } from "./persona.js";
 import { CREATED_MODE, type NewRoomPlan } from "./new-room.js";
 import { Room, type ChatMessage, type DiscoveredOptions, type RoomEvent, type SkillsBridge, type StoredParticipant, type RoomRecovery } from "./room.js";
@@ -50,6 +49,7 @@ export interface ProgramSettings {
   editor: EditorSettings;
   appearance: AppearanceSettings;
   checkForUpdates: boolean;
+  checkAgentUpdates: boolean;
   transcripts: TranscriptMode;
   foldAfter: number;
   reconnectMode: "replay" | "load";
@@ -112,6 +112,7 @@ export interface SecretRequest {
 
 export type HubEvent =
   | { type: "update"; update: UpdateInfo }
+  | { type: "agent.updates"; updates: AgentUpdatesView }
   | { type: "room.event"; roomId: string; event: RoomEvent }
   | { type: "room.created"; room: unknown }
   | { type: "room.removed"; roomId: string }
@@ -222,7 +223,7 @@ export class Hub extends EventEmitter {
 
   readonly folderId: string;
 
-  constructor(dataDir: string, log: Logger, initialHumanName?: string) {
+  constructor(dataDir: string, log: Logger, initialHumanName?: string, options: { backgroundAgentChecks?: boolean } = {}) {
     super();
     this.dataDir = resolve(dataDir);
     this.log = log;
@@ -234,19 +235,22 @@ export class Hub extends EventEmitter {
     this.looks = new LookLibrary(join(this.dataDir, "looks"), log.child("looks"));
     this.history = this.openHistory();
     recoverFileTransactions(this.dataDir, this.history);
-    setTimeout(() => void this.checkLogins().catch((error) => log.warn(`login checks: ${String(error)}`)), 2500).unref();
-    this.logins.on("change", (flow: LoginFlow) => {
-      this.emit("event", { type: "login", flow } satisfies HubEvent);
-      if (flow.state === "done" && flow.purpose === "install" && !flow.looked) {
-        void this.rescan([flow.recipeId]).catch((error) => log.warn(`rescan after install: ${String(error)}`));
-      } else if (flow.state === "done") {
-        void this.checkLogins([flow.recipeId], 0)
-          .then(() => {
-            if (loginCheckOf(flow.recipeId)?.state === "ok") for (const room of this.rooms.values()) room.retryAfterLogin(flow.recipeId);
-          })
-          .catch((error) => log.warn(`login check after sign-in: ${String(error)}`));
-      }
+    this.agents = new AgentManager({
+      dataDir: this.dataDir, enabled: () => this.settings.checkAgentUpdates !== false,
+      warn: message => this.log.warn(message),
+      blockers: vendor => [...this.rooms.values()].flatMap(room => room.agentUpdateBlockers(vendor)),
+      prepare: vendor => {
+        const blockers = [...this.rooms.values()].flatMap(room => room.agentUpdateBlockers(vendor));
+        if (blockers.length) throw new Error(`Wait for these vibemates to finish: ${blockers.join(", ")}`);
+        const sessions = [...this.rooms.values()].map(room => room.prepareAgentUpdate(vendor));
+        return { pause: async () => { for (const session of sessions) await session.pause(); },
+          resume: async () => { for (const session of sessions) await session.resume(); } };
+      },
+      afterLogin: vendor => { for (const room of this.rooms.values()) room.retryAfterLogin(vendor); },
     });
+    this.agents.on("login", (flow: LoginFlow) => this.emit("event", { type: "login", flow } satisfies HubEvent));
+    this.agents.on("recipes", recipes => this.emit("event", { type: "recipes", recipes } satisfies HubEvent));
+    this.agents.on("updates", updates => this.emit("event", { type: "agent.updates", updates } satisfies HubEvent));
     try {
       for (const { name, kept } of this.skills.seedBuiltins()) this.renamedSkills.set(name.toLowerCase(), kept);
     } catch (error) {
@@ -296,6 +300,7 @@ export class Hub extends EventEmitter {
       },
     };
     this.settings = this.loadSettings(initialHumanName);
+    if (options.backgroundAgentChecks !== false) this.agents.start();
     this.loadRooms();
     this.tellRoomsWhatEndedTheLastRun();
     if (this.renamedAttachments) this.saveRooms();
@@ -742,6 +747,7 @@ export class Hub extends EventEmitter {
       editor: { ...DEFAULT_EDITOR_SETTINGS },
       appearance: { ...DEFAULT_APPEARANCE },
       checkForUpdates: true,
+      checkAgentUpdates: true,
       transcripts: "off",
       foldAfter: 1200,
       reconnectMode: "replay",
@@ -792,6 +798,7 @@ export class Hub extends EventEmitter {
     if (patch.profileCompleted !== undefined) next.profileCompleted = patch.profileCompleted === true || patch.profileCompleted === "true";
     if (patch.agentSkillsNeedApproval !== undefined) next.agentSkillsNeedApproval = patch.agentSkillsNeedApproval === true || patch.agentSkillsNeedApproval === "true";
     if (patch.checkForUpdates !== undefined) next.checkForUpdates = patch.checkForUpdates === true || patch.checkForUpdates === "true";
+    if (patch.checkAgentUpdates !== undefined) next.checkAgentUpdates = patch.checkAgentUpdates === true || patch.checkAgentUpdates === "true";
     if (patch.transcripts !== undefined) {
       const mode = String(patch.transcripts);
       if (!TRANSCRIPT_MODES.includes(mode as TranscriptMode)) throw new Error(`transcripts must be one of ${TRANSCRIPT_MODES.join(", ")}`);
@@ -846,6 +853,7 @@ export class Hub extends EventEmitter {
       }
     }
     this.settings = next;
+    this.agents.settingsChanged();
     writeJson(this.settingsPath(), this.settings);
     for (const room of this.rooms.values()) {
       room.applyProgramSettings({
@@ -1356,77 +1364,13 @@ export class Hub extends EventEmitter {
     return true;
   }
 
-  async checkLogins(ids?: string[], maxAgeMs = 0): Promise<void> {
-    if (this.leaving.signal.aborted) return;
-    const targets = listRecipes().filter((r) => !r.unavailableReason && (!ids || ids.includes(r.id)) && !r.loginChecking);
-    const due = targets.filter((r) => { const c = loginCheckOf(r.id); return !c || Date.now() - c.at >= maxAgeMs; });
-    if (!due.length) return;
-    const cwd = join(this.dataDir, ".probe");
-    mkdirSync(cwd, { recursive: true });
-    for (const r of due) markLoginChecking(r.id, true);
-    this.emitRecipes();
-    const run = Promise.all(
-      due.map(async (r) => {
-        try {
-          const check = await checkLogin(r.loginStatus, r.build({ model: null, mode: null }), cwd, this.leaving.signal);
-          rememberLoginCheck(r.id, check);
-          this.log.info(`login check ${r.id}: ${check.state} (${check.how}: ${check.detail})`);
-          this.logins.settle(r.id, check.state, check.detail);
-        } catch (error) {
-          rememberLoginCheck(r.id, { state: "unknown", how: r.loginStatus.kind === "acp" ? "acp" : "command", at: Date.now(), detail: error instanceof Error ? error.message : String(error) });
-        } finally {
-          markLoginChecking(r.id, false);
-          this.emitRecipes();
-        }
-      }),
-    );
-    this.loginRun = run.then(() => undefined);
-    try {
-      await this.loginRun;
-    } finally {
-      this.loginRun = null;
-    }
-  }
-
-  private loginRun: Promise<void> | null = null;
+  readonly agents: AgentManager;
   private readonly leaving = new AbortController();
-
-  readonly logins = new LoginFlows();
-
-  startLogin(recipeId: string, inTerminal = false): LoginFlow {
-    const recipe = listRecipes().find((r) => r.id === recipeId);
-    if (!recipe) throw new Error(`unknown agent type: ${recipeId}`);
-    if (recipe.unavailableReason) throw new Error(`${recipe.vendor}: ${recipe.unavailableReason}`);
-    const cwd = join(this.dataDir, ".probe");
-    mkdirSync(cwd, { recursive: true });
-    if (inTerminal || recipe.loginFlow.kind === "terminal") {
-      const line = recipe.loginFlow.kind === "terminal" ? recipe.loginFlow.commandLine : recipe.loginTerminalLine;
-      if (!line) throw new Error(`${recipe.vendor} has no sign-in command to run in a terminal here`);
-      return this.logins.startTerminal({ recipeId: recipe.id, vendor: recipe.vendor, commandLine: line, hint: recipe.loginFlow.hint }, () => openTerminal(line, `viberoom: ${recipe.vendor} sign-in`, cwd));
-    }
-    return this.logins.start({ recipeId: recipe.id, vendor: recipe.vendor, spec: recipe.loginFlow, launch: recipe.build({ model: null, mode: null }) }, cwd);
-  }
-
-  startInstall(recipeId: string, inTerminal = false): LoginFlow {
-    const recipe = listRecipes().find((r) => r.id === recipeId);
-    if (!recipe) throw new Error(`unknown agent type: ${recipeId}`);
-    if (!recipe.unavailableReason) throw new Error(`${recipe.vendor} is already installed (${recipe.installedAt})`);
-    const spec = recipe.install;
-    if (spec.kind === "url") throw new Error(`${recipe.vendor} is installed from its website: ${spec.url}`);
-    const cwd = join(this.dataDir, ".probe");
-    mkdirSync(cwd, { recursive: true });
-    if (spec.kind === "command" && !inTerminal) {
-      return this.logins.start({ recipeId: recipe.id, vendor: recipe.vendor, purpose: "install", spec: { kind: "command", command: spec.command, args: spec.args, hint: spec.note }, launch: { command: spec.command, args: spec.args } }, cwd);
-    }
-    return this.logins.startTerminal({ recipeId: recipe.id, vendor: recipe.vendor, commandLine: spec.line, hint: spec.note, purpose: "install" }, () => openTerminal(spec.line, `viberoom: install ${recipe.vendor}`, cwd, { shell: spec.shell }));
-  }
-
-  async rescan(ids?: string[]): Promise<void> {
-    rescanRecipes();
-    for (const r of listRecipes()) if (!ids || ids.includes(r.id)) this.logins.settleInstall(r.id, r.unavailableReason ? null : r.installedAt);
-    this.emitRecipes();
-    await this.checkLogins(ids, 0);
-  }
+  get logins(): LoginFlows { return this.agents.logins; }
+  checkLogins(ids?: string[], maxAgeMs = 0): Promise<void> { return this.agents.checkLogins(ids, maxAgeMs); }
+  startLogin(recipeId: string, inTerminal = false): LoginFlow { return this.agents.startLogin(recipeId, inTerminal); }
+  startInstall(recipeId: string, inTerminal = false): LoginFlow { return this.agents.startInstall(recipeId, inTerminal); }
+  rescan(ids?: string[]): Promise<void> { return this.agents.rescan(ids); }
 
   private emitRecipes(): void {
     this.emit("event", { type: "recipes", recipes: publicRecipes() } satisfies HubEvent);
@@ -1436,6 +1380,7 @@ export class Hub extends EventEmitter {
     return {
       settings: this.settings,
       update: this.update,
+      agentUpdates: this.agents.view(),
       recipes: publicRecipes(),
       logins: this.logins.list(),
       skills: this.skills.list(),
@@ -1478,7 +1423,7 @@ export class Hub extends EventEmitter {
     this.leaving.abort();
     await stage("ways-in", plain, async () => {
       for (const room of this.rooms.values()) room.closeDoor();
-      await this.loginRun;
+      await this.agents.shutdown();
       await this.channels.stop();
     });
     for (const room of this.rooms.values()) {

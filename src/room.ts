@@ -21,6 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { AcpAgent } from "./acp-client.js";
 import { errorCode, errorDetail, RemoteError } from "./jsonrpc.js";
 import { getRecipe, listRecipes, publicRecipes, type AgentRecipe } from "./recipes.js";
+import { assertAgentAvailable, useAgent } from "./agent-maintenance.js";
 import { classifyStartFailure, classifyTurnFailure, type Trouble } from "./agent-health.js";
 import { legacyRowTone } from "./rows.js";
 import { composeSkillBlock, formatQuoteTime, skillPull, SKILL_TOOL_NAME, type SkillsForPrompt } from "./persona.js";
@@ -1722,7 +1723,7 @@ export class Room extends EventEmitter {
       await Promise.race([runtime.agent.closeSession(runtime.sessionId), delay(1500)]);
     } catch {
     }
-    runtime.agent.kill();
+    await runtime.agent.kill();
     this.forgetRuntime(id);
     participant.status = "offline";
     participant.statusDetail = undefined;
@@ -1871,6 +1872,44 @@ export class Room extends EventEmitter {
     }
   }
 
+  agentUpdateBlockers(recipeId: string): string[] {
+    return [...this.participants.values()].filter(p => {
+      if (p.kind !== "agent" || p.agentType !== recipeId) return false;
+      const runtime = this.runtimes.get(p.id);
+      return p.status === "starting" || !!runtime && (runtime.turnActive || runtime.workBusy === true);
+    }).map(p => `${p.name} (${this.name})`);
+  }
+
+  agentUpdateSessions(recipeId: string): { name: string; room: string; canRestore: boolean }[] {
+    return [...this.participants.values()].filter(p => p.agentType === recipeId && this.runtimes.has(p.id))
+      .map(p => ({ name: p.name, room: this.name, canRestore: p.supportsLoad !== false && !!p.sessionId }));
+  }
+
+  prepareAgentUpdate(recipeId: string): { pause: () => Promise<void>; resume: () => Promise<void> } {
+    const blockers = this.agentUpdateBlockers(recipeId);
+    if (blockers.length) throw new Error(`Still working: ${blockers.join(", ")}`);
+    const paused = [...this.runtimes.entries()].filter(([id]) => this.participants.get(id)?.agentType === recipeId);
+    for (const [id, runtime] of paused) {
+      runtime.retiring = true; this.dropScheduledTurn(id); this.restoredSeen.set(id, runtime.lastSeenSeq);
+    }
+    const resume = async () => {
+      this.optionCache.delete(recipeId);
+      for (const [id] of paused) {
+        const p = this.participants.get(id);
+        if (!p || p.status === "left") continue;
+        const remaining = this.runtimes.get(id);
+        if (remaining) { remaining.retiring = false; this.requestTurn(id); continue; }
+        try {
+          await this.reconnect(id, { mode: "load", memory: true, reason: "its installed agent was updated" });
+          this.requestTurn(id);
+        } catch (error) { this.notice(`${p.name}: could not reconnect after the update: ${describeError(error)}`, "error"); }
+      }
+    };
+    return { resume, pause: async () => {
+      for (const [id] of paused) { await this.retireRuntime(id); const participant = this.participants.get(id); if (participant) this.push({ type: "participant", participant }); }
+    } };
+  }
+
   private clearTrouble(participant: Participant, why: string | undefined): void {
     if (participant.status === "error") participant.status = "idle";
     participant.trouble = undefined;
@@ -1904,6 +1943,7 @@ export class Room extends EventEmitter {
 
 
   async discoverOptions(recipeId: string, refresh = false): Promise<DiscoveredOptions> {
+    assertAgentAvailable(recipeId);
     const recipe = getRecipe(recipeId);
     if (!recipe) throw new Error(`unknown agent type: ${recipeId}`);
     if (recipe.unavailableReason) throw new Error(`${recipe.label}: ${recipe.unavailableReason}`);
@@ -1913,7 +1953,9 @@ export class Room extends EventEmitter {
     const cwd = ensureDir(join(this.dataDir, ".probe"));
     const log = this.log.child(`probe:${recipeId}`);
     const launch = recipe.build({ model: null, mode: null });
-    const agent = new AcpAgent(
+    const release = useAgent(recipeId);
+    let agent: AcpAgent;
+    try { agent = new AcpAgent(
       { ...launch, cwd },
       {
         onSessionUpdate: () => undefined,
@@ -1921,7 +1963,7 @@ export class Room extends EventEmitter {
         onStderr: (line) => log.info(`stderr: ${line}`),
         onExit: () => undefined,
       },
-    );
+    ); } catch (error) { release(); throw error; }
     const started = Date.now();
     try {
       const info = await Promise.race([
@@ -1954,11 +1996,12 @@ export class Room extends EventEmitter {
       log.info(`options discovered in ${info.durationMs} ms: ${info.configOptions.map((o) => o.id).join(", ") || "none"}`);
       return info;
     } finally {
-      agent.kill();
+      try { await agent.kill(); } finally { release(); }
     }
   }
 
   async inviteAgent(options: InviteOptions): Promise<Participant> {
+    assertAgentAvailable(options.agentType);
     const recipe = getRecipe(options.agentType);
     if (!recipe) throw new Error(`unknown agent type: ${options.agentType}`);
     if (recipe.unavailableReason) throw new Error(`${recipe.label}: ${recipe.unavailableReason}`);
@@ -2091,6 +2134,7 @@ export class Room extends EventEmitter {
   async reconnect(id: string, options: ReconnectOptions = { mode: "replay" }): Promise<Participant> {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
+    assertAgentAvailable(participant.agentType ?? "");
     if (this.runtimes.has(id) || participant.status === "starting") return participant;
     participant.status = "starting";
     participant.startupSkipped = undefined;
@@ -2107,6 +2151,7 @@ export class Room extends EventEmitter {
   }
 
   private async startAgent(participant: Participant, launch: LaunchPrefs, fresh: boolean, reconnectOptions?: ReconnectOptions): Promise<void> {
+    assertAgentAvailable(participant.agentType ?? "");
     const recipe = getRecipe(participant.agentType ?? "");
     if (!recipe) throw new Error(`unknown agent type: ${participant.agentType}`);
     const id = participant.id;
@@ -3424,6 +3469,7 @@ export class Room extends EventEmitter {
     const participant = this.participants.get(id);
     if (!runtime || !participant) return;
     runtime.pendingTurn = true;
+    if (runtime.retiring) return;
     if (participant.status === "error") {
       const trouble = participant.trouble;
       const canResume = addressed && runtime.agent.alive && trouble?.stage === "turn" && trouble.kind !== "crash";

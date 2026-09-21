@@ -1,12 +1,12 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { execFileSync, execSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { agentDiscovery, type AgentInstallation, type VendorId } from "./agent-discovery.js";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RUN_AS_NODE, withRunAsNode } from "./own-runtime.js";
+import { RUN_AS_NODE } from "./own-runtime.js";
 import { loginState, type LoginProbe, type LoginState } from "./agent-health.js";
 import { readClaudeStatus, readCodexStatus, readGrokStatus, readHermesStatus, readOpenCodeStatus, type LoginCheck, type LoginStatusSpec } from "./login-status.js";
 import type { LoginFlowSpec } from "./login-flow.js";
@@ -40,6 +40,7 @@ export interface AgentRecipe {
   defaultMode: string | null;
   unavailableReason: string | null;
   installedAt: string | null;
+  installation?: AgentInstallation;
   installHint: string;
   install: InstallSpec;
   loginCommand: string;
@@ -68,217 +69,35 @@ const ICON_VERSION: string = (() => {
 })();
 const iconUrl = (id: string): string => `/vendor-icons/${id}.svg?v=${ICON_VERSION}`;
 
-function resolvePackageEntry(packageName: string, relativeEntry: string): string | null {
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require.resolve(`${packageName}/package.json`);
-    const entry = join(dirname(pkg), relativeEntry);
-    return existsSync(entry) ? entry : null;
-  } catch {
-    return null;
-  }
-}
-
-let globalNpmRoot: string | null | undefined;
-function resolveGlobalNpmRoot(): string | null {
-  if (globalNpmRoot !== undefined) return globalNpmRoot;
-  const candidates: string[] = [];
-  const npmCli = resolveNpmCli();
-  try {
-    const out = npmCli && npmCli.endsWith(".js")
-      ? execFileSync(process.execPath, [npmCli, "root", "-g"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true, env: withRunAsNode() }).trim()
-      : execSync("npm root -g", { encoding: "utf8", shell: isWindows ? "cmd.exe" : "/bin/sh", stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).trim();
-    if (out) candidates.push(out);
-  } catch {
-  }
-  if (isWindows && process.env.APPDATA) candidates.push(join(process.env.APPDATA, "npm", "node_modules"));
-  globalNpmRoot = candidates.find((c) => existsSync(c)) ?? null;
-  return globalNpmRoot;
-}
-
-function resolveGlobalPackageEntry(packageName: string, relativeEntry: string): string | null {
-  const root = resolveGlobalNpmRoot();
-  if (!root) return null;
-  const entry = join(root, packageName, relativeEntry);
-  return existsSync(entry) ? entry : null;
-}
-
-function resolveCursorAgent(): { node: string; index: string } | null {
-  const base = isWindows
-    ? process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, "cursor-agent")
-    : join(homedir(), ".local", "share", "cursor-agent");
-  if (!base || !existsSync(join(base, "versions"))) return null;
-  const versions = readdirSync(join(base, "versions"), { withFileTypes: true })
-    .filter((d) => d.isDirectory() && /^\d{4}\.\d{1,2}\.\d{1,2}/.test(d.name))
-    .map((d) => d.name)
-    .sort((a, b) => versionKey(b) - versionKey(a));
-  for (const version of versions) {
-    const dir = join(base, "versions", version);
-    const node = join(dir, isWindows ? "node.exe" : "node");
-    const index = join(dir, "index.js");
-    if (existsSync(node) && existsSync(index)) return { node, index };
-  }
-  return null;
-}
-
-function versionKey(name: string): number {
-  const [y, m, d] = name.split("-")[0].split(".").map((n) => Number(n));
-  return y * 10000 + m * 100 + d;
-}
-
-function resolveOnPath(names: string[]): string | null {
-  for (const name of names) {
-    try {
-      const out = execSync(isWindows ? `where ${name}` : `command -v ${name}`, {
-        encoding: "utf8",
-        shell: isWindows ? "cmd.exe" : "/bin/sh",
-        stdio: ["ignore", "pipe", "ignore"],
-        windowsHide: true,
-      });
-      const first = out
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .find((l) => l && existsSync(l) && (!isWindows || /\.(exe|cmd|bat)$/i.test(l)));
-      if (first) return first;
-    } catch {
-    }
-  }
-  return null;
-}
-
-function resolveOpenCode(): string | null {
-  const fromNpm =
-    resolveGlobalPackageEntry("opencode-ai", join("bin", isWindows ? "opencode.exe" : "opencode")) ??
-    resolvePackageEntry("opencode-ai", join("bin", isWindows ? "opencode.exe" : "opencode"));
-  if (fromNpm) return fromNpm;
-  const onPath = resolveOnPath(["opencode"]);
-  return onPath && !/\.(cmd|bat)$/i.test(onPath) ? onPath : null;
-}
-
-function resolveCopilot(): string | null {
-  const onPath = resolveOnPath(["copilot"]);
-  if (onPath && !/\.(cmd|bat)$/i.test(onPath)) return onPath;
-  if (isWindows && process.env.LOCALAPPDATA) {
-    const winget = join(process.env.LOCALAPPDATA, "Microsoft", "WinGet", "Links", "copilot.exe");
-    if (existsSync(winget)) return winget;
-  }
-  return null;
-}
-
-function resolveGlobalNpmBin(name: string): string | null {
-  const root = resolveGlobalNpmRoot();
-  if (!root) return null;
-  const candidates = isWindows ? [join(root, "..", `${name}.cmd`)] : [join(root, "..", "..", "bin", name)];
-  return candidates.find((c) => existsSync(c)) ?? null;
-}
-
-function resolveGlobalPackageBin(packageName: string, command: string): string | null {
-  const root = resolveGlobalNpmRoot();
-  if (!root) return null;
-  const dir = join(root, packageName);
-  try {
-    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { bin?: string | Record<string, string> };
-    const entry = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.[command];
-    if (!entry) return null;
-    const file = join(dir, entry);
-    return existsSync(file) ? file : null;
-  } catch {
-    return null;
-  }
-}
-
-function resolveClaudeCode(): string | null {
-  const onPath = resolveOnPath(["claude"]);
-  if (onPath && !/\.(cmd|bat)$/i.test(onPath)) return onPath;
-  const native = join(homedir(), ".local", "bin", isWindows ? "claude.exe" : "claude");
-  if (existsSync(native)) return native;
-  return resolveGlobalPackageBin("@anthropic-ai/claude-code", "claude");
-}
-
-function resolveCodex(): string | null {
-  return resolveGlobalNpmBin("codex") ?? resolveOnPath(["codex"]);
-}
-
-function realHome(): string | null {
-  try {
-    return realpathSync(homedir());
-  } catch {
-    return null;
-  }
-}
-
-function resolveGrok(): string | null {
-  const exe = isWindows ? "grok.exe" : "grok";
-  const home = realHome();
-  const dirs = [process.env.GROK_BIN_DIR, process.env.GROK_HOME && join(process.env.GROK_HOME, "bin"), join(homedir(), ".grok", "bin"), home && join(home, ".grok", "bin")];
-  for (const dir of dirs) if (dir && existsSync(join(dir, exe))) return join(dir, exe);
-  const onPath = resolveOnPath(["grok"]);
-  return onPath && !/\.(cmd|bat|ps1)$/i.test(onPath) ? onPath : null;
-}
-
-function resolveHermes(): { command: string; args: string[]; cli: string | null } | null {
-  const hermesHome = process.env.HERMES_HOME || (isWindows ? process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, "hermes") : join(homedir(), ".hermes"));
-  const scripts = isWindows ? "Scripts" : "bin";
-  const exe = (name: string) => (isWindows ? `${name}.exe` : name);
-  const candidates: { command: string; args: string[] }[] = [];
-  if (hermesHome) {
-    const venv = join(hermesHome, "hermes-agent", "venv");
-    candidates.push({ command: join(venv, scripts, exe("hermes-acp")), args: [] }, { command: join(venv, scripts, exe("hermes")), args: ["acp"] });
-    if (isWindows) candidates.push({ command: join(hermesHome, "bin", "hermes-acp.exe"), args: [] }, { command: join(hermesHome, "bin", "hermes.exe"), args: ["acp"] });
-  }
-  if (!isWindows) {
-    candidates.push({ command: join(homedir(), ".local", "bin", "hermes"), args: ["acp"] }, { command: "/usr/local/lib/hermes-agent/venv/bin/hermes-acp", args: [] }, { command: "/usr/local/bin/hermes", args: ["acp"] });
-  }
-  const withCli = (found: { command: string; args: string[] }) => {
-    const sibling = join(dirname(found.command), exe("hermes"));
-    return { ...found, cli: existsSync(sibling) ? sibling : /^hermes(\.exe)?$/i.test(basename(found.command)) ? found.command : null };
-  };
-  for (const candidate of candidates) if (existsSync(candidate.command)) return withCli(candidate);
-  const onPath = resolveOnPath(["hermes-acp", "hermes"]);
-  if (onPath && !/\.(cmd|bat|ps1)$/i.test(onPath)) return withCli({ command: onPath, args: /^hermes-acp/i.test(basename(onPath)) ? [] : ["acp"] });
-  return null;
-}
-
 const vendorDir = join(dirname(fileURLToPath(import.meta.url)), "..", "vendor", "acp");
 const claudeAdapter = join(vendorDir, "claude-agent-acp", "dist", "index.js");
 const codexAdapter = join(vendorDir, "codex-acp", "dist", "index.js");
-function resolveNpmCli(): string | null {
-  const nodeDir = dirname(process.execPath);
-  for (const candidate of [join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"), join(nodeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js")]) if (existsSync(candidate)) return candidate;
-  return resolveOnPath(["npm"]);
-}
-
 function buildRecipes(): AgentRecipe[] {
   const shellHere: TerminalShell = isWindows ? "cmd" : "sh";
-  const npmCli = resolveNpmCli();
+  const npmCli = agentDiscovery.npm();
   const npmInstall = (pkg: string, vendor: string): InstallSpec => {
-    const line = `npm install -g ${pkg}`;
-    const note = `${vendor} comes from npm; Node is already here, since viberoom runs on it.`;
-    return npmCli ? { kind: "command", command: npmCli, args: ["install", "-g", pkg], shell: shellHere, line, note } : { kind: "terminal", shell: shellHere, line, note };
+    const line = npmCli ? terminalLine(/\.(?:mjs|cjs|js)$/i.test(npmCli) ? [process.execPath, npmCli, "install", "-g", pkg] : [npmCli, "install", "-g", pkg]) : `npm install -g ${pkg}`;
+    const note = npmCli ? `${vendor} is installed with the npm found on this machine.` : `Install Node.js and npm first, then return and press Check again.`;
+    return npmCli ? { kind: "command", command: npmCli, args: ["install", "-g", pkg], shell: shellHere, line, note } : { kind: "url", url: "https://nodejs.org/en/download", note };
   };
   const scriptInstall = (vendor: string, unix: string, windows: string): InstallSpec =>
     isWindows ? { kind: "terminal", shell: "powershell", line: windows, note: `${vendor}'s own installer, from its website.` } : { kind: "terminal", shell: "sh", line: unix, note: `${vendor}'s own installer, from its website.` };
-  const claudeExe = resolveClaudeCode();
-  const codexExe = resolveCodex();
-  const geminiEntry =
-    resolvePackageEntry("@google/gemini-cli", join("bundle", "gemini.js")) ??
-    resolveGlobalPackageEntry("@google/gemini-cli", join("bundle", "gemini.js"));
-  const cursorAgent = resolveCursorAgent();
-  const openCodeExe = resolveOpenCode();
-  const copilotExe = resolveCopilot();
-  const grokExe = resolveGrok();
-  const hermesLaunch = resolveHermes();
-  const geminiCli = geminiEntry ? resolveOnPath(["gemini"]) : null;
-  const terminalLines = {
-    claude: claudeExe ? terminalLine([claudeExe, "auth", "login"]) : null,
-    codex: codexExe ? terminalLine([codexExe, "login"]) : null,
-    gemini: geminiCli ? terminalLine([geminiCli]) : geminiEntry ? terminalLine([process.execPath, geminiEntry]) : null,
-    cursor: cursorAgent ? terminalLine([cursorAgent.node, cursorAgent.index, "login"]) : null,
-    opencode: openCodeExe ? terminalLine([openCodeExe, "auth", "login"]) : null,
-    copilot: copilotExe ? terminalLine([copilotExe, "login"]) : null,
-    grok: grokExe ? terminalLine([grokExe, "login"]) : null,
-    hermes: hermesLaunch?.cli ? terminalLine([hermesLaunch.cli, "model"]) : null,
+  const installed = (id: VendorId) => agentDiscovery.get(id);
+  const launchAgent = (id: VendorId, args: string[], env?: Record<string, string>): LaunchSpec => {
+    const cli = installed(id)?.cli;
+    return { command: cli?.command ?? "", args: [...(cli?.args ?? []), ...args], env: { ...cli?.env, ...env } };
   };
+  const entry = (id: VendorId) => installed(id)?.realPath ?? null;
+  const claudeExe = entry("claude"), codexExe = installed("codex")?.executable ?? null;
+  const geminiEntry = entry("gemini"), openCodeExe = entry("opencode"), copilotExe = entry("copilot"), grokExe = entry("grok");
+  const cursorAgent = installed("cursor") ? { node: installed("cursor")!.cli.command, index: installed("cursor")!.executable } : null;
+  const hermesLaunch = installed("hermes") ? { command: installed("hermes")!.cli.command, args: [...installed("hermes")!.cli.args, "acp"], cli: installed("hermes")!.cli.command } : null;
+  const terminalLines: Record<string, string | null> = {};
+  const loginArgs: Record<VendorId, string[]> = { claude: ["auth", "login"], codex: ["login", "--device-auth"], gemini: [], cursor: ["login"], opencode: ["auth", "login"], copilot: ["login"], grok: ["login"], hermes: ["model"] };
+  for (const id of Object.keys(loginArgs) as VendorId[]) {
+    const cli = installed(id)?.cli;
+    terminalLines[id] = cli ? terminalLine([cli.command, ...cli.args, ...loginArgs[id]]) : null;
+  }
 
   const recipes: AgentRecipe[] = [
     {
@@ -366,11 +185,7 @@ function buildRecipes(): AgentRecipe[] {
       loginTerminalLine: terminalLines.gemini,
       loginState: "unknown",
       modelAtLaunch: true,
-      build: ({ model }) => ({
-        command: process.execPath,
-        args: [geminiEntry ?? "", "--acp", ...(model ? ["--model", model] : [])],
-        env: { ...RUN_AS_NODE, GEMINI_CLI_TRUST_WORKSPACE: "true" },
-      }),
+      build: ({ model }) => launchAgent("gemini", ["--acp", ...(model ? ["--model", model] : [])], { GEMINI_CLI_TRUST_WORKSPACE: "true" }),
     },
     {
       id: "cursor",
@@ -396,11 +211,7 @@ function buildRecipes(): AgentRecipe[] {
       loginFlow: { kind: "command", command: cursorAgent?.node ?? null, args: [cursorAgent?.index ?? "", "login"], hint: "Cursor opens your browser: sign in there and come back." },
       loginTerminalLine: terminalLines.cursor,
       loginState: "unknown",
-      build: () => ({
-        command: cursorAgent?.node ?? "",
-        args: [cursorAgent?.index ?? "", "acp"],
-        env: { CURSOR_INVOKED_AS: "cursor-agent" },
-      }),
+      build: () => launchAgent("cursor", ["acp"], { CURSOR_INVOKED_AS: "cursor-agent" }),
     },
     {
       id: "opencode",
@@ -426,10 +237,7 @@ function buildRecipes(): AgentRecipe[] {
       loginFlow: { kind: "terminal", commandLine: terminalLines.opencode ?? "opencode auth login", hint: "OpenCode asks which provider and for its key, in a menu of its own." },
       loginTerminalLine: terminalLines.opencode,
       loginState: "unknown",
-      build: () => ({
-        command: openCodeExe ?? "",
-        args: ["acp"],
-      }),
+      build: () => launchAgent("opencode", ["acp"]),
     },
     {
       id: "copilot",
@@ -454,16 +262,13 @@ function buildRecipes(): AgentRecipe[] {
       installHint: "winget install GitHub.Copilot / brew install copilot-cli / npm install -g @github/copilot, then copilot login",
       install: npmInstall("@github/copilot", "Copilot"),
       loginCommand: "copilot",
-      login: { env: ["GITHUB_TOKEN", "GH_TOKEN", "COPILOT_API_KEY"], files: [], command: "copilot" },
+      login: { env: ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"], files: [], command: "copilot" },
       loginStatus: { kind: "acp" },
       loginFlow: { kind: "command", command: copilotExe, args: ["login"], hint: "Copilot opens your browser, or shows a code to enter at github.com/login/device.", scene: "code" },
       loginTerminalLine: terminalLines.copilot,
       loginState: "unknown",
       modelAtLaunch: true,
-      build: ({ model }) => ({
-        command: copilotExe ?? "",
-        args: ["--acp", ...(model ? ["--model", model] : [])],
-      }),
+      build: ({ model }) => launchAgent("copilot", ["--acp", ...(model ? ["--model", model] : [])]),
     },
     {
       id: "grok",
@@ -490,10 +295,7 @@ function buildRecipes(): AgentRecipe[] {
       loginTerminalLine: terminalLines.grok,
       loginState: "unknown",
       modeAtLaunch: true,
-      build: ({ model, mode }) => ({
-        command: grokExe ?? "",
-        args: ["agent", ...(model ? ["-m", model] : []), ...(mode === "always-approve" ? ["--always-approve"] : []), "stdio"],
-      }),
+      build: ({ model, mode }) => launchAgent("grok", ["agent", ...(model ? ["-m", model] : []), ...(mode === "always-approve" ? ["--always-approve"] : []), "stdio"]),
     },
     {
       id: "hermes",
@@ -519,12 +321,22 @@ function buildRecipes(): AgentRecipe[] {
       loginFlow: { kind: "terminal", commandLine: terminalLines.hermes ?? "hermes model", hint: "Hermes asks for a provider and its key or sign-in, in a menu of its own." },
       loginTerminalLine: terminalLines.hermes,
       loginState: "unknown",
-      build: () => ({
-        command: hermesLaunch?.command ?? "",
-        args: hermesLaunch?.args ?? [],
-      }),
+      build: () => launchAgent("hermes", ["acp"]),
     },
   ];
+
+  for (const recipe of recipes) {
+    const id = recipe.id as VendorId, installation = installed(id);
+    recipe.installation = installation ?? undefined;
+    if (!installation) continue;
+    const cli = installation.cli;
+    recipe.installedAt = installation.executable;
+    recipe.unavailableReason = null;
+    if (recipe.loginStatus.kind === "command") recipe.loginStatus = { ...recipe.loginStatus, command: cli.command, args: [...cli.args, ...recipe.loginStatus.args] };
+    if (recipe.loginFlow.kind === "command") recipe.loginFlow = { ...recipe.loginFlow, command: cli.command, args: [...cli.args, ...loginArgs[id]] };
+    recipe.loginTerminalLine = terminalLines[id];
+    if (recipe.loginFlow.kind === "terminal") recipe.loginFlow.commandLine = terminalLines[id]!;
+  }
 
   const fakeAgent = process.env.VIBEROOM_FAKE_AGENT;
   if (fakeAgent) {
@@ -569,7 +381,12 @@ function buildRecipes(): AgentRecipe[] {
 let recipes = buildRecipes();
 
 export function rescanRecipes(): void {
+  agentDiscovery.refresh();
   recipes = buildRecipes();
+}
+export async function rescanRecipesAsync(signal?: AbortSignal): Promise<void> {
+  await agentDiscovery.refreshAsync(signal);
+  if (!signal?.aborted) recipes = buildRecipes();
 }
 
 function loginEvidence(): { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; exists: (relative: string) => boolean } {
@@ -583,7 +400,7 @@ export function listRecipes(): AgentRecipe[] {
     const checked = loginChecks.get(recipe.id);
     recipe.loginChecked = checked;
     recipe.loginChecking = loginChecking.has(recipe.id);
-    if (checked && checked.state !== "unknown" && !recipe.unavailableReason) recipe.loginState = checked.state;
+    if (checked && !recipe.unavailableReason) recipe.loginState = checked.state;
   }
   return recipes;
 }

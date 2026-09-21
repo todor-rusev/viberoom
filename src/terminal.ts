@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { findOnPath } from "./open.js";
+import { childEnvironment } from "./child-environment.js";
 
 export interface TerminalCommand {
   command: string;
@@ -10,12 +11,14 @@ export interface TerminalCommand {
   how: string;
 }
 
-export function quoteArg(arg: string): string {
-  return /\s/.test(arg) && !/^".*"$/.test(arg) ? `"${arg}"` : arg;
+export function quoteArg(arg: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32") return /^[a-zA-Z0-9_./:=+@,-]+$/.test(arg) ? arg : shQuote(arg);
+  if (/["\r\n%!]/.test(arg)) throw new Error("This path needs a directly launched executable, not a Windows command line.");
+  return /[\s&|<>()^]/.test(arg) ? `"${arg}"` : arg;
 }
 
-export function commandLine(parts: string[]): string {
-  return parts.map(quoteArg).join(" ");
+export function commandLine(parts: string[], platform: NodeJS.Platform = process.platform): string {
+  return parts.map(part => quoteArg(part, platform)).join(" ");
 }
 
 function shQuote(text: string): string {
@@ -71,12 +74,14 @@ export function terminalCommand(line: string, title: string, opts: TerminalOptio
 }
 
 export function openTerminal(line: string, title: string, cwd: string, opts: TerminalOptions = {}): Promise<{ how: string }> {
-  const cmd = terminalCommand(line, title, opts);
+  const platform = opts.platform ?? process.platform;
+  const context = platform === "win32" ? line : `cd ${shQuote(cwd)} || exit; ${Object.entries(opts.env ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry[0])).map(([key, value]) => `export ${key}=${shQuote(value)}; `).join("")}${line}`;
+  const cmd = terminalCommand(context, title, opts);
   if (!cmd) return Promise.reject(new Error("no terminal emulator found on this machine (looked for x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, kitty, alacritty, xterm)"));
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(cmd.command, cmd.args, { cwd, detached: true, stdio: "ignore", windowsHide: false, windowsVerbatimArguments: cmd.verbatim === true });
+      child = spawn(cmd.command, cmd.args, { cwd, env: childEnvironment(opts.env as Record<string, string> | undefined), detached: true, stdio: "ignore", windowsHide: false, windowsVerbatimArguments: cmd.verbatim === true });
     } catch (error) {
       reject(error instanceof Error ? error : new Error(String(error)));
       return;

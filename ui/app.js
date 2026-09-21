@@ -28,6 +28,12 @@
   };
 
   const Layout = VIBEROOM_LAYOUT.create(parseFloat(getComputedStyle(document.documentElement).zoom) || 1);
+  const agentUpdates = VIBEROOM_AGENT_UPDATES.create({
+    post: (...args) => post(...args), recipes: () => state.recipes,
+    onStatus: text => { const el = document.getElementById("sp-agent-update-status"); if (el) el.textContent = text; },
+    onError: error => showError(error),
+    onChange: () => { if (document.querySelector("#invite-dialog")?.open) renderInviteTiles(); },
+  });
 
   const $ = (selector) => document.querySelector(selector);
   const els = {
@@ -639,10 +645,29 @@
     tail.innerHTML = renderText(room, text.slice(done));
   }
   let selectionDuringPatch = null;
+  let textPress = null;
+  const deferredMessageParts = new WeakMap();
   function holdsSelection(el) {
+    if (textPress && el.contains(textPress)) return true;
     const sel = selectionDuringPatch || window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
-    return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
+    if (el.contains(sel.anchorNode) || el.contains(sel.focusNode)) return true;
+    for (let i = 0; i < sel.rangeCount; i++) if (sel.getRangeAt?.(i).intersectsNode(el)) return true;
+    return false;
+  }
+  function canPaintMessagePart(el, part) {
+    if (holdsSelection(el)) {
+      const pending = deferredMessageParts.get(el) || new Set();
+      pending.add(part); deferredMessageParts.set(el, pending);
+      return false;
+    }
+    const pending = deferredMessageParts.get(el);
+    pending?.delete(part);
+    if (!pending?.size) deferredMessageParts.delete(el);
+    return true;
+  }
+  function humanHoldsText() {
+    return heldTextSelection || !!textPress;
   }
   function renderText(room, text, images, quotes) {
     let html = md ? decorate(room, md.parse(String(text == null ? "" : text))) : renderTextLight(room, text);
@@ -1342,7 +1367,7 @@
     els.jumpLatest.hidden = false;
   }
   function calmAfterGrowth() {
-    if (!calm.held || CALM === "hold") return;
+    if (!calm.held || CALM === "hold" || humanHoldsText()) return;
     const el = els.messages;
     const grown = el.scrollHeight - calm.reserve - calm.baseContent;
     const next = Math.max(0, calm.initial - grown);
@@ -1380,12 +1405,15 @@
     settled = 0;
     if (!settling) settleBottom(20);
   }
+  function followEnd(why) {
+    if (stuck && !humanHoldsText()) scrollToBottom(why);
+  }
   function settleBottom(frames) {
     settling = frames;
     requestAnimationFrame(() => {
       const el = els.messages;
       const short = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
-      if (stuck && short) el.scrollTop = el.scrollHeight;
+      if (stuck && short && !humanHoldsText()) el.scrollTop = el.scrollHeight;
       settled = short ? 0 : settled + 1;
       settling = settled >= 2 ? 0 : frames - 1;
       if (settling > 0) settleBottom(settling);
@@ -2958,7 +2986,7 @@
       branch.textContent = `branch · ${label}`;
       branch.title = "This part of the conversation was kept from a parallel branch.";
     } else branch?.remove();
-    const want = (part) => !m.streaming || !parts || parts.has(part);
+    const want = (part) => !m.streaming || !parts || parts.has(part) || deferredMessageParts.get(el)?.has(part);
     el.dataset.streaming = m.streaming ? "1" : "0";
     el.classList.toggle("hidden-by-search", !messageMatches(m));
     const wasPinned = el.classList.contains("pinned");
@@ -2991,13 +3019,13 @@
       words.className = "words";
       text.replaceChildren(words);
     }
-    if (want("text")) {
+    if (want("text") && canPaintMessagePart(el, "text")) {
       if (m.streaming && m.text && !(m.images && m.images.length) && !(m.quotes && m.quotes.length)) renderStreamingWords(room, words, m.text);
       else words.innerHTML = renderText(room, long && !expanded ? clampedSource(m.text) : m.text, m.images, m.quotes);
       if (!m.streaming) {
         renderPreviews(words, m);
         linkRelativePaths(words, m);
-        const finish = () => { renderDiagrams(words); highlightBlocks(words); };
+        const finish = () => { if (canPaintMessagePart(el, "text")) { renderDiagrams(words); highlightBlocks(words); } };
         if (Date.now() - lastTypedAt < TYPING_WINDOW_MS) setTimeout(() => { if (words.isConnected) finish(); }, TYPING_WINDOW_MS);
         else finish();
       }
@@ -3023,13 +3051,15 @@
     renderShots(el.querySelector(".shots"), room, m);
     renderWaiting(el, room, m);
     const thought = el.querySelector(".thought");
-    if (m.thought && want("thought")) {
+    if (m.thought && want("thought") && canPaintMessagePart(el, "thought")) {
       thought.hidden = false;
       thought.querySelector(".thought-text").textContent = m.thought;
     }
     el.querySelector(".agent-notices").innerHTML = (m.notices || []).map((n) => UI.html("reply-note", { text: n, tone: "attention" })).join("");
     if (want("tools")) {
       const tools = el.querySelector(".tools");
+      const heldChips = !canPaintMessagePart(el, "tools");
+      if (heldChips) tools.dataset.held = "1";
       const calls = m.toolCalls || [];
       const chipFor = (call) => {
         const open = openTools.has(call.toolCallId);
@@ -3038,8 +3068,9 @@
         const input = !open || detail.rawInput === undefined ? "" : typeof detail.rawInput === "string" ? detail.rawInput : JSON.stringify(detail.rawInput, null, 1);
         return UI.el("tool-call", { id: call.toolCallId, title: detail.title, kind: call.kind || undefined, variant: call.messageCheck ? "message-check" : call.historySearch ? "history-search" : "tool", status: TOOL_STATUSES.has(call.status) ? call.status : "pending", open, loadState: loaded.state, input: input || undefined, output: open ? detail.output || undefined : undefined });
       };
-      const some = m.streaming && parts && toolIds && !tools.querySelector(":scope > details");
-      if (some) {
+      const some = m.streaming && parts && toolIds && tools.dataset.held !== "1" && !tools.querySelector(":scope > details");
+      if (heldChips) {
+      } else if (some) {
         for (const id of toolIds) {
           const call = calls.find((c) => c.toolCallId === id);
           if (!call) continue;
@@ -3051,6 +3082,7 @@
           }
         }
       } else {
+        delete tools.dataset.held;
         tools.innerHTML = "";
         const folded = !m.streaming && calls.length > 0;
         let host = tools;
@@ -3113,8 +3145,8 @@
     const doing = whatIsHappening(m);
     const calls = (m.toolCalls || []).length;
     const elapsed = fmtDuration(Math.max(0, Date.now() - (m.ts || Date.now()))) || "0 s";
-    const parts = [`<span title="Time spent on this reply">${ic("clock")} ${elapsed}</span>`, `<span>${ic("tool")} ${esc(doing)}</span>`];
-    if (calls) parts.push(`<span title="Tool calls in this reply">${calls} tool ${calls === 1 ? "call" : "calls"}</span>`);
+    const parts = [`<span title="Time spent on this reply">${ic("clock")} ${elapsed}</span>`, `<span>${esc(doing)}</span>`];
+    if (calls) parts.push(`<span title="Tool calls in this reply">${ic("tool")} ${calls} tool ${calls === 1 ? "call" : "calls"}</span>`);
     if (stale) parts.push(`<span title="Time since the last sign of activity">${stale}</span>`);
     return parts.join('<span class="sep">·</span>');
   }
@@ -3906,7 +3938,7 @@
     switch (item.kind) {
       case "msg":
         if (item.m.bodyMissing) { fillBodyPlaceholder(node, room, item.m); noteDrawn(node, item.m); return; }
-        if (!item.m.streaming && drawnFrom.get(node) === item.m && listGeneration === Number(node.dataset.gen)) return;
+        if (!item.m.streaming && !deferredMessageParts.has(node) && drawnFrom.get(node) === item.m && listGeneration === Number(node.dataset.gen)) return;
         updateMessageElement(node, room, item.m);
         return;
       case "ceiling":
@@ -4080,7 +4112,8 @@
     const row = els.messages.querySelector(`.msg[data-id="${CSS.escape(eye.id)}"]`);
     if (!row) return;
     const box = Layout.rect(els.messages);
-    const moved = Layout.rect(row).top - box.top - eye.at;
+    const target = eye.part ? row.querySelector(eye.part) || row : row;
+    const moved = Layout.rect(target).top - box.top - eye.at;
     if (Math.abs(moved) > 0.5) els.messages.scrollTop += moved;
   }
 
@@ -4120,23 +4153,57 @@
   }
   function widenForSelection(range, items) {
     const selection = window.getSelection();
-    if (!range || !selection || selection.isCollapsed || !selection.rangeCount) return range;
+    if (!range) return range;
     const rowAt = node => {
       const el = node?.nodeType === 3 ? node.parentElement : node;
       const row = el?.closest?.(".msg[data-id]");
       return row && els.messages.contains(row) ? items.findIndex(item => item.kind === "msg" && item.name === row.dataset.id) : -1;
     };
-    const ends = [rowAt(selection.anchorNode), rowAt(selection.focusNode)].filter(at => at >= 0);
+    const nodes = selection && !selection.isCollapsed && selection.rangeCount ? [selection.anchorNode, selection.focusNode] : [];
+    if (textPress) nodes.push(textPress);
+    const ends = nodes.map(rowAt).filter(at => at >= 0);
     if (!ends.length) return range;
     return { from: Math.min(range.from, ...ends), to: Math.max(range.to, ...ends.map(at => at + 1)) };
   }
   let heldTextSelection = false;
+  let heldTextElement = null, releasedTextEye = null;
+  function textPart(node) {
+    const el = node?.nodeType === 3 ? node.parentElement : node;
+    return el?.closest?.(".words, .thought, .tools") || el?.closest?.(".msg[data-id]") || null;
+  }
+  function rememberReleasedText() {
+    const part = heldTextElement, row = part?.closest(".msg[data-id]");
+    if (row && els.messages.contains(row)) releasedTextEye = {
+      roomId: state.currentRoomId, id: row.dataset.id,
+      part: ["words", "thought", "tools"].find(name => part.classList.contains(name)),
+      at: Layout.rect(part).top - Layout.rect(els.messages).top,
+    };
+    if (releasedTextEye?.part) releasedTextEye.part = `.${releasedTextEye.part}`;
+    heldTextElement = null;
+  }
   document.addEventListener("selectionchange", () => {
     const selection = window.getSelection();
-    const inside = !!selection && !selection.isCollapsed && els.messages.contains(selection.anchorNode);
-    if (heldTextSelection && !inside && state.view === "room") renderMessagesSoon("the text selection was released");
+    const wasHeld = heldTextSelection;
+    const inside = !!selection && !selection.isCollapsed && (els.messages.contains(selection.anchorNode) || els.messages.contains(selection.focusNode));
     heldTextSelection = inside;
+    if (inside) heldTextElement = textPart(els.messages.contains(selection.anchorNode) ? selection.anchorNode : selection.focusNode);
+    if (inside && !wasHeld) leaveTheEndForText();
+    if (wasHeld && !inside && state.view === "room") {
+      rememberReleasedText();
+      renderMessagesSoon("the text selection was released");
+      resumeAfterText();
+    }
   });
+  function leaveTheEndForText() {
+    if (!stuck) return;
+    stuck = false;
+    calm.held = false;
+    els.jumpLatest.hidden = false;
+  }
+  function resumeAfterText() {
+    if (stuck || humanHoldsText()) return;
+    if (nearBottom()) scrollToBottom("the text selection was released at the end");
+  }
   function windowedItems(items, range) {
     if (!range) return items;
     const opening = listAccount.before ? listAccount.before(0) : 0;
@@ -4179,7 +4246,7 @@
     }
     if (!changed) return;
     settleSpacers();
-    if (stuck) scrollToBottom("visible message size changed");
+    if (stuck && !humanHoldsText()) scrollToBottom("visible message size changed");
     else holdTheEye(eye);
     followWindowSoon();
     renderTimelineSoon(false);
@@ -4321,12 +4388,14 @@
       listRoomId = room.id;
       return;
     }
+    const releasedEye = releasedTextEye?.roomId === room?.id ? releasedTextEye : null;
+    releasedTextEye = null;
     listRoomId = room ? room.id : null;
     const resized = settledReader?.roomId === room?.id && settledReader.stamp !== pricesStamp();
     const anchor = savedAnchor !== undefined ? savedAnchor
       : keepingScroll ? (keepingScroll.eye ? { id: keepingScroll.eye.id, into: keepingScroll.eye.at } : null)
       : resized ? settledReader.anchor : stuck ? null : readerAnchor();
-    if (resized) stuck = settledReader.following;
+    if (resized && !humanHoldsText()) stuck = settledReader.following;
     els.messages.classList.toggle("searching", !!state.search);
     if (!room) { els.messages.innerHTML = ""; return; }
     if (room.history?.bodyProtocol && !room.history.indexed && room.indexError) {
@@ -4353,9 +4422,9 @@
     for (const node of els.messages.querySelectorAll(".history-placeholder")) if (loadedIds.has(node.dataset.id)) node.remove();
     const born = [];
     const selection = window.getSelection();
-    const savedSelection = selection && !selection.isCollapsed && selection.rangeCount
+    const savedSelection = selection && (!selection.isCollapsed || textPress) && selection.rangeCount
       && els.messages.contains(selection.anchorNode) && els.messages.contains(selection.focusNode)
-      ? { anchorNode: selection.anchorNode, anchorOffset: selection.anchorOffset, focusNode: selection.focusNode, focusOffset: selection.focusOffset, isCollapsed: false, rangeCount: 1 } : null;
+      ? { anchorNode: selection.anchorNode, anchorOffset: selection.anchorOffset, focusNode: selection.focusNode, focusOffset: selection.focusOffset, isCollapsed: selection.isCollapsed, rangeCount: 1, range: selection.getRangeAt(0).cloneRange(), getRangeAt() { return this.range; } } : null;
     selectionDuringPatch = savedSelection;
     try {
     KeyedList.patchPaged(els.messages, shown, {
@@ -4393,10 +4462,11 @@
     syncRecovery(room);
     refreshSeen(room);
     settleSpacers();
-    if (keepingScroll) {
+    if (releasedEye) holdTheEye(releasedEye);
+    else if (keepingScroll) {
       if (keepingScroll.eye) holdTheEye(keepingScroll.eye);
       else els.messages.scrollTop = keepingScroll.top;
-    } else if (!restoreReader(anchor)) scrollToBottom("the list was rebuilt");
+    } else if (!restoreReader(anchor) && !humanHoldsText()) scrollToBottom("the list was rebuilt");
     renderTimeline();
     rememberReader();
     if (room.history?.indexed) {
@@ -4484,8 +4554,8 @@
       else if (!stick && m.kind === "chat") noteNew(room, m);
     }
     if (stick) {
-      if (CALM !== "off" && m.streaming && m.from !== "human" && !existing) calmStart(m.id);
-      else scrollToBottom("a message arrived");
+      if (CALM !== "off" && m.streaming && m.from !== "human" && !existing && !humanHoldsText()) calmStart(m.id);
+      else if (!humanHoldsText()) scrollToBottom("a message arrived");
     } else if (calm.held) calmAfterGrowth();
     if (m.streaming) updateWorkingNow();
     if (!wasFinal && !m.streaming && m.kind === "chat" && m.from !== "human") noteFinished(room, m);
@@ -4576,7 +4646,7 @@
     }
     if (touched) {
       if (calm.held) calmAfterGrowth();
-      else if (stuck) scrollToBottom("a reply grew");
+      else followEnd("a reply grew");
     }
     if (touched) updateWorkingNow();
     if (touched) noteSlow("streamed frame", performance.now() - t0);
@@ -4677,7 +4747,7 @@
     const host = draft ? els.messages.querySelector(`.msg[data-id="${draft.id}"] .perms`) : null;
     if (host) host.appendChild(card);
     else placeCard(card, room, perm.ts || Date.now());
-    if (stuck) scrollToBottom("a permission card");
+    followEnd("a permission card");
   }
   function resolvePermissionCard(key, optionId) {
     const card = document.querySelector(`[data-ui="ask-card"][data-kind="permission"][data-key="${CSS.escape(key)}"]`);
@@ -4743,7 +4813,7 @@
     if (existing) existing.replaceWith(card);
     else {
       placeCard(card, room, p.ts || Date.now());
-      if (stuck) scrollToBottom("a new-room card");
+      followEnd("a new-room card");
     }
   }
 
@@ -4765,7 +4835,7 @@
     if (existing) existing.replaceWith(card);
     else {
       placeCard(card, room, p.ts || Date.now());
-      if (stuck) scrollToBottom("a proposal card");
+      followEnd("a proposal card");
     }
   }
   function renderRecovery(room, r) {
@@ -5404,6 +5474,10 @@
             <label class="switch"><span class="label">Check for updates once a day<span class="hint">At start, one request to the npm registry for the latest viberoom version; nothing else leaves this machine. A newer version shows as a bubble over your avatar.</span></span><input type="checkbox" id="sp-updates" ${s.checkForUpdates !== false ? "checked" : ""}></label>
             <p class="hint" id="sp-update-status">${updateStatusText()}</p>
             ${UI.html("button", { label: "Check now", size: "sm", id: "sp-update-check" })}
+            <hr>
+            <label class="switch"><span class="label">Check installed agents once a day<span class="hint">Checks the existing installations and their release channels. Updates run only when you choose them.</span></span><input type="checkbox" id="sp-agent-updates" ${s.checkAgentUpdates !== false ? "checked" : ""}></label>
+            <p class="hint" id="sp-agent-update-status">${esc(agentUpdates.status())}</p>
+            ${UI.html("button", { label: "Agent updates…", size: "sm", id: "sp-agent-update-open" })}
           `)}
           ${settingsGroup("sp-autostart", "Start with the computer", `
             <label class="switch"><span class="label">Start viberoom when you sign in to this computer<span class="hint">A quiet start, without a window: the icon opens the window when you want it. Rooms with "Start this room with viberoom" bring their vibemates back by themselves, so a paired phone reaches them without a click. A viberoom already running is left alone. Switch this off before you remove or move viberoom.</span></span><input type="checkbox" id="sp-autostart-on" ${state.autostart && state.autostart.enabled ? "checked" : ""}${state.autostart ? "" : " disabled"}></label>
@@ -5730,6 +5804,7 @@
       b.disabled = false;
       UI.setState(b, null);
     });
+    $("#sp-agent-update-open").addEventListener("click", () => agentUpdates.open());
     bindSave($("#sp-form"), async () => {
         const vendorPresets = {};
         els.pageInner.querySelectorAll("input[data-vendor]").forEach((inp) => {
@@ -5740,6 +5815,7 @@
           bypassPermissionsByDefault: $("#sp-bypass").checked,
           agentSkillsNeedApproval: $("#sp-skill-approval").checked,
           checkForUpdates: $("#sp-updates").checked,
+          checkAgentUpdates: $("#sp-agent-updates").checked,
           transcripts: $("#sp-transcripts-mode").value,
           diagrams: { preset: $("#sp-diagram-preset").value, primary: $("#sp-diagram-custom").checked ? $("#sp-diagram-color").value : null },
           editor: { mode: $("#sp-editor-mode").value, command: $("#sp-editor-cmd").value },
@@ -6409,13 +6485,13 @@
 
   function loginStatusWords(recipe) {
     const own = recipe.loginChecked && recipe.loginChecked.how === "command" && recipe.loginChecked.detail ? ` · ${recipe.loginChecked.detail}` : "";
-    return recipe.loginState === "ok" ? `logged in${own}` : recipe.loginState === "missing" ? `not logged in${own}` : "login not known";
+    return recipe.loginState === "ok" ? recipe.loginChecked?.how === "acp" ? "ready to connect" : `logged in${own}` : recipe.loginState === "configured" ? `sign-in configured${own}` : recipe.loginState === "missing" ? `not logged in${own}` : "login not known";
   }
   function loginDialogProps(recipe, purpose) {
     const known = flowOf(recipe, purpose);
     const flow = known && (known.state === "running" || (known.endedAt || 0) >= loginDialog.openedAt) ? known : null;
     const running = !!flow && flow.state === "running";
-    const checkedAfter = !!flow && (flow.kind === "terminal" || (!!recipe.loginChecked && recipe.loginChecked.at >= (flow.endedAt || 0) && !recipe.loginChecking));
+    const checkedAfter = !!flow && !!recipe.loginChecked && recipe.loginChecked.at >= (flow.endedAt || 0) && !recipe.loginChecking;
     const base = { vendor: recipe.vendor, icon: recipe.icon || "", purpose, flowId: flow ? flow.id : undefined, data: { recipe: recipe.id } };
     let confirmed = false;
     let props;
@@ -6423,9 +6499,14 @@
       const kind = recipe.installHow === "url" ? "url" : recipe.installHow === "terminal" ? "terminal" : "command";
       const idleScene = kind === "terminal" ? "terminal" : kind === "url" ? "browser" : "package";
       const geek = `${esc(recipe.installNote || "")}${recipe.installCommand ? ` It runs <code>${esc(recipe.installCommand)}</code>${kind === "terminal" ? " in a terminal window" : " hidden, the way you would in a terminal"}.` : ""} viberoom downloads nothing itself: it is the vendor's own installer.`;
-      if (!recipe.unavailableReason && !(running)) {
+      if (!recipe.unavailableReason && !running && (!flow || flow.state === "done")) {
         confirmed = checkedAfter && recipe.loginState === "ok";
-        props = { ...base, kind, state: "done", scene: "done", words: confirmed ? `${recipe.vendor} is installed and logged in. You can summon it now.` : `${recipe.vendor} is installed. Asking whether it is logged in…`, status: recipe.installedAt || undefined, lines: flow ? flow.lines : undefined };
+        const words = confirmed ? `${recipe.vendor} is installed and ready to join. You can summon it now.`
+          : recipe.loginChecking ? `${recipe.vendor} is installed. Checking its sign-in…`
+          : recipe.loginState === "missing" ? `${recipe.vendor} is installed. Log in to use it.`
+          : recipe.loginState === "configured" ? `${recipe.vendor} is installed and has sign-in details configured. You can summon it; the vendor will confirm access.`
+          : `${recipe.vendor} is installed. Its sign-in could not be confirmed. You can check again or open its sign-in.`;
+        props = { ...base, kind, state: "done", scene: "done", words, status: recipe.installedAt || undefined, lines: flow ? flow.lines : undefined };
       } else if (running) {
         props = { ...base, kind, state: "running", scene: idleScene, words: flow.detail, lines: flow.lines, geek };
       } else if (flow && flow.state === "failed") {
@@ -6434,32 +6515,34 @@
         const words = kind === "url" ? `${recipe.vendor} is installed from its website. Follow the steps there, come back, and press Check again.` : kind === "terminal" ? `A terminal window opens with ${recipe.vendor}'s installer. Finish there, then press I'm done.` : `${recipe.vendor} is fetched from npm; the tile turns live when it is done.`;
         props = { ...base, kind, state: "idle", scene: idleScene, words, status: "not installed on this machine", url: recipe.installUrl, geek };
       }
-      return { props, confirmed };
+      return { props: { ...props, confirmed, checking: !!recipe.loginChecking }, confirmed };
     }
     const kind = recipe.loginHow === "terminal" ? "terminal" : "command";
-    const geek = `${esc(recipe.loginHint || "")}${recipe.loginTerminalCommand ? ` In a terminal it is <code>${esc(recipe.loginTerminalCommand)}</code>.` : ""} viberoom never sees your password or keys: ${esc(recipe.vendor)} signs you in, this dialog only shows what it says.`;
+    const geek = `${esc(recipe.loginHint || "")}${recipe.loginTerminalCommand ? ` In a terminal it is <code>${esc(recipe.loginTerminalCommand)}</code>.` : ""} ${esc(recipe.vendor)} handles sign-in. This dialog displays its output and forwards any answers you enter here.`;
     const terminal = kind !== "terminal" && !!recipe.loginTerminalCommand;
     const said = loginStatusWords(recipe);
-    if (recipe.loginState === "ok" && flow && flow.state === "done" && checkedAfter) {
+    if (recipe.loginState === "ok" && flow && !running && checkedAfter) {
       confirmed = true;
-      props = { ...base, kind, state: "done", scene: "done", words: `${recipe.vendor} confirms it is logged in.`, status: said, lines: flow.lines };
+      props = { ...base, kind, state: "done", scene: "done", words: `${recipe.vendor} is ready to join the room.`, status: said, lines: flow.lines };
     } else if (running) {
       const scene = kind === "terminal" ? "terminal" : flow.wantsInput ? "question" : flow.code ? "code" : "browser";
       props = { ...base, kind, state: "running", scene, words: flow.detail, url: flow.url, code: flow.code, wantsInput: !!flow.wantsInput, lines: flow.lines, geek };
-    } else if (flow && flow.state === "done" && !checkedAfter) {
-      props = { ...base, kind, state: "done", scene: "done", words: `${recipe.vendor} says it is signed in. Asking it…`, lines: flow.lines };
+    } else if (flow && flow.state === "done" && !checkedAfter && recipe.loginChecking) {
+      props = { ...base, kind, state: "done", scene: "done", words: `The sign-in command finished. Checking ${recipe.vendor}…`, lines: flow.lines };
     } else if (flow && flow.state === "done" && recipe.loginState === "missing") {
-      props = { ...base, kind, state: "failed", scene: "failed", words: `${recipe.vendor} said it signed in, but asked again it says: ${said || "not logged in"}.`, lines: flow.lines, geek, terminal };
+      props = { ...base, kind, state: "failed", scene: "failed", words: `The sign-in command finished, but ${recipe.vendor} reports: ${said || "not logged in"}.`, lines: flow.lines, geek, terminal };
     } else if (flow && flow.state === "done") {
-      props = { ...base, kind, state: "done", scene: "done", words: `${recipe.vendor} says it is signed in; asked again, it could not say for sure. Summon it and see.`, status: said, lines: flow.lines };
+      props = { ...base, kind, state: "done", scene: "done", words: recipe.loginState === "configured"
+        ? `${recipe.vendor} has sign-in details configured. Access is confirmed when the vendor uses them.`
+        : `The sign-in command finished, but ${recipe.vendor}'s access could not be confirmed. Check again or reopen sign-in.`, status: said, lines: flow.lines };
     } else if (flow && flow.state === "failed") {
       props = { ...base, kind, state: "failed", scene: "failed", words: flow.detail, lines: flow.lines, geek, terminal };
     } else {
       const scene = recipe.loginScene || "browser";
-      const words = scene === "terminal" ? `A terminal window opens with ${recipe.vendor}'s own sign-in. Finish there, then press I'm done.` : scene === "code" ? `${recipe.vendor} shows a page and a code. Open the page, type the code, and it signs you in.` : `${recipe.vendor} opens your browser. Sign in there and come back; viberoom waits.`;
+      const words = scene === "terminal" ? `A terminal window opens with ${recipe.vendor}'s own sign-in. Complete its menu and exit the vendor's screen; viberoom then checks the result.` : scene === "code" ? `${recipe.vendor} shows a page and a code. Open the page, type the code, and it signs you in.` : `${recipe.vendor} opens your browser. Sign in there and come back; viberoom waits.`;
       props = { ...base, kind, state: "idle", scene, words: flow && flow.state === "cancelled" ? `Cancelled. ${words}` : words, status: said, geek };
     }
-    return { props, confirmed };
+    return { props: { ...props, confirmed, checking: !!recipe.loginChecking }, confirmed };
   }
 
   const SETUP_STEPS = ["what", "bot", "key", "name", "pair", "done"];
@@ -6876,7 +6959,7 @@
       const flowId = root && root.dataset.flow;
       try {
         if (act === "close-login") closeDialog(els.loginDialog);
-        else if (act === "start-login" || (act === "retry-login" && purpose === "login")) { btn.disabled = true; await startLoginFlow(recipeId, false); }
+        else if (act === "start-login" || (act === "retry-login" && purpose === "login")) { btn.disabled = true; loginDialog.purpose = "login"; await startLoginFlow(recipeId, false); }
         else if (act === "start-install" || (act === "retry-login" && purpose === "install")) { btn.disabled = true; await startInstallFlow(recipeId, false); }
         else if (act === "terminal-login") { btn.disabled = true; await (purpose === "install" ? startInstallFlow(recipeId, true) : startLoginFlow(recipeId, true)); }
         else if (act === "rescan" || (act === "recheck-login" && purpose === "install")) { btn.disabled = true; await post("/api/recipes/check", { id: recipeId, rescan: true }, { deadline: 3 * 60000 }); }
@@ -6992,7 +7075,8 @@
     if (r.unavailableReason) return { state: "off", text: "not installed" };
     if (r.loginChecking && !r.loginChecked) return { state: "checking", text: "checking…" };
     if (r.loginState === "missing") return { state: "missing", text: "not logged in" };
-    if (r.loginState === "ok") return { state: "ok", text: "logged in" };
+    if (r.loginState === "ok") return { state: "ok", text: r.loginChecked?.how === "acp" ? "ready" : "logged in" };
+    if (r.loginState === "configured") return { state: "unknown", text: "sign-in set up" };
     return { state: "unknown", text: "installed" };
   }
   function loginTitle(r) {
@@ -7019,9 +7103,9 @@
           : r.loginState === "missing"
           ? UI.html("button", { label: "Log in", kind: "primary", size: "xs", act: "open-login-dialog", icon: "lock", title: `${r.vendor} is not logged in here: log in from the room`, data: { recipe: r.id, purpose: "login" } })
           : "";
-        return `<div class="agent-cell">${tile}${under}</div>`;
+        return `<div class="agent-cell">${tile}${under}${agentUpdates.tileAction(r)}</div>`;
       })
-      .join("");
+      .join("") + agentUpdates.bulkAction();
     els.invAgents.querySelectorAll('[data-act="install-pick"]').forEach((b) => b.addEventListener("click", () => pickForInstall(b.dataset.agent)));
     els.invAgents.querySelectorAll(".agent-tile:not(.off)").forEach((b) =>
       b.addEventListener("click", () => {
@@ -7739,7 +7823,9 @@
     noteHubRun();
     state.skills = snapshot.skills || [];
     state.recipes = snapshot.recipes || [];
-    state.logins = new Map((snapshot.logins || []).filter((f) => f.purpose !== "install").map((f) => [f.recipeId, f]));
+    agentUpdates.setView(snapshot.agentUpdates || null);
+    for (const flow of snapshot.logins || []) agentUpdates.setFlow(flow);
+    state.logins = new Map((snapshot.logins || []).filter((f) => !f.purpose || f.purpose === "login").map((f) => [f.recipeId, f]));
     state.installs = new Map((snapshot.logins || []).filter((f) => f.purpose === "install").map((f) => [f.recipeId, f]));
     state.roomDefaults = snapshot.roomDefaults || null;
     state.channels = snapshot.channels || null;
@@ -8029,6 +8115,7 @@
       if (state.view === "room") renderSideRoom();
     },
     login: (m) => {
+      if (m.flow.purpose === "update") { agentUpdates.setFlow(m.flow); return; }
       (m.flow.purpose === "install" ? state.installs : state.logins).set(m.flow.recipeId, m.flow);
       renderLoginHosts();
       if (document.querySelector("#invite-dialog")?.open) renderInviteTiles();
@@ -8092,6 +8179,7 @@
       renderUpdatePop();
       if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
     },
+    "agent.updates": (m) => agentUpdates.setView(m.updates),
     channels: (m) => {
       state.channels = m.channels || null;
       if (state.pairLink && !(m.channels && m.channels.pairLinkUntil)) dropPairLink(false);
@@ -9131,6 +9219,22 @@
   for (const type of ["wheel", "touchmove", "keydown", "mousedown"]) {
     els.messages.addEventListener(type, () => (lastUserScrollAt = Date.now()), { passive: true });
   }
+  els.messages.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || (e.target.closest && e.target.closest("button, a, input, textarea, select, summary, [role=button]"))) return;
+    textPress = e.target.nodeType === 3 ? e.target.parentElement : e.target;
+    heldTextElement = textPart(textPress);
+  });
+  const releasePress = () => {
+    if (!textPress) return;
+    textPress = null;
+    if (state.view === "room" && !humanHoldsText()) {
+      rememberReleasedText();
+      renderMessagesSoon("the text press was released");
+      resumeAfterText();
+    }
+  };
+  for (const type of ["pointerup", "pointercancel"]) document.addEventListener(type, releasePress, { passive: true });
+  window.addEventListener("blur", releasePress);
   els.messages.addEventListener("scroll", () => {
     if (state.view !== "room") return;
     if (rowPrices.stamp !== pricesStamp()) { repriceSoon(); return; }
@@ -9139,9 +9243,9 @@
     if (byHand && calm.reserve > 0) calmRelease();
     if (byHand) {
       if (top < lastScrollTop) stuck = false;
-      else if (els.messages.scrollHeight - top - els.messages.clientHeight < 12) stuck = true;
+      else if (!humanHoldsText() && els.messages.scrollHeight - top - els.messages.clientHeight < 12) stuck = true;
     } else if (calm.held) { }
-    else if (nearBottom()) stuck = true;
+    else if (!humanHoldsText() && nearBottom()) stuck = true;
     else if (top < lastScrollTop) stuck = false;
     if (stuck) calm.held = false;
     lastScrollTop = top;
@@ -9875,18 +9979,19 @@
   }
   function updateTimelineView() { for (const t of timelines) t.updateView(); }
   function rescaleTimeline() { for (const t of timelines) t.rescale(); }
-  function followComposer() { for (const t of timelines) t.follow(); }
+  function followConversation() { for (const t of timelines) t.follow(); }
   attachScrollHints(els.pageInner);
   attachScrollHints(els.detailsInner);
   document.querySelectorAll("dialog.dialog").forEach((d) => attachScrollHints(d));
-  const composerFollowers = [$("#timeline"), $("#timeline-left"), els.mentionMenu, els.emojiMenu, els.jumpLatest, els.doneNotes];
+  const composerFollowers = [els.mentionMenu, els.emojiMenu];
   new ResizeObserver(() => {
     const h = `${els.composer.offsetHeight}px`;
     for (const el of composerFollowers) el.style.setProperty("--composer-h", h);
-    followComposer();
+    followConversation();
     renderTimelineSoon(true);
   }).observe(els.composer);
   new ResizeObserver(() => {
+    followConversation();
     renderTimelineSoon(true);
     repriceSoon();
   }).observe(els.messages);

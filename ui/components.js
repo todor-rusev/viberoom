@@ -534,7 +534,7 @@
 
   UI.define("login-dialog", {
     group: "loginDialog",
-    describe: "A vendor's sign-in or install, from any place in the room, in one modal (U147): the vendor's mark and a title, a scene (one drawing: a browser opening, a code to type, a question, a terminal, a package coming in, done, failed) that says what happens, one sentence, the task itself when there is one (a page to open, a code to type, a question to answer), the vendor's own lines behind 'for geeks', and the way out. viberoom never sees a password or a key: the vendor signs the human in, this dialog shows what it says.",
+    describe: "A vendor's sign-in or install, from any place in the room, in one modal (U147): the vendor's mark and a title, a scene (one drawing: a browser opening, a code to type, a question, a terminal, a package coming in, done, failed) that says what happens, one sentence, the task itself when there is one (a page to open, a code to type, a question to answer), the vendor's own lines behind 'for geeks', and the way out. The vendor handles sign-in; this dialog displays its output and forwards any answers entered here.",
     props: {
       vendor: { type: "string", required: true },
       icon: { type: "string", note: "the vendor's drawing (a recipe's icon); a letter without" },
@@ -542,6 +542,8 @@
       state: { type: "enum", values: ["idle", "running", "done", "failed", "cancelled"], required: true, note: "idle: nothing started yet" },
       scene: { type: "enum", values: ["browser", "code", "question", "terminal", "package", "done", "failed"], required: true },
       words: { type: "string", required: true, note: "one sentence: what happens, or what happened" },
+      confirmed: { type: "boolean", default: false, note: "a fresh vendor check confirmed readiness" },
+      checking: { type: "boolean", default: false, note: "the vendor check is still running" },
       status: { type: "string", note: "the vendor's own word on its state, under the title" },
       kind: { type: "enum", values: ["command", "acp", "terminal", "url"], default: "command", note: "terminal: the human finishes in a window and presses I'm done; url: the vendor's page" },
       url: { type: "string", note: "the page to open" },
@@ -553,12 +555,12 @@
       flowId: { type: "string" },
       data: { type: "object" },
     },
-    build: ({ vendor, icon, purpose, state, scene, words, status, kind, url, code, wantsInput, lines, geek, terminal, flowId, data }, ui) => {
+    build: ({ vendor, icon, purpose, state, scene, words, confirmed, checking, status, kind, url, code, wantsInput, lines, geek, terminal, flowId, data }, ui) => {
       const installing = purpose === "install";
       const running = state === "running";
       const title = installing
         ? (state === "done" ? `${vendor} is installed` : state === "failed" ? `${vendor} was not installed` : `Install ${vendor}`)
-        : (state === "done" ? `${vendor} is logged in` : state === "failed" ? `${vendor} did not sign you in` : `Log in to ${vendor}`);
+        : (state === "done" ? confirmed ? `${vendor} is ready` : `${vendor}: check sign-in` : state === "failed" ? `${vendor} did not sign you in` : `Log in to ${vendor}`);
       const startLabel = installing
         ? (kind === "terminal" ? `Open a terminal to install ${vendor}` : kind === "url" ? "Open the page" : `Install ${vendor}`)
         : (kind === "terminal" ? `Open a terminal to sign in` : `Log in to ${vendor}`);
@@ -572,6 +574,10 @@
         if (kind === "terminal") foot.push(ui.build("button", { label: "I'm done", kind: "primary", act: "recheck-login", icon: "check" }));
         foot.push(ui.build("button", { label: "Cancel", kind: "ghost", act: "cancel-login" }));
       } else if (state === "done") {
+        if (!confirmed) {
+          foot.push(ui.build("button", { label: checking ? "Checking…" : "Check again", disabled: checking, kind: "paper", act: "recheck-login", icon: "refresh" }));
+          if (!checking) foot.push(ui.build("button", { label: "Open sign-in", kind: "paper", act: "start-login", icon: "lock" }));
+        }
         foot.push(ui.build("button", { label: "Close", kind: "primary", act: "close-login" }));
       } else {
         foot.push(ui.build("button", { label: "Try again", kind: "primary", act: "retry-login", icon: "refresh" }));

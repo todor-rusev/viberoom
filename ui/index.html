@@ -91,20 +91,22 @@
           <button class="linklike" data-act="copy">Copy</button>
           <button class="linklike" data-act="clear">Cancel</button>
         </div>
-        <div id="messages" class="messages" tabindex="0"></div>
-        <div id="pins-panel" class="pins-panel" hidden></div>
-        <div id="search-panel" class="search-panel" hidden></div>
-        <div id="timeline-left" class="timeline left" hidden>
-          <div class="tl-view"></div>
-          <div class="tl-ticks"></div>
-          <div class="tl-pop" hidden></div>
-        </div>
-        <button type="button" id="jump-latest" class="jump-latest" title="Back to the latest messages" hidden><span data-icon="chevrons-down"></span></button>
-        <div id="done-notes" class="done-notes" hidden></div>
-        <div id="timeline" class="timeline" hidden>
-          <div class="tl-view"></div>
-          <div class="tl-ticks"></div>
-          <div class="tl-pop" hidden></div>
+        <div class="chat-conversation">
+          <div id="messages" class="messages" tabindex="0"></div>
+          <div id="pins-panel" class="pins-panel" hidden></div>
+          <div id="search-panel" class="search-panel" hidden></div>
+          <div id="timeline-left" class="timeline left" hidden>
+            <div class="tl-view"></div>
+            <div class="tl-ticks"></div>
+            <div class="tl-pop" hidden></div>
+          </div>
+          <button type="button" id="jump-latest" class="jump-latest" title="Back to the latest messages" hidden><span data-icon="chevrons-down"></span></button>
+          <div id="done-notes" class="done-notes" hidden></div>
+          <div id="timeline" class="timeline" hidden>
+            <div class="tl-view"></div>
+            <div class="tl-ticks"></div>
+            <div class="tl-pop" hidden></div>
+          </div>
         </div>
         <div id="mention-menu" class="mention-menu" hidden></div>
         <div id="emoji-menu" class="mention-menu emoji-menu" hidden></div>
@@ -362,6 +364,7 @@
   <script src="/carry.js"></script>
   <script src="/memory.js"></script>
   <script src="/layout.js"></script>
+  <script src="/agent-updates.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

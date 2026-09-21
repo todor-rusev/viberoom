@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { withRunAsNode } from "./own-runtime.js";
+import { semanticVersion, compareSemanticVersions } from "./agent-version.js";
 
 export interface UpdateInfo {
   current: string;
@@ -24,18 +25,12 @@ export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const CHECK_FILE = "update-check.json";
 
 export function parseVersion(v: string): { parts: number[]; prerelease: boolean } | null {
-  const m = /^v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?$/.exec(v.trim());
-  if (!m) return null;
-  return { parts: [Number(m[1]), Number(m[2]), Number(m[3])], prerelease: !!m[4] };
+  const parsed = semanticVersion(v);
+  return parsed ? { parts: parsed.parts, prerelease: parsed.pre.length > 0 } : null;
 }
 
 export function compareVersions(a: string, b: string): number {
-  const pa = parseVersion(a);
-  const pb = parseVersion(b);
-  if (!pa || !pb) return 0;
-  for (let i = 0; i < 3; i++) if (pa.parts[i] !== pb.parts[i]) return pa.parts[i] - pb.parts[i];
-  if (pa.prerelease !== pb.prerelease) return pa.prerelease ? -1 : 1;
-  return 0;
+  return compareSemanticVersions(a, b) ?? 0;
 }
 
 export function readCheckRecord(dataDir: string): CheckRecord | null {

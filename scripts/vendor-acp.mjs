@@ -128,7 +128,7 @@ function patchClaudeAdapter(file) {
                             break;
                         }
                         // Snapshot before result bookkeeping marks dispatched commands as having seen a result.
-                        const absorbedPrompts = (session.turnQueue ?? []).filter((t) => !t.settled && t.commandStarted && !t.commandFinished && !t.commandResultSeen);
+                        const absorbedPrompts = (session.turnQueue ?? []).filter((t) => !t.settled && !t.commandResultSeen && (t.commandStarted || t.commandFinished === "completed" || (session.activeTurn === t && t.deferredSettle === undefined && t.steeredSettle === undefined)));
                         const dispatchedOwner = session.activeTurn && !session.activeTurn.settled && session.activeTurn.deferredSettle === undefined
                             ? session.activeTurn : absorbedPrompts[0];
                         const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind) && absorbedPrompts.length === 0;`,
@@ -168,7 +168,8 @@ function patchClaudeAdapter(file) {
     "                        const viberoomResults = (session.viberoomResultUuids ??= new Set());",
     `                        console.error("viberoom-trace result uuid=" + (typeof message.uuid === "string" ? message.uuid : "none") + " turn=" + (session.activeTurn ? (session.activeTurn.settled ? "settled" : "open") : "none")
                             + " origin=" + (message.origin && message.origin.kind ? message.origin.kind : "none")
-                            + " absorbed=" + ((session.turnQueue ?? []).filter((t) => !t.settled && t.commandStarted && !t.commandFinished && !t.commandResultSeen).length)
+                            + " absorbed=" + ((session.turnQueue ?? []).filter((t) => !t.settled && !t.commandResultSeen && (t.commandStarted || t.commandFinished === "completed" || (session.activeTurn === t && t.deferredSettle === undefined && t.steeredSettle === undefined))).length)
+                            + " activeCmd=" + (session.activeTurn ? (session.activeTurn.commandStarted ? "started" : "-") + "/" + (session.activeTurn.commandFinished || "-") + "/" + (session.activeTurn.commandResultSeen ? "seen" : "-") : "none")
                             + " seen=" + (session.viberoomResultUuids && typeof message.uuid === "string" && session.viberoomResultUuids.has(message.uuid) ? "again" : "first"));
                         const viberoomResults = (session.viberoomResultUuids ??= new Set());`,
   );
@@ -210,7 +211,17 @@ function patchClaudeAdapter(file) {
                     + " owedIdles=" + (session.owedTrailingIdles || 0));
                 this.logger.error(\`Session \${params.sessionId}: cancel floor elapsed without the SDK yielding; forcing "cancelled". The underlying query may still be wedged — a new session may be required.\`);`,
   );
+  once(
+    "                    const frame = message;\n                    switch (frame.state) {",
+    `                    const frame = message;
+                    const viberoomKnown = findUnsettledTurn(frame.command_uuid);
+                    console.error("viberoom-trace lifecycle uuid=" + frame.command_uuid + " state=" + frame.state
+                        + " turn=" + (session.activeTurn ? (session.activeTurn.settled ? "settled" : "open") : "none")
+                        + " command=" + (viberoomKnown ? (viberoomKnown === session.activeTurn ? "active" : "queued") : "unknown"));
+                    switch (frame.state) {`,
+  );
   writeFileSync(file, source);
   console.log("patched claude-agent-acp: a prompt absorbed into an autonomous cycle completes");
   console.log("patched claude-agent-acp: the result, the hold and its release say so in the room's record");
+  console.log("patched claude-agent-acp: a command finished before its cycle's result still completes; lifecycle frames are traced");
 }

@@ -1,9 +1,11 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { AcpAgent, childEnvironment } from "./acp-client.js";
-import { RUN_AS_NODE } from "./own-runtime.js";
+import { AcpAgent } from "./acp-client.js";
+import { spawnManaged, stopManaged } from "./managed-process.js";
+import type { LoginState } from "./agent-health.js";
+import type { WatchedTerminal } from "./agent-terminal.js";
 import { stripAnsi } from "./login-status.js";
 
 export type LoginFlowSpec =
@@ -17,7 +19,7 @@ export interface LoginFlow {
   recipeId: string;
   vendor: string;
   kind: "command" | "acp" | "terminal";
-  purpose?: "login" | "install";
+  purpose?: "login" | "install" | "update";
   looked?: boolean;
   state: "running" | "done" | "failed" | "cancelled";
   startedAt: number;
@@ -58,6 +60,10 @@ interface Running {
   tail: string;
   timer?: NodeJS.Timeout;
   promptTimer?: NodeJS.Timeout;
+  cleanup?: Promise<void>;
+  finishing?: boolean;
+  abort: AbortController;
+  terminal?: WatchedTerminal;
 }
 
 export interface LoginTarget {
@@ -65,7 +71,8 @@ export interface LoginTarget {
   vendor: string;
   spec: LoginFlowSpec;
   launch: { command: string; args: string[]; env?: Record<string, string> };
-  purpose?: "login" | "install";
+  purpose?: "login" | "install" | "update";
+  verify?: (signal: AbortSignal) => Promise<void>;
 }
 
 export class LoginFlows extends EventEmitter {
@@ -80,17 +87,20 @@ export class LoginFlows extends EventEmitter {
   }
 
   runningFor(recipeId: string): LoginFlow | undefined {
-    return [...this.running.values()].map((r) => r.flow).find((f) => f.recipeId === recipeId && f.state === "running");
+    return [...this.running.values()].find(r => r.flow.recipeId === recipeId && (r.flow.state === "running" || r.finishing))?.flow;
   }
 
   start(target: LoginTarget, cwd: string): LoginFlow {
     const purpose = target.purpose ?? "login";
-    const existing = [...this.running.values()].map((r) => r.flow).find((f) => f.recipeId === target.recipeId && f.state === "running" && (f.purpose ?? "login") === purpose);
-    if (existing) return existing;
+    const existing = this.runningFor(target.recipeId);
+    if (existing) {
+      if ((existing.purpose ?? "login") === purpose && existing.state === "running") return existing;
+      throw new Error(`${target.vendor} has another operation in progress. Wait until it finishes.`);
+    }
     const { spec } = target;
     if (spec.kind !== "command" && spec.kind !== "acp") throw new Error(`${target.vendor} signs in through its own screen: run it in a terminal`);
-    const flow: LoginFlow = { id: randomUUID(), recipeId: target.recipeId, vendor: target.vendor, kind: spec.kind, purpose, state: "running", startedAt: Date.now(), lines: [], detail: spec.kind === "acp" ? `${target.vendor} is opening your browser; finish the sign-in there and come back.` : `Starting ${target.vendor}'s own ${purpose === "install" ? "installer" : "sign-in"}…`, hint: spec.hint };
-    const entry: Running = { flow, tail: "" };
+    const flow: LoginFlow = { id: randomUUID(), recipeId: target.recipeId, vendor: target.vendor, kind: spec.kind, purpose, state: "running", startedAt: Date.now(), lines: [], detail: spec.kind === "acp" ? `${target.vendor} is opening your browser; finish the sign-in there and come back.` : `Starting ${target.vendor}'s own ${purpose === "install" ? "installer" : purpose === "update" ? "updater" : "sign-in"}…`, hint: spec.hint };
+    const entry: Running = { flow, tail: "", abort: new AbortController() };
     this.running.set(flow.id, entry);
     for (const [id, r] of this.running) if (id !== flow.id && r.flow.recipeId === target.recipeId && (r.flow.purpose ?? "login") === purpose && r.flow.state !== "running") this.running.delete(id);
     if (spec.kind === "command") this.runCommand(entry, spec, target, cwd);
@@ -99,13 +109,17 @@ export class LoginFlows extends EventEmitter {
     return flow;
   }
 
-  startTerminal(target: { recipeId: string; vendor: string; commandLine: string; hint: string; purpose?: "login" | "install" }, open: () => Promise<{ how: string }>): LoginFlow {
+  startTerminal(target: { recipeId: string; vendor: string; commandLine: string; hint: string; purpose?: "login" | "install" | "update" }, open: () => Promise<{ how: string }>, watch?: WatchedTerminal): LoginFlow {
     const purpose = target.purpose ?? "login";
-    const existing = [...this.running.values()].map((r) => r.flow).find((f) => f.recipeId === target.recipeId && f.state === "running" && (f.purpose ?? "login") === purpose);
-    if (existing) return existing;
+    const existing = this.runningFor(target.recipeId);
+    if (existing) {
+      if ((existing.purpose ?? "login") === purpose && existing.state === "running") return existing;
+      throw new Error(`${target.vendor} has another operation in progress. Wait until it finishes.`);
+    }
     const thing = purpose === "install" ? "installer" : "sign-in";
     const flow: LoginFlow = { id: randomUUID(), recipeId: target.recipeId, vendor: target.vendor, kind: "terminal", purpose, state: "running", startedAt: Date.now(), lines: [target.commandLine], detail: `Opening a terminal window with ${target.vendor}'s own ${thing}…`, hint: target.hint };
-    const entry: Running = { flow, tail: "" };
+    const entry: Running = { flow, tail: "", abort: new AbortController() };
+    entry.terminal = watch;
     this.running.set(flow.id, entry);
     for (const [id, r] of this.running) if (id !== flow.id && r.flow.recipeId === target.recipeId && (r.flow.purpose ?? "login") === purpose && r.flow.state !== "running") this.running.delete(id);
     entry.timer = setTimeout(() => { if (flow.state === "running") this.end(entry, "cancelled", `${target.vendor}'s ${thing} was not finished in an hour; start it again when you are ready.`); }, TERMINAL_TIMEOUT_MS);
@@ -113,7 +127,7 @@ export class LoginFlows extends EventEmitter {
     open().then(
       ({ how }) => {
         if (flow.state !== "running") return;
-        flow.detail = purpose === "install"
+        flow.detail = watch ? `${target.vendor}'s ${thing} is running in ${how}. Finish there and exit the vendor's screen; viberoom checks the result when the command ends.` : purpose === "install"
           ? `${target.vendor}'s installer is running in ${how}. Finish it there, then come back and press "I'm done": viberoom looks for ${target.vendor} again.`
           : `${target.vendor}'s sign-in is running in ${how}. Finish it there, then come back and press "I'm done": viberoom asks ${target.vendor} whether it worked.`;
         this.changed(flow);
@@ -123,19 +137,24 @@ export class LoginFlows extends EventEmitter {
         this.end(entry, "failed", `No terminal window could be opened (${error instanceof Error ? error.message : String(error)}). Run the command below in a terminal yourself, then press "Check again".`);
       },
     );
+    if (watch) void watch.finished.then(receipt => {
+      if (flow.state !== "running") return;
+      this.end(entry, receipt.state === "done" ? "done" : receipt.state === "cancelled" ? "cancelled" : "failed",
+        receipt.detail || (receipt.state === "done" ? `${target.vendor}'s ${thing} finished. Checking the result…` : `${target.vendor}'s ${thing} ended without success (exit ${receipt.code ?? "unknown"}). See the terminal for its explanation.`));
+    });
     return flow;
   }
 
   settleInstall(recipeId: string, installedAt: string | null): void {
     for (const r of this.running.values()) {
       if (r.flow.recipeId !== recipeId || r.flow.purpose !== "install") continue;
-      if (r.flow.state === "running") {
+      if (r.flow.state === "running" && r.flow.kind === "terminal" && !r.terminal) {
         if (installedAt) { r.flow.looked = true; this.end(r, "done", `${r.flow.vendor} is installed (${installedAt}). Asking whether it is logged in…`); }
         else {
           r.flow.detail = `${r.flow.vendor} is still not found on this machine. Finish the install in the terminal window, then press "I'm done" once more; if it went somewhere unusual, \`viberoom doctor\` lists where the room looked.`;
           this.changed(r.flow);
         }
-      } else if (r.flow.state === "done" && r.flow.kind !== "terminal" && !r.flow.looked) {
+      } else if (r.flow.state === "done" && !r.flow.looked) {
         r.flow.looked = true;
         if (installedAt) r.flow.detail = `${r.flow.vendor} is installed (${installedAt}). Asking whether it is logged in…`;
         else {
@@ -147,10 +166,10 @@ export class LoginFlows extends EventEmitter {
     }
   }
 
-  settle(recipeId: string, state: "ok" | "missing" | "unknown", detail: string): void {
+  settle(recipeId: string, state: LoginState, detail: string): void {
     for (const r of this.running.values()) {
-      if (r.flow.recipeId !== recipeId || r.flow.kind !== "terminal" || r.flow.purpose === "install" || r.flow.state !== "running") continue;
-      if (state === "ok") this.end(r, "done", `${r.flow.vendor} confirms it is logged in${detail ? ` (${detail})` : ""}. You can summon it now; the terminal window can be closed.`);
+      if (r.flow.recipeId !== recipeId || r.flow.kind !== "terminal" || r.flow.purpose === "install" || r.flow.state !== "running" || r.terminal) continue;
+      if (state === "ok" || state === "configured") this.end(r, "done", `${r.flow.vendor} ${state === "ok" ? "confirms it is logged in" : "has sign-in details configured"}${detail ? ` (${detail})` : ""}. You can summon it now; the terminal window can be closed.`);
       else {
         r.flow.detail = `${r.flow.vendor}, asked again, ${state === "missing" ? "still says it is not logged in" : "could not say for sure"}${detail ? ` (${detail})` : ""}. Finish the sign-in in the terminal window, then press "I'm done" once more.`;
         this.changed(r.flow);
@@ -181,28 +200,32 @@ export class LoginFlows extends EventEmitter {
   private runCommand(entry: Running, spec: Extract<LoginFlowSpec, { kind: "command" }>, target: LoginTarget, cwd: string): void {
     const command = spec.command ?? target.launch.command;
     const installing = target.purpose === "install";
-    const thing = installing ? "installer" : "sign-in";
+    const thing = installing ? "installer" : target.purpose === "update" ? "updater" : "sign-in";
     if (!command) { this.end(entry, "failed", `${target.vendor} is not installed here.`); return; }
-    const isJs = /\.(mjs|cjs|js)$/i.test(command);
-    const isShim = /\.(cmd|bat)$/i.test(command);
-    const [file, args] = isJs ? [process.execPath, [command, ...spec.args]] : isShim ? ["cmd.exe", ["/d", "/s", "/c", `"${command}" ${spec.args.join(" ")}`]] : [command, spec.args];
     let child: ChildProcess;
     try {
-      child = spawn(file, args, { cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, windowsVerbatimArguments: isShim, env: childEnvironment({ ...(target.launch.env ?? {}), ...(isJs ? RUN_AS_NODE : {}), NO_COLOR: "1", FORCE_COLOR: "0", TERM: "dumb" }) });
+      child = spawnManaged({ command, args: spec.args, env: target.launch.env }, cwd);
     } catch (error) {
       this.end(entry, "failed", `${target.vendor}'s ${thing} could not start: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
     entry.child = child;
-    entry.flow.detail = installing ? `${target.vendor} is being installed; what the installer prints appears here.` : `${target.vendor} is signing in; what it says appears here.`;
+    entry.flow.detail = installing ? `${target.vendor} is being installed; what the installer prints appears here.` : target.purpose === "update" ? `${target.vendor} is being updated; what the updater prints appears here.` : `${target.vendor} is signing in; what it says appears here.`;
     const onData = (d: Buffer | string) => this.absorb(entry, String(d));
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
     child.on("error", (e) => this.end(entry, "failed", `${target.vendor}'s ${thing} could not start: ${e.message}`));
-    child.on("exit", (code) => {
-      if (entry.flow.state !== "running") return;
+    child.on("close", (code) => {
+      if (entry.flow.state !== "running" || entry.finishing) return;
       this.flushTail(entry);
-      if (code === 0) this.end(entry, "done", installing ? `${target.vendor}'s installer finished. Looking for ${target.vendor}…` : `${target.vendor} says it is signed in. Checking…`);
+      if (code === 0 && target.verify) {
+        entry.flow.detail = `Checking ${target.vendor} after ${target.purpose ?? "sign-in"}…`;
+        this.changed(entry.flow);
+        void target.verify(entry.abort.signal).then(() => { if (entry.flow.state === "running") this.end(entry, "done", `${target.vendor}'s ${target.purpose ?? "sign-in"} is complete and checked.`); }, error => {
+          if (entry.flow.state === "running") this.end(entry, "failed", error instanceof Error ? error.message : String(error));
+        });
+      }
+      else if (code === 0) this.end(entry, "done", installing ? `${target.vendor}'s installer finished. Looking for ${target.vendor}…` : `${target.vendor} says it is signed in. Checking…`);
       else this.end(entry, "failed", `${target.vendor}'s ${thing} ended without success (exit ${code})${entry.flow.lines.length ? `: ${entry.flow.lines[entry.flow.lines.length - 1]}` : ""}.`);
     });
     entry.timer = setTimeout(() => { if (entry.flow.state === "running") this.end(entry, "failed", `${target.vendor}'s ${thing} got no answer in ten minutes.`); }, COMMAND_TIMEOUT_MS);
@@ -237,7 +260,7 @@ export class LoginFlows extends EventEmitter {
 
   private absorb(entry: Running, chunk: string): void {
     const text = stripAnsi(chunk.replace(/\r\n?/g, "\n"));
-    entry.tail += text;
+    entry.tail = (entry.tail + text).slice(-16_000);
     const parts = entry.tail.split("\n");
     entry.tail = parts.pop() ?? "";
     for (const line of parts) this.addLine(entry, line);
@@ -264,7 +287,7 @@ export class LoginFlows extends EventEmitter {
   }
 
   private addLine(entry: Running, raw: string, keepTail = false): void {
-    const line = raw.trimEnd();
+    const line = raw.trimEnd().slice(0, 4000);
     if (!line.trim()) return;
     entry.flow.lines.push(line);
     if (entry.flow.lines.length > MAX_LINES) entry.flow.lines.splice(0, entry.flow.lines.length - MAX_LINES);
@@ -275,15 +298,30 @@ export class LoginFlows extends EventEmitter {
   }
 
   private end(entry: Running, state: LoginFlow["state"], detail: string): void {
-    entry.flow.state = state;
-    entry.flow.endedAt = Date.now();
-    entry.flow.detail = detail;
+    if (entry.finishing || entry.flow.state !== "running") return;
+    entry.flow.detail = "Waiting for the operation's processes to stop…";
     entry.flow.wantsInput = false;
     if (entry.timer) clearTimeout(entry.timer);
     if (entry.promptTimer) clearTimeout(entry.promptTimer);
-    try { entry.child?.kill(); } catch { }
-    try { entry.agent?.kill(); } catch { }
-    this.changed(entry.flow);
+    entry.finishing = true;
+    entry.abort.abort();
+    entry.cleanup = Promise.all([entry.child ? stopManaged(entry.child) : undefined, entry.agent?.kill(), entry.terminal?.cancel()]).then(() => {
+      entry.finishing = false;
+      entry.flow.state = state;
+      entry.flow.endedAt = Date.now();
+      entry.flow.detail = detail;
+      this.changed(entry.flow);
+    }, error => {
+      entry.finishing = false;
+      entry.flow.detail = `Still waiting for the operation to stop: ${error instanceof Error ? error.message : String(error)}. Close its terminal or retry Cancel.`;
+      this.changed(entry.flow);
+    });
+  }
+
+  async shutdown(): Promise<void> {
+    for (const entry of this.running.values()) if (entry.flow.state === "running") this.end(entry, "cancelled", "The application is closing.");
+    await Promise.all([...this.running.values()].map(entry => entry.cleanup));
+    if ([...this.running.values()].some(entry => entry.flow.state === "running")) throw new Error("An agent operation has not confirmed it stopped. Its ownership is retained until the process exits.");
   }
 
   private changed(flow: LoginFlow): void {

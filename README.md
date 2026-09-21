@@ -40,6 +40,23 @@ Every word ever said in a room stays with it. Ask about something from a year ag
 
 <br>
 
+## Agent updates
+
+viberoom checks your installed agents for updates once a day. Each update stays
+with the tool that installed that copy. Update an agent from the dialog or Summon,
+or choose Update all to run the available updates one at a time. The active agent
+shows a progress indicator; waiting agents show Pending. Busy agents are skipped
+with an explanation so their conversations can finish.
+
+Close keeps started updates running and mutes reminders for 24 hours. Cancel
+updates stops the queue. You can also skip the versions shown; Settings lets you
+check manually or turn off automatic checks. Restarting viberoom interrupts an
+unfinished queue and requires a fresh action to resume updates.
+
+Some installation methods need a manual update; the dialog explains the next
+step. A failed check is shown as unknown. Sign-in checks distinguish a configured
+account from an agent that has confirmed it is ready.
+
 ## See it before you install it
 
 Two rooms, six vibemates, one afternoon: a small CLI fixed and tested by Claude, Codex and OpenCode, and a

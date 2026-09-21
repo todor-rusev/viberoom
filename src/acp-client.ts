@@ -2,6 +2,8 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
+import { spawnManaged, stopManaged } from "./managed-process.js";
+export { childEnvironment } from "./child-environment.js";
 import { JsonRpcPeer, MethodNotFound } from "./jsonrpc.js";
 import type {
   ContentBlock,
@@ -34,16 +36,6 @@ export interface AgentHooks {
   onProtocolError?(text: string): void;
 }
 
-export function childEnvironment(extra?: Record<string, string>): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value === undefined) continue;
-    if (key === "CLAUDECODE" || key.startsWith("CLAUDE_CODE_") || key === "CLAUDE_PID" || key === "CLAUDE_EFFORT") continue;
-    env[key] = value;
-  }
-  return { ...env, ...(extra ?? {}) };
-}
-
 export class AcpAgent {
   readonly child: ChildProcess;
   private readonly peer: JsonRpcPeer;
@@ -55,13 +47,7 @@ export class AcpAgent {
   private readonly reportedMode = new Map<string, { order: number; value: string }>();
 
   constructor(readonly launch: AgentLaunch, private readonly hooks: AgentHooks) {
-    this.child = spawn(launch.command, launch.args, {
-      cwd: launch.cwd,
-      env: childEnvironment(launch.env),
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
-      windowsHide: true,
-    });
+    this.child = spawnManaged(launch, launch.cwd);
 
     if (!this.child.stdin || !this.child.stdout || !this.child.stderr) {
       throw new Error("agent process has no stdio pipes");
@@ -182,13 +168,10 @@ export class AcpAgent {
     this.reportedMode.delete(sessionId);
   }
 
-  kill(): void {
-    if (this.exited) return;
-    try {
-      this.child.stdin?.end();
-    } catch {
-    }
-    this.child.kill();
+  kill(): Promise<void> {
+    const stopped = this.exited ? Promise.resolve() : stopManaged(this.child);
+    void stopped.catch(error => this.hooks.onStderr(`viberoom: could not stop the agent process: ${String(error)}`));
+    return stopped;
   }
 
   private async handleRequest(method: string, params: unknown): Promise<unknown> {
