@@ -49,6 +49,10 @@ export class AcpAgent {
   private readonly peer: JsonRpcPeer;
   private initResult: InitializeResult | null = null;
   private exited = false;
+  private received = 0;
+  private readonly replyOrder = new WeakMap<object, number>();
+  private readonly reportedConfig = new Map<string, { order: number; options: SessionConfigOption[] }>();
+  private readonly reportedMode = new Map<string, { order: number; value: string }>();
 
   constructor(readonly launch: AgentLaunch, private readonly hooks: AgentHooks) {
     this.child = spawn(launch.command, launch.args, {
@@ -66,7 +70,14 @@ export class AcpAgent {
     this.peer = new JsonRpcPeer(this.child.stdin, this.child.stdout, {
       onRequest: (method, params) => this.handleRequest(method, params),
       onNotification: (method, params) => this.handleNotification(method, params),
-      onRaw: hooks.onRaw,
+      onRaw: (direction, message) => {
+        if (direction === "in") {
+          const order = ++this.received;
+          const result = (message as { result?: unknown })?.result;
+          if (result && typeof result === "object") this.replyOrder.set(result, order);
+        }
+        hooks.onRaw?.(direction, message);
+      },
       onProtocolError: hooks.onProtocolError,
     });
 
@@ -147,16 +158,28 @@ export class AcpAgent {
   async setConfigOption(sessionId: string, configId: string, value: string | boolean): Promise<SessionConfigOption[]> {
     const params = typeof value === "boolean" ? { sessionId, configId, type: "boolean", value } : { sessionId, configId, value };
     const result = (await this.peer.request("session/set_config_option", params)) as { configOptions: SessionConfigOption[] };
-    return result.configOptions;
+    if (!result || typeof result !== "object") throw new Error("the agent did not return its updated settings");
+    const newer = this.reportedConfig.get(sessionId);
+    let order = this.replyOrder.get(result) ?? 0;
+    let options = result.configOptions;
+    if (newer && newer.order > order) { options = newer.options; order = newer.order; }
+    if (!Array.isArray(options)) throw new Error("the agent did not return its updated settings");
+    const mode = this.reportedMode.get(sessionId);
+    return mode && mode.order > order ? options.map(option => option.category === "mode" ? { ...option, currentValue: mode.value } : option) : options;
   }
 
-  async setMode(sessionId: string, modeId: string): Promise<void> {
+  async setMode(sessionId: string, modeId: string): Promise<{ currentModeId?: string }> {
+    const since = this.received;
     await this.peer.request("session/set_mode", { sessionId, modeId });
+    const reported = this.reportedMode.get(sessionId);
+    return reported && reported.order > since ? { currentModeId: reported.value } : {};
   }
 
   async closeSession(sessionId: string): Promise<void> {
     if (!this.hasSessionCapability("close")) return;
     await this.peer.request("session/close", { sessionId });
+    this.reportedConfig.delete(sessionId);
+    this.reportedMode.delete(sessionId);
   }
 
   kill(): void {
@@ -178,6 +201,16 @@ export class AcpAgent {
   private handleNotification(method: string, params: unknown): void {
     if (method === "session/update") {
       const p = params as SessionNotificationParams;
+      if (p.update.sessionUpdate === "config_option_update") {
+        const options = (p.update as { configOptions: SessionConfigOption[] }).configOptions;
+        if (Array.isArray(options)) {
+          this.reportedConfig.set(p.sessionId, { order: this.received, options });
+          const mode = options.find(option => option.category === "mode");
+          if (mode && typeof mode.currentValue === "string") this.reportedMode.set(p.sessionId, { order: this.received, value: mode.currentValue });
+        }
+      } else if (p.update.sessionUpdate === "current_mode_update") {
+        this.reportedMode.set(p.sessionId, { order: this.received, value: (p.update as { currentModeId: string }).currentModeId });
+      }
       this.hooks.onSessionUpdate(p.sessionId, p.update);
       return;
     }

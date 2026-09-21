@@ -4,6 +4,8 @@ import { EventEmitter } from "node:events";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { writeFileAtomic } from "./atomic.js";
+import { commitFiles, recoverFileTransactions, type FileChange } from "./file-transaction.js";
+import { folderIdentity, isIdentity, newIdentity } from "./identity.js";
 import { qrSvg } from "./qr.js";
 import { pickBotKey } from "./bot-key.js";
 import { ensureDataRoot } from "./data-root.js";
@@ -77,8 +79,9 @@ export interface DiagramSettings {
 export type DiagramPreset = "pop" | "lavender" | "mint" | "sunset" | "slate";
 export const DIAGRAM_PRESETS: DiagramPreset[] = ["pop", "lavender", "mint", "sunset", "slate"];
 
-interface StoredRoom {
+export interface StoredRoom {
   id: string;
+  uuid?: string;
   name: string;
   dir: string;
   createdAt: number;
@@ -189,6 +192,15 @@ function nameList(names: string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
+export interface ShutdownStep {
+  stage: string;
+  ms: number;
+  timedOut: boolean;
+}
+
+const SHUTDOWN_STAGE_MS = 5_000;
+const ROOM_AGENT_MS = 1_000;
+
 export class Hub extends EventEmitter {
   readonly dataDir: string;
   readonly requestDiagnostics = new RequestTraceRing();
@@ -208,16 +220,20 @@ export class Hub extends EventEmitter {
   private renamedAttachments = false;
   private readonly skillsBridge: SkillsBridge;
 
+  readonly folderId: string;
+
   constructor(dataDir: string, log: Logger, initialHumanName?: string) {
     super();
     this.dataDir = resolve(dataDir);
     this.log = log;
     ensureDataRoot(this.dataDir);
     mkdirSync(join(this.dataDir, "rooms"), { recursive: true });
+    this.folderId = folderIdentity(this.dataDir);
     this.skills = new SkillLibrary(join(this.dataDir, "skills"), log.child("skills"));
     this.templates = new TemplateLibrary(join(this.dataDir, "templates"), log.child("templates"));
     this.looks = new LookLibrary(join(this.dataDir, "looks"), log.child("looks"));
     this.history = this.openHistory();
+    recoverFileTransactions(this.dataDir, this.history);
     setTimeout(() => void this.checkLogins().catch((error) => log.warn(`login checks: ${String(error)}`)), 2500).unref();
     this.logins.on("change", (flow: LoginFlow) => {
       this.emit("event", { type: "login", flow } satisfies HubEvent);
@@ -281,6 +297,7 @@ export class Hub extends EventEmitter {
     };
     this.settings = this.loadSettings(initialHumanName);
     this.loadRooms();
+    this.tellRoomsWhatEndedTheLastRun();
     if (this.renamedAttachments) this.saveRooms();
     this.channelsStore = new ChannelsStore(join(this.dataDir, "channels.json"));
     this.channels = new ChannelRouter(
@@ -366,7 +383,13 @@ export class Hub extends EventEmitter {
     return own === "load" || own === "replay" ? own : this.settings.reconnectMode;
   }
 
-  async startRoomsAtBoot(reconnect: (room: Room, id: string) => Promise<unknown> = (room, id) => room.reconnect(id, { mode: this.reconnectModeFor(room) })): Promise<string[]> {
+  private bootRooms: Promise<string[]> | null = null;
+
+  startRoomsAtBoot(reconnect: (room: Room, id: string) => Promise<unknown> = (room, id) => room.reconnect(id, { mode: this.reconnectModeFor(room) }), options: { afterRestart?: boolean } = {}): Promise<string[]> {
+    return this.bootRooms ??= this.restoreRoomsAtBoot(reconnect, options.afterRestart === true);
+  }
+
+  private async restoreRoomsAtBoot(reconnect: (room: Room, id: string) => Promise<unknown>, afterRestart: boolean): Promise<string[]> {
     const started: string[] = [];
     for (const room of this.rooms.values()) {
       if (!room.settings.startWithHub) continue;
@@ -374,10 +397,12 @@ export class Hub extends EventEmitter {
       if (!offline.length) continue;
       this.markOpened(room.id);
       room.noteStartingWithHub(true);
+      const restored: string[] = [];
       try {
         for (const p of offline) {
           try {
             await reconnect(room, p.id);
+            restored.push(p.id);
           } catch (error) {
             this.log.warn(`room ${room.id}: ${p.name} did not start with viberoom: ${error instanceof Error ? error.message : String(error)}`);
           }
@@ -386,6 +411,7 @@ export class Hub extends EventEmitter {
         room.noteStartingWithHub(false);
       }
       room.noteStartedWithHub(this.reconnectModeFor(room));
+      if (afterRestart) room.wakeAfterRestart(restored);
       started.push(room.id);
     }
     return started;
@@ -418,8 +444,7 @@ export class Hub extends EventEmitter {
     for (const room of this.rooms.values()) {
       for (const p of room.participants.values()) {
         if (p.kind !== "agent" || (p.status !== "thinking" && p.status !== "queued")) continue;
-        const draft = room.messages.find((m) => m.streaming && m.from === p.id);
-        marks.push(`${room.id}:${p.id}:${p.status}:${draft ? draft.text.length : 0}:${draft?.toolCalls?.length ?? 0}`);
+        marks.push(`${room.id}:${p.id}:${p.status}:${room.turnProgressMark(p.id)}`);
       }
     }
     return marks.join("|");
@@ -693,7 +718,7 @@ export class Hub extends EventEmitter {
     this.skillsChanged(name);
   }
 
-  private skillsChanged(name: string): void {
+  skillsChanged(name: string): void {
     for (const room of this.rooms.values()) room.skillChanged(name);
     this.emit("event", { type: "skills", skills: this.skills.list() } satisfies HubEvent);
   }
@@ -850,8 +875,39 @@ export class Hub extends EventEmitter {
     });
   }
 
+  private tellRoomsWhatEndedTheLastRun(): void {
+    const mark = join(this.dataDir, "last-fault.json");
+    if (!existsSync(mark)) return;
+    let ended: { at?: number; reason?: string; writing?: string[] } = {};
+    try {
+      ended = JSON.parse(readFileSync(mark, "utf8")) as typeof ended;
+    } catch {
+    }
+    const at = typeof ended.at === "number" ? new Date(ended.at) : null;
+    const sameDay = at ? new Date().toDateString() === at.toDateString() : false;
+    const when = !at
+      ? "the last time it ran"
+      : sameDay
+        ? `at ${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+        : `on ${at.toLocaleDateString()} at ${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    const why = ended.reason ? ` What stopped it: ${ended.reason}` : "";
+    const lost = ended.writing === undefined
+      ? " A reply that was being written at that moment would not have survived it — ask for it again if something is missing."
+      : ended.writing.length
+        ? ` A reply from ${ended.writing.join(" and ")} was being written at that moment and did not survive it — ask for it again.`
+        : "";
+    for (const room of this.rooms.values()) {
+      room.hubRecord(`viberoom stopped unexpectedly ${when} and has started again. Everything said here is kept on this computer and is safe.${lost}${why}`);
+    }
+    try {
+      rmSync(mark, { force: true });
+    } catch {
+    }
+  }
+
   private loadRooms(): void {
     if (!existsSync(this.roomsPath())) return;
+    let backfilled = 0;
     let file: RoomsFile;
     try {
       file = JSON.parse(readFileSync(this.roomsPath(), "utf8")) as RoomsFile;
@@ -861,12 +917,17 @@ export class Hub extends EventEmitter {
     }
     for (const stored of file.rooms ?? []) {
       try {
-        const room = this.instantiate(stored.id, stored.name, stored.dir, stored.settings, stored.createdAt);
+        const room = this.instantiate(stored.id, stored.name, stored.dir, stored.settings, stored.createdAt, isIdentity(stored.uuid) ? stored.uuid : newIdentity());
+        if (!isIdentity(stored.uuid)) backfilled++;
         room.restore(this.keepAttachments(stored.participants ?? []));
         this.log.info(`restored room "${stored.name}" (${stored.id}): ${room.messages.length} messages, ${stored.participants?.length ?? 0} participants offline`);
       } catch (error) {
         this.log.error(`could not restore room ${stored.id}: ${String(error)}`);
       }
+    }
+    if (backfilled) {
+      this.saveRooms();
+      this.log.info(`${backfilled} room(s) had no identity of their own and were given one on this machine`);
     }
   }
 
@@ -876,6 +937,43 @@ export class Hub extends EventEmitter {
       rooms: [...this.rooms.values()].map((room) => room.toStored()),
     };
     writeJson(this.roomsPath(), file);
+  }
+
+  importedRoomAddress(name: string, reserved: ReadonlySet<string> = new Set()): string {
+    let base = slugify(name);
+    if (!ROOM_ID_PATTERN.test(base)) base = `room-${randomBytes(6).toString("hex")}`;
+    let id = base;
+    for (let n = 2; this.rooms.has(id) || reserved.has(id) || existsSync(join(this.dataDir, "rooms", id)); n++) id = `${base.slice(0, 32)}-${n}`;
+    return id;
+  }
+
+  commitRoomTransfer(changes: { stored: StoredRoom; setup: boolean }[], files: FileChange[], writeRecord: () => void): void {
+    const changed = new Map(changes.map(c => [c.stored.id, c]));
+    if (changed.size !== changes.length) throw new Error("The import targets a room more than once.");
+    for (const { stored, setup } of changes) {
+      if (!/^[a-z0-9][a-z0-9-]{0,199}$/.test(stored.id) || !isIdentity(stored.uuid) || !stored.name.trim() || stored.name.length > 60) throw new Error("The import has invalid room metadata.");
+      const room = this.rooms.get(stored.id);
+      if (room && room.uuid !== stored.uuid) throw new Error("The target room changed. Preview the import again.");
+      if (!room && resolve(stored.dir) !== resolve(this.dataDir, "rooms", stored.id, "workspace")) throw new Error("A carried room must start with its own local working folder.");
+      if (room?.historyDiverted) throw new Error(`The conversation in ${room.name} has unsaved writes. Let those finish before importing.`);
+      if (setup && room?.hasConnectedAgents) throw new Error(`Disconnect the agents in ${room.name} before replacing their setup, then preview the import again.`);
+    }
+    const rooms = [...this.rooms.values()].map(room => changed.get(room.id)?.stored ?? room.toStored());
+    for (const change of changes) if (!this.rooms.has(change.stored.id)) rooms.push(change.stored as ReturnType<Room["toStored"]>);
+    const workspaces: FileChange[] = changes.filter(c => !this.rooms.has(c.stored.id)).map(c => ({ path: join("rooms", c.stored.id, "workspace"), directory: [] }));
+    commitFiles(this.dataDir, this.history, [...workspaces, ...files, { path: "rooms.json", data: JSON.stringify({ version: 1, rooms }, null, 2) + "\n" }], () => {
+      for (const { stored } of changes) if (!this.history.migration(stored.id)) this.history.adoptMirror(stored.id);
+      writeRecord();
+    });
+    for (const { stored, setup } of changes) {
+      let room = this.rooms.get(stored.id);
+      if (!room || setup) {
+        room?.removeAllListeners();
+        room = this.instantiate(stored.id, stored.name, stored.dir, stored.settings, stored.createdAt, stored.uuid);
+        room.restore(stored.participants, { quiet: true });
+        this.emit("event", { type: "room.created", room: room.snapshot() } satisfies HubEvent);
+      } else room.importCommitted();
+    }
   }
 
   searchHistory(params: { q?: string; rooms?: string; kinds?: string; author?: string; sort?: string; limit?: string; offset?: string; perRoom?: string; deleted?: string }): HistorySearchResponse {
@@ -1022,9 +1120,11 @@ export class Hub extends EventEmitter {
     }
   }
 
-  private instantiate(id: string, name: string, dir: string, settings: Partial<RoomSettings>, createdAt: number): Room {
+  private instantiate(id: string, name: string, dir: string, settings: Partial<RoomSettings>, createdAt: number, uuid: string = newIdentity()): Room {
     const room = new Room({
       id,
+      uuid,
+      folderId: this.folderId,
       name,
       dir,
       dataDir: join(this.dataDir, "rooms", id),
@@ -1056,7 +1156,7 @@ export class Hub extends EventEmitter {
     return found.length ? `The working directory contains ${found.join(", ")}; agents will read these by their own conventions in addition to the room brief.` : null;
   }
 
-  createRoom(input: { name: string; dir?: string | null; settings?: Partial<RoomSettings> }): { room: Room; notices: string[] } {
+  createRoom(input: { name: string; dir?: string | null; settings?: Partial<RoomSettings>; uuid?: string }): { room: Room; notices: string[] } {
     const name = input.name.trim();
     if (!name || name.length > 60) throw new Error("room name must be 1-60 characters");
     let id = slugify(name);
@@ -1077,7 +1177,7 @@ export class Hub extends EventEmitter {
       mkdirSync(dir, { recursive: true });
     }
 
-    const room = this.instantiate(id, name, dir, input.settings ?? {}, Date.now());
+    const room = this.instantiate(id, name, dir, input.settings ?? {}, Date.now(), isIdentity(input.uuid) ? input.uuid : newIdentity());
     for (const notice of notices) room.postNotice(notice);
     this.saveRooms();
     this.emit("event", { type: "room.created", room: room.snapshot() } satisfies HubEvent);
@@ -1254,6 +1354,7 @@ export class Hub extends EventEmitter {
   }
 
   async checkLogins(ids?: string[], maxAgeMs = 0): Promise<void> {
+    if (this.leaving.signal.aborted) return;
     const targets = listRecipes().filter((r) => !r.unavailableReason && (!ids || ids.includes(r.id)) && !r.loginChecking);
     const due = targets.filter((r) => { const c = loginCheckOf(r.id); return !c || Date.now() - c.at >= maxAgeMs; });
     if (!due.length) return;
@@ -1261,10 +1362,10 @@ export class Hub extends EventEmitter {
     mkdirSync(cwd, { recursive: true });
     for (const r of due) markLoginChecking(r.id, true);
     this.emitRecipes();
-    await Promise.all(
+    const run = Promise.all(
       due.map(async (r) => {
         try {
-          const check = await checkLogin(r.loginStatus, r.build({ model: null, mode: null }), cwd);
+          const check = await checkLogin(r.loginStatus, r.build({ model: null, mode: null }), cwd, this.leaving.signal);
           rememberLoginCheck(r.id, check);
           this.log.info(`login check ${r.id}: ${check.state} (${check.how}: ${check.detail})`);
           this.logins.settle(r.id, check.state, check.detail);
@@ -1276,7 +1377,16 @@ export class Hub extends EventEmitter {
         }
       }),
     );
+    this.loginRun = run.then(() => undefined);
+    try {
+      await this.loginRun;
+    } finally {
+      this.loginRun = null;
+    }
   }
+
+  private loginRun: Promise<void> | null = null;
+  private readonly leaving = new AbortController();
 
   readonly logins = new LoginFlows();
 
@@ -1336,23 +1446,50 @@ export class Hub extends EventEmitter {
     };
   }
 
-  async shutdown(): Promise<void> {
+  async shutdown(options: { stageMs?: number; onStage?: (step: ShutdownStep) => void } = {}): Promise<ShutdownStep[]> {
+    const steps: ShutdownStep[] = [];
+    const stage = async (name: string, budget: number, work: () => Promise<void> | void): Promise<void> => {
+      const started = Date.now();
+      let timedOut = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          (async () => await work())(),
+          new Promise<void>((resolve) => { timer = setTimeout(() => { timedOut = true; resolve(); }, budget); }),
+        ]);
+      } catch (error) {
+        this.log.warn(`shutdown: ${name} failed: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        clearTimeout(timer);
+      }
+      const step: ShutdownStep = { stage: name, ms: Date.now() - started, timedOut };
+      if (timedOut) this.log.warn(`shutdown: ${name} did not finish within ${budget} ms; carrying on`);
+      steps.push(step);
+      options.onStage?.(step);
+    };
+    const plain = options.stageMs ?? SHUTDOWN_STAGE_MS;
+
     this.clearRestart();
     if (this.channelsRetry) clearTimeout(this.channelsRetry);
     this.channelsRetry = null;
-    await this.channels.stop();
-    for (const room of this.rooms.values()) await room.shutdown();
+    this.leaving.abort();
+    await stage("ways-in", plain, async () => {
+      for (const room of this.rooms.values()) room.closeDoor();
+      await this.loginRun;
+      await this.channels.stop();
+    });
+    for (const room of this.rooms.values()) {
+      const agents = [...room.participants.values()].filter((p) => p.kind === "agent").length;
+      await stage(`room:${room.name}`, ROOM_AGENT_MS * (agents + 1) + plain, () => room.shutdown());
+    }
     this.saveRooms();
     if (this.backupTimer) {
       clearInterval(this.backupTimer);
       this.backupTimer = null;
-      try {
-        await this.backupHistory();
-      } catch (error) {
-        this.log.warn(`history backup at shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      await stage("backup", plain, async () => { await this.backupHistory(); });
     }
-    this.history.close();
+    await stage("history", plain, () => this.history.close());
+    return steps;
   }
 
   async reset(): Promise<void> {

@@ -11,12 +11,12 @@ import { planNewRoom, type NewRoomPlan } from "./new-room.js";
 import { formatDuration } from "./duration.js";
 import { affectedByEdit, editNotice, EDIT_NOTICE_MAX, partitionHistory, rewriteNotice, type AgentReadState, type EditMode } from "./edit.js";
 import { bodyRefs, registerBodyReader, resetBodyDelivery, supplyBodies, type BodyDelivery, type BodyEdit, type BodyRef } from "./body-delivery.js";
-import { saveImages, type Attachment, type ImageInput } from "./files.js";
+import { isRoomResourceName, saveImages, type Attachment, type ImageInput } from "./files.js";
 import { agentReadableWindow, resolveQuotes, visibleToAgents, type Quote, type QuoteInput } from "./quotes.js";
-import { canAutoApproveMessageCheck, isDirectMessageCheck, messageAddressing, messageCheckCursor, messageCheckHeader, messageCheckPageCursor, messageCheckPagePosition, messageCheckPosition, messageCheckTitle, packMessageCheck, parseMessageCheckArgs, type MessageCheckArgs, type MessageCheckCounts, type MessageCheckResult } from "./message-check.js";
+import { canAutoApproveMessageCheck, isDirectMessageCheck, messageAddressing, messageCheckCursor, messageCheckHeader, messageCheckPageCursor, messageCheckPagePosition, messageCheckPosition, messageCheckTitle, packMessageCheck, packLiveDraft, parseMessageCheckArgs, type MessageCheckArgs, type MessageCheckCounts, type MessageCheckResult } from "./message-check.js";
 import { historySearchReceipt, historySearchTitle, parseAgentSearchArgs, type AgentSearchArgs, type AgentSearchResult, type HistorySearchReceipt } from "./agent-history.js";
 import { canAutoApproveRoomTool, isDirectRoomTool } from "./room-tool-identity.js";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { AcpAgent } from "./acp-client.js";
 import { errorCode, errorDetail, RemoteError } from "./jsonrpc.js";
 import { getRecipe, listRecipes, publicRecipes, type AgentRecipe } from "./recipes.js";
@@ -34,6 +34,7 @@ import {
   type SkillMeta,
 } from "./skills.js";
 import type { McpServer } from "./acp-types.js";
+import { runAsNodeEntries } from "./own-runtime.js";
 import { templateId, type TemplateLibrary, type TemplateVibemate } from "./templates.js";
 import type { LookCheck, LookSpec } from "./looks.js";
 import type { AppearanceSettings } from "./hub.js";
@@ -143,6 +144,8 @@ export interface Participant {
   deliveryEpoch?: string;
   suppliedThrough?: number;
   activeTurnId?: string;
+  lastSignAt?: number;
+  pendingSettings?: { id: string; name: string; value: string | boolean }[];
   quiet?: QuietTurn;
   runSeen?: string;
   buildSeen?: string;
@@ -286,6 +289,10 @@ export interface ChatMessage {
   wakes?: true;
   streaming?: boolean;
   thought?: string;
+  origin?: string;
+  branch?: { source: string; revision: string };
+  variantOf?: { id: string; revision: string };
+  resourceRefs?: { source: string; file: string; sha256?: string }[];
   notices?: string[];
   toolCalls?: ToolCallView[];
   plan?: PlanEntry[];
@@ -343,6 +350,7 @@ export type RoomEvent =
   | { type: "message.delivery"; updates: { id: string; delivery: BodyDelivery }[] }
   | { type: "message.removed"; id: string }
   | { type: "messages.truncated"; fromSeq: number }
+  | { type: "record.replaced"; reason: "import" }
   | { type: "chunk"; id: string; text: string }
   | { type: "thought"; id: string; text: string }
   | { type: "toolcall"; id: string; toolCall: ToolCallView }
@@ -450,6 +458,8 @@ export interface DiscoveredOptions {
 
 export interface RoomOptions {
   id: string;
+  uuid: string;
+  folderId?: string;
   name: string;
   dir: string;
   dataDir: string;
@@ -483,7 +493,7 @@ interface AgentRuntime {
   workCancelled?: boolean;
   usageSeenThisTurn?: boolean;
   pendingTurn: boolean;
-  turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; lastSignAt?: number; published: boolean; publishedAt?: number; hidden?: boolean; messagesFromSeq: number; shownLength?: number } | null;
+  turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; lastSignAt?: number; lastWorkAt?: number; published: boolean; publishedAt?: number; hidden?: boolean; messagesFromSeq: number; shownLength?: number } | null;
   quiet?: { turnId: string; nudge?: "asking" | "answered" | "silent" };
   strayMessageId: string | null;
   turnsSinceBrief: number;
@@ -527,6 +537,7 @@ const ADAPTER_TRACE = "viberoom-trace ";
 const SILENCE_CHECK_MS = 60_000;
 const STOP_GRACE_MS = 30_000;
 const SILENCE_MS = 10 * 60_000;
+const WORK_SIGNS = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan"]);
 const NUDGE_WAIT_MS = 10_000;
 
 const COLORS = ["#6d5dfc", "#16a34a", "#d97706", "#dc2626", "#0891b2", "#be185d", "#4d7c0f", "#7c3aed"];
@@ -571,6 +582,8 @@ function stoppedWork(message: ChatMessage): string {
 
 export class Room extends EventEmitter {
   readonly id: string;
+  readonly uuid: string;
+  readonly folderId: string | null;
   name: string;
   dir: string;
   readonly dataDir: string;
@@ -618,6 +631,8 @@ export class Room extends EventEmitter {
   constructor(options: RoomOptions) {
     super();
     this.id = options.id;
+    this.uuid = options.uuid;
+    this.folderId = options.folderId ?? null;
     this.name = options.name;
     this.dir = options.dir;
     this.dataDir = options.dataDir;
@@ -691,15 +706,7 @@ export class Room extends EventEmitter {
       this.log.warn("history.jsonl changed after the move to the store; it is not read again (export / import is the way)");
       this.loadNotices.push("history.jsonl was changed after this room moved to the conversation store; those changes are not shown (export and import are the way to bring text in).");
     }
-    for (const message of this.history.all(this.id)) {
-      if (message.kind === "system" && !message.details?.tone) {
-        const tone = legacyRowTone(message.text);
-        if (tone) message.details = { ...(message.details ?? {}), tone };
-      }
-      this.messages.push(message);
-      this.displayOrder = Math.max(this.displayOrder, message.displayOrder ?? message.seq);
-    }
-    this.seq = Math.max(this.seq, this.history.maxSeq(this.id));
+    this.takeFromRecord();
     if (copyAwaits) {
       const chat = this.messages.filter((m) => m.kind === "chat");
       const last = chat.length ? chat[chat.length - 1].ts : null;
@@ -716,7 +723,7 @@ export class Room extends EventEmitter {
       for (const op of journal.ops) {
         if (this.opApplied(op)) continue;
         this.applyOpToMemory(op);
-        if (op.kind !== "truncate") {
+        if (op.kind === "upsert" || op.kind === "rewrite") {
           this.seq = Math.max(this.seq, op.message.seq);
           this.displayOrder = Math.max(this.displayOrder, op.message.displayOrder ?? op.message.seq);
         }
@@ -748,6 +755,10 @@ export class Room extends EventEmitter {
       if (at >= 0) this.messages[at] = op.message;
       else this.messages.push(op.message);
     }
+    if (op.kind === "bury") {
+      const gone = new Set(op.ids);
+      this.messages.splice(0, this.messages.length, ...this.messages.filter((m) => !gone.has(m.id)));
+    }
   }
 
   private persist(op: PendingOp): StoreOutcome {
@@ -775,6 +786,7 @@ export class Room extends EventEmitter {
           if (op.opId) this.history.applyOp(this.id, op as DivertOp);
           else if (op.kind === "upsert") this.history.upsert(this.id, op.message);
           else if (op.kind === "rewrite") this.history.rewrite(this.id, op.message, op.fromSeq, op.deletedAt);
+          else if (op.kind === "bury") this.history.markDeleted(this.id, op.ids, op.deletedAt);
           else this.history.truncateFrom(this.id, op.fromSeq, op.deletedAt);
         }
       };
@@ -853,10 +865,13 @@ export class Room extends EventEmitter {
     return this.divertPending;
   }
 
-  restore(stored: StoredParticipant[]): void {
+  restore(stored: StoredParticipant[], options: { quiet?: boolean } = {}): void {
     for (const s of stored) {
       if (!s.agentType) {
-        this.addUnstaffed({ name: s.name, tagline: s.tagline, role: s.role, avatar: s.avatar, skills: s.skills, color: s.color, id: s.id, textCheck: "keep" });
+        const p = this.addUnstaffed({ name: s.name, tagline: s.tagline, role: s.role, avatar: s.avatar, skills: s.skills, color: s.color, id: s.id, textCheck: "keep", quiet: options.quiet, restoring: true });
+        p.colorSlot = s.colorSlot ?? p.colorSlot;
+        p.muted = s.muted; p.replyDelay = s.replyDelay; p.launch = s.launch;
+        p.createdByVibemate = s.createdByVibemate;
         continue;
       }
       const recipe = getRecipe(s.agentType);
@@ -930,10 +945,11 @@ export class Room extends EventEmitter {
     return { dir: this.dir, settings, vibemates };
   }
 
-  toStored(): { id: string; name: string; dir: string; createdAt: number; settings: Partial<RoomSettings>; participants: StoredParticipant[] } {
+  toStored(): { id: string; uuid: string; name: string; dir: string; createdAt: number; settings: Partial<RoomSettings>; participants: StoredParticipant[] } {
     const { name: _n, humanName: _h, ...settings } = this.settings;
     return {
       id: this.id,
+      uuid: this.uuid,
       name: this.name,
       dir: this.dir,
       createdAt: this.createdAt,
@@ -971,10 +987,42 @@ export class Room extends EventEmitter {
 
   private commit(message: ChatMessage, opId?: string): StoreOutcome {
     message.displayOrder ??= ++this.displayOrder;
+    if (this.folderId) message.origin ??= this.folderId;
     this.messages.push(message);
     const stored = this.persist(opId ? { kind: "upsert", message, opId, accept: true } : { kind: "upsert", message });
     this.push({ type: "message", message });
     return stored;
+  }
+
+  private takeFromRecord(): void {
+    this.messages.splice(0, this.messages.length);
+    for (const message of this.history.all(this.id)) {
+      if (message.kind === "system" && !message.details?.tone) {
+        const tone = legacyRowTone(message.text);
+        if (tone) message.details = { ...(message.details ?? {}), tone };
+      }
+      this.messages.push(message);
+      this.displayOrder = Math.max(this.displayOrder, message.displayOrder ?? message.seq);
+    }
+    this.seq = Math.max(this.seq, this.history.maxSeq(this.id));
+  }
+
+  absorbImported(arriving: ChatMessage[], buried: { id: string; at: number }[]): StoreOutcome {
+    if (!arriving.length && !buried.length) return "record";
+    const ops: PendingOp[] = arriving.map((message) => ({ kind: "upsert", message }));
+    for (const grave of buried) ops.push({ kind: "bury", ids: [grave.id], deletedAt: grave.at });
+    const stored = this.persistMany(ops);
+    this.takeFromRecord();
+    this.push({ type: "record.replaced", reason: "import" });
+    return stored;
+  }
+
+  get hasConnectedAgents(): boolean { return this.runtimes.size > 0; }
+
+  importCommitted(): void {
+    this.takeFromRecord();
+    this.messageCheckRevision++;
+    this.push({ type: "record.replaced", reason: "import" });
   }
 
   private messagesWithLiveDrafts(): ChatMessage[] {
@@ -987,6 +1035,22 @@ export class Room extends EventEmitter {
 
   get humanName(): string {
     return this.settings.humanName;
+  }
+
+  turnProgressMark(participantId: string): string {
+    const turn = this.runtimes.get(participantId)?.turn;
+    return turn ? `${turn.message.id}:${turn.lastSignAt ?? turn.startedAt}:${turn.message.text.length}:${turn.message.toolCalls?.length ?? 0}` : "";
+  }
+
+  messageById(messageId: string): ChatMessage | undefined {
+    let message = this.messages.find(m => m.id === messageId);
+    if (!message) for (const runtime of this.runtimes.values()) {
+      if (runtime.turn?.published && runtime.turn.message.id === messageId) { message = runtime.turn.message; break; }
+    }
+    return message;
+  }
+  toolCallDetails(messageId: string, toolCallId: string): ToolCallView | undefined {
+    return this.messageById(messageId)?.toolCalls?.find(call => call.toolCallId === toolCallId);
   }
 
   get hopLimit(): number {
@@ -1016,10 +1080,10 @@ export class Room extends EventEmitter {
       streamSequence: this.historyStreamSequence, handedFromSeq: this.handedFromSeq(), total: this.messages.length, chats, lastChatAt };
   }
 
-  snapshot(request: { from?: Cursor; all?: boolean; seq?: number } = {}): unknown {
+  snapshot(request: { from?: Cursor; all?: boolean; seq?: number; message?: string } = {}): unknown {
     const last = this.messages.length ? this.messages[this.messages.length - 1] : null;
     const all = this.messagesWithLiveDrafts();
-    let from = foldIndex(all, this.effectiveFoldAfter(), this.handedFromSeq());
+    let from = foldIndex(all, this.effectiveFoldAfter());
     if (request.all) from = 0;
     if (request.from) {
       const c = request.from;
@@ -1034,15 +1098,23 @@ export class Room extends EventEmitter {
       const index = all.findIndex(m => m.seq === targetSeq);
       if (index >= 0) from = Math.min(from, Math.max(0, index - 25));
     }
+    if (request.message) {
+      const index = all.findIndex(m => m.id === request.message);
+      if (index >= 0) from = Math.min(from, Math.max(0, index - 25));
+    }
     const shown = from ? all.slice(from) : all;
+    const hidden = from ? all.slice(0, from).filter(m => m.seq > 0 && !m.streaming).length : 0;
     const latest: Record<string, { seq: number; usage?: ChatMessage["usage"] }> = {};
     for (const m of this.messages) if (m.kind === "chat") latest[m.from] = { seq: m.seq, ...(m.usage ? { usage: m.usage } : {}) };
     const lastChat = [...all].reverse().find(m => m.kind === "chat");
     return {
-      history: { ...this.historyStamp(), hidden: from, oldest: from ? cursorOf(shown[0]) : null, latest,
+      history: { ...this.historyStamp(), hidden, oldest: hidden ? cursorOf(shown[0]) : null, latest,
         lastChat: lastChat ? { id: lastChat.id, seq: lastChat.seq, from: lastChat.from, fromName: lastChat.fromName, ts: lastChat.ts, text: lastChat.text.slice(0, 160) } : null },
       pinnedOlder: from ? all.slice(0, from).filter((m) => m.pinned && m.kind === "chat") : [],
       id: this.id,
+      filesDir: this.filesDir(),
+      sources: this.history.carry.sources(),
+      resourceVersions: this.history.carry.resources(this.id),
       name: this.name,
       dir: this.dir,
       createdAt: this.createdAt,
@@ -1069,6 +1141,7 @@ export class Room extends EventEmitter {
     const changed: string[] = [];
     this.bypassPermissionsByDefault = program.bypassPermissionsByDefault;
     if (program.transcripts) this.programTranscripts = program.transcripts;
+    if (program.transcripts) this.updateTranscriptModes();
     if (program.foldAfter) this.programFoldAfter = program.foldAfter;
     if (program.humanName !== this.settings.humanName) {
       this.settings = { ...this.settings, humanName: program.humanName };
@@ -1149,20 +1222,25 @@ export class Room extends EventEmitter {
     return draft.text ? "writing" : "thinking";
   }
 
-  whoIsBusy(): { name: string; state: string; line: string }[] {
+  whoIsBusy(): import("./message-check.js").CheckedVibemate[] {
     const now = Date.now();
-    const out: { name: string; state: string; line: string }[] = [];
+    const out: import("./message-check.js").CheckedVibemate[] = [];
     for (const p of this.participants.values()) {
       if (p.kind !== "agent" || p.status === "left") continue;
       const state = p.muted ? "muted" : this.shownStatus(p.id);
       const turn = this.runtimes.get(p.id)?.turn;
       const parts = [state];
-      if (turn && !turn.hidden) {
-        const quiet = Math.floor((now - (turn.lastSignAt ?? turn.startedAt)) / 60_000);
+      let timing: Pick<import("./message-check.js").CheckedVibemate, "startedAt" | "elapsedSeconds" | "quietSeconds"> = {};
+      if (turn && !turn.hidden && Number.isFinite(turn.startedAt)) {
+        const elapsedSeconds = Math.max(0, Math.floor((now - turn.startedAt) / 1000));
+        const quietSeconds = Math.max(0, Math.floor((now - (turn.lastSignAt ?? turn.startedAt)) / 1000));
+        timing = { startedAt: new Date(turn.startedAt).toISOString(), elapsedSeconds, quietSeconds };
+        parts.push(formatDuration(elapsedSeconds * 1000));
+        const quiet = Math.floor(quietSeconds / 60);
         if (quiet >= 1) parts.push(`nothing new for ${quiet} min`);
         parts.push(`since ${formatQuoteTime(turn.startedAt).slice(-5)}`);
       }
-      out.push({ name: p.name, state, line: parts.join(" · ") });
+      out.push({ name: p.name, state, line: parts.join(" · "), ...timing });
     }
     return out;
   }
@@ -1209,6 +1287,24 @@ export class Room extends EventEmitter {
 
   noteStartedWithHub(mode: string): void {
     this.postRoomEvent(`Started with viberoom: the vibemates are back (${mode}).`);
+  }
+
+  private restartMessageHandled = false;
+
+  wakeAfterRestart(restored: string[]): void {
+    if (this.restartMessageHandled) return;
+    this.restartMessageHandled = true;
+    const text = this.settings.restartMessage.trim();
+    if (!this.settings.startWithHub || !this.settings.wakeAfterRestart || !text || this.closing || this.focused || this.recordHold) return;
+    const targets = [...new Set(restored)].filter(id => {
+      const participant = this.participants.get(id), runtime = this.runtimes.get(id);
+      return participant?.kind === "agent" && participant.status === "idle" && !participant.muted && runtime?.agent.alive && !runtime.retiring && !runtime.workCancelled && !runtime.turnActive;
+    });
+    if (!targets.length) return;
+    this.postRoomEvent(`Automatic restart message, configured by ${this.humanName}:\n${text}`, undefined, true);
+    this.hops = 0;
+    this.push(this.roomEvent());
+    for (const id of targets) this.requestTurn(id);
   }
 
   exportMarkdown(): string {
@@ -1532,8 +1628,7 @@ export class Room extends EventEmitter {
       try {
         this.push({ type: "participant", participant });
       } finally {
-        this.resumeRuntimeWork(id, runtime);
-        this.startNext();
+        await this.finishRuntimeWork(id, runtime);
       }
     }
     return participant;
@@ -1662,6 +1757,7 @@ export class Room extends EventEmitter {
       }
     }
     this.settings = next;
+    if (changed.includes("transcripts")) this.updateTranscriptModes();
     this.push(this.roomEvent());
     const briefChanges = changed.filter((c) => BRIEF_AFFECTING_SETTINGS.includes(c as keyof RoomSettings));
     if (briefChanges.length) {
@@ -1885,10 +1981,10 @@ export class Room extends EventEmitter {
     return participant;
   }
 
-  addUnstaffed(input: { name: string; tagline?: string; role?: string; avatar?: string; skills?: string[]; color?: string; id?: string; textCheck?: BriefTextCheck }): Participant {
+  addUnstaffed(input: { name: string; tagline?: string; role?: string; avatar?: string; skills?: string[]; color?: string; id?: string; textCheck?: BriefTextCheck; quiet?: boolean; restoring?: boolean }): Participant {
     const name = input.name.trim();
     if (!NAME_PATTERN.test(name)) throw new Error("name must be 1-24 letters, digits, _ or - (no spaces)");
-    if (this.findByName(name)) throw new Error(`name "${name}" is already taken`);
+    if (!input.restoring && this.findByName(name)) throw new Error(`name "${name}" is already taken`);
     const id = input.id ?? `vm-${name.toLowerCase()}`;
     const participant: Participant = {
       id,
@@ -1907,7 +2003,7 @@ export class Room extends EventEmitter {
       failedTurns: 0,
     };
     this.participants.set(id, participant);
-    this.push({ type: "participant", participant });
+    if (!input.quiet) this.push({ type: "participant", participant });
     return participant;
   }
 
@@ -1986,6 +2082,11 @@ export class Room extends EventEmitter {
     return participant;
   }
 
+  private updateTranscriptModes(): void {
+    const mode = this.settings.transcripts === "inherit" ? this.programTranscripts : this.settings.transcripts;
+    for (const runtime of this.runtimes.values()) runtime.transcript?.setMode(mode);
+  }
+
   private async startAgent(participant: Participant, launch: LaunchPrefs, fresh: boolean, reconnectOptions?: ReconnectOptions): Promise<void> {
     const recipe = getRecipe(participant.agentType ?? "");
     if (!recipe) throw new Error(`unknown agent type: ${participant.agentType}`);
@@ -1995,7 +2096,8 @@ export class Room extends EventEmitter {
     const cwd = ensureDir(this.dir);
     const spec = recipe.build({ model: launch.model, mode: launch.mode });
     const mode = this.settings.transcripts === "inherit" ? this.programTranscripts : this.settings.transcripts;
-    const transcript = new Transcript(join(this.dataDir, "transcripts"), name, mode);
+    const transcript = new Transcript(join(this.dataDir, "transcripts"), name, mode,
+      this.history.path === ":memory:" ? undefined : dirname(this.history.path));
     log.info(`spawning ${spec.command} ${spec.args.join(" ")} (cwd ${cwd}); protocol: ${mode}${mode === "off" ? "" : ` (${transcript.path})`}`);
 
     const stderrTail: string[] = [];
@@ -2262,32 +2364,84 @@ export class Room extends EventEmitter {
   async setConfig(id: string, configId: string, value: string | boolean, from?: string): Promise<void> {
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
-    if (!runtime || !participant) throw new Error("no such agent (offline?)");
-    if (runtime.turnActive) {
+    if (!participant) throw new Error("no such vibemate");
+    if (participant.status === "starting") throw new Error(`${participant.name} is still starting. Change its settings once it is ready.`);
+    if (!runtime) throw new Error(`${participant.name} is offline. Reconnect it before changing its live settings.`);
+    const option = participant.configOptions?.find(o => o.id === configId)
+      ?? participant.configOptions?.find(o => o.category === configId);
+    if (option) configId = option.id;
+    if (runtime.turnActive || runtime.workBusy) {
       runtime.pendingConfig = [...(runtime.pendingConfig ?? []).filter((p) => p.configId !== configId), { configId, value, ...(from ? { from } : {}) }];
+      this.push({ type: "participant", participant });
       this.postSystem(`${participant.name}: ${this.configName(participant, configId)} → ${configShown(value)}; when this reply is finished${from ? ` (${from})` : ""}`, "human", false, { agentId: participant.id });
       return;
     }
+    let owner = runtime;
+    runtime.workBusy = true;
+    try { owner = await this.applyConfigNow(id, configId, value, from); }
+    finally { await this.finishRuntimeWork(id, owner); }
+  }
+
+  private async applyConfigNow(id: string, configId: string, value: string | boolean, from?: string): Promise<AgentRuntime> {
+    const runtime = this.runtimes.get(id);
+    const participant = this.participants.get(id);
+    if (!runtime || !participant) throw new Error("the vibemate is no longer connected");
+    const option = participant.configOptions?.find(o => o.id === configId)
+      ?? participant.configOptions?.find(o => o.category === configId);
+    if (option) configId = option.id;
+    const stillOurs = () => {
+      if (this.runtimes.get(id) !== runtime || this.participants.get(id) !== participant) throw new Error("the vibemate restarted while its setting was changing; choose the setting again");
+    };
+    const change = async <T>(request: () => Promise<T>): Promise<T> => {
+      try { return await request(); }
+      catch (error) {
+        const record = runtime.transcript?.dump("setting change failed");
+        const setting = JSON.stringify({ id: configId, value, model: participant.model, mode: participant.mode }).slice(0, 500);
+        runtime.log.warn(`setting refused ${setting}: ${describeError(error)}${record ? `; protocol kept at ${record}` : ""}`);
+        throw error;
+      }
+    };
     const recipe = getRecipe(participant.agentType ?? "");
     if (recipe?.modeAtLaunch && configId === "mode") {
       if (!recipe.modePresets.includes(String(value))) throw new Error(`${participant.name}: no mode "${value}" (${recipe.modePresets.join(", ")})`);
       participant.launch = { model: participant.launch?.model ?? null, effort: participant.launch?.effort ?? null, mode: String(value) };
-      participant.mode = String(value);
       this.push({ type: "participant", participant });
+      const pendingTurn = runtime.pendingTurn, addressed = runtime.addressed;
       await this.respawnAgent(id, { memory: true, reason: "its mode changed" });
-      return;
+      const replacement = this.runtimes.get(id);
+      if (!replacement) throw new Error("the vibemate could not restart with its new mode");
+      replacement.workBusy = true;
+      replacement.pendingTurn ||= pendingTurn;
+      replacement.addressed ||= addressed;
+      replacement.pendingConfig = [...(runtime.pendingConfig || []), ...(replacement.pendingConfig || [])];
+      runtime.pendingConfig = undefined;
+      runtime.workBusy = false;
+      return replacement;
     }
-    const hasOption = participant.configOptions?.some((o) => o.id === configId);
-    if (!hasOption && configId === "mode" && participant.modes?.some((m) => m.id === value)) {
-      await runtime.agent.setMode(runtime.sessionId, String(value));
-      participant.mode = String(value);
+    if (!option && configId === "mode" && (participant.modes?.some((m) => m.id === value) || participant.mode === value)) {
+      const reported = await change(() => runtime.agent.setMode(runtime.sessionId, String(value)));
+      stillOurs();
+      participant.mode = reported?.currentModeId ?? String(value);
     } else {
-      participant.configOptions = await runtime.agent.setConfigOption(runtime.sessionId, configId, value);
+      if (!option && configId === "mode" && participant.modes?.length) throw new Error(`${participant.name}: ${configShown(value)} is not an available mode. Choose one of ${participant.modes.map(m => m.name || m.id).join(", ")}.`);
+      if (!option) throw new Error(`${participant.name} no longer offers that setting. Open its settings again to see the current choices.`);
+      if ((option.type === "boolean" && typeof value !== "boolean") || (option.type === "select" && typeof value !== "string")) {
+        throw new Error(`${participant.name}: choose a valid value for ${option.name}.`);
+      }
+      if (option.category === "mode" && value !== option.currentValue && !flattenOptions(option.options).some(o => o.value === value)) {
+        throw new Error(`${participant.name}: ${configShown(value)} is not available for ${option.name}. Open its settings again to see the current choices.`);
+      }
+      const reported = await change(() => runtime.agent.setConfigOption(runtime.sessionId, configId, value));
+      stillOurs();
+      participant.configOptions = reported;
       this.applyConfigSummary(participant);
     }
     participant.launch = { model: participant.model ?? null, effort: participant.effort ?? null, mode: participant.mode ?? null };
     this.push({ type: "participant", participant });
-    this.postSystem(`${participant.name}: ${this.configName(participant, configId)} → ${configShown(value)}; from its next turn${from ? ` (${from})` : ""}`, "human", false, { agentId: participant.id });
+    const actual = participant.configOptions?.find(o => o.id === configId)?.currentValue ?? (configId === "mode" ? participant.mode : undefined) ?? value;
+    const said = actual === value ? configShown(actual) : `${configShown(actual)} (requested ${configShown(value)})`;
+    this.postSystem(`${participant.name}: ${this.configName(participant, configId)} → ${said}; from its next turn${from ? ` (${from})` : ""}`, "human", false, { agentId: participant.id });
+    return runtime;
   }
 
   setLaunch(id: string, patch: { model?: string | null; effort?: string | null; mode?: string | null }, from?: string): Participant {
@@ -2311,19 +2465,22 @@ export class Room extends EventEmitter {
     return configId === "mode" ? "mode" : participant.configOptions?.find((o) => o.id === configId)?.name || configId;
   }
 
-  private async applyPendingConfig(id: string): Promise<void> {
-    const runtime = this.runtimes.get(id);
+  private async applyPendingConfig(id: string, expected = this.runtimes.get(id)): Promise<AgentRuntime | undefined> {
+    let runtime = expected;
     const participant = this.participants.get(id);
-    if (!runtime || !participant) return;
-    const waiting = runtime.pendingConfig ?? [];
-    runtime.pendingConfig = undefined;
-    for (const entry of waiting) {
+    if (!runtime || !participant) return runtime;
+    let changed = false;
+    while (this.runtimes.get(id) === runtime && !runtime.retiring && runtime.pendingConfig?.length) {
+      changed = true;
+      const entry = runtime.pendingConfig.shift()!;
       try {
-        await this.setConfig(id, entry.configId, entry.value, entry.from);
+        runtime = await this.applyConfigNow(id, entry.configId, entry.value, entry.from);
       } catch (error) {
         this.postSystem(`${participant.name}: ${this.configName(participant, entry.configId)} → ${configShown(entry.value)} was refused (${describeError(error)})`, "human", false, { agentId: participant.id, tone: "error" });
       }
     }
+    if (changed && this.runtimes.get(id) === runtime) { runtime.pendingConfig = undefined; this.push({ type: "participant", participant }); }
+    return runtime;
   }
 
   permissionPending(key: string): boolean {
@@ -2342,7 +2499,7 @@ export class Room extends EventEmitter {
     this.postSystem(text);
   }
 
-  async shutdown(): Promise<void> {
+  closeDoor(): void {
     this.closing = true;
     if (this.silenceWatch) clearInterval(this.silenceWatch);
     this.silenceWatch = null;
@@ -2350,10 +2507,16 @@ export class Room extends EventEmitter {
       clearTimeout(this.typingTimer);
       this.typingTimer = null;
     }
-    for (const [id, runtime] of this.runtimes) {
+    for (const runtime of this.runtimes.values()) {
       if (runtime.delayTimer) clearTimeout(runtime.delayTimer);
       runtime.delayTimer = null;
       runtime.pendingTurn = false;
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    this.closeDoor();
+    for (const [id, runtime] of this.runtimes) {
       try {
         if (runtime.turnActive) runtime.agent.cancel(runtime.sessionId);
         await Promise.race([runtime.agent.closeSession(runtime.sessionId), delay(1000)]);
@@ -2516,17 +2679,28 @@ export class Room extends EventEmitter {
   }
 
   private agentMessageView(m: ChatMessage) {
+    const files = this.carriedFilePaths(m);
     return {
       seq: m.seq,
       from: m.fromName,
       to: m.toNames,
       at: new Date(m.ts).toISOString(),
       text: m.text,
+      ...(files.length ? { files } : {}),
       ...(m.kind === "system" ? { kind: "system" } : {}),
       ...(m.edited ? { edited: true } : {}),
       ...(m.images && m.images.length ? { images: m.images.map((a, i) => ({ ref: `#${m.seq}.${a.n ?? i + 1}`, name: a.name, path: this.imagePath(a) })) } : {}),
       ...(m.quotes && m.quotes.length ? { quotes: m.quotes.map((q) => ({ n: q.n, seq: q.seq, from: q.fromName, text: q.text })) } : {}),
     };
+  }
+
+  private carriedFilePaths(m: ChatMessage): { original: string; path: string }[] {
+    return (m.resourceRefs ?? []).filter(ref => isRoomResourceName(ref.file) && m.text.includes(ref.source)).map(ref => ({ original: ref.source, path: join(this.filesDir(), ref.file) }));
+  }
+
+  private backlogText(m: ChatMessage): string {
+    const files = this.carriedFilePaths(m);
+    return files.length ? `${m.text}\n\n[Files carried with this message; paths on this computer]\n${files.map(file => JSON.stringify(file)).join("\n")}` : m.text;
   }
 
   private ensureDeliveryEpoch(participant: Participant): string {
@@ -2614,6 +2788,31 @@ export class Room extends EventEmitter {
     this.push({ type: "toolcall", id: turn.message.id, toolCall: view });
   }
 
+  private checkRoomExtras(participantId: string, callerTurn: string, args: MessageCheckArgs): Pick<MessageCheckResult, "vibemates" | "vibematesOmitted" | "liveDraft"> {
+    const all = this.whoIsBusy(), vibemates: typeof all = [];
+    for (const entry of all) {
+      if (Buffer.byteLength(JSON.stringify([...vibemates, entry], null, 2)) > 3 * 1024) break;
+      vibemates.push(entry);
+    }
+    const extras: ReturnType<Room["checkRoomExtras"]> = { vibemates, ...(all.length > vibemates.length ? { vibematesOmitted: all.length - vibemates.length } : {}) };
+    if (!args.draft) return extras;
+    const writer = this.findByName(args.draft.name);
+    if (!writer || writer.kind !== "agent" || writer.id === participantId || writer.status === "left") throw new Error("Choose another vibemate in this room for draft.name.");
+    const runtime = this.runtimes.get(writer.id), turn = runtime?.turn;
+    if (!runtime?.agent.alive || !runtime.turnActive || runtime.retiring || runtime.workCancelled || !turn || turn.hidden || !turn.published || !visibleToAgents(turn.message)) {
+      extras.liveDraft = { name: writer.name, provisional: true, available: false, text: "", hint: "No visible draft is being written now. Finished replies are ordinary room messages.", ...(args.draft.cursor ? { reset: true } : {}) };
+      return extras;
+    }
+    const text = settledVisible(turn.message.text);
+    extras.liveDraft = packLiveDraft(this.messageCheckKey, callerTurn, writer.id, args.draft, {
+      name: writer.name, provisional: true, available: true, turnId: turn.message.id,
+      startedAt: new Date(turn.startedAt).toISOString(), updatedAt: new Date(turn.lastSignAt ?? turn.startedAt).toISOString(),
+      text: looksSilent(text) ? "" : text, toolCalls: turn.message.toolCalls?.length ?? 0,
+      hint: "Unfinished visible text, not a final reply. It may change or disappear. Read further with draft.cursor=nextCursor; reset means a changed draft restarted at zero. This does not mark the final reply as read or wake anyone.",
+    });
+    return extras;
+  }
+
   checkMessagesForAgent(participantId: string, params: Record<string, unknown>): MessageCheckResult {
     this.assertHistoryAccessForAgent(participantId);
     const runtime = this.runtimes.get(participantId)!;
@@ -2636,7 +2835,7 @@ export class Room extends EventEmitter {
       const result = packMessageCheck(args, { ...position, pageSeq: page.seq, pagePriority: page.priority, reset: position.reset || page.reset }, rows, {
         read: seq => messageCheckCursor(this.messageCheckKey, context, seq),
         headers: (seq, priority) => messageCheckPageCursor(this.messageCheckKey, { ...context, latest }, position.seq, seq, priority),
-      }, latest);
+      }, latest, new Date().toISOString(), this.checkRoomExtras(participantId, turn.message.id, args));
       if (args.mode === "read") {
         this.noteBodyExposure(participantId, result.messages.map(m => m.seq));
         const complete = new Set(result.messages.filter(m => !m.truncated && !m.detailsOmitted).map(m => m.seq));
@@ -2656,7 +2855,7 @@ export class Room extends EventEmitter {
       if (call.messageCheck || ["completed", "failed"].includes(call.status ?? "") || !isDirectMessageCheck(call.name ?? call.title)) return false;
       try {
         const input = parseMessageCheckArgs((call.rawInput ?? {}) as Record<string, unknown>);
-        return input.mode === args.mode && input.limit === args.limit && input.after === args.after && input.page === args.page;
+        return input.mode === args.mode && input.limit === args.limit && input.after === args.after && input.page === args.page && JSON.stringify(input.draft) === JSON.stringify(args.draft);
       } catch { return false; }
     });
     const view = candidates.length === 1 ? candidates[0] : { toolCallId: `room-check-${randomUUID()}`, title: "Check messages" } as ToolCallView;
@@ -2670,6 +2869,7 @@ export class Room extends EventEmitter {
       ...(result ? { available: result.available, returned: result.returned, more: result.more, reset: result.reset,
         ...(result.counts ? { counts: result.counts, previewed: result.previewed, moreHeaders: result.moreHeaders } : {}) } : {}) };
     view.output = result ? toolOutputText({ toolCallId: view.toolCallId, rawOutput: { ...view.messageCheck,
+      ...(result.liveDraft ? { liveDraft: { name: result.liveDraft.name, turnId: result.liveDraft.turnId, available: result.liveDraft.available, offset: result.liveDraft.offset, characters: result.liveDraft.text.length, truncated: result.liveDraft.truncated, reset: result.liveDraft.reset } } : {}),
       ...(result.mode === "status" ? { headers: result.headers, snapshotThrough: result.snapshotThrough } : {
         messages: result.messages.map(m => ({ ...messageCheckHeader(m), truncated: !!m.truncated, detailsOmitted: !!m.detailsOmitted })),
       }) } }) : error;
@@ -3091,6 +3291,7 @@ export class Room extends EventEmitter {
         env: [
           { name: "VIBEROOM_HUB", value: hubUrl },
           { name: "VIBEROOM_TOKEN", value: token },
+          ...runAsNodeEntries(),
         ],
       },
     };
@@ -3333,10 +3534,15 @@ export class Room extends EventEmitter {
           this.push({ type: "participant", participant });
         }
       } finally {
-        this.resumeRuntimeWork(id, runtime);
-        this.startNext();
+        await this.finishRuntimeWork(id, runtime);
       }
     }
+  }
+
+  private async finishRuntimeWork(id: string, runtime: AgentRuntime): Promise<void> {
+    let owner = runtime;
+    try { owner = await this.applyPendingConfig(id, runtime) ?? runtime; }
+    finally { this.resumeRuntimeWork(id, owner); this.startNext(); }
   }
 
   private resumeRuntimeWork(id: string, runtime: AgentRuntime): void {
@@ -3416,12 +3622,12 @@ export class Room extends EventEmitter {
       skills: attached.map((s) => composeSkillBlock({ name: s.name, text: s.text, invokedBy: s.invokedBy, extraFiles: s.extraFiles })),
       backlog: unread.map<BacklogLine>((m) =>
         m.kind === "system"
-          ? { kind: "event", text: m.text }
+          ? { kind: "event", text: this.backlogText(m) }
           : {
               kind: "message",
               fromName: m.from === id ? `${m.fromName} (you, earlier)` : m.fromName,
               toNames: m.toNames,
-              text: m.text,
+              text: this.backlogText(m),
               images: backlogImages(m),
               quotes: backlogQuotes(m),
             },
@@ -3513,7 +3719,6 @@ export class Room extends EventEmitter {
     const publishedAt = turn.publishedAt ?? null;
     runtime.turn = null;
     runtime.turnActive = false;
-    if (runtime.pendingConfig?.length) void this.applyPendingConfig(id).catch((error) => runtime.log.warn(`settings chosen during the reply: ${describeError(error)}`));
     this.drafts.delete(draft.id);
     participant.turns += 1;
     if (!retry) runtime.turnsSinceBrief += 1;
@@ -3845,6 +4050,7 @@ export class Room extends EventEmitter {
         this.push({ type: "participant", participant });
       }
       turn.lastSignAt = Date.now();
+      if (WORK_SIGNS.has(update.sessionUpdate)) turn.lastWorkAt = Date.now();
     }
 
     switch (update.sessionUpdate) {
@@ -4056,8 +4262,8 @@ export class Room extends EventEmitter {
       if (!option || option.type !== "select") {
         if (category === "mode" && participant.modes?.some((m) => m.id === value)) {
           try {
-            await runtime.agent.setMode(runtime.sessionId, value);
-            participant.mode = value;
+            const reported = await runtime.agent.setMode(runtime.sessionId, value);
+            participant.mode = reported?.currentModeId ?? value;
           } catch (error) {
             warnings.push(`mode: set_mode failed: ${describeError(error)}`);
           }
@@ -4092,6 +4298,9 @@ export class Room extends EventEmitter {
       }
     }
     this.applyConfigSummary(participant);
+    if (wanted.mode && participant.mode && participant.mode !== wanted.mode && !warnings.some(w => w.startsWith("mode:"))) {
+      warnings.push(`mode: requested ${wanted.mode}; the agent reports ${participant.mode}`);
+    }
     return warnings;
   }
 
@@ -4144,9 +4353,10 @@ export class Room extends EventEmitter {
   }
 
   private roster(): RosterEntry[] {
+    const activity = new Map(this.whoIsBusy().map(p => [p.name, p.line]));
     return [...this.participants.values()]
       .filter((p) => p.status !== "left" && p.status !== "unstaffed")
-      .map((p) => ({ name: p.name, kind: p.kind, vendor: p.agentVendor ?? p.agentLabel, tagline: p.tagline || undefined, muted: p.muted || undefined }));
+      .map((p) => ({ name: p.name, kind: p.kind, vendor: p.agentVendor ?? p.agentLabel, tagline: p.tagline || undefined, muted: p.muted || undefined, activity: activity.get(p.name) }));
   }
 
   private parseMentions(text: string): { ids: string[]; names: string[] } {
@@ -4256,10 +4466,18 @@ export class Room extends EventEmitter {
     this.push({ type: "notice", text, level, ts: Date.now() });
   }
 
+  participantSnapshot(id: string): Participant {
+    const participant = this.participants.get(id);
+    if (!participant) throw new Error("no such vibemate");
+    return this.participantView(participant);
+  }
+
   private participantView(participant: Participant): Participant & { lastSeenSeq?: number } {
     const runtime = this.runtimes.get(participant.id);
     return { ...participant, lastSeenSeq: runtime?.lastSeenSeq ?? this.restoredSeen.get(participant.id),
+      pendingSettings: runtime?.pendingConfig?.length ? runtime.pendingConfig.map(entry => ({ id: entry.configId, name: this.configName(participant, entry.configId), value: entry.value })) : undefined,
       activeTurnId: runtime?.turn && !runtime.turn.hidden ? runtime.turn.message.id : undefined,
+      lastSignAt: runtime?.turn && !runtime.turn.hidden ? (runtime.turn.lastWorkAt ?? runtime.turn.startedAt) : undefined,
       quiet: this.quietTurn(participant.id) };
   }
 
@@ -4294,7 +4512,7 @@ export class Room extends EventEmitter {
       this.emit("event", { ...event, streamSequence, history: this.historyStamp(), participant: this.participantView(event.participant) });
       return;
     }
-    if (event.type === "message" || event.type === "messages.truncated" || event.type === "message.removed") {
+    if (event.type === "message" || event.type === "messages.truncated" || event.type === "message.removed" || event.type === "record.replaced") {
       this.historyRevision++;
       this.emit("event", { ...event, streamSequence, history: this.historyStamp() });
       return;

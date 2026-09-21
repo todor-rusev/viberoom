@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { Logger, requestLogPath } from "./log.js";
+import { bodyPageForWindow, eventForWindow, messageForWindow, roomForWindow, snapshotForWindow, wireRevision } from "./window-wire.js";
 import { checkGate, keyFrom, OPENING_PARAM } from "./local-gate.js";
 import { keyMatches, loadOrCreateKey, openingNonce, openingValid } from "./local-key.js";
 import { clearDiagnosticLogs, diagnosticLogStats } from "./diagnostic-logs.js";
@@ -24,8 +25,9 @@ import { classifyOpenTarget, describeOpen, detectEditor, editorCommand, isExecut
 import { imageMediaType, languageOf, looksBinary, parseCsv, sliceLines, viewerKind, IMAGE_VIEW_MAX_BYTES, STREAM_MAX_BYTES, VIEWER_MAX_BYTES, WINDOW_MAX_LINES } from "./viewer.js";
 import { createFolder, homeFolder, listFolders, listRoots } from "./fsbrowse.js";
 import { autostartStatus, installAutostart, type AutostartOptions } from "./autostart.js";
-import { findingReading, recordFinding } from "./findings.js";
-import type { StartReason } from "./launcher.js";
+import { findingReading, recordWitness } from "./findings.js";
+import type { Shape } from "./record-fields.js";
+import { HUB_HOST, hubUrl, type StartReason } from "./launcher.js";
 import { contentTypeOf, isStoredFileName, IMAGE_MAX_BYTES, IMAGES_PER_MESSAGE, type ImageInput } from "./files.js";
 import { QUOTES_PER_MESSAGE, type QuoteInput } from "./quotes.js";
 import { commandTarget, parseRoomCommand } from "./commands.js";
@@ -46,7 +48,7 @@ function currentEditor(): DetectedEditor | null {
   return editorFound;
 }
 
-const STATIC_FILES: Record<string, { file: string; type: string; dir?: "ui" | "assets" | "node_modules" }> = {
+const STATIC_FILES: Record<string, { file: string; type: string; dir?: "ui" | "assets" | "node_modules" | "vendor" }> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/styleguide": { file: "styleguide.html", type: "text/html; charset=utf-8" },
   "/guide": { file: "guide.html", type: "text/html; charset=utf-8" },
@@ -63,10 +65,29 @@ const STATIC_FILES: Record<string, { file: string; type: string; dir?: "ui" | "a
   "/vendor-icons/copilot.svg": { file: "vendors/copilot.svg", type: "image/svg+xml", dir: "assets" },
   "/vendor-icons/grok.svg": { file: "vendors/grok.svg", type: "image/svg+xml", dir: "assets" },
   "/vendor-icons/hermes.svg": { file: "vendors/hermes.svg", type: "image/svg+xml", dir: "assets" },
-  "/vendor/mermaid.min.js": { file: "mermaid/dist/mermaid.min.js", type: "text/javascript; charset=utf-8", dir: "node_modules" },
+  "/vendor/mermaid.min.js": { file: "ui/mermaid.min.js", type: "text/javascript; charset=utf-8", dir: "vendor" },
   "/vendor/marked.umd.js": { file: "marked/lib/marked.umd.js", type: "text/javascript; charset=utf-8", dir: "node_modules" },
   "/vendor/prism.js": { file: "prismjs/prism.js", type: "text/javascript; charset=utf-8", dir: "node_modules" },
 };
+
+export const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self'",
+  "connect-src 'self' ws://127.0.0.1:* ws://localhost:*",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'self'",
+].join("; ");
+
+function fileHeaders(type: string, cache: string): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": type, "Cache-Control": cache };
+  if (type.startsWith("text/html")) headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY;
+  return headers;
+}
 
 const PRISM_LANGUAGE = /^\/vendor\/prism-lang\/([a-z0-9-]{1,32})\.js$/;
 
@@ -89,7 +110,10 @@ export interface RunningServer {
 }
 
 import { checkForUpdate, installUpdate, newerBuildThanRunning, restartWithNewBuild, runsFromSourceCheckout } from "./update.js";
+import { exportRoom, importRoom, previewImport } from "./export-room.js";
+import { CarryTransfers } from "./carry-transfers.js";
 import { publicRecipes } from "./recipes.js";
+import { thinState } from "./state-thinning.js";
 import { qrSvg } from "./qr.js";
 
 export interface BuildInfo {
@@ -97,6 +121,7 @@ export interface BuildInfo {
   version: string;
   build: string;
   staleSource?: string | null;
+  insideBox?: "installer" | "store";
   staleBuild?: string | null;
   sourceCheckout?: boolean;
 }
@@ -108,11 +133,14 @@ export interface DataFolderAccess {
 }
 
 export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo, onShutdownRequest: () => void, extras: { autostart?: AutostartOptions; dataFolder?: DataFolderAccess; run?: { startedAs: StartReason; startedAt: number } } = {}): Promise<RunningServer> {
+  const transfers = new CarryTransfers(hub, info.version, log.child("carry"));
   const uiDir = fileURLToPath(new URL("../ui/", import.meta.url));
   const assetsDir = fileURLToPath(new URL("../assets/", import.meta.url));
+  const vendorDir = fileURLToPath(new URL("../vendor/", import.meta.url));
   const resolveModule = createRequire(import.meta.url).resolve;
   const packageDir = (name: string): string => dirname(resolveModule(`${name}/package.json`));
-  const staticPath = (entry: { file: string; dir?: "ui" | "assets" | "node_modules" }): string => {
+  const staticPath = (entry: { file: string; dir?: "ui" | "assets" | "node_modules" | "vendor" }): string => {
+    if (entry.dir === "vendor") return vendorDir + entry.file;
     if (entry.dir !== "node_modules") return (entry.dir === "assets" ? assetsDir : uiDir) + entry.file;
     const slash = entry.file.indexOf("/");
     return join(packageDir(entry.file.slice(0, slash)), entry.file.slice(slash + 1));
@@ -122,15 +150,16 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
   const dataFolder = (): unknown => (extras.dataFolder ? { path: extras.dataFolder.path, ...extras.dataFolder.state() } : null);
   const startedAt = extras.run ? extras.run.startedAt : Date.now();
   const startedAs: StartReason = extras.run ? extras.run.startedAs : "by-hand";
-  const snapshot = (): unknown => ({ ...(hub.snapshot() as Record<string, unknown>), autostart: extras.autostart ? autostartStatus(extras.autostart) : null, dataFolder: dataFolder(), version: { ...info, pid: process.pid, startedAt, startedAs } });
+  const snapshot = (): unknown => ({ ...(snapshotForWindow(hub.snapshot()) as Record<string, unknown>), autostart: extras.autostart ? autostartStatus(extras.autostart) : null, dataFolder: dataFolder(), version: { ...info, pid: process.pid, startedAt, startedAs } });
 
   const broadcast = (event: HubEvent): void => {
-    const json = JSON.stringify(event);
+    const json = JSON.stringify(eventForWindow(event));
     const payload = `event: ${event.type}\ndata: ${json}\n\n`;
     for (const res of clients) res.write(payload);
     for (const peer of sockets) peer.send(json);
   };
-  hub.on("event", broadcast);
+  const toWindows = thinState(broadcast);
+  hub.on("event", (event: HubEvent) => toWindows.send(event));
 
   const heartbeat = setInterval(() => {
     for (const res of clients) res.write(": ping\n\n");
@@ -226,6 +255,8 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (await transfers.handle(req, res, url)) return;
+
     const font = req.method === "GET" && path.match(/^\/fonts\/([a-z0-9-]+\.(woff2|css))$/i);
     if (font) {
       try {
@@ -260,7 +291,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     if (req.method === "GET" && STATIC_FILES[path]) {
       const entry = STATIC_FILES[path];
       const body = await readFile(staticPath(entry));
-      res.writeHead(200, { "Content-Type": entry.type, "Cache-Control": entry.dir === "node_modules" ? "public, max-age=3600" : "no-cache" });
+      res.writeHead(200, fileHeaders(entry.type, entry.dir === "node_modules" ? "public, max-age=3600" : "no-cache"));
       res.end(body);
       return;
     }
@@ -274,7 +305,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         sendJson(res, 404, { error: `no such file: ${uiFile[1]}` });
         return;
       }
-      res.writeHead(200, { "Content-Type": UI_TYPES[uiFile[2].toLowerCase()], "Cache-Control": "no-cache" });
+      res.writeHead(200, fileHeaders(UI_TYPES[uiFile[2].toLowerCase()], "no-cache"));
       res.end(body);
       return;
     }
@@ -422,12 +453,15 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     }
 
     if (req.method === "GET" && path === "/api/update") {
+      if (info.insideBox === "store") { sendJson(res, 200, { current: info.version, latest: null, available: false, checkedAt: null, error: null, updatedByStore: true }); return; }
       if (url.searchParams.get("check") === "1") hub.setUpdate(await checkForUpdate(hub.dataDir, info.version, { force: true }));
       sendJson(res, 200, hub.update ?? { current: info.version, latest: null, available: false, checkedAt: null, error: null });
       return;
     }
     if (req.method === "POST" && path === "/api/update/install") {
       const mainUrl = new URL("./main.js", import.meta.url).href;
+      if (info.insideBox === "store") throw new Error("viberoom updates itself through the store you installed it from. There is nothing to do here — new versions arrive on their own.");
+      if (info.insideBox) throw new Error("this viberoom is the installed application, and it updates by its own installer, not through npm. Download the newer version and run it; your rooms stay where they are.");
       if (runsFromSourceCheckout(mainUrl)) throw new Error("this viberoom runs from a source checkout; update it with git pull and npm run update");
       const latest = hub.update?.available ? hub.update.latest : null;
       if (!latest) throw new Error("no newer version is known; check for updates first");
@@ -522,7 +556,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       const params = Object.fromEntries(url.searchParams);
       delete params.token;
       const args = parseMessageCheckArgs(params, true);
-      sendJson(res, 200, { ...target.room.checkMessagesForAgent(target.participantId, { ...args }), vibemates: target.room.whoIsBusy() });
+      sendJson(res, 200, target.room.checkMessagesForAgent(target.participantId, { ...args }));
       return;
     }
 
@@ -583,6 +617,20 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    const bodiesGet = req.method === "GET" && path.match(/^\/api\/rooms\/([^/]+)\/history\/bodies$/);
+    if (bodiesGet) {
+      const room = hub.getRoom(decodeURIComponent(bodiesGet[1]));
+      const ids = [...new Set(url.searchParams.getAll("id"))];
+      if (!ids.length || ids.length > 64 || ids.some(id => !id || id.length > 128)) throw new Error("Choose between 1 and 64 message IDs.");
+      const stamp = room.historyStamp();
+      if (url.searchParams.get("version") !== stamp.version) {
+        sendJson(res, 409, { error: "The conversation changed while these messages loaded.", code: "history_changed", ...stamp });
+        return;
+      }
+      const messages = ids.map(id => room.messageById(id)).filter((m): m is NonNullable<typeof m> => !!m);
+      sendJson(res, 200, { messages: bodyPageForWindow(messages, wireRevision(stamp)), ...stamp });
+      return;
+    }
     const storeGet = req.method === "GET" && path.match(/^\/api\/rooms\/([^/]+)\/(history|pinned|fold|export)$/);
     if (storeGet) {
       const room = hub.getRoom(decodeURIComponent(storeGet[1]));
@@ -610,34 +658,47 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         const cursor = (name: string) => parseHistoryCursor(q.get(name), name);
         const page: PageQuery = { limit };
         if (q.has("around")) {
-          sendJson(res, 200, { messages: store.around(room.id, int("around", 0, 0, Number.MAX_SAFE_INTEGER), int("window", 25, 0, 500)), ...stamp });
+          sendJson(res, 200, { messages: store.around(room.id, int("around", 0, 0, Number.MAX_SAFE_INTEGER), int("window", 25, 0, 500)).map(m => messageForWindow(m, wireRevision(stamp))), ...stamp });
           return;
         }
         if (q.has("before")) page.before = cursor("before");
         else if (q.has("after")) page.after = cursor("after");
         const messages = store.page(room.id, page);
-        sendJson(res, 200, { messages, ...stamp, remainingBefore: messages.length ? store.countBefore(room.id, cursorOf(messages[0])) : 0 });
+        sendJson(res, 200, { messages: messages.map(m => messageForWindow(m, wireRevision(stamp))), ...stamp, remainingBefore: messages.length ? store.countBefore(room.id, cursorOf(messages[0])) : 0 });
         return;
       }
       if (storeGet[2] === "pinned") {
-        sendJson(res, 200, { messages: store.pinned(room.id) });
+        sendJson(res, 200, { messages: store.pinned(room.id).map(m => messageForWindow(m, wireRevision(stamp))) });
         return;
       }
       if (storeGet[2] === "fold") {
         sendJson(res, 200, store.foldBoundary(room.id, { maxMessages: int("max", 1200, 1, 100_000), maxWeight: q.has("maxWeight") ? int("maxWeight", 4_000_000, 1, Number.MAX_SAFE_INTEGER) : undefined, atLeastSeq: q.has("atLeast") ? int("atLeast", 0, 0, Number.MAX_SAFE_INTEGER) : undefined }));
         return;
       }
-      const format = q.get("format") === "md" ? "md" : "jsonl";
-      const body = format === "md" ? store.exportMarkdown(room.id, room.name) : store.exportJsonl(room.id);
+      const format = q.get("format") === "md" ? "md" : "viberoom";
+      const wants = (name: string) => q.get(name) !== "0";
+      const body = format === "md"
+        ? store.exportMarkdown(room.id, room.name)
+        : exportRoom(hub, room.id, info.version, { conversation: wants("conversation"), settings: wants("settings"), resources: wants("resources") });
       const safeName = room.name.replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "") || room.id;
+      const fileName = format === "md" ? `${safeName}.md` : `${safeName}-${new Date().toISOString().slice(0, 10)}.viberoom.jsonl`;
       res.writeHead(200, {
         "Content-Type": format === "md" ? "text/markdown; charset=utf-8" : "application/x-ndjson; charset=utf-8",
-        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${safeName}.${format}`)}`,
+        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
       });
       res.end(body);
+      log.info(`exported ${room.name} as ${format} (${Buffer.byteLength(body, "utf8")} bytes)`);
       return;
     }
 
+    const toolDetails = req.method === "GET" && path.match(/^\/api\/rooms\/([^/]+)\/messages\/([^/]+)\/tools\/([^/]+)$/);
+    if (toolDetails) {
+      const room = hub.getRoom(decodeURIComponent(toolDetails[1]));
+      const call = room.toolCallDetails(decodeURIComponent(toolDetails[2]), decodeURIComponent(toolDetails[3]));
+      if (!call) { sendJson(res, 404, { error: "This tool call is no longer available." }); return; }
+      sendJson(res, 200, call);
+      return;
+    }
     const editPreview = req.method === "GET" && path.match(/^\/api\/rooms\/([^/]+)\/messages\/([^/]+)\/edit-preview$/);
     if (editPreview) {
       const room = hub.getRoom(decodeURIComponent(editPreview[1]));
@@ -655,7 +716,10 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       }
       const seq = q.has("seq") ? Number(q.get("seq")) : undefined;
       if (seq !== undefined && (!Number.isSafeInteger(seq) || seq < 0)) throw new Error("seq must be a message number");
-      sendJson(res, 200, room.snapshot({ from: parseHistoryCursor(q.get("from"), "from"), all: q.get("all") === "1", seq }));
+      const message = q.get("message") || undefined;
+      if (message && !room.messageById(message)) { sendJson(res, 404, { error: "This message is no longer available." }); return; }
+      const index = q.get("index") === "1";
+      sendJson(res, 200, roomForWindow(room.snapshot({ from: parseHistoryCursor(q.get("from"), "from"), all: index || q.get("all") === "1", seq, message }), { index, keepRange: !index }));
       return;
     }
 
@@ -679,7 +743,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     }
 
     if (req.method === "GET" && path === "/api/rooms") {
-      sendJson(res, 200, [...hub.rooms.values()].map((r) => r.snapshot()));
+      sendJson(res, 200, [...hub.rooms.values()].map((r) => roomForWindow(r.snapshot())));
       return;
     }
 
@@ -822,32 +886,44 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     if (path === "/api/window/finding") {
       const roomId = String(body.roomId ?? "");
-      const messageId = String(body.messageId ?? "");
       const room = hub.rooms.get(roomId);
-      if (!room || !messageId) throw new Error("that finding names no room or no message");
+      if (!room) throw new Error("that finding names no room");
+
+      if (String(body.kind) === "blank-fragment") {
+        const since = Number(body.since) || Date.now();
+        const { kind: _kind, roomId: _roomId, since: _since, ...said } = body;
+        const finding = recordWitness(hub.dataDir, {
+          kind: "blank-fragment",
+          key: `blank-fragment:${roomId}:${since}`,
+          ours: { room: room.name, roomId },
+          shape: BLANK_FRAGMENT,
+          said,
+        });
+        log.warn(`a window went blank under itself: ${finding.blankPx ?? "?"} px of ${finding.listPx ?? "?"} in ${room.name} (${finding.stage ?? "?"})`);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      const messageId = String(body.messageId ?? "");
+      if (!messageId) throw new Error("that finding names no message");
       const ended = room.endOfTurn(messageId);
-      const finding = {
+      const finding = recordWitness(hub.dataDir, {
         kind: "held-live",
         key: `held-live:${roomId}:${messageId}`,
-        at: new Date().toISOString(),
-        room: room.name,
-        roomId,
-        messageId,
-        window: {
-          heldSince: Number(body.heldSince) || null,
-          lastStreamSequence: Number(body.lastStreamSequence),
-          afterReload: body.afterReload === true,
+        ours: {
+          room: room.name,
+          roomId,
+          messageId,
+          ...(ended ? { hub: { endedAt: new Date(ended.at).toISOString(), streamSequence: ended.streamSequence } } : {}),
+          reading: findingReading({ heldBy: String(body.heldBy), lastStreamSequence: Number(body.lastStreamSequence) }, ended),
         },
-        hub: ended ? { endedAt: new Date(ended.at).toISOString(), streamSequence: ended.streamSequence } : null,
-        heldBy: ["record", "screen", "both"].includes(String(body.heldBy)) ? String(body.heldBy) : "record",
-        reading: findingReading({ heldBy: String(body.heldBy), lastStreamSequence: Number(body.lastStreamSequence) }, ended),
-      };
-      recordFinding(hub.dataDir, finding);
+        shape: HELD_LIVE,
+        said: { heldBy: body.heldBy, window: { heldSince: body.heldSince, lastStreamSequence: body.lastStreamSequence, afterReload: body.afterReload } },
+      });
       log.warn(`a window held a finished turn: ${finding.reading} (room ${room.name}, message ${messageId})`);
       sendJson(res, 200, { ok: true, reading: finding.reading });
       return;
     }
-
     if (path === "/api/open") {
       const target = classifyOpenTarget(String(body.target ?? ""));
       if (!target) throw new Error("only http(s) or mailto links and absolute paths can be opened");
@@ -1207,6 +1283,25 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (path === "/api/rooms/import/preview") {
+      const file = String(body.file ?? "");
+      if (!file.trim()) throw new Error("no file was sent to look at");
+      sendJson(res, 200, previewImport(hub, file));
+      return;
+    }
+
+    if (path === "/api/rooms/import") {
+      const file = String(body.file ?? "");
+      if (!file.trim()) throw new Error("no file was sent to bring in");
+      const agreed = body.agreed as { version?: unknown } | undefined;
+      const promise = agreed && typeof agreed === "object" ? { version: typeof agreed.version === "string" ? agreed.version : null } : undefined;
+      const report = importRoom(hub, file, promise);
+      hub.saveRooms();
+      log.info(`imported into ${report.room.name}: ${report.messages.added} added, ${report.messages.replaced} replaced, ${report.graves.applied} removed${report.made ? " (the room is new here)" : ""}`);
+      sendJson(res, 200, report);
+      return;
+    }
+
     const messagePin = path.match(/^\/api\/rooms\/([^/]+)\/messages\/([^/]+)\/pin$/);
     if (messagePin) {
       const room = hub.getRoom(decodeURIComponent(messagePin[1]));
@@ -1299,7 +1394,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         else room.updatePersona(id, patch);
       } else await room.setConfig(id, String(body.configId ?? ""), body.value as string | boolean);
       hub.saveRooms();
-      sendJson(res, 200, { ok: true });
+      sendJson(res, 200, { ok: true, participant: room.participantSnapshot(id), history: room.historyStamp() });
       return;
     }
 
@@ -1315,20 +1410,27 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
   }
 
   return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => {
+    server.once("error", error => {
+      clearInterval(heartbeat); toWindows.stop();
+      void transfers.close().finally(() => reject(error));
+    });
+    server.listen(port, HUB_HOST, () => {
       const address = server.address();
       const actualPort = typeof address === "object" && address ? address.port : port;
-      const url = `http://127.0.0.1:${actualPort}/`;
+      const url = hubUrl(actualPort);
       resolve({
         url,
         server,
         key: localKey.value,
         close: () => {
+          const cleanup = transfers.close().catch(error => log.warn(`transfer cleanup: ${error instanceof Error ? error.message : String(error)}`));
           clearInterval(heartbeat);
+          toWindows.stop();
           for (const res of clients) res.end();
           for (const peer of sockets) peer.close(1001, "room closing");
           server.close();
+          server.closeIdleConnections?.();
+          return cleanup;
         },
       });
     });
@@ -1340,6 +1442,51 @@ function optionalString(value: unknown): string | null | undefined {
   if (value === null || value === "") return null;
   return String(value);
 }
+
+const BLANK_FRAGMENT: Shape = {
+  stage: { kind: "enum", values: ["began", "ended"] },
+  blankPx: { kind: "number", min: 0 },
+  blankTop: { kind: "number" },
+  listPx: { kind: "number", min: 0 },
+  scrollTop: { kind: "number" },
+  painted: { kind: "integer", min: 0 },
+  msgs: { kind: "integer", min: 0 },
+  streaming: { kind: "boolean" },
+  seconds: { kind: "number", min: 0 },
+  scrolled: { kind: "boolean" },
+  afterReload: { kind: "boolean" },
+  under: { kind: "list", items: 5, of: { kind: "string", max: 80 } },
+  pages: { kind: "list", items: 3, of: { kind: "object", of: { h: { kind: "number" }, kids: { kind: "integer", min: 0 }, skipped: { kind: "boolean" } } } },
+  redraws: { kind: "list", items: 8, of: { kind: "string", max: 80 } },
+  unpainted: {
+    kind: "list",
+    items: 5,
+    of: {
+      kind: "object",
+      of: {
+        seq: { kind: "string", max: 16 },
+        cls: { kind: "string", max: 120 },
+        h: { kind: "number" },
+        op: { kind: "string", max: 8 },
+        skipped: { kind: "boolean" },
+        anim: { kind: "string", max: 12 },
+        animAt: { kind: "number", min: 0 },
+      },
+    },
+  },
+};
+
+const HELD_LIVE: Shape = {
+  heldBy: { kind: "enum", values: ["record", "screen", "both"] },
+  window: {
+    kind: "object",
+    of: {
+      heldSince: { kind: "number", min: 0 },
+      lastStreamSequence: { kind: "integer", min: 0 },
+      afterReload: { kind: "boolean" },
+    },
+  },
+};
 
 function stringList(value: unknown): string[] | undefined {
   if (value === undefined) return undefined;

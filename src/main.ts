@@ -7,8 +7,9 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hub } from "./hub.js";
-import { Logger, logDateTime, logToFile } from "./log.js";
-import { ensureDataRoot } from "./data-root.js";
+import { Logger, logDateTime, logToFile, sayTheLastWord } from "./log.js";
+import { ensureDataRoot, networkFolderNotice } from "./data-root.js";
+import { withRunAsNode } from "./own-runtime.js";
 import { narrowToOwner, whoElseCanReach, wideOpenNotice } from "./private-path.js";
 import { KEY_HEADER, OPENING_PARAM } from "./local-gate.js";
 import { mintOpening, readKey } from "./local-key.js";
@@ -21,6 +22,7 @@ import {
   findChromium,
   foreignHub,
   hubPortFor,
+  hubUrl,
   isProcessAlive,
   logFilePath,
   openUrlCommand,
@@ -38,6 +40,7 @@ import {
   type HubIdentity,
   type PidRecord,
 } from "./launcher.js";
+import { busyMessage, claimPort } from "./claim.js";
 import { aumidSyncScript, installShortcuts, windowsShortcutPaths } from "./shortcuts.js";
 import { autostartLogPath, autostartStatus, installAutostart, recordAutoStart, refreshAutostart, type AutostartOptions } from "./autostart.js";
 import { askEnter, renderInstalled, runMenu, unicodeSupported } from "./tui.js";
@@ -186,7 +189,7 @@ function buildInfo(): BuildInfo {
 }
 
 async function runningInstance(port: number, dataDir: string): Promise<(HubIdentity & { url: string }) | null> {
-  const url = `http://127.0.0.1:${port}/`;
+  const url = hubUrl(port);
   try {
     const res = await fetch(`${url}api/version`, { headers: keyHeader(dataDir), signal: AbortSignal.timeout(1500) });
     if (!res.ok) return null;
@@ -320,6 +323,8 @@ async function runDoctor(options: CliOptions, info: BuildInfo): Promise<void> {
   lines.push(`${nodeOk ? "ok  " : "FAIL"} node ${process.versions.node}${nodeOk ? "" : " (viberoom needs Node 22.16 or newer for its conversation store: https://nodejs.org)"}`);
   const chromium = findChromium();
   lines.push(chromium ? `ok   browser for the app window: ${chromium}` : `warn ${browserAdvice(null)}`);
+  const onTheNetwork = networkFolderNotice(options.dataDir);
+  if (onTheNetwork) lines.push(`warn ${onTheNetwork}`);
   const recipes = listRecipes();
   const found = recipes.filter((r) => !r.unavailableReason);
   lines.push(`${found.length ? "ok  " : "warn"} coding agents: ${found.length ? found.map((r) => r.vendor).join(", ") : "none found"}${found.length ? "" : " (install and log in to at least one: Claude Code, Codex, Gemini CLI, Cursor, OpenCode or GitHub Copilot)"}`);
@@ -351,6 +356,7 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
   const background = options.command === "serve";
   ensureDataRoot(options.dataDir);
   logToFile(logFilePath(options.dataDir), { alsoStderr: !background });
+  faultFolder = options.dataDir;
   if (!background) {
     const running = await runningInstance(options.port, options.dataDir);
     const other = foreignHub(running, options.dataDir);
@@ -372,11 +378,12 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
   if (!options.dataDirGiven) migrateLegacyData(options.dataDir, log);
   const runStartedAt = Date.now();
   const hub = new Hub(options.dataDir, log, options.name);
+  faultWitness = () => hub.writingNow();
   hub.setRun({ id: runId(process.pid, runStartedAt), build: info.build });
   hub.startBackups();
   void hub.startChannels();
   const once = options.reconnectOnce;
-  void hub.startRoomsAtBoot(once ? (room, id) => room.reconnect(id, { mode: once }) : undefined);
+  void hub.startRoomsAtBoot(once ? (room, id) => room.reconnect(id, { mode: once }) : undefined, { afterRestart: options.afterRestart });
   hub.restartWith = (sessions) => handOverToFreshHub(options, log, sessions);
   if (options.afterRestart) hub.noteBackAfterRestart(info.build);
   if (options.name && hub.settings.humanName !== options.name) hub.updateSettings({ humanName: options.name });
@@ -387,7 +394,7 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
     if (shuttingDown) return;
     shuttingDown = true;
     log.info("shutting down: closing agent sessions");
-    await hub.shutdown();
+    await hub.shutdown({ onStage: (step) => log.info(`shutdown: ${step.stage} ${step.timedOut ? `gave up after ${step.ms} ms` : `in ${step.ms} ms`}`) });
     server?.close();
     rmSync(pidFilePath(options.dataDir), { force: true });
     process.exit(0);
@@ -404,18 +411,22 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
     },
   };
 
-  const listenDeadline = Date.now() + 15_000;
-  for (;;) {
-    try {
-      server = await startServer(hub, options.port, log.child("http"), info, () => void shutdown(), { autostart: autostartOptions(options), dataFolder, run: { startedAs: startReason(options), startedAt: runStartedAt } });
-      break;
-    } catch (error) {
-      const code = (error as { code?: string }).code;
-      if (code !== "EADDRINUSE") throw error;
-      if (Date.now() > listenDeadline) throw new Error(`port ${options.port} is taken by another program (not viberoom). Pick another port: viberoom --port 4811`);
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
+  const claim = await claimPort<Awaited<ReturnType<typeof startServer>>>({
+    bind: () => startServer(hub, options.port, log.child("http"), info, () => void shutdown(), { autostart: autostartOptions(options), dataFolder, run: { startedAs: startReason(options), startedAt: runStartedAt } }),
+    ask: async () => {
+      const who = await runningInstance(options.port, options.dataDir);
+      return who ? { build: who.build, dataDir: who.dataDir, pid: who.pid, url: who.url } : null;
+    },
+    ours: (holder) => !foreignHub({ build: holder.build, dataDir: holder.dataDir, pid: holder.pid }, options.dataDir),
+    onOurs: "wait",
+  });
+  if (claim.kind === "foreign") {
+    const other = foreignHub({ build: claim.holder.build, dataDir: claim.holder.dataDir, pid: claim.holder.pid }, options.dataDir);
+    throw new Error(otherHubMessage(options.port, other ?? { dataDir: claim.holder.dataDir }, options.dataDir));
   }
+  if (claim.kind === "ours") throw new Error(`a viberoom for these rooms already answers at ${claim.holder.url} (build ${claim.holder.build ?? "unknown"}); this one stepped aside rather than open the same history twice`);
+  if (claim.kind === "busy") throw new Error(busyMessage(options.port, claim.silentMs));
+  server = claim.server;
   hub.setHubUrl(server.url);
   if (hub.settings.checkForUpdates) {
     void checkForUpdate(hub.dataDir, info.version).then((update) => {
@@ -429,6 +440,8 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
   if (info.staleSource) log.warn(`the code on disk is newer than this build (${info.staleSource} changed after dist/ was compiled): the UI is served live, the room is not; rebuild and restart with: node scripts/update.mjs`);
   const reach = wideOpenNotice(hub.dataDir, dataFolder.state());
   if (reach) log.warn(reach);
+  const onTheNetwork = networkFolderNotice(hub.dataDir);
+  if (onTheNetwork) log.warn(onTheNetwork);
   if (process.stdout.isTTY) process.stdout.write(`${server.url}\n`);
   if (options.open && !background) openWindow(server.url, options, log);
 
@@ -443,7 +456,7 @@ function handOverToFreshHub(options: CliOptions, log: Logger, sessions?: "load" 
   if (sessions) args.push("--reconnect-once", sessions);
   args.push("--after-restart");
   const fd = openSync(runtimeLogPath(options.dataDir), "a");
-  const child = spawn(process.execPath, args, { cwd: options.dataDir, detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
+  const child = spawn(process.execPath, args, { cwd: options.dataDir, detached: true, stdio: ["ignore", fd, fd], windowsHide: true, env: withRunAsNode() });
   child.unref();
   closeSync(fd);
   log.info(`restart requested from the window: a fresh room is starting (pid ${child.pid})`);
@@ -471,9 +484,9 @@ async function startAtSignIn(options: CliOptions, log: Logger, info: BuildInfo):
       recordAutoStart(options.dataDir);
       return;
     }
-    await launchHiddenHub(options, log, info, port);
+    const how = await launchHiddenHub(options, log, info, port);
     recordAutoStart(options.dataDir);
-    note(`started the room on port ${port} (build ${info.build})`);
+    note(how === "started" ? `started the room on port ${port} (build ${info.build})` : `a viberoom for these rooms was already answering on port ${port}; this start stepped aside`);
   } catch (error) {
     note(`could not start: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -505,7 +518,7 @@ function runAutostartCommand(options: CliOptions): void {
 async function startBackground(options: CliOptions, log: Logger, info: BuildInfo): Promise<void> {
   if (options.autostart) return startAtSignIn(options, log, info);
   const port = hubPortFor(options.port, options.portGiven, liveRecord(options.dataDir));
-  const url = `http://127.0.0.1:${port}/`;
+  const url = hubUrl(port);
   const running = await runningInstance(port, options.dataDir);
   const other = foreignHub(running, options.dataDir);
   if (other) throw new Error(otherHubMessage(port, other, options.dataDir));
@@ -519,13 +532,14 @@ async function startBackground(options: CliOptions, log: Logger, info: BuildInfo
     log.info(`an older viberoom build is running at ${url}; replacing it with the build from ${info.build}`);
     if (!(await stopInstance(url, options.dataDir, log))) throw new Error(`the older viberoom on port ${port} did not stop; try: viberoom stop`);
   }
-  await launchHiddenHub(options, log, info, port);
+  const how = await launchHiddenHub(options, log, info, port);
+  if (how === "already-running") log.info(`a viberoom for these rooms was already answering at ${url}; this start stepped aside`);
   refreshSignInEntry(options, log);
   process.stdout.write(`${url}\n`);
   if (options.open) openWindow(url, options, log);
 }
 
-async function launchHiddenHub(options: CliOptions, log: Logger, info: BuildInfo, port: number): Promise<void> {
+async function launchHiddenHub(options: CliOptions, log: Logger, info: BuildInfo, port: number): Promise<"started" | "already-running"> {
   ensureDataRoot(options.dataDir);
   const logPath = logFilePath(options.dataDir);
   const runtimePath = runtimeLogPath(options.dataDir);
@@ -540,13 +554,16 @@ async function launchHiddenHub(options: CliOptions, log: Logger, info: BuildInfo
   closeSync(fd);
   log.info(`the room started in the background (pid ${child.pid}); log: ${logPath}`);
   const up = await waitUntil(async () => (await runningInstance(port, options.dataDir))?.build === info.build, 20_000);
-  if (!up) throw new Error(`the room did not come up within 20 s; see ${logPath}`);
+  if (up) return "started";
+  const holder = await runningInstance(port, options.dataDir);
+  if (holder && !foreignHub(holder, options.dataDir)) return "already-running";
+  throw new Error(`the room did not come up within 20 s; see ${logPath}`);
 }
 
 async function stopBackground(options: CliOptions, log: Logger): Promise<void> {
   const live = liveRecord(options.dataDir);
   const port = hubPortFor(options.port, options.portGiven, live);
-  const url = `http://127.0.0.1:${port}/`;
+  const url = hubUrl(port);
   const other = foreignHub(await runningInstance(port, options.dataDir), options.dataDir);
   if (other) throw new Error(`the room on port ${port} keeps its rooms in ${other}, not in ${options.dataDir}, so it was left running. To stop that one: viberoom stop --data-dir "${other}"`);
   if (await isUp(url)) {
@@ -575,7 +592,7 @@ async function showStatus(options: CliOptions): Promise<void> {
   const record = readPidFile(options.dataDir);
   const live = record && isProcessAlive(record.pid) ? record : null;
   const port = hubPortFor(options.port, options.portGiven, live);
-  const url = `http://127.0.0.1:${port}/`;
+  const url = hubUrl(port);
   const running = await runningInstance(port, options.dataDir);
   if (running) {
     const other = foreignHub(running, options.dataDir);
@@ -623,7 +640,7 @@ async function main(): Promise<void> {
       return;
     case "open": {
       const port = hubPortFor(options.port, options.portGiven, liveRecord(options.dataDir));
-      const url = `http://127.0.0.1:${port}/`;
+      const url = hubUrl(port);
       if (!(await isUp(url))) throw new Error(`no room is running on port ${port}; start one with: viberoom start`);
       openWindow(url, options, log);
       return;
@@ -652,7 +669,7 @@ async function main(): Promise<void> {
         }
         if (choice === "shortcut") {
           const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")) as { version: string };
-          const result = installShortcuts({ root: fileURLToPath(new URL("..", import.meta.url)), dataDir: options.dataDir, node: process.execPath, version: pkg.version, desktop: true });
+          const result = installShortcuts({ root: fileURLToPath(new URL("..", import.meta.url)), dataDir: options.dataDir, node: process.execPath, port: hubPortFor(options.port, options.portGiven, liveRecord(options.dataDir)), version: pkg.version, desktop: true });
           const advice = browserAdvice(findChromium());
           process.stdout.write(renderInstalled({ files: result.files, notes: result.notes, platform: process.platform, browserAdvice: advice && advice.replace("viberoom opens", "the icon opens viberoom") }, { color: !process.env.NO_COLOR, unicode: unicodeSupported(), columns: process.stdout.columns }));
           if (await askEnter()) {
@@ -669,6 +686,11 @@ async function main(): Promise<void> {
       return;
   }
 }
+
+let faultFolder: string | null = null;
+let faultWitness: (() => string[]) | null = null;
+
+sayTheLastWord({ remember: () => faultFolder, witness: () => faultWitness?.() });
 
 main().catch((error) => {
   process.stderr.write(`viberoom: ${error instanceof Error ? error.message : String(error)}\n`);

@@ -126,18 +126,6 @@
   </main>
   <script src="/tokens.js"></script>
   <script src="/icons.js"></script>
-  <script>
-    Icons.install();
-    if (window.self !== window.top) {
-      document.querySelector(".g-back").hidden = true;
-      for (const a of document.querySelectorAll("a[href]")) a.target = "_top";
-    }
-    for (const el of document.querySelectorAll("[data-scene]")) el.innerHTML = Icons.scene(el.dataset.scene);
-    fetch("/api/settings").then((r) => r.json()).then((res) => {
-      const a = ((res && res.settings) || {}).appearance || {};
-      const look = TOKENS.looks[a.look] ? a.look : TOKENS.current.id;
-      if (look !== TOKENS.current.id) document.documentElement.dataset.look = look;
-    }).catch(() => {});
-  </script>
+  <script src="/guide.js"></script>
 </body>
 </html>

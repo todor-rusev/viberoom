@@ -212,5 +212,5 @@ function patchClaudeAdapter(file) {
   );
   writeFileSync(file, source);
   console.log("patched claude-agent-acp: a prompt absorbed into an autonomous cycle completes");
-  console.log("patched claude-agent-acp: the result, the hold and its release say so in the room's record (F28)");
+  console.log("patched claude-agent-acp: the result, the hold and its release say so in the room's record");
 }

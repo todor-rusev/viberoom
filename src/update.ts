@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { withRunAsNode } from "./own-runtime.js";
 
 export interface UpdateInfo {
   current: string;
@@ -153,6 +154,6 @@ export function installUpdate(version: string, cwd: string): Promise<{ ok: boole
 
 export function restartWithNewBuild(mainModuleUrl: string, port: number, dataDir: string): void {
   const main = fileURLToPath(mainModuleUrl);
-  const child = spawn(process.execPath, [main, "start", "--port", String(port), "--data-dir", dataDir, "--no-open"], { cwd: dataDir, detached: true, stdio: "ignore", windowsHide: true });
+  const child = spawn(process.execPath, [main, "start", "--port", String(port), "--data-dir", dataDir, "--no-open"], { cwd: dataDir, detached: true, stdio: "ignore", windowsHide: true, env: withRunAsNode() });
   child.unref();
 }

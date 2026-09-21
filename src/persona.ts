@@ -53,6 +53,8 @@ export interface RoomSettings {
   searchOtherRooms: boolean;
   reachableFromMessengers: boolean;
   startWithHub: boolean;
+  wakeAfterRestart: boolean;
+  restartMessage: string;
   reconnectMode: "inherit" | "load" | "replay";
   replyDelay: number;
 }
@@ -69,6 +71,8 @@ export type SettingSpec = { doc: string; brief: boolean; agent: boolean } & (
 );
 
 export const ROOM_SETTINGS_SPEC: Record<keyof RoomSettings, SettingSpec> = {
+  wakeAfterRestart: { kind: "boolean", default: false, brief: false, agent: false, doc: "After a requested hub restart, send this room's restart message once to its successfully restored, unmuted vibemates. Requires Start with viberoom." },
+  restartMessage: { kind: "text", max: 8000, default: "", brief: false, agent: false, doc: "The human's optional instruction to the room after a requested restart. Empty text never starts a turn." },
   name: { kind: "own-path", brief: true, agent: false, doc: "The room's name; changed with rename." },
   humanName: { kind: "own-path", brief: true, agent: false, doc: "The human's name; a program-level setting." },
   topic: { kind: "text", max: 2000, default: "", brief: true, agent: true, doc: "One line about what the room is for; the brief repeats it to every vibemate." },
@@ -187,6 +191,7 @@ export interface RosterEntry {
   vendor?: string;
   tagline?: string;
   muted?: boolean;
+  activity?: string;
 }
 
 export const IMAGE_MARKER_PATTERN = /\[img\s+(\d+)\]/gi;
@@ -429,7 +434,7 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
     }`,
   );
   if (skills?.channel === "tool") lines.push('Use search_history for earlier conversation (rooms: "all" includes shared rooms), then read_message with the result\'s room and seq for the full text; recent messages are searchable too.');
-  if (skills?.channel === "tool") lines.push("New room messages arrive automatically on your next turn, not while you work. If you expect an update sooner, you may call check_room.");
+  if (skills?.channel === "tool") lines.push("New room messages arrive automatically on your next turn, not while you work. If you expect an update sooner, you may call check_room. Its optional draft.name reads one other vibemate's unfinished visible text, not a final reply.");
   if (previousNotes && previousNotes.trim()) {
     lines.push("");
     lines.push(`Notes from your previous session (written by you): ${previousNotes.trim()}`);
@@ -450,7 +455,7 @@ export function buildHeader(
     .map((r) => {
       if (r.name === persona.name) return `${r.name} (you)`;
       if (r.kind === "human") return `${r.name} (human)`;
-      return r.muted ? `${r.name} (muted)` : r.name;
+      return r.muted ? `${r.name} (muted)` : r.activity ? `${r.name} (${r.activity})` : r.name;
     })
     .join(", ");
   const who = persona.tagline.trim() ? `${persona.name} (${persona.tagline.trim()})` : persona.name;

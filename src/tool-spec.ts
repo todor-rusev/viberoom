@@ -250,7 +250,7 @@ export const TOOLS = [
   },
   {
     name: "check_room",
-    description: "Check what is new and who is doing what, while you work. Beside the messages the answer carries a line per vibemate: its state, how long nothing new has come from it, and the clock time its turn began (it says that one is busy, never what it is writing). Check new messages while working. status (default) gives snapshot-wide counts and headers: direct to you first, then broadcast, other, event; no bodies or acknowledgement. Broadcast includes @All and unaddressed chat. You decide whether to check and what to read: use read_message for a chosen seq, or mode=read for chronological bodies. nextCursor continues as after; status leaves it unchanged. nextPage continues headers as page with the same after; omit page for a fresh snapshot. Addressees are a clue, not grounds to ignore others or interrupt immediately. Responses stay within 16 KiB; truncation is explicit. Cursors belong to one turn; edits reset them. Normal next-turn delivery stays unchanged; do not poll in a waiting loop.",
+    description: "Check what is new and who is doing what, while you work. Beside the messages the answer carries a line per vibemate: its state, elapsed working time at this snapshot, how long nothing new has come from it, and the clock time its turn began Only when requested with draft.name, liveDraft contains that vibemate's unfinished visible text, clearly marked provisional. It is a separate observation, never a final reply; a draft cursor pages one revision and resets if it changes. Check new messages while working. status (default) gives snapshot-wide counts and headers: direct to you first, then broadcast, other, event; no bodies or acknowledgement. Broadcast includes @All and unaddressed chat. You decide whether to check and what to read: use read_message for a chosen seq, or mode=read for chronological bodies. nextCursor continues as after; status leaves it unchanged. nextPage continues headers as page with the same after; omit page for a fresh snapshot. Addressees are a clue, not grounds to ignore others or interrupt immediately. Responses stay within 16 KiB; truncation is explicit. Cursors belong to one turn; edits reset them. Normal next-turn delivery stays unchanged; do not poll in a waiting loop.",
     inputSchema: {
       type: "object", additionalProperties: false,
       properties: {
@@ -258,6 +258,10 @@ export const TOOLS = [
         after: { type: "string", minLength: 1, maxLength: 1024, description: "optional: nextCursor from a previous check in this turn" },
         page: { type: "string", minLength: 1, maxLength: 1024, description: "status only: nextPage for more headers from the same snapshot; keep the same after. Omit to check new arrivals. Never pass as after." },
         limit: { type: "integer", minimum: 1, maximum: 20, default: 10, description: "maximum bodies or headers in this page; status counts always cover the whole range" },
+        draft: { type: "object", additionalProperties: false, required: ["name"], description: "Optional: read the unfinished visible text of one other vibemate in this room. No hidden notes or tool arguments/results. Does not acknowledge a final reply.", properties: {
+          name: { type: "string", minLength: 1, maxLength: 100, description: "exact vibemate name" },
+          cursor: { type: "string", minLength: 1, maxLength: 1024, description: "optional liveDraft.nextCursor for more of the same revision; a changed draft resets explicitly" },
+        } },
       },
     },
     annotations: { readOnlyHint: true },

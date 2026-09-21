@@ -2,6 +2,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { writeFileAtomic } from "./atomic.js";
 import { join } from "node:path";
+import { asRecord, type Shape, type Value } from "./record-fields.js";
 
 export const FINDINGS_FILE = "findings.jsonl";
 
@@ -15,6 +16,21 @@ export interface Finding {
 
 export function findingsPath(dataDir: string): string {
   return join(dataDir, FINDINGS_FILE);
+}
+
+const WITNESS_KINDS = new Set(["blank-fragment", "held-live"]);
+
+export function recordWitness(dataDir: string, witness: { kind: string; key: string; ours: Record<string, Value>; shape: Shape; said: unknown }, keep = FINDINGS_KEPT): Finding {
+  if (!WITNESS_KINDS.has(witness.kind)) throw new Error(`"${witness.kind}" is not a witness: an instrument kept for everybody waits for a known fault, and this one is on no list`);
+  const finding: Finding = {
+    ...asRecord(witness.shape, witness.said),
+    kind: witness.kind,
+    key: witness.key,
+    at: new Date().toISOString(),
+    ...witness.ours,
+  };
+  recordFinding(dataDir, finding, keep);
+  return finding;
 }
 
 export function readFindings(dataDir: string): Finding[] {

@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { createRequire } from "node:module";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { RUN_AS_NODE, withRunAsNode } from "./own-runtime.js";
 import { loginState, type LoginProbe, type LoginState } from "./agent-health.js";
 import { readClaudeStatus, readCodexStatus, readGrokStatus, readHermesStatus, readOpenCodeStatus, type LoginCheck, type LoginStatusSpec } from "./login-status.js";
 import type { LoginFlowSpec } from "./login-flow.js";
@@ -85,7 +86,7 @@ function resolveGlobalNpmRoot(): string | null {
   const npmCli = resolveNpmCli();
   try {
     const out = npmCli && npmCli.endsWith(".js")
-      ? execFileSync(process.execPath, [npmCli, "root", "-g"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).trim()
+      ? execFileSync(process.execPath, [npmCli, "root", "-g"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true, env: withRunAsNode() }).trim()
       : execSync("npm root -g", { encoding: "utf8", shell: isWindows ? "cmd.exe" : "/bin/sh", stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).trim();
     if (out) candidates.push(out);
   } catch {
@@ -307,7 +308,7 @@ function buildRecipes(): AgentRecipe[] {
       build: ({ model }) => ({
         command: process.execPath,
         args: [claudeAdapter],
-        env: { CLAUDE_CODE_EXECUTABLE: claudeExe ?? "", ...(model && model !== "default" ? { ANTHROPIC_MODEL: model } : {}) },
+        env: { ...RUN_AS_NODE, CLAUDE_CODE_EXECUTABLE: claudeExe ?? "", ...(model && model !== "default" ? { ANTHROPIC_MODEL: model } : {}) },
       }),
     },
     {
@@ -337,7 +338,7 @@ function buildRecipes(): AgentRecipe[] {
       build: () => ({
         command: process.execPath,
         args: [codexAdapter],
-        env: { CODEX_PATH: codexExe ?? "", NO_BROWSER: "1" },
+        env: { ...RUN_AS_NODE, CODEX_PATH: codexExe ?? "", NO_BROWSER: "1" },
       }),
     },
     {
@@ -368,7 +369,7 @@ function buildRecipes(): AgentRecipe[] {
       build: ({ model }) => ({
         command: process.execPath,
         args: [geminiEntry ?? "", "--acp", ...(model ? ["--model", model] : [])],
-        env: { GEMINI_CLI_TRUST_WORKSPACE: "true" },
+        env: { ...RUN_AS_NODE, GEMINI_CLI_TRUST_WORKSPACE: "true" },
       }),
     },
     {
@@ -559,7 +560,7 @@ function buildRecipes(): AgentRecipe[] {
           : { kind: "command", command: process.execPath, args: [fakeAgent, "--login"], hint: "A scripted sign-in: an address, a code, a question.", scene: "code" },
       loginTerminalLine: fakeTerminalLine,
       bypassMode: null,
-      build: () => ({ command: process.execPath, args: [fakeAgent], env: {} }),
+      build: () => ({ command: process.execPath, args: [fakeAgent], env: { ...RUN_AS_NODE } }),
     });
   }
   return recipes;

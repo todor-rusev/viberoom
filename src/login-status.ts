@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { AcpAgent } from "./acp-client.js";
 import type { LoginState } from "./agent-health.js";
 import { RemoteError } from "./jsonrpc.js";
+import { withRunAsNode } from "./own-runtime.js";
 
 export interface LoginCheck {
   state: LoginState;
@@ -60,7 +61,7 @@ export const readHermesStatus: StatusReader = (out) => {
 };
 
 
-export function runStatusCommand(command: string, args: string[], timeoutMs: number): Promise<{ code: number | null; out: string; timedOut: boolean }> {
+export function runStatusCommand(command: string, args: string[], timeoutMs: number, signal?: AbortSignal): Promise<{ code: number | null; out: string; timedOut: boolean }> {
   return new Promise((resolve) => {
     const isJs = /\.(mjs|cjs|js)$/i.test(command);
     const isShim = /\.(cmd|bat)$/i.test(command);
@@ -69,7 +70,7 @@ export function runStatusCommand(command: string, args: string[], timeoutMs: num
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       windowsVerbatimArguments: isShim,
-      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+      env: { ...withRunAsNode(), NO_COLOR: "1", FORCE_COLOR: "0" },
     });
     let out = "";
     let done = false;
@@ -85,6 +86,15 @@ export function runStatusCommand(command: string, args: string[], timeoutMs: num
       child.kill();
       setTimeout(() => finish(null), 300);
     }, timeoutMs);
+    const stopOnAbort = (): void => {
+      try {
+        child.kill();
+      } catch {
+      }
+      finish(null);
+    };
+    if (signal?.aborted) stopOnAbort();
+    else signal?.addEventListener("abort", stopOnAbort, { once: true });
     child.stdout?.on("data", (d) => { out += String(d); });
     child.stderr?.on("data", (d) => { out += String(d); });
     child.on("error", (e) => { out += `\n${e.message}`; finish(null); });
@@ -97,10 +107,17 @@ export function firstWords(out: string, max = 120): string {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
-export async function probeLoginViaAcp(launch: { command: string; args: string[]; env?: Record<string, string> }, cwd: string, timeoutMs: number): Promise<LoginCheck> {
+export async function probeLoginViaAcp(launch: { command: string; args: string[]; env?: Record<string, string> }, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<LoginCheck> {
   const at = Date.now();
   let agent: AcpAgent | null = null;
   const stderr: string[] = [];
+  const stopOnAbort = (): void => {
+    try {
+      agent?.kill();
+    } catch {
+    }
+  };
+  signal?.addEventListener("abort", stopOnAbort, { once: true });
   try {
     agent = new AcpAgent(
       { ...launch, cwd },
@@ -131,24 +148,25 @@ export async function probeLoginViaAcp(launch: { command: string; args: string[]
   } catch (error) {
     return { state: "unknown", how: "acp", at, detail: firstWords([error instanceof Error ? error.message : String(error), ...stderr].join("\n"), 160) };
   } finally {
+    signal?.removeEventListener("abort", stopOnAbort);
     try { agent?.kill(); } catch { }
   }
 }
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-export async function checkLogin(spec: LoginStatusSpec, launch: { command: string; args: string[]; env?: Record<string, string> } | null, cwd: string): Promise<LoginCheck> {
+export async function checkLogin(spec: LoginStatusSpec, launch: { command: string; args: string[]; env?: Record<string, string> } | null, cwd: string, signal?: AbortSignal): Promise<LoginCheck> {
   const at = Date.now();
   if (!launch || !launch.command) return { state: "unknown", how: "command", at, detail: "not installed" };
   if (spec.kind === "command") {
     const command = spec.command ?? launch.command;
     if (!command) return { state: "unknown", how: "command", at, detail: "no status command" };
-    const { code, out, timedOut } = await runStatusCommand(command, spec.args, spec.timeoutMs ?? 15_000);
+    const { code, out, timedOut } = await runStatusCommand(command, spec.args, spec.timeoutMs ?? 15_000, signal);
     if (timedOut) return { state: "unknown", how: "command", at, detail: `${spec.args.join(" ")}: no answer in ${Math.round((spec.timeoutMs ?? 15_000) / 1000)} s` };
     const read = spec.read(out, code);
     const state = typeof read === "string" ? read : read.state;
     const detail = typeof read === "string" ? firstWords(out) || `exit ${code}` : read.detail;
     return { state, how: "command", at, detail };
   }
-  return probeLoginViaAcp(launch, cwd, 25_000);
+  return probeLoginViaAcp(launch, cwd, 25_000, signal);
 }

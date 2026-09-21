@@ -1,12 +1,13 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
 import { DatabaseSync, backup as sqliteBackup } from "node:sqlite";
+import { CarryHistory } from "./carry-history.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import type { ChatMessage } from "./room.js";
 import { Logger } from "./log.js";
 
 export const HISTORY_DB_FILE = "history.db";
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const AGENT_VISIBLE_SQL = "m.deleted_at is null and m.kind in ('chat','system') and coalesce(json_extract(m.body, '$.audience'), '') != 'human'";
 
@@ -99,6 +100,7 @@ const LATER_APPLIED_COLUMNS: Array<[string, string]> = [
 export type PendingOp = (
   | { kind: "upsert"; message: StoredMessage }
   | { kind: "truncate"; fromSeq: number; deletedAt: number }
+  | { kind: "bury"; ids: string[]; deletedAt: number }
   | { kind: "rewrite"; fromSeq: number; deletedAt: number; message: StoredMessage }
 ) & {
   opId?: string;
@@ -228,6 +230,7 @@ type Row = Record<string, unknown>;
 export class HistoryStore {
   private readonly db: DatabaseSync;
   private readonly log: Logger;
+  readonly carry: CarryHistory;
 
   constructor(readonly path: string, log?: Logger) {
     this.log = log ?? new Logger("history");
@@ -236,14 +239,38 @@ export class HistoryStore {
     this.db.exec("pragma journal_mode = wal");
     this.db.exec("pragma synchronous = full");
     this.db.exec("pragma foreign_keys = on");
+    this.refuseIfNewer();
+    this.backupBeforeUpgrade();
     this.db.exec(SCHEMA);
+    this.db.exec("create table if not exists file_transactions(id text primary key)");
+    this.carry = new CarryHistory(this.db);
     this.reconcileColumns();
     const version = this.meta("schema_version");
     if (version === null || Number(version) < SCHEMA_VERSION) this.setMeta("schema_version", String(SCHEMA_VERSION));
-    else if (Number(version) > SCHEMA_VERSION) {
-      this.db.close();
-      throw new Error(`history.db was written by a newer viberoom (schema ${version}, this one knows ${SCHEMA_VERSION})`);
-    }
+  }
+
+  private refuseIfNewer(): void {
+    const table = this.db.prepare("select name from sqlite_master where type = 'table' and name = 'meta'").get();
+    if (!table) return;
+    const row = this.db.prepare("select value from meta where key = 'schema_version'").get() as Row | undefined;
+    const version = row ? Number(row.value) : 0;
+    if (!(version > SCHEMA_VERSION)) return;
+    this.log.error(`refusing ${this.path}: schema ${version}, this build knows ${SCHEMA_VERSION}`);
+    this.db.close();
+    throw new Error([
+      "This viberoom is older than your rooms.",
+      "The rooms in this folder were last opened by a newer viberoom, and an older one cannot read them without damaging them. Nothing has been changed.",
+      "Open the newer viberoom instead, or update this one.",
+    ].join(String.fromCharCode(10)));
+  }
+
+  private backupBeforeUpgrade(): void {
+    if (!this.db.prepare("select name from sqlite_master where type = 'table' and name = 'meta'").get()) return;
+    const row = this.db.prepare("select value from meta where key = 'schema_version'").get() as Row | undefined;
+    if (!row || Number(row.value) >= SCHEMA_VERSION || this.path === ":memory:") return;
+    const destination = `${this.path}.before-schema-${SCHEMA_VERSION}-${Date.now()}.bak`;
+    try { this.db.prepare("vacuum into ?").run(destination); }
+    catch (error) { this.db.close(); throw new Error("Could not back up the conversation store before upgrading it. The upgrade was not applied.", { cause: error }); }
   }
 
   private reconcileColumns(): void {
@@ -278,6 +305,10 @@ export class HistoryStore {
 
   private transactionDepth = 0;
 
+  markFileTransaction(id: string): void { this.db.prepare("insert into file_transactions(id) values (?)").run(id); }
+  hasFileTransaction(id: string): boolean { return !!this.db.prepare("select 1 from file_transactions where id = ?").get(id); }
+  forgetFileTransaction(id: string): void { this.db.prepare("delete from file_transactions where id = ?").run(id); }
+
   transaction<T>(work: () => T): T {
     if (this.transactionDepth > 0) return work();
     this.db.exec("begin immediate");
@@ -295,7 +326,15 @@ export class HistoryStore {
   }
 
 
-  upsert(roomId: string, message: StoredMessage): void {
+  upsert(roomId: string, message: StoredMessage, options: { track?: boolean } = {}): void {
+    const write = () => {
+    if (options.track !== false) {
+      if (!this.carry.head(roomId, message.id)) {
+        const before = this.db.prepare("select body,deleted_at from messages where room=? and id=?").get(roomId, message.id);
+        if (before) this.carry.ensure(roomId, JSON.parse(String(before.body)), before.deleted_at === null ? null : Number(before.deleted_at));
+      }
+      this.carry.record(roomId, message);
+    }
     const features = messageFeatures(message);
     this.db
       .prepare(
@@ -321,6 +360,9 @@ export class HistoryStore {
         JSON.stringify(features),
         messageWeight(features),
       );
+    };
+    if (this.transactionDepth) write();
+    else this.transaction(write);
   }
 
   upsertMany(roomId: string, messages: StoredMessage[]): void {
@@ -349,7 +391,8 @@ export class HistoryStore {
   }
 
   truncateFrom(roomId: string, fromSeq: number, deletedAt = Date.now()): number {
-    return this.db.prepare("update messages set deleted_at = ? where room = ? and seq > ? and deleted_at is null").run(deletedAt, roomId, fromSeq).changes as number;
+    const ids = this.db.prepare("select id from messages where room=? and seq>? and deleted_at is null").all(roomId, fromSeq).map(r => String(r.id));
+    return this.markDeleted(roomId, ids, deletedAt);
   }
 
   rewrite(roomId: string, message: StoredMessage, fromSeq: number, deletedAt = Date.now()): number {
@@ -360,13 +403,28 @@ export class HistoryStore {
     });
   }
 
-  markDeleted(roomId: string, ids: string[], deletedAt = Date.now()): number {
+  markDeleted(roomId: string, ids: string[], deletedAt = Date.now(), options: { track?: boolean } = {}): number {
     if (!ids.length) return 0;
-    return this.db.prepare(`update messages set deleted_at = ? where room = ? and id in (${placeholders(ids.length)}) and deleted_at is null`).run(deletedAt, roomId, ...ids).changes as number;
+    return this.transaction(() => {
+      let changed = 0;
+      for (let start = 0; start < ids.length; start += 500) {
+        const batch = ids.slice(start, start + 500);
+        if (options.track !== false) for (const row of this.db.prepare(`select body from messages where room=? and id in (${placeholders(batch.length)}) and deleted_at is null`).all(roomId, ...batch)) {
+          const message = JSON.parse(String(row.body)) as ChatMessage;
+          this.carry.ensure(roomId, message);
+          this.carry.record(roomId, message, deletedAt);
+        }
+        changed += this.db.prepare(`update messages set deleted_at = ? where room = ? and id in (${placeholders(batch.length)}) and deleted_at is null`).run(deletedAt, roomId, ...batch).changes as number;
+      }
+      return changed;
+    });
   }
 
   dropRoom(roomId: string): void {
-    this.db.prepare("delete from messages where room = ?").run(roomId);
+    this.transaction(() => {
+      this.db.prepare("delete from messages where room = ?").run(roomId);
+      this.carry.drop(roomId);
+    });
   }
 
 
@@ -539,8 +597,9 @@ export class HistoryStore {
       if (this.db.prepare("select 1 from applied_ops where op_id = ?").get(op.opId)) return "skipped";
       if (op.kind === "upsert") this.upsert(roomId, op.message);
       else if (op.kind === "rewrite") this.rewrite(roomId, op.message, op.fromSeq, op.deletedAt);
+      else if (op.kind === "bury") this.markDeleted(roomId, op.ids, op.deletedAt);
       else this.truncateFrom(roomId, op.fromSeq, op.deletedAt);
-      const message = op.kind === "truncate" ? null : op.message;
+      const message = op.kind === "truncate" || op.kind === "bury" ? null : op.message;
       const kind = op.accept ? "accept" : "divert";
       this.db
         .prepare("insert into applied_ops(op_id, room, applied_at, message_id, seq, kind) values (?, ?, ?, ?, ?, ?)")
@@ -614,11 +673,6 @@ export class HistoryStore {
       }
     });
     return report;
-  }
-
-  exportJsonl(roomId: string): string {
-    const rows = this.db.prepare("select body from messages where room = ? and deleted_at is null order by seq").all(roomId) as Row[];
-    return rows.map((r) => String(r.body)).join("\n") + (rows.length ? "\n" : "");
   }
 
   exportMarkdown(roomId: string, roomName = roomId): string {
@@ -723,9 +777,9 @@ export class HistoryStore {
   }
 
 
-  async backup(toPath: string): Promise<void> {
+  async backup(toPath: string, options: { recorded?: boolean } = {}): Promise<void> {
     await sqliteBackup(this.db, toPath);
-    this.setMeta("last_backup_at", String(Date.now()));
+    if (options.recorded !== false) this.setMeta("last_backup_at", String(Date.now()));
   }
 
   close(): void {

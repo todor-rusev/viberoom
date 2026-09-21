@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { AcpAgent, childEnvironment } from "./acp-client.js";
+import { RUN_AS_NODE } from "./own-runtime.js";
 import { stripAnsi } from "./login-status.js";
 
 export type LoginFlowSpec =
@@ -187,7 +188,7 @@ export class LoginFlows extends EventEmitter {
     const [file, args] = isJs ? [process.execPath, [command, ...spec.args]] : isShim ? ["cmd.exe", ["/d", "/s", "/c", `"${command}" ${spec.args.join(" ")}`]] : [command, spec.args];
     let child: ChildProcess;
     try {
-      child = spawn(file, args, { cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, windowsVerbatimArguments: isShim, env: childEnvironment({ ...(target.launch.env ?? {}), NO_COLOR: "1", FORCE_COLOR: "0", TERM: "dumb" }) });
+      child = spawn(file, args, { cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, windowsVerbatimArguments: isShim, env: childEnvironment({ ...(target.launch.env ?? {}), ...(isJs ? RUN_AS_NODE : {}), NO_COLOR: "1", FORCE_COLOR: "0", TERM: "dumb" }) });
     } catch (error) {
       this.end(entry, "failed", `${target.vendor}'s ${thing} could not start: ${error instanceof Error ? error.message : String(error)}`);
       return;

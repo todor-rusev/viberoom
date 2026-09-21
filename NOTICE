@@ -45,7 +45,8 @@ This product bundles the following third-party material:
   The agents themselves (Claude Code, Codex CLI) are not part of viberoom: it
   runs the copies the user installed.
 
-- Mermaid (served from node_modules at run time, not copied): MIT License,
+- Mermaid (vendor/ui/mermaid.min.js, the browser bundle copied unmodified at
+  build time by scripts/vendor-ui.mjs, with its licence file): MIT License,
   Copyright (c) 2014-2025 Knut Sveidqvist.
 
 - marked (served from node_modules at run time, not copied): MIT License,

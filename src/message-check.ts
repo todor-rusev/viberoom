@@ -1,12 +1,18 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { canAutoApproveRoomTool, isDirectRoomTool, type ToolIdentity } from "./room-tool-identity.js";
 import { oldNamesFor } from "./tool-spec.js";
 
 const MESSAGE_CHECK_TOOL = "check_room";
 
 export const MESSAGE_CHECK_BYTES = 16 * 1024;
-export interface MessageCheckArgs { mode: "read" | "status"; limit: number; after?: string; page?: string }
+export interface CheckedVibemate { name: string; state: string; line: string; startedAt?: string; elapsedSeconds?: number; quietSeconds?: number }
+export interface MessageCheckArgs { mode: "read" | "status"; limit: number; after?: string; page?: string; draft?: { name: string; cursor?: string } }
+export interface LiveDraft {
+  name: string; provisional: true; available: boolean; text: string; hint: string;
+  turnId?: string; startedAt?: string; updatedAt?: string; toolCalls?: number;
+  offset?: number; totalChars?: number; truncated?: boolean; nextCursor?: string; reset?: boolean;
+}
 export interface MessageCheckContext { turn: string; revision: number; baseline: number; latest: number }
 export type MessageAddressing = "direct" | "broadcast" | "other" | "event";
 export interface CheckedMessage extends Record<string, unknown> { seq: number; text: string; addressing?: MessageAddressing; truncated?: boolean; detailsOmitted?: boolean }
@@ -23,17 +29,54 @@ export interface MessageCheckResult {
   checkedAt: string; mode: "read" | "status"; available: number; returned: number;
   messages: CheckedMessage[]; nextCursor: string; more: boolean; reset: boolean; hint: string;
   counts?: MessageCheckCounts; headers?: MessageHeader[]; previewed?: number; moreHeaders?: boolean; nextPage?: string; snapshotThrough?: number;
+  vibemates?: CheckedVibemate[]; vibematesOmitted?: number; liveDraft?: LiveDraft;
 }
 
 export function parseMessageCheckArgs(params: Record<string, unknown>, query = false): MessageCheckArgs {
-  for (const key of Object.keys(params)) if (!["mode", "limit", "after", "page"].includes(key)) throw new Error(`unsupported check_room argument: ${key}`);
+  for (const key of Object.keys(params)) if (!["mode", "limit", "after", "page", "draft"].includes(key)) throw new Error(`unsupported check_room argument: ${key}`);
   const mode = params.mode === undefined ? "status" : params.mode;
   if (mode !== "read" && mode !== "status") throw new Error("mode must be read or status");
   const limit = params.limit === undefined ? 10 : query && typeof params.limit === "string" && /^\d+$/.test(params.limit) ? Number(params.limit) : params.limit;
   if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error("limit must be an integer from 1 to 20");
   if (params.after !== undefined && (typeof params.after !== "string" || !params.after || params.after.length > 1024)) throw new Error("after must be a cursor returned by check_room");
   if (params.page !== undefined && (mode !== "status" || typeof params.page !== "string" || !params.page || params.page.length > 1024)) throw new Error("page must be a nextPage cursor and is only supported with mode=status");
-  return { mode, limit, ...(params.after !== undefined ? { after: params.after as string } : {}), ...(params.page !== undefined ? { page: params.page as string } : {}) };
+  let draft = params.draft;
+  if (query && typeof draft === "string") { try { draft = JSON.parse(draft); } catch { throw new Error("draft must name a vibemate in this room"); } }
+  if (draft !== undefined) {
+    if (!draft || typeof draft !== "object" || Array.isArray(draft)) throw new Error("draft must name a vibemate in this room");
+    const value = draft as Record<string, unknown>;
+    if (Object.keys(value).some(k => !["name", "cursor"].includes(k)) || typeof value.name !== "string" || !value.name.trim() || value.name.length > 100) throw new Error("draft must name a vibemate in this room");
+    if (value.cursor !== undefined && (typeof value.cursor !== "string" || !value.cursor || value.cursor.length > 1024)) throw new Error("draft.cursor must be returned by a previous draft check");
+    draft = { name: value.name.trim(), ...(value.cursor !== undefined ? { cursor: value.cursor } : {}) };
+  }
+  return { mode, limit, ...(params.after !== undefined ? { after: params.after as string } : {}), ...(params.page !== undefined ? { page: params.page as string } : {}), ...(draft !== undefined ? { draft: draft as MessageCheckArgs["draft"] } : {}) };
+}
+
+export function packLiveDraft(key: string, callerTurn: string, writer: string, request: NonNullable<MessageCheckArgs["draft"]>, draft: LiveDraft): LiveDraft {
+  const text = draft.text;
+  const revision = createHash("sha256").update(text).digest("hex");
+  let offset = 0, reset = false;
+  if (request.cursor) {
+    let point: Record<string, unknown>;
+    try { point = decodeCursor(key, request.cursor); }
+    catch { throw new Error("invalid draft cursor; omit draft.cursor to read the current draft"); }
+    if (point.kind !== "draft" || point.caller !== callerTurn || point.writer !== writer || !Number.isSafeInteger(point.offset) || Number(point.offset) < 0) throw new Error("invalid draft cursor for this caller or vibemate");
+    if (point.turn !== draft.turnId || point.revision !== revision) reset = true;
+    else { offset = Number(point.offset); if (offset > text.length) throw new Error("invalid draft offset"); }
+  }
+  const cursor = (end: number) => signCursor(key, { kind: "draft", caller: callerTurn, writer, turn: draft.turnId, revision, offset: end });
+  const result: LiveDraft = { ...draft, text: "", offset, totalChars: text.length, truncated: false, reset };
+  let low = offset, high = text.length, best = offset;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const end = middle > offset && /[\uD800-\uDBFF]/.test(text[middle - 1]) ? middle - 1 : middle;
+    result.text = text.slice(offset, end); result.truncated = end < text.length;
+    result.nextCursor = result.truncated ? cursor(end) : undefined;
+    if (Buffer.byteLength(JSON.stringify(result, null, 2)) <= 8 * 1024) { best = end; low = middle + 1; } else high = middle - 1;
+  }
+  result.text = text.slice(offset, best); result.truncated = best < text.length;
+  result.nextCursor = result.truncated ? cursor(best) : undefined;
+  return result;
 }
 
 function signCursor(key: string, value: Record<string, unknown>): string {
@@ -107,10 +150,11 @@ export function messageCheckHeader(message: CheckedMessage): MessageHeader {
 export function packMessageCheck(
   args: MessageCheckArgs, position: { seq: number; reset: boolean; pageSeq?: number; pagePriority?: number }, rows: CheckedMessage[],
   cursors: { read: (seq: number) => string; headers: (seq: number, priority: number) => string }, latest: number, checkedAt = new Date().toISOString(),
+  extras: Pick<MessageCheckResult, "vibemates" | "vibematesOmitted" | "liveDraft"> = {},
 ): MessageCheckResult {
   const cursor = cursors.read;
   let result: MessageCheckResult = {
-    checkedAt, mode: args.mode, available: rows.length, returned: 0, messages: [],
+    ...extras, checkedAt, mode: args.mode, available: rows.length, returned: 0, messages: [],
     nextCursor: cursor(position.seq), more: rows.length > 0, reset: position.reset,
     hint: "This is a snapshot; later messages may arrive. Pass nextCursor as after to continue. Normal next-turn delivery is unchanged. Use read_message with seq for truncated text or omitted details.",
   };
@@ -170,6 +214,9 @@ export function packMessageCheck(
 }
 
 export function messageCheckTitle(result: MessageCheckResult): string {
+  if (result.liveDraft) return result.liveDraft.available
+    ? `Read ${result.liveDraft.name}'s unfinished reply · ${result.liveDraft.text.length} characters${result.liveDraft.truncated ? " · more available" : ""}`
+    : `No visible draft from ${result.liveDraft.name}`;
   if (!result.available) return "Checked room messages · Nothing new";
   if (result.mode === "status") return `Checked room messages · ${result.available} new · ${result.counts?.direct ?? 0} for you`;
   return `Returned ${result.returned} message${result.returned === 1 ? "" : "s"}${result.more ? ` · ${result.available - result.returned} more` : ""}`;

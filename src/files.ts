@@ -26,6 +26,7 @@ export interface Attachment {
   name: string;
   mimeType: string;
   bytes: number;
+  sha256?: string;
   n?: number;
 }
 
@@ -33,6 +34,15 @@ const STORED_NAME = /^[0-9a-f]{32}\.(png|jpg|webp|gif)$/;
 
 export function isStoredFileName(name: string): boolean {
   return STORED_NAME.test(name);
+}
+
+export function isRoomResourceName(name: unknown): name is string {
+  return typeof name === "string" && name.length <= 200 && !/[\\/:*?"<>|\u0000-\u001f]/.test(name) && !name.endsWith(".") && !name.endsWith(" ") && (isStoredFileName(name) || /^[0-9a-f]{12}-[^. ].*$/.test(name));
+}
+
+export function canonicalResourceFile(file: string, hash: string): string {
+  if (!isRoomResourceName(file) || !/^[0-9a-f]{64}$/.test(hash)) throw new Error("Invalid carried resource identity.");
+  return isStoredFileName(file) ? `${hash.slice(0, 32)}${file.slice(32)}` : `${hash.slice(0, 12)}${file.slice(12)}`;
 }
 
 export function contentTypeOf(file: string): string {

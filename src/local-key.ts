@@ -1,14 +1,12 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { narrowToOwner, whoElseCanReach, type PathAccess } from "./private-path.js";
+import { whoElseCanReach, type PathAccess } from "./private-path.js";
+import { createPrivateKey, readPrivateKey } from "./key-creation.js";
+export { MAKE_PATIENCE_MS } from "./key-creation.js";
 
 
 export const KEY_FILE = "local-key";
-const KEY_BYTES = 32;
-const KEY_PATTERN = /^[0-9a-f]{64}$/;
-
 export interface LocalKey {
   value: string;
   path: string;
@@ -16,17 +14,10 @@ export interface LocalKey {
   fresh: boolean;
 }
 
-export function loadOrCreateKey(dataDir: string): LocalKey {
+export function loadOrCreateKey(dataDir: string, options: { patienceMs?: number } = {}): LocalKey {
   const path = join(dataDir, KEY_FILE);
-  if (existsSync(path)) {
-    const value = readFileSync(path, "utf8").trim();
-    if (KEY_PATTERN.test(value)) return { value, path, access: whoElseCanReach(path), fresh: false };
-  }
-  const value = randomBytes(KEY_BYTES).toString("hex");
-  writeFileSync(path, "", { mode: 0o600 });
-  narrowToOwner(path, "file");
-  writeFileSync(path, value, { mode: 0o600 });
-  return { value, path, access: whoElseCanReach(path), fresh: true };
+  const made = createPrivateKey(path, options);
+  return { ...made, path, access: whoElseCanReach(path) };
 }
 
 const OPENING_MS = 5 * 60_000;
@@ -55,12 +46,7 @@ function signOpening(key: string, nonce: string, until: number): string {
 }
 
 export function readKey(dataDir: string): string | null {
-  try {
-    const value = readFileSync(join(dataDir, KEY_FILE), "utf8").trim();
-    return KEY_PATTERN.test(value) ? value : null;
-  } catch {
-    return null;
-  }
+  return readPrivateKey(join(dataDir, KEY_FILE));
 }
 
 export function keyMatches(expected: string, given: string | undefined | null): boolean {
@@ -69,4 +55,3 @@ export function keyMatches(expected: string, given: string | undefined | null): 
   const b = Buffer.from(given, "utf8");
   return a.length === b.length && timingSafeEqual(a, b);
 }
-

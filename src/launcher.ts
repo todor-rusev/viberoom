@@ -2,6 +2,7 @@
 
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, posix, resolve, win32 } from "node:path";
+import { OPERATIONAL_LOG_KEEP, rollAside } from "./log.js";
 
 export type Command = "run" | "serve" | "start" | "stop" | "status" | "open" | "logs" | "doctor" | "autostart" | "help";
 
@@ -99,16 +100,21 @@ export function foreignHub(identity: HubIdentity | null, dataDir: string): Forei
   return sameDataDir(identity.dataDir, dataDir) ? null : { dataDir: identity.dataDir };
 }
 
+export const HUB_HOST = "127.0.0.1";
+
+export function hubUrl(port: number): string {
+  return `http://${HUB_HOST}:${port}/`;
+}
+
 const LOG_ROTATE_BYTES = 5 * 1024 * 1024;
 
 export function rotateLog(path: string, limit = LOG_ROTATE_BYTES): boolean {
   try {
     if (!existsSync(path) || statSync(path).size < limit) return false;
-    renameSync(path, `${path}.1`);
-    return true;
   } catch {
     return false;
   }
+  return rollAside(path, OPERATIONAL_LOG_KEEP);
 }
 
 export function tailFile(path: string, lines: number): string {
@@ -120,28 +126,65 @@ export function tailFile(path: string, lines: number): string {
   }
 }
 
+const APP_WINDOW_BROWSERS: { name: string; win32: string[]; darwin: string[]; linux: string[] }[] = [
+  {
+    name: "Google Chrome",
+    win32: ["Google/Chrome/Application/chrome.exe", "Google/Chrome Beta/Application/chrome.exe", "Google/Chrome Dev/Application/chrome.exe", "Google/Chrome SxS/Application/chrome.exe"],
+    darwin: ["Google Chrome.app/Contents/MacOS/Google Chrome", "Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta", "Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev", "Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"],
+    linux: ["google-chrome", "google-chrome-stable", "google-chrome-beta", "google-chrome-unstable"],
+  },
+  {
+    name: "Microsoft Edge",
+    win32: ["Microsoft/Edge/Application/msedge.exe", "Microsoft/Edge Beta/Application/msedge.exe", "Microsoft/Edge Dev/Application/msedge.exe"],
+    darwin: ["Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "Microsoft Edge Beta.app/Contents/MacOS/Microsoft Edge Beta", "Microsoft Edge Dev.app/Contents/MacOS/Microsoft Edge Dev"],
+    linux: ["microsoft-edge", "microsoft-edge-stable", "microsoft-edge-beta", "microsoft-edge-dev"],
+  },
+  {
+    name: "Brave",
+    win32: ["BraveSoftware/Brave-Browser/Application/brave.exe"],
+    darwin: ["Brave Browser.app/Contents/MacOS/Brave Browser"],
+    linux: ["brave-browser", "brave"],
+  },
+  {
+    name: "Vivaldi",
+    win32: ["Vivaldi/Application/vivaldi.exe", "Programs/Vivaldi/Application/vivaldi.exe"],
+    darwin: ["Vivaldi.app/Contents/MacOS/Vivaldi"],
+    linux: ["vivaldi", "vivaldi-stable"],
+  },
+  {
+    name: "Opera",
+    win32: ["Opera/opera.exe", "Programs/Opera/opera.exe"],
+    darwin: ["Opera.app/Contents/MacOS/Opera"],
+    linux: ["opera"],
+  },
+  {
+    name: "Chromium",
+    win32: ["Chromium/Application/chrome.exe"],
+    darwin: ["Chromium.app/Contents/MacOS/Chromium"],
+    linux: ["chromium", "chromium-browser"],
+  },
+];
+
+export const APP_WINDOW_BROWSER_NAMES = APP_WINDOW_BROWSERS.map((browser) => browser.name);
+
 export function findChromium(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, exists: (p: string) => boolean = existsSync): string | null {
-  const candidates: string[] = [];
   const P = platform === "win32" ? win32 : posix;
-  if (platform === "win32") {
-    const roots = [env["ProgramFiles"], env["ProgramFiles(x86)"], env["LOCALAPPDATA"]].filter((r): r is string => !!r);
-    for (const root of roots) candidates.push(P.join(root, "Google", "Chrome", "Application", "chrome.exe"));
-    for (const root of roots) candidates.push(P.join(root, "Microsoft", "Edge", "Application", "msedge.exe"));
-    for (const root of roots) candidates.push(P.join(root, "Chromium", "Application", "chrome.exe"));
-  } else if (platform === "darwin") {
-    candidates.push(
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-      "/Applications/Chromium.app/Contents/MacOS/Chromium",
-      "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-    );
-  } else {
-    const dirs = (env.PATH ?? "").split(P.delimiter).filter(Boolean);
-    for (const name of ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge", "brave-browser"]) {
-      for (const dir of dirs) candidates.push(P.join(dir, name));
+  const roots =
+    platform === "win32"
+      ? [env["ProgramFiles"], env["ProgramFiles(x86)"], env["LOCALAPPDATA"]].filter((root): root is string => !!root)
+      : platform === "darwin"
+      ? ["/Applications", ...(env.HOME ? [P.join(env.HOME, "Applications")] : [])]
+      : (env.PATH ?? "").split(P.delimiter).filter(Boolean);
+  for (const browser of APP_WINDOW_BROWSERS) {
+    const wanted = platform === "win32" ? browser.win32 : platform === "darwin" ? browser.darwin : browser.linux;
+    for (const name of wanted) {
+      for (const root of roots) {
+        const candidate = P.join(root, ...name.split("/"));
+        if (exists(candidate)) return candidate;
+      }
     }
   }
-  return candidates.find((c) => exists(c)) ?? null;
+  return null;
 }
 
 export interface WindowPlacement {
@@ -248,8 +291,10 @@ export function appWindowArgs(url: string, profileDir: string, freshProfile: boo
 
 export function browserAdvice(chromium: string | null, platform: NodeJS.Platform = process.platform): string | null {
   if (chromium) return null;
-  const names = platform === "darwin" ? "Chrome, Edge, Brave or Chromium" : platform === "win32" ? "Chrome, Edge or Chromium" : "google-chrome, chromium, microsoft-edge or brave-browser on PATH";
-  return `No Chromium-based browser found (${names}); viberoom opens in a tab of your default browser instead. Install one of them for the app window.`;
+  const all = APP_WINDOW_BROWSER_NAMES;
+  const names = `${all.slice(0, -1).join(", ")} or ${all[all.length - 1]}`;
+  const where = platform === "linux" ? " on PATH" : "";
+  return `No Chromium-based browser found (${names}${where}); viberoom opens in a tab of your default browser instead. Install one of them for the app window.`;
 }
 
 export function openUrlCommand(url: string, platform: NodeJS.Platform = process.platform): string {

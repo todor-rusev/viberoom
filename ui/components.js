@@ -430,15 +430,18 @@
       open: { type: "boolean", default: false, note: "open, the card shows the call; the body is built only then" },
       input: { type: "string", note: "shown up to 4000 characters" },
       output: { type: "string" },
+      loadState: { type: "enum", values: ["ready", "loading", "error"], default: "ready" },
     },
-    build: ({ id, title, kind, variant, status, open, input, output }, ui) =>
+    build: ({ id, title, kind, variant, status, open, input, output, loadState }, ui) =>
       ui.h("div", { "data-status": status, "data-state": open ? "open" : null, "data-variant": variant !== "tool" ? variant : null },
         ui.build("chip", { label: variant !== "tool" ? title : `${title}${kind ? ` · ${kind}` : ""} · ${status}`, icon: variant === "message-check" ? "inbox" : variant === "history-search" ? "search" : "tool", tone: TOOL_TONE[status] || "plain", button: true, title: open ? "Collapse" : "Expand", data: { tool: id } }),
         open
           ? ui.h("div", { class: "body" },
+              loadState === "loading" ? ui.h("div", { class: "sec quiet", role: "status" }, "Loading tool details…") : null,
+              loadState === "error" ? ui.h("div", { class: "sec quiet", role: "status" }, "Could not load tool details. ", ui.h("button", { type: "button", "data-tool-retry": id }, "Try again")) : null,
               ui.h("div", { class: "sec" }, ui.h("b", null, "call"), ui.h("pre", null, title)),
               input ? ui.h("div", { class: "sec" }, ui.h("b", null, "input"), ui.h("pre", null, input.slice(0, 4000))) : null,
-              output ? ui.h("div", { class: "sec" }, ui.h("b", null, "output"), ui.h("pre", null, output)) : ui.h("div", { class: "sec quiet" }, "no output recorded"))
+              output ? ui.h("div", { class: "sec" }, ui.h("b", null, "output"), ui.h("pre", null, output)) : loadState === "ready" ? ui.h("div", { class: "sec quiet" }, "no output recorded") : null)
           : null),
     states: ["rest"],
     samples: [

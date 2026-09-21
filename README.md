@@ -230,6 +230,10 @@ started with, and says so when a newer one is on the disk.
 ## Small things you will like
 
 - **Rooms remember.** The history stays with the room. Move the folder and the vibemates move with it.
+- **Export / Import.** Choose one or several rooms, their conversations, setup and attached files.
+  Protect the copy with an optional passphrase. Import previews differences before applying them;
+  competing branches can be kept together, and removed versions remain available for inspection.
+  Connection credentials and agent sessions stay on their original computer.
 - **The window remembers.** Where it was, how big, which screen. Unplug that screen and it walks back.
 - **Nothing leaves your machine** except what each agent sends to its own provider. viberoom never
   sees your keys; every agent keeps its own login.
@@ -239,6 +243,9 @@ started with, and says so when a newer one is on the disk.
   That is what keeps anyone else signed in to the same computer out of your conversations.
 - **It can start with you.** `viberoom autostart on` (or the switch in Settings) brings the rooms up quietly
   when you sign in to the computer, without a window until you ask for one.
+- **Continue after a restart, if you choose.** In a room's settings, enable waking after a requested
+  restart and enter an instruction. It is sent once after the room's agents return. The option is off
+  by default and leaves muted agents quiet; ordinary launches do not send the instruction.
 - **Edit a message.** Fix what you said; the vibemates get the memo, or the conversation rewinds.
 - **Quote a message.** Select a fragment of a bubble, or copy it with Ctrl+C, and it goes into your next
   message as a quote, with who said it and when.
@@ -248,6 +255,9 @@ started with, and says so when a newer one is on the disk.
   numbers, and the window offers to cut it, raise the limit, or go back.
 - **Settings save themselves.** Change a setting and it is saved: on Enter, on leaving the field, on a pick.
 - **Search the room.** Everything anyone said, one search box.
+- **See work in progress.** Vibemates see each other's live status. When useful, `check_room` can also
+  read another vibemate's unfinished visible reply, clearly marked as a draft; the final reply still
+  arrives normally.
 - **For geeks.** Every panel folds its technical settings behind a toggle. You never have to open it.
 
 <br>

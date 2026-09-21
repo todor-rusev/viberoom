@@ -79,13 +79,19 @@
           </div>
           <div class="chat-actions">
             <button id="pins-btn" data-ui="chip" data-button type="button" hidden title="Pinned messages"></button>
-            <label class="search"><span class="search-icon" data-icon="search"></span><input id="search" type="search" placeholder="Search in this room…" autocomplete="off"></label>
+            <label class="search"><span class="search-icon" data-icon="search"></span><input id="search" type="search" placeholder="Search full history…" autocomplete="off"></label>
+            <button id="carry-btn" data-ui="button" data-kind="ghost" title="Export or import rooms and conversations"><span data-icon="package"></span> Export / Import</button>
             <button id="chat-info-btn" data-ui="icon-button" title="Room settings"><span data-icon="settings"></span></button>
           </div>
         </header>
         <div id="cast-banner" class="cast-banner" hidden></div>
         <div id="wedge-banner" class="wedge-banner" hidden></div>
-        <div id="messages" class="messages"></div>
+        <div id="conversation-selection" class="conversation-selection" role="status" hidden>
+          <span>Whole saved conversation selected · copy as Markdown</span>
+          <button class="linklike" data-act="copy">Copy</button>
+          <button class="linklike" data-act="clear">Cancel</button>
+        </div>
+        <div id="messages" class="messages" tabindex="0"></div>
         <div id="pins-panel" class="pins-panel" hidden></div>
         <div id="search-panel" class="search-panel" hidden></div>
         <div id="timeline-left" class="timeline left" hidden>
@@ -348,8 +354,12 @@
   <script src="/components.js"></script>
   <script src="/avatars.js"></script>
   <script src="/fold.js"></script>
+  <script src="/keyed-list.js"></script>
+  <script src="/list-index.js"></script>
   <script src="/history-window.js"></script>
+  <script src="/window-bodies.js"></script>
   <script src="/timeline-slots.js"></script>
+  <script src="/carry.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

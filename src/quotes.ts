@@ -12,6 +12,8 @@ export interface QuoteInput {
 }
 
 export interface Quote {
+  id?: string;
+  originSeq?: number;
   n: number;
   seq: number;
   from: string;
@@ -58,7 +60,7 @@ export function resolveQuotes(inputs: QuoteInput[], messages: QuotableMessage[],
       n = next;
     }
     used.add(n);
-    out.push({ n, seq, from: source.from, fromName: source.fromName, ts: source.ts, text });
+    out.push({ n, seq, ...(source.id ? { id: source.id } : {}), from: source.from, fromName: source.fromName, ts: source.ts, text });
   }
   return out;
 }

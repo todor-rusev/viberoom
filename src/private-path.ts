@@ -5,6 +5,7 @@ import { userInfo } from "node:os";
 import { join } from "node:path";
 
 const ACL_TIMEOUT_MS = 10_000;
+export const NARROW_WORST_MS = 2 * ACL_TIMEOUT_MS;
 const ALWAYS_ALLOWED = ["*S-1-5-18", "*S-1-5-32-544"];
 const ALWAYS_ALLOWED_NAMES = [/^NT AUTHORITY\\SYSTEM$/i, /^BUILTIN\\Administrators$/i];
 

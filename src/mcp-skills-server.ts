@@ -224,6 +224,7 @@ async function handle(message: JsonRpcMessage): Promise<void> {
         const query = new URLSearchParams({ token: TOKEN, mode: parsed.mode, limit: String(parsed.limit) });
         if (parsed.after !== undefined) query.set("after", parsed.after);
         if (parsed.page !== undefined) query.set("page", parsed.page);
+        if (parsed.draft !== undefined) query.set("draft", JSON.stringify(parsed.draft));
         const res = await hub(`/api/mcp/check-messages?${query}`);
         if (!res.ok) return errorResult("messages could not be checked", res);
         reply(id, { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] });

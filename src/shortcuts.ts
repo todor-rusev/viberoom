@@ -3,13 +3,14 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { findChromium } from "./launcher.js";
+import { findChromium, hubUrl } from "./launcher.js";
 import { ensureDataRoot } from "./data-root.js";
 
 export interface ShortcutOptions {
   root: string;
   dataDir: string;
   node: string;
+  port: number;
   version: string;
   desktop: boolean;
   platform?: NodeJS.Platform;
@@ -29,7 +30,7 @@ export function vbsLauncher(node: string, main: string, workingDir: string): str
 
 const AUMID_BASE: Record<string, string> = { "chrome.exe": "Chrome", "msedge.exe": "MSEdge", "brave.exe": "Brave", "chromium.exe": "Chromium" };
 
-export function appUserModelId(browserPath: string | null, url = "http://127.0.0.1:4810/", profileDirName = "browser"): string | null {
+export function appUserModelId(browserPath: string | null, url: string, profileDirName = "browser"): string | null {
   if (!browserPath) return null;
   const base = AUMID_BASE[basename(browserPath).toLowerCase()];
   if (!base) return null;
@@ -150,7 +151,7 @@ export function installShortcuts(o: ShortcutOptions): ShortcutResult {
     }
     const wscript = join(env.SystemRoot ?? "C:\\Windows", "System32", "wscript.exe");
     const browser = o.browser === undefined ? findChromium(env, platform) : o.browser;
-    const aumid = appUserModelId(browser, "http://127.0.0.1:4810/", basename(join(o.dataDir, "browser")));
+    const aumid = appUserModelId(browser, hubUrl(o.port), basename(join(o.dataDir, "browser")));
     for (const lnk of windowsShortcutPaths(home, env, o.desktop)) {
       mkdirSync(join(lnk, ".."), { recursive: true });
       const r = spawnSync("powershell", ["-NoProfile", "-Command", shortcutScript(lnk, wscript, vbs, o.dataDir, ico, aumid)], { encoding: "utf8", windowsHide: true });

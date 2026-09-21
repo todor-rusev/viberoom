@@ -72,6 +72,7 @@
     chatRoomName: $("#chat-room-name"),
     chatRoomSub: $("#chat-room-sub"),
     chatInfoBtn: $("#chat-info-btn"),
+    carryBtn: $("#carry-btn"),
     search: $("#search"),
     messages: $("#messages"),
     jumpLatest: $("#jump-latest"),
@@ -167,7 +168,7 @@
     }
   }
   function noteSlow(name, ms) {
-    if (blankWatch.since && blankWatch.redraws.length < 6 && /render|drawn|caught up|streamed/.test(name)) blankWatch.redraws.push(name);
+    if (blankWatch.since && blankWatch.redraws.length < 6 && !name.startsWith("browser task") && /render|drawn|caught up|streamed/.test(name)) blankWatch.redraws.push(name);
     if (!(ms >= 8)) return;
     slowTasks.push({ at: Date.now(), ms: Math.round(ms), name, busy: busyLabel() });
     if (slowTasks.length > 60) slowTasks.splice(0, slowTasks.length - 40);
@@ -186,14 +187,26 @@
     if (!b.height) return null;
     const painted = [];
     const unpainted = [];
+    const near = new Set();
+    const pages = [];
+    for (const page of list.querySelectorAll(".msgs-page")) {
+      const pr = page.getBoundingClientRect();
+      if (pr.bottom < b.top || pr.top > b.bottom) continue;
+      near.add(page);
+      const inside = page.firstElementChild;
+      const shown = inside && typeof inside.checkVisibility === "function" ? inside.checkVisibility({ contentVisibilityAuto: true }) : true;
+      if (pages.length < 3) pages.push({ h: Math.round(pr.height), kids: page.children.length, skipped: !shown });
+    }
     for (const e of list.querySelectorAll(".msg")) {
+      const page = e.parentElement;
+      if (page && page.classList.contains("msgs-page") && !near.has(page)) continue;
       const r = e.getBoundingClientRect();
       if (r.bottom < b.top || r.top > b.bottom) continue;
       const ok = typeof e.checkVisibility === "function" ? e.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true }) : true;
-      const bubble = e.querySelector(".bubble");
-      const br = bubble && bubble.getBoundingClientRect();
+      const ink = e.querySelector(".bubble") || (e.classList.contains("system") || e.classList.contains("hidden") ? e.firstElementChild : null);
+      const br = ink && ink.getBoundingClientRect();
       if (ok && br && br.height > 0) painted.push([Math.max(br.top, b.top), Math.min(br.bottom, b.bottom)]);
-      else if (unpainted.length < 5) unpainted.push({ seq: e.dataset.seq || "", cls: e.className, h: Math.round(r.height), op: getComputedStyle(e).opacity, skipped: !ok });
+      else if (unpainted.length < 5) unpainted.push({ seq: e.dataset.seq || "", cls: e.className, h: Math.round(r.height), op: getComputedStyle(e).opacity, skipped: !ok, ...animationOf(e) });
     }
     painted.sort((x, y) => x[0] - y[0]);
     let gap = 0;
@@ -211,7 +224,29 @@
       gapAt = cover;
     }
     const under = gap > 40 ? document.elementsFromPoint(Math.round(b.left + b.width / 2), Math.round(gapAt + gap / 2)).slice(0, 5).map((e) => `${e.tagName}.${(e.className || "").toString().split(" ")[0] || ""}`) : [];
-    return { blankPx: Math.round(gap), blankTop: Math.round(gapAt - b.top), listPx: Math.round(b.height), scrollTop: Math.round(list.scrollTop), painted: painted.length, unpainted, under, msgs: list.querySelectorAll(".msg").length };
+    return { blankPx: Math.round(gap), blankTop: Math.round(gapAt - b.top), listPx: Math.round(b.height), scrollTop: Math.round(list.scrollTop), painted: painted.length, unpainted, pages, under, msgs: list.querySelectorAll(".msg").length };
+  }
+  function animationOf(el) {
+    try {
+      const run = typeof el.getAnimations === "function" ? el.getAnimations()[0] : null;
+      if (!run) return { anim: "none" };
+      return { anim: String(run.playState), animAt: Math.round(Number(run.currentTime) || 0) };
+    } catch {
+      return { anim: "unknown" };
+    }
+  }
+
+  function reportBlank(stage, extra) {
+    const room = currentRoom();
+    if (!room || !blankWatch.facts) return;
+    void post("/api/window/finding", {
+      kind: "blank-fragment",
+      roomId: room.id,
+      since: blankWatch.since,
+      stage,
+      ...blankWatch.facts,
+      ...extra,
+    }).catch(() => {});
   }
   function watchBlank() {
     if (!els.messages) return;
@@ -228,19 +263,50 @@
       blankWatch.scrolled = false;
       blankWatch.redraws = [];
       const room = currentRoom();
-      noteFinding(`blank fragment began: ${JSON.stringify({ ...facts, streaming: !!room && room.messages.some((m) => m.streaming) })}`);
+      blankWatch.facts = { ...facts, streaming: !!room && room.messages.some((m) => m.streaming) };
+      noteFinding(`blank fragment began: ${JSON.stringify(blankWatch.facts)}`);
+      reportBlank("began", {});
     } else if (!blank && blankWatch.since) {
-      noteFinding(`blank fragment ended after ${Math.round((Date.now() - blankWatch.since) / 1000)} s: ${blankWatch.scrolled ? "a scroll came in between" : "no scroll"}; redraws in between: ${blankWatch.redraws.join(" | ") || "none"}`);
+      const seconds = Math.round((Date.now() - blankWatch.since) / 1000);
+      noteFinding(`blank fragment ended after ${seconds} s: ${blankWatch.scrolled ? "a scroll came in between" : "no scroll"}; redraws in between: ${blankWatch.redraws.join(" | ") || "none"}`);
+      reportBlank("ended", { seconds, scrolled: blankWatch.scrolled, redraws: blankWatch.redraws.slice(0, 8) });
       blankWatch.since = 0;
       blankWatch.clear = 0;
     } else if (!blank) blankWatch.clear++;
   }
   setInterval(watchBlank, 3000);
+  const LONG_FRAMES = typeof PerformanceObserver === "function" && (PerformanceObserver.supportedEntryTypes || []).includes("long-animation-frame");
   try {
     new PerformanceObserver((list) => {
-      for (const e of list.getEntries()) noteSlow("browser task", e.duration);
-    }).observe({ entryTypes: ["longtask"] });
+      for (const e of list.getEntries()) noteSlow(`browser task${LONG_FRAMES ? heldBy(e) : ""}`, e.duration);
+    }).observe({ entryTypes: [LONG_FRAMES ? "long-animation-frame" : "longtask"] });
   } catch {
+  }
+  function heldBy(entry) {
+    const script = [...(entry.scripts || [])].sort((a, b) => b.duration - a.duration)[0];
+    const before = entry.renderStart ? Math.max(0, Math.round(entry.renderStart - entry.startTime)) : Math.round(entry.duration);
+    const after = Math.max(0, Math.round(entry.duration) - before);
+    const named = script ? [script.sourceFunctionName || script.invoker, String(script.sourceURL || "").split(/[/\\]/).pop()].filter(Boolean).join(" in ") : "";
+    const blocking = entry.blockingDuration >= 1 ? `, ${Math.round(entry.blockingDuration)} ms blocking` : "";
+    return ` · ${before} ms script${named ? ` in ${named}` : ""}, ${after} ms style & paint${blocking}`;
+  }
+
+  const bursts = new Map();
+  let burstTimer = 0;
+  function noteBurst(kind, ms) {
+    const seen = bursts.get(kind) || { times: 0, total: 0, worst: 0 };
+    seen.times++;
+    seen.total += ms;
+    seen.worst = Math.max(seen.worst, ms);
+    bursts.set(kind, seen);
+    clearTimeout(burstTimer);
+    burstTimer = setTimeout(flushBursts, 400);
+  }
+  function flushBursts() {
+    for (const [kind, seen] of bursts) {
+      noteSlow(seen.times === 1 ? `hub said ${kind}` : `hub said ${kind} ×${seen.times} (worst ${Math.round(seen.worst)} ms)`, seen.total);
+    }
+    bursts.clear();
   }
 
   const FONTS = globalThis.VIBEROOM_TOKENS.fonts;
@@ -325,6 +391,22 @@
     return window.Avatars.searchableGrid(list, current, onPick, current !== null && current !== undefined ? { label: "—", title: "No emoji" } : null);
   }
   const CLAMP_CHARS = 700;
+  const CLAMP_PREFIX_CHARS = 1200;
+  function clampedSource(text) {
+    if (!text || text.length <= CLAMP_PREFIX_CHARS) return text;
+    const paragraph = text.lastIndexOf("\n\n", CLAMP_PREFIX_CHARS);
+    let head = text.slice(0, paragraph > CLAMP_PREFIX_CHARS / 2 ? paragraph : CLAMP_PREFIX_CHARS);
+    if (!head.endsWith("\n") && head.slice(head.lastIndexOf("\n") + 1).trimStart().startsWith("|")) head = head.slice(0, head.lastIndexOf("\n") + 1);
+    const lines = head.split("\n");
+    let end = lines.length;
+    while (end > 0 && !lines[end - 1].trim()) end--;
+    let from = end;
+    while (from > 0 && lines[from - 1].trimStart().startsWith("|")) from--;
+    const table = lines.slice(from, end);
+    if (table.length && !table.some((line) => /^\s*\|[\s:|-]+\|\s*$/.test(line))) head = lines.slice(0, from).join("\n");
+    if ((head.match(/^```/gm) || []).length % 2) head += "\n```";
+    return head;
+  }
 
   window.Icons.install();
   const ic = (name, cls) => window.Icons.svg(name, cls);
@@ -554,8 +636,9 @@
     }
     tail.innerHTML = renderText(room, text.slice(done));
   }
+  let selectionDuringPatch = null;
   function holdsSelection(el) {
-    const sel = window.getSelection();
+    const sel = selectionDuringPatch || window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
     return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
   }
@@ -809,6 +892,18 @@
 
   function renderPreviews(textEl, m) {
     if (!textEl || m.streaming) return;
+    const current = currentRoom();
+    if (current?.filesDir && m.resourceRefs?.length) for (const link of textEl.querySelectorAll(".open-link[data-open]")) {
+      const original = link.dataset.resourceSource || link.dataset.open;
+      const spec = splitLine(original);
+      const source = spec?.path || original;
+      const ref = m.resourceRefs.find(r => r.source === source);
+      if (ref) {
+        link.dataset.resourceSource = original;
+        link.dataset.open = `${current.filesDir.replace(/[\\/]$/, "")}/${ref.file}${spec ? `:${spec.from}${spec.to ? `-${spec.to}` : ""}` : ""}`;
+        link.title = "Open the copy carried with this room";
+      }
+    }
     for (const link of textEl.querySelectorAll(".open-link[data-open]:not([data-previewed])")) {
       const target = link.dataset.open;
       if (/^(https?:|mailto:)/i.test(target) || NOT_VIEWABLE_RE.test(target)) continue;
@@ -1161,11 +1256,19 @@
     });
     renderDiagrams(document);
   }
+  const timeFormatter = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit" });
+  const fullTimeFormatter = new Intl.DateTimeFormat([], { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const shortDateFormatter = new Intl.DateTimeFormat([], { day: "numeric", month: "short" });
+  const dayFormatter = new Intl.DateTimeFormat([], { weekday: "short", day: "numeric", month: "short" });
+  const dayLabels = new Map();
+  let dayLabelsFor = "";
   function time(ts) {
-    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? "Invalid Date" : timeFormatter.format(d);
   }
   function fullTime(ts) {
-    return new Date(ts).toLocaleString([], { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? "Invalid Date" : fullTimeFormatter.format(d);
   }
   function relTime(ts) {
     if (!ts) return "";
@@ -1173,15 +1276,19 @@
     if (d < 60000) return "just now";
     if (d < 3600000) return `${Math.floor(d / 60000)} min ago`;
     if (d < 86400000) return `${Math.floor(d / 3600000)} h ago`;
-    return new Date(ts).toLocaleDateString([], { day: "numeric", month: "short" });
+    return shortDateFormatter.format(new Date(ts));
   }
   function dayLabel(ts) {
     const d = new Date(ts);
     const today = new Date();
-    const yesterday = new Date(today.getTime() - 86400000);
-    if (d.toDateString() === today.toDateString()) return "Today";
-    if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
-    return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+    const now = today.toDateString(), key = d.toDateString();
+    if (now !== dayLabelsFor) { dayLabels.clear(); dayLabelsFor = now; }
+    if (dayLabels.has(key)) return dayLabels.get(key);
+    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+    const label = key === now ? "Today" : key === yesterday.toDateString() ? "Yesterday"
+      : Number.isNaN(d.getTime()) ? "Invalid Date" : dayFormatter.format(d);
+    dayLabels.set(key, label);
+    return label;
   }
   function fmtTokens(n) {
     if (n === undefined || n === null) return "";
@@ -1289,15 +1396,20 @@
     const s = state.settings || {};
     return { name: s.humanName || "You", color: TOKENS.active().elements.face.humanInk, avatar: s.humanAvatar, kind: "human" };
   }
-  function copyableHtml(el) {
-    const clone = (el.querySelector(".text > .words") || el.querySelector(".text")).cloneNode(true);
+  function copyableHtml(el, m) {
+    const collapsed = m && el.querySelector(".text.clamped");
+    let clone;
+    if (collapsed) {
+      clone = document.createElement("div");
+      clone.innerHTML = renderText(currentRoom(), m.text, m.images, m.quotes);
+    } else clone = (el.querySelector(".text > .words") || el.querySelector(".text")).cloneNode(true);
     for (const node of clone.querySelectorAll('[data-ui="file-card"], [data-ui="icon-button"], .live-tail, .mermaid-block svg, .mm-bar')) node.remove();
     for (const link of clone.querySelectorAll("a.open-link, .img-ref")) link.replaceWith(document.createTextNode(link.textContent));
     clone.classList.remove("clamped");
     return clone.innerHTML.trim();
   }
   async function copyMessage(el, m) {
-    const html = copyableHtml(el);
+    const html = copyableHtml(el, m);
     const text = String(m.text || "");
     try {
       if (navigator.clipboard && window.ClipboardItem) {
@@ -1327,7 +1439,7 @@
     toast(error && error.message ? error.message : String(error), "error");
   }
   const TRANSCRIPT_LABEL = { off: "off", errors: "when something fails", full: "all activity" };
-  const DIAGNOSTIC_LOG_HELP = "Save details to help investigate problems with a vibemate. Choose All activity while checking a reply that gets stuck. These files can grow large, so turn logging off afterwards. Your conversations are saved with any option.";
+  const DIAGNOSTIC_LOG_HELP = "Save details to help investigate problems with a vibemate. Choose All activity while checking a reply that gets stuck. Diagnostic files keep up to 64 MB across rooms, 5 MB per file, for up to seven days. Older details are removed and unusually large entries are shortened. Conversations are saved separately and are not shortened.";
   function geekTip(text) {
     return `<button type="button" class="geek-tip" title="For geeks">${ic("geek")}for geeks</button><span class="geek-text" hidden>${text}</span>`;
   }
@@ -1734,6 +1846,9 @@
 
 
   function setView(view) {
+    if (view !== "room") clearConversationSelection();
+    if (state.view === "room" && view !== "room") rememberReader();
+    if (view !== "room") toolDetailsCache.clear();
     if (state.view === "settings" && view !== "settings") dropPairLink(true);
     state.view = view;
     els.app.classList.remove("view-home", "view-rooms", "view-room", "view-skills", "view-settings");
@@ -1777,6 +1892,7 @@
   }
 
   function selectRoom(id, opts) {
+    if (id !== state.currentRoomId) clearConversationSelection();
     if (!state.rooms.has(id)) return;
     if (state.currentRoomId !== id) {
       clearShots();
@@ -2237,62 +2353,60 @@
     els.sideRoomEmoji.textContent = room.settings.emoji || "";
     els.sideRoomSub.textContent = room.settings.topic || `${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}${st.agents.length ? ` · ${st.online} online` : ""}${st.waiting ? ` · ${st.waiting} waiting` : ""}`;
     const ordered = [...room.participants].sort((a, b) => (a.kind === "human" ? -1 : b.kind === "human" ? 1 : 0));
-    const rows = new Map([...els.participants.children].map((li) => [li.dataset.id, li]));
-    for (const p of ordered) {
-      let li = rows.get(p.id);
-      const selected = state.detailsOpen && ((state.selection.kind === "participant" && state.selection.id === p.id) || (p.kind === "human" && state.selection.kind === "me"));
-      const asleep = p.kind === "agent" && (p.status === "offline" || p.status === "left");
-      const unstaffed = p.kind === "agent" && p.status === "unstaffed";
-      const shown = shownStatus(room, p);
-      const className = (p.kind === "human" ? "me" : "") + (selected ? " selected" : "") + (asleep ? " offline" : "") + (unstaffed ? " unstaffed" : "");
-      const sub = p.kind === "human" ? "you, the human" : [p.tagline ? `"${p.tagline}"` : "", p.agentVendor || p.agentLabel, p.model].filter(Boolean).join(" · ");
-      const working = p.kind === "agent" && (p.status === "thinking" || p.status === "queued");
-      const troubled = p.kind === "agent" && !working && p.trouble && (p.status === "error" || p.trouble.stage === "turn" || (p.trouble.actions && p.trouble.actions.length > 0));
-      const unplugged = vendorLoggedOut(p);
-      const loginRow = unplugged && p.status === "offline" && !troubled ? `<div class="p-fix">${UI.html("button", { label: "Log in", kind: "primary", size: "xs", act: "open-login-dialog", icon: "lock", title: `${p.agentVendor || "The vendor"} is not logged in: log in, and ${p.name} comes back`, data: { recipe: p.agentType, purpose: "login" } })}</div>` : "";
-      const warn = troubled ? troubleHtml(p) : working ? "" : p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>${loginRow}` : loginRow;
-      const status = unstaffed
-        ? UI.html("badge", { label: "summon", tone: "attention", title: "Click to summon this vibemate: pick the coding agent that runs it" })
-        : asleep
-        ? `<span class="zzz" title="${esc(STATUS_LABEL[p.status] || p.status)}">zzz</span>`
-        : p.kind === "agent" && p.status !== "idle" ? UI.html("badge", { label: STATUS_LABEL[shown] || shown, tone: STATUS_TONE[shown] || "plain", dot: p.status === "thinking" }) : "";
-      const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true, muted: p.muted, unplugged, me: p.kind === "human", alert: p.kind === "agent" && (p.status === "error" || (p.status === "offline" && !!(p.trouble && p.trouble.actions && p.trouble.actions.length))), dim: unstaffed ? "unstaffed" : asleep ? "asleep" : undefined });
-      const statusValue = p.kind === "agent" ? (shown === "working" ? "writing" : shown) || "idle" : "";
-      const bodyHtml = `<div class="p-body">
-          <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? UI.html("badge", { label: "muted", tone: "muted" }) : ""}${status}</div>
-          <div class="p-sub">${esc(sub)}</div>
-          ${warn}
-        </div>
-        <div class="p-actions">
-          ${p.kind === "agent" && p.status === "offline" && !unplugged ? UI.html("row-button", { icon: "refresh", title: `Wake ${p.name} up: reconnect it to the room`, act: "wake" }) : ""}
-        </div>`;
-      if (!li) {
-        li = document.createElement("li");
-        li.dataset.id = p.id;
-        li.innerHTML = avatarHtml + bodyHtml + (p.kind === "agent" ? UI.html("row-button", { icon: "settings", title: `Open ${p.name}'s panel`, act: "panel" }) + UI.html("row-button", { icon: "last-reply", title: `Go to ${p.name}'s last reply`, act: "last-reply" }) : "");
-        li.dataset.avatar = avatarHtml;
-        if (statusValue) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="status" data-status="${esc(statusValue)}"></span>`);
-        li.dataset.body = bodyHtml;
-      } else {
-        if (li.dataset.avatar !== avatarHtml) {
-          li.querySelector(".avatar").outerHTML = avatarHtml;
+    KeyedList.patch(els.participants, ordered, {
+      key: "id",
+      id: (p) => p.id,
+      make: () => document.createElement("li"),
+      fill: (li, p, _at, fresh) => {
+        const selected = state.detailsOpen && ((state.selection.kind === "participant" && state.selection.id === p.id) || (p.kind === "human" && state.selection.kind === "me"));
+        const asleep = p.kind === "agent" && (p.status === "offline" || p.status === "left");
+        const unstaffed = p.kind === "agent" && p.status === "unstaffed";
+        const shown = shownStatus(room, p);
+        const className = (p.kind === "human" ? "me" : "") + (selected ? " selected" : "") + (asleep ? " offline" : "") + (unstaffed ? " unstaffed" : "");
+        const sub = p.kind === "human" ? "you, the human" : [p.tagline ? `"${p.tagline}"` : "", p.agentVendor || p.agentLabel, p.model].filter(Boolean).join(" · ");
+        const working = p.kind === "agent" && (p.status === "thinking" || p.status === "queued");
+        const troubled = p.kind === "agent" && !working && p.trouble && (p.status === "error" || p.trouble.stage === "turn" || (p.trouble.actions && p.trouble.actions.length > 0));
+        const unplugged = vendorLoggedOut(p);
+        const loginRow = unplugged && p.status === "offline" && !troubled ? `<div class="p-fix">${UI.html("button", { label: "Log in", kind: "primary", size: "xs", act: "open-login-dialog", icon: "lock", title: `${p.agentVendor || "The vendor"} is not logged in: log in, and ${p.name} comes back`, data: { recipe: p.agentType, purpose: "login" } })}</div>` : "";
+        const warn = troubled ? troubleHtml(p) : working ? "" : p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>${loginRow}` : loginRow;
+        const status = unstaffed
+          ? UI.html("badge", { label: "summon", tone: "attention", title: "Click to summon this vibemate: pick the coding agent that runs it" })
+          : asleep
+          ? `<span class="zzz" title="${esc(STATUS_LABEL[p.status] || p.status)}">zzz</span>`
+          : p.kind === "agent" && p.status !== "idle" ? UI.html("badge", { label: STATUS_LABEL[shown] || shown, tone: STATUS_TONE[shown] || "plain", dot: p.status === "thinking" }) : "";
+        const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true, muted: p.muted, unplugged, me: p.kind === "human", alert: p.kind === "agent" && (p.status === "error" || (p.status === "offline" && !!(p.trouble && p.trouble.actions && p.trouble.actions.length))), dim: unstaffed ? "unstaffed" : asleep ? "asleep" : undefined });
+        const statusValue = p.kind === "agent" ? (shown === "working" ? "writing" : shown) || "idle" : "";
+        const bodyHtml = `<div class="p-body">
+            <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? UI.html("badge", { label: "muted", tone: "muted" }) : ""}${status}</div>
+            <div class="p-sub">${esc(sub)}</div>
+            ${warn}
+          </div>
+          <div class="p-actions">
+            ${p.kind === "agent" && p.status === "offline" && !unplugged ? UI.html("row-button", { icon: "refresh", title: `Wake ${p.name} up: reconnect it to the room`, act: "wake" }) : ""}
+          </div>`;
+        if (fresh) {
+          li.innerHTML = avatarHtml + bodyHtml + (p.kind === "agent" ? UI.html("row-button", { icon: "settings", title: `Open ${p.name}'s panel`, act: "panel" }) + UI.html("row-button", { icon: "last-reply", title: `Go to ${p.name}'s last reply`, act: "last-reply" }) : "");
           li.dataset.avatar = avatarHtml;
-        }
-        const dot = li.querySelector(".avatar .status");
-        if (statusValue && dot && dot.dataset.status !== statusValue) dot.dataset.status = statusValue;
-        else if (statusValue && !dot) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="status" data-status="${esc(statusValue)}"></span>`);
-        if (li.dataset.body !== bodyHtml) {
-          li.querySelectorAll(".p-body, .p-actions").forEach((el) => el.remove());
-          li.insertAdjacentHTML("beforeend", bodyHtml);
+          if (statusValue) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="status" data-status="${esc(statusValue)}"></span>`);
           li.dataset.body = bodyHtml;
+        } else {
+          if (li.dataset.avatar !== avatarHtml) {
+            li.querySelector(".avatar").outerHTML = avatarHtml;
+            li.dataset.avatar = avatarHtml;
+          }
+          const dot = li.querySelector(".avatar .status");
+          if (statusValue && dot && dot.dataset.status !== statusValue) dot.dataset.status = statusValue;
+          else if (statusValue && !dot) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="status" data-status="${esc(statusValue)}"></span>`);
+          if (li.dataset.body !== bodyHtml) {
+            li.querySelectorAll(".p-body, .p-actions").forEach((el) => el.remove());
+            li.insertAdjacentHTML("beforeend", bodyHtml);
+            li.dataset.body = bodyHtml;
+          }
         }
-      }
-      if (li.className !== className) li.className = className;
-      if (p.kind === "agent" && !unstaffed) patchLifeRing(li, p);
-      if (li !== els.participants.children[ordered.indexOf(p)]) els.participants.appendChild(li);
-      rows.delete(p.id);
-    }
-    for (const li of rows.values()) li.remove();
+        if (li.className !== className) li.className = className;
+        if (p.kind === "agent" && !unstaffed) patchLifeRing(li, p);
+      },
+    });
     renderLifePop();
     renderHushButton(room);
     els.reconnectAllBtn.hidden = offlineAgents(room).length === 0;
@@ -2377,12 +2491,26 @@
       </details>`;
   }
 
+  function landing(el) {
+    el.classList.add("landing");
+    const done = () => el.classList.remove("landing");
+    el.addEventListener("animationend", done, { once: true });
+    setTimeout(done, 1200);
+    return el;
+  }
+
   function messageElement(room, m) {
+    const el = buildMessageElement(room, m);
+    noteDrawn(el, m);
+    return el;
+  }
+  function buildMessageElement(room, m) {
     const el = document.createElement("div");
     el.dataset.id = m.id;
     el.dataset.seq = m.seq;
     el.dataset.from = m.from;
     el.dataset.streaming = m.streaming ? "1" : "0";
+    if (m.bodyMissing) { fillBodyPlaceholder(el, room, m); return el; }
     if (state.watched.has(m.id)) watchedLeave.observe(el);
     if (m.kind === "hidden") {
       el.className = "msg hidden";
@@ -2425,55 +2553,62 @@
         </div>
         <div class="meta"></div>
       </div>`;
+    bindMessageActions(el, room.id);
+    updateMessageElement(el, room, m);
+    return el;
+  }
+
+  function bindMessageActions(el, roomId) {
+    const asItIsNow = () => {
+      const now = state.rooms.get(roomId);
+      if (!now) return null;
+      return now.messages.find((x) => x.id === el.dataset.id) || (now.pinnedOlder || []).find((x) => x.id === el.dataset.id) || null;
+    };
     el.querySelector('[data-act="more"]').addEventListener("click", () => {
-      if (state.expanded.has(m.id)) state.expanded.delete(m.id);
-      else state.expanded.add(m.id);
-      updateMessageElement(el, room, m);
+      const now = asItIsNow();
+      if (!now) return;
+      if (state.expanded.has(now.id)) state.expanded.delete(now.id);
+      else state.expanded.add(now.id);
+      updateMessageElement(el, state.rooms.get(roomId), now);
     });
     const editBtn = el.querySelector('[data-act="edit"]');
-    if (editBtn) editBtn.addEventListener("click", () => openInlineEditor(el, room, m));
-    el.querySelector('[data-act="quote"]').addEventListener("click", () => addQuote(m, ""));
-    el.querySelector('[data-act="copy"]').addEventListener("click", () => copyMessage(el, (currentRoom() || room).messages.find((x) => x.id === m.id) || m));
+    if (editBtn) editBtn.addEventListener("click", () => { const now = asItIsNow(); if (now) openInlineEditor(el, state.rooms.get(roomId), now); });
+    el.querySelector('[data-act="quote"]').addEventListener("click", () => { const now = asItIsNow(); if (now) addQuote(now, ""); });
+    el.querySelector('[data-act="copy"]').addEventListener("click", () => { const now = asItIsNow(); if (now) copyMessage(el, now); });
     el.querySelector('[data-act="pin"]').addEventListener("click", async () => {
-      if (m.pending) return;
-      const now = (currentRoom() || room).messages.find((x) => x.id === m.id) || m;
+      const now = asItIsNow();
+      if (!now || now.pending) return;
       try {
-        await post(`/api/rooms/${encodeURIComponent(room.id)}/messages/${encodeURIComponent(m.id)}/pin`, { pinned: !now.pinned });
+        await post(`/api/rooms/${encodeURIComponent(roomId)}/messages/${encodeURIComponent(now.id)}/pin`, { pinned: !now.pinned });
       } catch (error) {
         showError(error);
       }
     });
     el.addEventListener("pointerenter", () => refreshWalkArrows(el));
     for (const [act, back] of [["up", true], ["down", false]]) {
-      el.querySelector(`.head [data-act="${act}"]`).addEventListener("click", () => {
+      el.querySelector(`.head [data-act="${act}"]`).addEventListener("click", async () => {
         const target = walkFrom(el, back);
         if (!target) return;
-        jumpToMessage(target);
-        refreshWalkArrows(target);
-        const next = target.querySelector(`.head [data-act="${act}"]`);
+        if (!await jumpToId(target.id)) return;
+        const landed = drawnRow(target.id);
+        if (!landed) return;
+        refreshWalkArrows(landed);
+        const next = landed.querySelector(`.head [data-act="${act}"]`);
         if (next && !next.hidden) next.focus();
       });
     }
-    updateMessageElement(el, room, m);
-    return el;
   }
 
   function walkFrom(el, back) {
-    const step = (node) => {
-      const sibling = back ? node.previousElementSibling : node.nextElementSibling;
-      if (sibling) return sibling;
-      let page = node.parentElement;
-      while (page && page.classList.contains("msgs-page")) {
-        page = back ? page.previousElementSibling : page.nextElementSibling;
-        if (!page || !page.classList.contains("msgs-page")) return null;
-        const edge = back ? page.lastElementChild : page.firstElementChild;
-        if (edge) return edge;
-      }
-      return null;
-    };
-    let node = el;
-    while ((node = step(node))) {
-      if (node.classList.contains("msg") && !node.classList.contains("hidden-by-search") && node.dataset.from === el.dataset.from) return node;
+    const room = currentRoom();
+    if (!room) return null;
+    const parts = foldParts(room);
+    const rows = el.closest(".history-pins") ? parts.above : parts.drawn;
+    const at = rows.findIndex(m => m.id === el.dataset.id);
+    if (at < 0) return null;
+    for (let i = at + (back ? -1 : 1); i >= 0 && i < rows.length; i += back ? -1 : 1) {
+      const m = rows[i];
+      if (m.kind === "chat" && m.from === el.dataset.from && messageMatches(m)) return m;
     }
     return null;
   }
@@ -2487,7 +2622,8 @@
 
   function shotUrl(roomId, image) {
     if (image.url) return image.url;
-    return `/api/rooms/${encodeURIComponent(roomId)}/files/${encodeURIComponent(image.file)}`;
+    const version = state.rooms.get(roomId)?.resourceVersions?.[image.file];
+    return `/api/rooms/${encodeURIComponent(roomId)}/files/${encodeURIComponent(image.file)}${version ? `?v=${encodeURIComponent(version)}` : ""}`;
   }
 
   function renderShots(box, room, m) {
@@ -2613,7 +2749,7 @@
   });
   els.messages.addEventListener("click", (e) => {
     const hubRow = e.target.closest('[data-ui="hub-row"][data-ref]');
-    if (hubRow) return void jumpToMessage(els.messages.querySelector(`.msg[data-id="${hubRow.dataset.ref}"]`));
+    if (hubRow) return void jumpToId(hubRow.dataset.ref);
     const shot = e.target.closest(".shot");
     if (shot) return void openLightbox(shot.dataset.src, shot.title);
     const quote = e.target.closest(".quote");
@@ -2686,6 +2822,32 @@
   }
 
   const openTools = new Set();
+  const toolDetailsCache = new Map();
+  const toolDetailsKey = (room, m, id) => `${room.id}/${m.id}/${id}`;
+  function toolDetailsFor(room, m, call) {
+    if (!call.detailsAvailable) return { state: "ready", value: call };
+    const key = toolDetailsKey(room, m, call.toolCallId);
+    let entry = toolDetailsCache.get(key);
+    if (entry?.revision === call.detailsRevision) return entry;
+    entry = { revision: call.detailsRevision, state: "loading", value: call };
+    toolDetailsCache.set(key, entry);
+    const part = encodeURIComponent;
+    get(`/api/rooms/${part(room.id)}/messages/${part(m.id)}/tools/${part(call.toolCallId)}`).then(value => {
+      entry.state = "ready"; entry.value = value;
+    }, () => { entry.state = "error"; }).finally(() => {
+      if (toolDetailsCache.get(key) !== entry) return;
+      if (!openTools.has(call.toolCallId)) { toolDetailsCache.delete(key); return; }
+      if (state.currentRoomId !== room.id || state.view !== "room") return;
+      const latestRoom = state.rooms.get(room.id);
+      if (!latestRoom) return;
+      const current = HistoryWindow.knownMessages(latestRoom).find(row => row.id === m.id);
+      const latest = current?.toolCalls?.find(c => c.toolCallId === call.toolCallId);
+      if (!latest || latest.detailsRevision !== entry.revision) return;
+      const el = els.messages.querySelector(`.msg[data-id="${CSS.escape(m.id)}"]`);
+      if (el) updateMessageElement(el, latestRoom, current, new Set(["tools"]), new Set([call.toolCallId]));
+    });
+    return entry;
+  }
   const openToolGroups = new Set();
   els.messages.addEventListener("click", (e) => {
     const stop = e.target.closest('.live-tail [data-act="stop"]');
@@ -2719,17 +2881,37 @@
       }
       return;
     }
-    const chip = e.target.closest('[data-ui="tool-call"] > [data-ui="chip"]');
+    const retry = e.target.closest("[data-tool-retry]");
+    const chip = retry ? retry.closest('[data-ui="tool-call"]').querySelector(':scope > [data-ui="chip"]') : e.target.closest('[data-ui="tool-call"] > [data-ui="chip"]');
     if (!chip) return;
     const msgEl = chip.closest(".msg");
     const room = currentRoom();
     const m = room && msgEl && HistoryWindow.knownMessages(room).find((x) => x.id === msgEl.dataset.id);
     if (!m) return;
-    if (openTools.has(chip.dataset.tool)) openTools.delete(chip.dataset.tool);
+    toolDetailsCache.delete(toolDetailsKey(room, m, chip.dataset.tool));
+    if (!retry && openTools.has(chip.dataset.tool)) openTools.delete(chip.dataset.tool);
     else openTools.add(chip.dataset.tool);
     updateMessageElement(msgEl, room, m);
   });
   function updateMessageElement(el, room, m, parts, toolIds) {
+    el.dataset.seq = String(m.seq);
+    el.dataset.from = m.from;
+    measuredRows.delete(m.id);
+    if (room.history?.indexed) (room.dirtyHeights ||= new Set()).add(m.id);
+    if (m.pinned) measuredRows.delete("pins");
+    if (m.bodyMissing) { fillBodyPlaceholder(el, room, m); noteDrawn(el, m); return; }
+    if (el.classList.contains("history-placeholder")) { el.replaceWith(messageElement(room, m)); return; }
+    applyMessageElement(el, room, m, parts, toolIds);
+    noteDrawn(el, m);
+  }
+  function applyMessageElement(el, room, m, parts, toolIds) {
+    let branch = el.querySelector(".carry-branch");
+    if (m.branch && el.querySelector(".head")) {
+      if (!branch) { branch = document.createElement("span"); branch.className = "carry-branch"; el.querySelector(".head .name")?.after(branch); }
+      const label = (room.sources || []).find(source => source.uuid === m.branch.source)?.label || "another copy";
+      branch.textContent = `branch · ${label}`;
+      branch.title = "This part of the conversation was kept from a parallel branch.";
+    } else branch?.remove();
     const want = (part) => !m.streaming || !parts || parts.has(part);
     el.dataset.streaming = m.streaming ? "1" : "0";
     el.classList.toggle("hidden-by-search", !messageMatches(m));
@@ -2765,7 +2947,7 @@
     }
     if (want("text")) {
       if (m.streaming && m.text && !(m.images && m.images.length) && !(m.quotes && m.quotes.length)) renderStreamingWords(room, words, m.text);
-      else words.innerHTML = renderText(room, m.text, m.images, m.quotes);
+      else words.innerHTML = renderText(room, long && !expanded ? clampedSource(m.text) : m.text, m.images, m.quotes);
       if (!m.streaming) {
         renderPreviews(words, m);
         linkRelativePaths(words, m);
@@ -2804,8 +2986,11 @@
       const tools = el.querySelector(".tools");
       const calls = m.toolCalls || [];
       const chipFor = (call) => {
-        const input = call.rawInput === undefined ? "" : typeof call.rawInput === "string" ? call.rawInput : JSON.stringify(call.rawInput, null, 1);
-        return UI.el("tool-call", { id: call.toolCallId, title: call.title, kind: call.kind || undefined, variant: call.messageCheck ? "message-check" : call.historySearch ? "history-search" : "tool", status: TOOL_STATUSES.has(call.status) ? call.status : "pending", open: openTools.has(call.toolCallId), input: input || undefined, output: call.output || undefined });
+        const open = openTools.has(call.toolCallId);
+        const loaded = open ? toolDetailsFor(room, m, call) : { state: "ready", value: call };
+        const detail = loaded.value;
+        const input = !open || detail.rawInput === undefined ? "" : typeof detail.rawInput === "string" ? detail.rawInput : JSON.stringify(detail.rawInput, null, 1);
+        return UI.el("tool-call", { id: call.toolCallId, title: detail.title, kind: call.kind || undefined, variant: call.messageCheck ? "message-check" : call.historySearch ? "history-search" : "tool", status: TOOL_STATUSES.has(call.status) ? call.status : "pending", open, loadState: loaded.state, input: input || undefined, output: open ? detail.output || undefined : undefined });
       };
       const some = m.streaming && parts && toolIds && !tools.querySelector(":scope > details");
       if (some) {
@@ -2829,11 +3014,14 @@
             if (group.open) openToolGroups.add(m.id);
             else openToolGroups.delete(m.id);
             group.querySelector("summary").title = group.open ? "Fold the tool calls away" : "Show every tool call";
+            const list = group.querySelector(".list");
+            if (group.open && !list.childElementCount) for (const call of calls) list.appendChild(chipFor(call));
+            else if (!group.open) list.replaceChildren();
           });
           tools.appendChild(group);
           host = group.querySelector(".list");
         }
-        for (const call of calls) host.appendChild(chipFor(call));
+        if (!folded || openToolGroups.has(m.id)) for (const call of calls) host.appendChild(chipFor(call));
       }
     }
     const plan = el.querySelector(".plan");
@@ -2850,27 +3038,46 @@
       meta.innerHTML = parts.length ? `<span class="stats">${parts.join('<span class="sep">·</span>')}</span>` : "";
       fillSeen(el, room, m);
     } else if (m.from === "human") fillSeen(el, room, m);
-    else meta.innerHTML = liveMetaHtml(m) ? `<span class="stats">${liveMetaHtml(m)}</span>` : "";
+    else meta.innerHTML = liveMetaHtml(room, m) ? `<span class="stats">${liveMetaHtml(room, m)}</span>` : "";
   }
 
-  function elapsedLabel(ms) {
-    const total = Math.max(0, Math.round(ms / 1000));
-    if (total < 60) return `${total} s`;
-    const seconds = String(total % 60).padStart(2, "0");
-    const minutes = Math.floor(total / 60) % 60;
-    const hours = Math.floor(total / 3600);
-    return hours ? `${hours}h ${String(minutes).padStart(2, "0")}m ${seconds}s` : `${minutes}m ${seconds}s`;
-  }
-  function liveMetaHtml(m) {
+  function liveMetaHtml(room, m) {
     if (!m.streaming || !m.ts) return "";
+    return `<span class="live" data-from="${esc(m.from)}" data-since="${m.ts}" title="what this reply is doing, and when it last showed a sign">${liveSignHtml(room, m)}</span>`;
+  }
+  function lastSignFor(room, m) {
+    const who = room && findById(room, m.from);
+    return (who && who.lastSignAt) || m.ts;
+  }
+  const DOING = { read: "reading", edit: "editing", delete: "deleting", move: "moving files", search: "searching", execute: "running a command", think: "thinking", fetch: "fetching" };
+  function whatIsHappening(m) {
+    const calls = m.toolCalls || [];
+    const running = [...calls].reverse().find((c) => c.status === "pending" || c.status === "in_progress");
+    if (running) return DOING[running.kind] || "working";
+    return m.text ? "writing" : "thinking";
+  }
+  function staleLabel(ms) {
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 20) return "";
+    if (seconds < 60) return `last sign ${Math.floor(seconds / 10) * 10}s ago`;
+    return `last sign ${Math.floor(seconds / 60)}m ago`;
+  }
+  function liveSignHtml(room, m) {
+    const stale = staleLabel(Date.now() - lastSignFor(room, m));
+    const doing = whatIsHappening(m);
     const calls = (m.toolCalls || []).length;
-    const tools = !m.text && calls ? `<span class="sep">·</span><span title="tool calls so far">${ic("tool")} ${calls}</span>` : "";
-    return `<span class="live" data-since="${m.ts}" title="how long this reply has been coming">${ic("clock")} ${elapsedLabel(Date.now() - m.ts)}</span>${tools}`;
+    const elapsed = fmtDuration(Math.max(0, Date.now() - (m.ts || Date.now()))) || "0 s";
+    const parts = [`<span title="Time spent on this reply">${ic("clock")} ${elapsed}</span>`, `<span>${ic("tool")} ${esc(doing)}</span>`];
+    if (calls) parts.push(`<span title="Tool calls in this reply">${calls} tool ${calls === 1 ? "call" : "calls"}</span>`);
+    if (stale) parts.push(`<span title="Time since the last sign of activity">${stale}</span>`);
+    return parts.join('<span class="sep">·</span>');
   }
   function tickLive() {
+    const room = currentRoom();
+    if (!room) return;
     for (const span of els.messages.querySelectorAll(".meta .live")) {
-      const since = Number(span.dataset.since);
-      if (since) span.innerHTML = `${ic("clock")} ${elapsedLabel(Date.now() - since)}`;
+      const m = drawnFrom.get(span.closest(".msg"));
+      if (m && m.streaming) span.innerHTML = liveSignHtml(room, m);
     }
   }
 
@@ -2969,6 +3176,7 @@
     if (!page || !page.classList.contains("msgs-page") || page.childElementCount >= PAGE_SIZE) {
       page = document.createElement("div");
       page.className = "msgs-page";
+      page.dataset.page = "";
       host.appendChild(page);
     }
     page.appendChild(el);
@@ -2976,7 +3184,13 @@
   function topInList(el) {
     const page = el.parentElement;
     if (!page || !page.classList.contains("msgs-page")) return el.offsetTop;
-    if (els.messages.classList.contains("searching") || page.firstElementChild.checkVisibility({ contentVisibilityAuto: true })) return page.offsetTop + el.offsetTop;
+    const first = page.firstElementChild;
+    const laidOut = !first || typeof first.checkVisibility !== "function" || first.checkVisibility({ contentVisibilityAuto: true });
+    if (els.messages.classList.contains("searching") || laidOut) {
+      let top = 0;
+      for (let node = el; node && node !== els.messages; node = node.offsetParent) top += node.offsetTop;
+      return top;
+    }
     let i = 0;
     for (let n = el.previousElementSibling; n; n = n.previousElementSibling) i++;
     return page.offsetTop + (page.offsetHeight * i) / page.childElementCount;
@@ -2985,11 +3199,18 @@
   function readerAnchor() {
     const m = els.messages;
     const top = m.scrollTop;
+    let previous = null;
     for (const el of m.querySelectorAll(".msg[data-id]")) {
       const y = topInList(el);
-      if (y + el.offsetHeight > top) return { id: el.dataset.id, into: y - top };
+      if (y > top) return previous ? { id: previous.el.dataset.id, into: previous.y - top } : { id: el.dataset.id, into: y - top };
+      previous = { el, y };
     }
-    return null;
+    return previous ? { id: previous.el.dataset.id, into: previous.y - top } : null;
+  }
+  let settledReader = null;
+  function rememberReader() {
+    if (state.view !== "room" || !currentRoom()) return;
+    settledReader = { roomId: state.currentRoomId, anchor: stuck ? null : readerAnchor(), stamp: pricesStamp(), following: stuck };
   }
   let readerRestoreCleanup = null;
   function restoreReader(anchor) {
@@ -2997,6 +3218,10 @@
     if (!anchor) return false;
     const el = els.messages.querySelector(`.msg[data-id="${CSS.escape(anchor.id)}"]`);
     if (!el) return false;
+    if (els.messages.classList.contains("windowed")) {
+      els.messages.scrollTop += el.getBoundingClientRect().top - els.messages.getBoundingClientRect().top - anchor.into;
+      return true;
+    }
     const page = el.closest(".msgs-page");
     const pageVisibility = page?.style.contentVisibility || "";
     if (page) page.style.contentVisibility = "visible";
@@ -3045,26 +3270,10 @@
   let listRoomId = null;
   function showRoomList(why) {
     const room = currentRoom();
+    if (room?.history?.bodyProtocol && !room.history.indexed && !room.historyRestoring) void refreshHeld(room.id);
     if (room?.restoreFrom && !room.historyRestoring) void refreshHeld(room.id, room.restoreFrom);
     if (room?.historyRestoring) return renderMessages(why);
-    if (!room || listRoomId !== room.id || !els.messages.firstElementChild) return renderMessages(why);
-    const t0 = performance.now();
-    const have = new Map();
-    for (const el of els.messages.querySelectorAll(".msg[data-id]")) have.set(el.dataset.id, el);
-    const live = new Set([...room.messages, ...(room.pinnedOlder || [])].map((m) => m.id));
-    let gone = 0;
-    for (const [id, el] of have) if (!live.has(id)) { el.remove(); have.delete(id); gone++; }
-    let added = 0;
-    const parts = foldParts(room);
-    for (const m of [...parts.above, ...parts.drawn]) {
-      const el = have.get(m.id);
-      if (!el) { upsertMessage(room.id, m); added++; }
-      else if (m.streaming || el.dataset.streaming === "1") updateMessageElement(el, room, m);
-    }
-    syncRecovery(room);
-    refreshSeen(room);
-    renderTimeline();
-    noteSlow(`the list caught up (${added} new, ${gone} gone)`, performance.now() - t0);
+    return renderMessages(why);
   }
   const { FOLD_SHOWN, FOLD_STEP } = Fold;
   const foldAnchor = new Map();
@@ -3088,6 +3297,7 @@
     else listRoomId = null;
   }
   function foldIndex(room) {
+    if (room.history?.indexed) return 0;
     let anchor = foldAnchor.get(room.id);
     const shown = foldShown(room);
     if (!anchor && room.messages.length >= shown) {
@@ -3098,17 +3308,16 @@
         : Fold.anchorAt(room.messages, index);
       foldAnchor.set(room.id, anchor);
     }
-    let index = Fold.foldIndexFor(room.messages, anchor, shown);
-    if (room.history?.handedFromSeq !== undefined) {
-      const handed = room.messages.findIndex(m => m.seq >= room.history.handedFromSeq);
-      if (handed >= 0) index = Math.min(index, handed);
-    }
-    return index;
+    return Fold.foldIndexFor(room.messages, anchor, shown);
   }
-  const remoteHidden = (room) => (room && room.history ? room.history.hidden : 0);
+  const remoteHidden = (room) => (room?.history?.indexed ? 0 : room && room.history ? room.history.hidden : 0);
   const foldHidden = (room) => foldIndex(room) + remoteHidden(room);
   function setFoldIndex(room, index) {
-    foldAnchor.set(room.id, Fold.anchorAt(room.messages, index));
+    if (room.history?.indexed) return;
+    const anchor = Fold.anchorAt(room.messages, index);
+    const first = room.messages[Math.max(0, index)];
+    foldAnchor.set(room.id, anchor.all && remoteHidden(room) && first
+      ? { id: first.id, order: first.displayOrder ?? first.seq } : anchor);
   }
   function foldParts(room) {
     const local = Fold.partsOf(room.messages, foldIndex(room));
@@ -3120,6 +3329,81 @@
   }
   const cursorOf = (m) => ({ order: m.displayOrder != null ? m.displayOrder : m.seq, seq: m.seq });
   const before = (a, b) => a.order < b.order || (a.order === b.order && a.seq < b.seq);
+  function trimBodyCache(room, extra = []) {
+    if (!room.history?.bodyProtocol) return;
+    if (!room.history.indexed) {
+      const keep = new Set(room.messages.slice(-80).map(m => m.id));
+      room.messages = room.messages.filter(m => keep.has(m.id) || m.streaming || m.pending);
+      syncHistoryCount(room);
+      return;
+    }
+    const protectedIds = new Set(extra);
+    if (currentRoom() === room && state.view === "room") {
+      for (const el of els.messages.querySelectorAll(".msg[data-id]")) protectedIds.add(el.dataset.id);
+    }
+    WindowBodies.trim(room, protectedIds);
+  }
+  function fillBodyPlaceholder(el, room, m) {
+    el.className = "msg history-placeholder";
+    const size = measuredRows.get(m.id) ?? (rowPrices.fallback ? priceItem({ kind: "msg", m }) : 100);
+    el.style.minHeight = `${Math.max(64, size)}px`;
+    el.setAttribute("aria-busy", m.bodyError ? "false" : "true");
+    const label = m.bodyError ? "This message could not be loaded." : "Loading message…";
+    if (el.dataset.loadLabel === label) return;
+    el.dataset.loadLabel = label;
+    el.innerHTML = `<span>${esc(m.fromName || "Room")} · ${esc(label)}</span>${m.bodyError ? '<button class="linklike">Try again</button>' : ""}`;
+    el.querySelector("button")?.addEventListener("click", () => {
+      const visible = [...els.messages.querySelectorAll(".msg[data-id]")].map(node => node.dataset.id);
+      void loadBodies(room, [...new Set([m.id, ...visible])], true);
+    });
+  }
+  async function loadBodies(room, ids, retry = false) {
+    if (!room.history?.indexed || state.rooms.get(room.id) !== room) return false;
+    while (room.bodyFlight) { await room.bodyFlight; if (state.rooms.get(room.id) !== room) return false; }
+    const wanted = new Set(ids);
+    const missing = room.messages.filter(m => wanted.has(m.id) && m.bodyMissing && (retry || !m.bodyError)).slice(0, 64);
+    if (!missing.length) return ids.every(id => room.messages.some(m => m.id === id && !m.bodyMissing));
+    for (const m of missing) delete m.bodyError;
+    const requested = missing.map(m => m.id);
+    const flight = (async () => {
+      try {
+        let races = 0;
+        for (let part = 0; part < requested.length + 2; part++) {
+          const known = new Map(room.messages.map(m => [m.id, m]));
+          const remaining = requested.filter(id => known.get(id)?.bodyMissing);
+          if (!remaining.length) return requested.every(id => known.has(id));
+          const generation = room.historyGeneration;
+          const q = new URLSearchParams({ version: room.history.version });
+          for (const id of remaining) q.append("id", id);
+          try {
+            const page = await get(`/api/rooms/${encodeURIComponent(room.id)}/history/bodies?${q}`);
+            if (state.rooms.get(room.id) !== room) return false;
+            if (!WindowBodies.merge(room, page, generation)) {
+              if (++races > 1) break;
+              continue;
+            }
+            const arrived = page.messages.filter(body => room.messages.some(m => m.id === body.id && !m.bodyMissing));
+            if (!arrived.length) { if (++races > 1) break; continue; }
+            trimBodyCache(room, requested);
+            if (currentRoom() === room && state.view === "room") renderMessagesSoon("message bodies arrived");
+            if (requested.every(id => room.messages.some(m => m.id === id && !m.bodyMissing))) return true;
+          } catch (error) {
+            if (error.code !== "history_changed" || ++races > 1) throw error;
+            if (!await refreshHeld(room.id)) throw error;
+          }
+        }
+        throw new Error("The conversation changed while these messages loaded. Try again.");
+      } catch (error) {
+        if (state.rooms.get(room.id) === room) {
+          for (const m of room.messages) if (wanted.has(m.id) && m.bodyMissing) m.bodyError = error.message;
+          if (currentRoom() === room && state.view === "room") renderMessagesSoon("message loading failed");
+        }
+        return false;
+      }
+    })();
+    room.bodyFlight = flight;
+    try { return await flight; } finally { if (room.bodyFlight === flight) room.bodyFlight = null; }
+  }
   function syncHistoryCount(room) {
     if (room.history?.total === undefined) return;
     room.history.hidden = Math.max(0, room.history.total - room.messages.filter(m => m.seq > 0 && !m.streaming).length);
@@ -3178,15 +3462,20 @@
         const ticket = HistoryWindow.capture(room);
         const q = new URLSearchParams();
         if (ticket.epoch) q.set("epoch", ticket.epoch);
-        if (wanted.all || foldAnchor.get(roomId)?.all) q.set("all", "1");
+        if (room.history?.bodyProtocol) q.set("index", "1");
+        else if (wanted.all || foldAnchor.get(roomId)?.all) q.set("all", "1");
         else if (from) q.set("from", `${from.order}:${from.seq}`);
         if (wanted.seq !== undefined) q.set("seq", wanted.seq);
+        if (wanted.messageId) q.set("message", wanted.messageId);
         const fresh = await get(`/api/rooms/${encodeURIComponent(roomId)}?${q}`);
         if (state.rooms.get(roomId) !== room || room.historyRequest !== request) return false;
         if (!HistoryWindow.acceptSnapshot(room, fresh, ticket)) continue;
+        if (fresh.history?.indexed) WindowBodies.retain(room, fresh);
         room.messages = (fresh.messages || []).sort(HistoryWindow.compareMessages);
         room.history = fresh.history;
         room.pinnedOlder = fresh.pinnedOlder || [];
+        room.bodyChanges = new Map();
+        room.indexError = null;
         const arrived = room.historyEvents;
         room.historyEvents = null;
         for (const event of arrived) if (event.streamSequence > (fresh.history?.streamSequence ?? Infinity)) onRoomEvent(roomId, event);
@@ -3194,11 +3483,18 @@
         room.historyRestoring = false;
         room.historyGeneration = (room.historyGeneration || 0) + 1;
         let anchor = reader;
+        const targetIndex = wanted.messageId ? room.messages.findIndex(m => m.id === wanted.messageId)
+          : wanted.seq !== undefined ? room.messages.findIndex(m => m.seq === wanted.seq) : -1;
+        if (targetIndex >= 0) {
+          setFoldIndex(room, Math.min(foldIndex(room), Math.max(0, targetIndex - Fold.FOLD_STEP)));
+          anchor = { id: room.messages[targetIndex].id, into: 12 };
+        }
         if (anchor && !HistoryWindow.knownMessages(room).some(m => m.id === anchor.id)) {
           const replacement = oldMessage && room.messages.find(m => !before(cursorOf(m), cursorOf(oldMessage)));
           anchor = replacement ? { ...anchor, id: replacement.id } : null;
         }
         if (roomId === state.currentRoomId && state.view === "room") {
+          if (targetIndex >= 0) stuck = false;
           renderMessages("the loaded history was refreshed", anchor);
           renderSideRoom();
         }
@@ -3207,7 +3503,10 @@
       }
       throw new Error("The conversation is changing. Try loading its history again.");
     } catch (error) {
-      if (state.rooms.get(roomId) === room && room.historyRequest === request) showError(error);
+      if (state.rooms.get(roomId) === room && room.historyRequest === request) {
+        room.indexError = error.message;
+        showError(error);
+      }
       return false;
     } finally {
       if (room.historyRequest === request) {
@@ -3240,54 +3539,20 @@
     setFoldIndex(room, more === "all" ? 0 : oldIndex - more);
     if (roomId !== state.currentRoomId || state.view !== "room" || listRoomId !== room.id) return;
     const ceiling = els.messages.querySelector(".fold-ceiling");
-    if (more === "all" || !ceiling) return renderMessages(why, undefined, more !== "all");
+    if (more === "all" || !ceiling) return renderMessages(why);
     const t0 = performance.now();
-    const anchor = readerAnchor();
-    const parts = foldParts(room);
     const stretch = room.messages.slice(foldIndex(room), oldIndex);
-    const arrived = [];
-    let at = ceiling;
-    let lastDay = "";
-    const insert = (el) => { el.style.contentVisibility = "visible"; at.after(el); at = el; };
-    for (const m of stretch) {
-      const day = dayLabel(m.ts);
-      if (day !== lastDay) {
-        const d = document.createElement("div");
-        d.className = "day";
-        d.textContent = day;
-        d.title = new Date(m.ts).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-        insert(d);
-        lastDay = day;
-      }
-      const drawn = els.messages.querySelector(`.msg[data-id="${CSS.escape(m.id)}"]`);
-      if (drawn) {
-        drawn.classList.remove("above-fold");
-        at.after(drawn);
-        at = drawn;
-      } else {
-        const el = messageElement(room, m);
-        el.classList.add("history-static", "history-arriving");
-        insert(el);
-        arrived.push(el);
-      }
+    const standing = new Set([...els.messages.querySelectorAll(".msg[data-id]")].map((el) => el.dataset.id));
+    arriving = new Set(stretch.map((m) => m.id));
+    try {
+      renderMessages(why);
+    } finally {
+      arriving = null;
     }
-    const next = at.nextElementSibling;
-    if (next && next.classList.contains("day") && next.textContent === lastDay) next.remove();
-    const pins = els.messages.querySelector(".history-pins");
-    if (pins) {
-      for (const day of pins.querySelectorAll(".day")) {
-        let next = day.nextElementSibling;
-        if (!next) next = day.parentElement.nextElementSibling?.firstElementChild;
-        if (!next || next.classList.contains("day")) day.remove();
-      }
-      for (const page of pins.querySelectorAll(".msgs-page")) if (!page.childElementCount) page.remove();
-      if (!parts.above.length) pins.remove();
-      else pins.querySelector(".history-pins-label").lastChild.textContent = `${parts.above.length} pinned from earlier`;
-    }
-    updateHistoryBoundary(room, parts.hidden, parts.above.length);
-    restoreReader(anchor);
-    refreshSeen(room);
-    renderTimeline();
+    const arrived = stretch
+      .filter((m) => !standing.has(m.id))
+      .map((m) => els.messages.querySelector(`.msg[data-id="${CSS.escape(m.id)}"]`))
+      .filter(Boolean);
     noteSlow(`${stretch.length} older messages drawn (${why})`, performance.now() - t0);
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const animate = !document.hidden && currentRoom() === room && state.view === "room";
@@ -3297,6 +3562,7 @@
       }
     }));
   }
+
   async function revealSeq(seq) {
     const room = currentRoom();
     if (!room || !Number.isFinite(seq)) return false;
@@ -3308,12 +3574,84 @@
       index = room.messages.findIndex((m) => m.seq === seq);
     }
     if (index < 0) return false;
+    if (room.messages[index].bodyMissing && !await loadBodies(room, [room.messages[index].id], true)) {
+      toast("This message could not be loaded. Try again when the connection is back.", "warn");
+      return false;
+    }
+    if (currentRoom() !== room) return false;
     if (loaded || index < foldIndex(room)) {
       setFoldIndex(room, Math.max(0, index - FOLD_STEP));
-      renderMessages("a message above the fold was asked for");
+    }
+    if (!els.messages.querySelector(`.msg[data-seq="${CSS.escape(String(seq))}"]`)) {
+      stuck = false;
+      renderMessages("a message was asked for", { id: room.messages[index].id, into: 12 });
     }
     return jumpToMessage(els.messages.querySelector(`.msg[data-seq="${CSS.escape(String(seq))}"]`));
   }
+  function releaseFold(room) {
+    if (room?.history?.indexed) { trimBodyCache(room); return false; }
+    const anchor = room && foldAnchor.get(room.id);
+    if (!anchor || !Fold.anchorSurplus(room.messages, anchor, foldShown(room))) return false;
+    foldAnchor.delete(room.id);
+    if (room.id !== state.currentRoomId || state.view !== "room" || listRoomId !== room.id) return true;
+    const started = performance.now();
+    const before = els.messages.querySelectorAll(".msg[data-id]").length;
+    renderMessages("the list gave the fold back");
+    const removed = before - els.messages.querySelectorAll(".msg[data-id]").length;
+    noteSlow(`the list gave back ${removed} rows`, performance.now() - started);
+    return true;
+  }
+
+  els.messages.addEventListener("copy", (event) => {
+    const selection = getSelection();
+    const room = currentRoom();
+    if (!selection || selection.isCollapsed || !selection.rangeCount || !room) return;
+    const chosen = selection.getRangeAt(0);
+    if ([...els.messages.querySelectorAll(".history-placeholder")].some(node => chosen.intersectsNode(node))) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      toast("Some selected messages are still loading. Load or retry them before copying.", "warn");
+      return;
+    }
+    const parts = [];
+    const shaped = [];
+    let whole = false;
+    for (const msg of els.messages.querySelectorAll(".msg[data-id]")) {
+      const words = msg.querySelector(".text > .words");
+      if (!words || !selection.containsNode(words, true)) continue;
+      const m = room.messages.find((x) => x.id === msg.dataset.id);
+      if (m && msg.querySelector(".text.clamped") && selection.containsNode(words, false)) {
+        parts.push(m.text);
+        shaped.push(copyableHtml(msg, m));
+        whole = true;
+        continue;
+      }
+      const inside = document.createRange();
+      inside.selectNodeContents(words);
+      if (chosen.compareBoundaryPoints(Range.START_TO_START, inside) > 0) inside.setStart(chosen.startContainer, chosen.startOffset);
+      if (chosen.compareBoundaryPoints(Range.END_TO_END, inside) < 0) inside.setEnd(chosen.endContainer, chosen.endOffset);
+      parts.push(inside.toString());
+      const shape = document.createElement("div");
+      shape.appendChild(inside.cloneContents());
+      shaped.push(shape.innerHTML);
+    }
+    if (!whole || !event.clipboardData) return;
+    event.clipboardData.setData("text/plain", parts.filter((p) => p && p.trim()).join("\n\n"));
+    event.clipboardData.setData("text/html", shaped.filter((p) => p && p.trim()).join("<br><br>"));
+    event.preventDefault();
+  });
+
+  const FOLD_SETTLE_MS = 2000;
+  let foldSettleTimer = 0;
+  function foldSettleSoon() {
+    clearTimeout(foldSettleTimer);
+    if (!stuck) return;
+    const settling = state.currentRoomId;
+    foldSettleTimer = setTimeout(() => {
+      const room = currentRoom();
+      if (stuck && room && room.id === settling && state.view === "room" && !room.messages.some((m) => m.streaming)) releaseFold(room);
+    }, FOLD_SETTLE_MS);
+  }
+
   function ceilingElement(room, hidden, pinned) {
     const el = document.createElement("div");
     el.className = "fold-ceiling";
@@ -3391,18 +3729,30 @@
     }
   }
   let foldBusy = false;
-  function requestHistoryAtTop() {
-    if (foldBusy || els.messages.scrollTop > 4) return;
+  function historyBoundaryReached() {
+    const ceiling = els.messages.querySelector(".fold-ceiling");
+    if (!ceiling) return false;
+    const box = els.messages.getBoundingClientRect(), boundary = ceiling.getBoundingClientRect();
+    return boundary.bottom >= box.top && boundary.top <= box.bottom;
+  }
+  function requestHistoryAtTop(intent = false) {
+    if (state.view !== "room" || foldBusy || !historyBoundaryReached()) return;
+    if (!intent && Date.now() - lastUserScrollAt > 700) return;
     const room = currentRoom();
     if (!room || !foldHidden(room)) return;
     foldBusy = true;
     setTimeout(async () => {
       try {
-        if (currentRoom() === room && state.view === "room" && els.messages.scrollTop <= 4) await requestOlder(room, FOLD_STEP, "the reader reached the ceiling");
+        if (currentRoom() === room && state.view === "room" && historyBoundaryReached()) await requestOlder(room, FOLD_STEP, "the reader reached the ceiling");
       } finally { foldBusy = false; }
     }, 180);
   }
-  els.messages.addEventListener("scroll", requestHistoryAtTop, { passive: true });
+  let historyScrollTop = 0;
+  els.messages.addEventListener("scroll", () => {
+    const top = els.messages.scrollTop, up = top < historyScrollTop;
+    historyScrollTop = top;
+    if (up) requestHistoryAtTop();
+  }, { passive: true });
   function canPullEarlier(event) {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false;
     if (els.messages.contains(event.target)) for (let node = event.target; node && node !== els.messages; node = node.parentElement) {
@@ -3410,100 +3760,614 @@
     }
     return true;
   }
-  els.messages.addEventListener("wheel", event => { if (event.deltaY < 0 && canPullEarlier(event)) requestHistoryAtTop(); }, { passive: true });
+  els.messages.addEventListener("wheel", event => { if (event.deltaY < 0 && canPullEarlier(event)) requestHistoryAtTop(true); }, { passive: true });
   document.addEventListener("keydown", event => {
     if (!["ArrowUp", "PageUp", "Home"].includes(event.key) || !canPullEarlier(event) || event.target.closest?.("input, textarea, select, [contenteditable]")) return;
-    if (event.target === document.body || els.messages.contains(event.target)) requestHistoryAtTop();
+    if (event.target === document.body || els.messages.contains(event.target)) requestHistoryAtTop(true);
   });
 
-  function renderMessages(why, savedAnchor, animate = true) {
-    const t0 = performance.now();
-    const room = currentRoom();
-    if (room?.historyRestoring) {
-      if (listRoomId !== room.id) {
-        const controls = els.messages.querySelector(".history-load");
-        if (controls) historyHintObserver.unobserve(controls);
-        els.messages.textContent = "Loading conversation…";
-      }
-      listRoomId = room.id;
-      return;
+  function dayElement(day, ts) {
+    const el = document.createElement("div");
+    el.className = "day";
+    el.textContent = day;
+    el.title = new Date(ts).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    return el;
+  }
+
+  const drawnFrom = new WeakMap();
+  let arriving = null;
+  let listGeneration = 0;
+  let listSearch = null;
+  function noteDrawn(el, m) {
+    drawnFrom.set(el, m);
+    el.dataset.gen = String(listGeneration);
+    el.dataset.w = String((m.text || "").length);
+  }
+
+  const itemLists = new WeakMap();
+  function listItems(room) {
+    const cacheKey = room.history?.indexed ? `${room.history.version}|${visibilityFingerprint(room)}|${new Date().toDateString()}` : null;
+    const cached = cacheKey && itemLists.get(room);
+    if (cached && cached.key === cacheKey && cached.messages === room.messages && cached.count === room.messages.length) return cached.items;
+    const items = [];
+    const { hidden, drawn, above } = foldParts(room);
+    if (hidden) {
+      if (above.length) items.push({ kind: "pins", name: "pins", above });
+      items.push({ kind: "ceiling", name: "ceiling", hidden, pinned: above.length });
     }
-    listRoomId = room ? room.id : null;
-    const anchor = savedAnchor !== undefined ? savedAnchor : stuck ? null : readerAnchor();
-    const oldControls = els.messages.querySelector(".history-load");
-    if (oldControls) historyHintObserver.unobserve(oldControls);
-    els.messages.innerHTML = "";
-    els.messages.classList.toggle("searching", !!state.search);
-    if (!room) return;
-    if (!room.messages.length) {
-      els.messages.innerHTML = `<div class="empty"><div class="art">${ic("chat")}</div><strong>${esc(room.name)}</strong> is quiet.<br>Summon a vibemate from the left, then say hello. Use @Name to address someone; without @ every vibemate hears you.</div>`;
-      return;
-    }
+    else if (!state.search) items.push({ kind: "beginning", name: "beginning" });
     const markers = visibilityMarkers(room);
     const placed = new Set();
     let lastDay = "";
-    const { hidden, drawn, above } = foldParts(room);
-    if (hidden) {
-      const pins = document.createElement("section");
-      pins.className = "history-pins";
-      pins.setAttribute("aria-label", "Pinned messages from earlier history");
-      pins.innerHTML = `<span class="history-rule" aria-hidden="true"></span><div class="history-pins-label">${ic("pin")}<span>${above.length} pinned from earlier</span></div>`;
-      if (above.length) els.messages.appendChild(pins);
-      for (const m of above) {
-        const day = dayLabel(m.ts);
-        if (day !== lastDay) {
-          const d = document.createElement("div");
-          d.className = "day";
-          d.textContent = day;
-          d.title = new Date(m.ts).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-          placeInList(d, pins);
-          lastDay = day;
-        }
-        const el = messageElement(room, m);
-        el.classList.add("above-fold");
-        if (!animate) el.classList.add("history-static");
-        placeInList(el, pins);
-      }
-      placeInList(ceilingElement(room, hidden, above.length));
-      lastDay = "";
-    }
     for (const m of drawn) {
       const day = dayLabel(m.ts);
       if (day !== lastDay) {
-        const d = document.createElement("div");
-        d.className = "day";
-        d.textContent = day;
-        d.title = new Date(m.ts).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-        placeInList(d);
+        items.push({ kind: "day", name: `day:${day}:${m.id}`, day, ts: m.ts });
         lastDay = day;
       }
       for (const [seq, agents] of markers) {
         if (placed.has(seq) || !(m.seq >= seq)) continue;
         if (m.seq > 0) {
           placed.add(seq);
-          placeInList(dividerElement(agents));
+          items.push({ kind: "mark", name: `mark:${seq}:${agents.map((p) => p.id).join(",")}`, agents });
         }
       }
-      const el = messageElement(room, m);
-      if (!animate) el.classList.add("history-static");
-      placeInList(el);
+      items.push({ kind: "msg", name: m.id, m });
     }
     for (const [seq, agents] of markers) {
-      if (!placed.has(seq)) placeInList(dividerElement(agents));
+      if (!placed.has(seq)) items.push({ kind: "mark", name: `mark:${seq}:${agents.map((p) => p.id).join(",")}`, agents });
     }
+    if (cacheKey) itemLists.set(room, { key: cacheKey, messages: room.messages, count: room.messages.length, items });
+    return items;
+  }
+
+  function listRow(room, item) {
+    switch (item.kind) {
+      case "space": {
+        const el = document.createElement("div");
+        el.className = "msgs-space";
+        el.setAttribute("aria-hidden", "true");
+        return el;
+      }
+      case "msg": {
+        const el = messageElement(room, item.m);
+        if (arriving && arriving.has(item.m.id)) el.classList.add("history-static", "history-arriving");
+        return el;
+      }
+      case "day": return dayElement(item.day, item.ts);
+      case "beginning": {
+        const el = document.createElement("div");
+        el.className = "conversation-start";
+        el.textContent = "The room starts here";
+        return el;
+      }
+      case "mark": return dividerElement(item.agents);
+      case "ceiling": return ceilingElement(room, item.hidden, item.pinned);
+      default: {
+        const pins = document.createElement("section");
+        pins.className = "history-pins";
+        pins.setAttribute("aria-label", "Pinned messages from earlier history");
+        pins.innerHTML = `<span class="history-rule" aria-hidden="true"></span><div class="history-pins-label">${ic("pin")}<span></span></div><div class="history-pins-rows"></div>`;
+        return pins;
+      }
+    }
+  }
+
+  function fillListRow(room, node, item, fresh) {
+    if (item.kind === "space") { node.style.height = `${Math.max(0, Math.round(item.px))}px`; return; }
+    if (item.kind === "pins") return fillPins(room, node, item.above);
+    if (fresh) return;
+    switch (item.kind) {
+      case "msg":
+        if (item.m.bodyMissing) { fillBodyPlaceholder(node, room, item.m); noteDrawn(node, item.m); return; }
+        if (!item.m.streaming && drawnFrom.get(node) === item.m && listGeneration === Number(node.dataset.gen)) return;
+        updateMessageElement(node, room, item.m);
+        return;
+      case "ceiling":
+        updateHistoryBoundary(room, item.hidden, item.pinned);
+        return;
+      default:
+        return;
+    }
+  }
+
+  function fillPins(room, node, above) {
+    node.querySelector(".history-pins-label").lastElementChild.textContent = `${above.length} pinned from earlier`;
+    const rows = [];
+    let day = "";
+    for (const m of above) {
+      const label = dayLabel(m.ts);
+      if (label !== day) {
+        rows.push({ kind: "day", name: `day:${label}:${m.id}`, day: label, ts: m.ts });
+        day = label;
+      }
+      rows.push({ kind: "msg", name: m.id, m });
+    }
+    KeyedList.patch(node.querySelector(".history-pins-rows"), rows, {
+      key: "id",
+      id: (row) => row.name,
+      make: (row) => {
+        const el = listRow(room, row);
+        if (row.kind === "msg") el.classList.add("above-fold");
+        return el;
+      },
+      fill: (el, row, _at, born) => fillListRow(room, el, row, born),
+    });
+  }
+
+  const SAMPLE_ROWS = 40;
+  const rowPrices = { stamp: "", perKind: new Map(), fallback: null, middle: 0, gap: 0, chrome: 0, said: new Set() };
+  const rowInsets = new Map();
+  function rowFlowBox(node, borderSize) {
+    const style = getComputedStyle(node);
+    const top = parseFloat(style.marginTop) || 0, bottom = parseFloat(style.marginBottom) || 0;
+    let height = borderSize;
+    if (height === undefined) {
+      height = parseFloat(style.height);
+      if (!Number.isFinite(height)) height = node.offsetHeight;
+      else if (style.boxSizing !== "border-box") height += (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0)
+        + (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0);
+    }
+    return { height: Math.max(0, height + top + bottom), inset: top };
+  }
+  function itemKind(item) {
+    if (item.kind !== "msg") return item.kind;
+    const m = item.m;
+    const long = !m.streaming && (m.bodyChars ?? (m.text || "").length) > CLAMP_CHARS && !state.watched.has(m.id);
+    return long && !state.expanded.has(m.id) ? "clamped" : "open";
+  }
+  const itemWeight = (item) => (item.kind === "msg" ? item.m.bodyChars ?? (item.m.text || "").length : 0);
+  function priceItem(item) {
+    if (item.kind === "space") return item.px;
+    const kind = itemKind(item);
+    const price = rowPrices.perKind.get(kind);
+    if (price) return price.floor + price.rate * itemWeight(item);
+    if (!rowPrices.said.has(kind)) {
+      rowPrices.said.add(kind);
+      noteFinding(`the list has a row of a kind it has no price for (${kind}); its height is being guessed`);
+    }
+    return rowPrices.middle;
+  }
+  const pricesStamp = () =>
+    `${els.messages.clientWidth}|${document.documentElement.dataset.look || ""}|${document.documentElement.style.getPropertyValue("--chat-fs")}`;
+
+  function priceRows(room, items) {
+    const stamp = pricesStamp();
+    if (rowPrices.stamp === stamp) return !!rowPrices.fallback;
+    if (!room || !items?.length || !els.messages.clientWidth) return false;
+    items = items.filter(item => item.kind !== "msg" || !item.m.bodyMissing);
+    if (!items.length) return false;
+    const step = Math.max(1, Math.floor(items.length / SAMPLE_ROWS));
+    const sample = [];
+    const kinds = new Set();
+    for (let i = 0; i < items.length && sample.length < SAMPLE_ROWS; i += step) {
+      sample.push({ item: items[i] });
+      kinds.add(itemKind(items[i]));
+    }
+    for (let i = 0; i < items.length; i++) {
+      const kind = itemKind(items[i]);
+      if (kinds.has(kind)) continue;
+      kinds.add(kind);
+      sample.push({ item: items[i] });
+    }
+
+    const host = document.createElement("div");
+    host.style.cssText = "height:0;overflow:hidden;flex:0 0 0px";
+    const page = document.createElement("div");
+    page.className = "msgs-page";
+    page.style.contentVisibility = "visible";
+    host.appendChild(page);
+    const clones = sample.map(({ item }) => {
+      const row = listRow(room, item);
+      fillListRow(room, row, item, true);
+      row.style.contentVisibility = "visible";
+      page.appendChild(row);
+      return row;
+    });
+    els.messages.appendChild(host);
+    for (const inner of page.querySelectorAll(".msg, .msgs-page")) inner.style.contentVisibility = "visible";
+    const boxes = clones.map(clone => rowFlowBox(clone));
+    const heights = boxes.map(box => box.height);
+    sample.forEach(({ item }, at) => rowInsets.set(itemKind(item), boxes[at].inset));
+    const gap = parseFloat(getComputedStyle(page).rowGap) || 0;
+    const chrome = Math.max(0, rowFlowBox(page).height - heights.reduce((sum, h) => sum + h, 0) - gap * Math.max(0, heights.length - 1));
+    host.remove();
+
+    const byKind = new Map();
+    sample.forEach(({ item }, at) => {
+      const kind = itemKind(item);
+      const seen = byKind.get(kind) || { w: [], h: [] };
+      seen.w.push(itemWeight(item));
+      seen.h.push(heights[at]);
+      byKind.set(kind, seen);
+    });
+    rowPrices.perKind = new Map([...byKind].map(([kind, seen]) => [kind, fitHeight(seen.w, seen.h)]));
+    rowPrices.fallback = fitHeight(sample.map(({ item }) => itemWeight(item)), heights);
+    rowPrices.middle = heights.reduce((sum, h) => sum + h, 0) / heights.length;
+    rowPrices.said.clear();
+    rowPrices.gap = gap;
+    rowPrices.chrome = chrome;
+    rowPrices.stamp = stamp;
+    return true;
+  }
+
+  function fitHeight(weights, heights) {
+    const n = heights.length;
+    if (!n) return { floor: 0, rate: 0 };
+    const floor = Math.min(...heights);
+    const carried = weights.reduce((sum, w) => sum + w, 0);
+    const above = heights.reduce((sum, h) => sum + h, 0) - n * floor;
+    return { floor, rate: carried > 0 ? Math.max(0, above / carried) : 0 };
+  }
+
+  const MARGIN_SCREENS = 1;
+  let keepingScroll = null;
+  let followTimer = 0;
+  function followWindow() {
+    followTimer = 0;
+    const room = currentRoom();
+    if (!room || state.view !== "room" || !drawnWindow || room.historyRestoring) return;
+    if (rowPrices.stamp !== pricesStamp()) { repriceSoon(); return; }
+    const screen = els.messages.clientHeight;
+    const top = stuck ? Math.max(0, ListIndex.total(listAccount) - screen) : els.messages.scrollTop;
+    const needed = ListIndex.rangeFor(listAccount, Math.max(0, top - screen / 4), top + screen * 1.25);
+    if (needed.from >= drawnWindow.from && needed.to <= drawnWindow.to) return;
+    const next = drawnRange(listAccount.items);
+    if (!next || (next.from === drawnWindow.from && next.to === drawnWindow.to)) return;
+    keepingScroll = { top: els.messages.scrollTop, eye: eyeRow() };
+    try {
+      renderMessages("the window moved");
+    } finally {
+      keepingScroll = null;
+    }
+  }
+  function eyeRow() {
+    const box = els.messages.getBoundingClientRect();
+    for (const row of els.messages.querySelectorAll(".msg[data-id]")) {
+      const r = row.getBoundingClientRect();
+      if (r.bottom > box.top + 4 && r.top < box.bottom) return { id: row.dataset.id, at: r.top - box.top };
+    }
+    return null;
+  }
+  function holdTheEye(eye) {
+    if (!eye) return;
+    const row = els.messages.querySelector(`.msg[data-id="${CSS.escape(eye.id)}"]`);
+    if (!row) return;
+    const box = els.messages.getBoundingClientRect();
+    const moved = row.getBoundingClientRect().top - box.top - eye.at;
+    if (Math.abs(moved) > 0.5) els.messages.scrollTop += moved;
+  }
+
+  function settleSpacers() {
+    if (!drawnWindow || !listAccount) return;
+    const above = els.messages.querySelector('.msgs-space[data-id="space:above"]');
+    const belowNode = els.messages.querySelector('.msgs-space[data-id="space:below"]');
+    const opening = listAccount.before ? listAccount.before(0) : 0;
+    const want = Math.max(0, ListIndex.topOf(listAccount, drawnWindow.from) - opening - listAccount.gap);
+    const below = Math.max(0, ListIndex.total(listAccount) - ListIndex.topOf(listAccount, drawnWindow.to));
+    if (belowNode) belowNode.style.height = `${Math.round(below)}px`;
+    if (above) above.style.height = `${Math.round(want)}px`;
+  }
+  function followWindowSoon() {
+    if (followTimer || !drawnWindow) return;
+    followTimer = requestAnimationFrame(followWindow);
+  }
+
+
+  function drawnRange(items, anchor = null) {
+    if (!listAccount || !rowPrices.fallback || listAccount.items.length !== items.length) return null;
+    const screen = els.messages.clientHeight || 0;
+    if (!screen) return null;
+    let top = stuck && !keepingScroll ? Math.max(0, ListIndex.total(listAccount) - screen) : els.messages.scrollTop;
+    if (anchor) {
+      const at = items.findIndex(item => item.name === anchor.id || (item.kind === "pins" && item.above.some(m => m.id === anchor.id)));
+      if (at >= 0) {
+        let inset = rowInsets.get(itemKind(items[at])) || 0;
+        if (items[at].kind === "pins") {
+          const child = drawnRow(anchor.id), block = child?.closest(".history-pins");
+          if (block) inset += child.getBoundingClientRect().top - block.getBoundingClientRect().top;
+        }
+        top = Math.max(0, ListIndex.topOf(listAccount, at) + inset - anchor.into);
+      }
+    }
+    return widenForSelection(ListIndex.rangeFor(listAccount, top - screen * MARGIN_SCREENS, top + screen * (1 + MARGIN_SCREENS)), items);
+  }
+  function widenForSelection(range, items) {
+    const selection = window.getSelection();
+    if (!range || !selection || selection.isCollapsed || !selection.rangeCount) return range;
+    const rowAt = node => {
+      const el = node?.nodeType === 3 ? node.parentElement : node;
+      const row = el?.closest?.(".msg[data-id]");
+      return row && els.messages.contains(row) ? items.findIndex(item => item.kind === "msg" && item.name === row.dataset.id) : -1;
+    };
+    const ends = [rowAt(selection.anchorNode), rowAt(selection.focusNode)].filter(at => at >= 0);
+    if (!ends.length) return range;
+    return { from: Math.min(range.from, ...ends), to: Math.max(range.to, ...ends.map(at => at + 1)) };
+  }
+  let heldTextSelection = false;
+  document.addEventListener("selectionchange", () => {
+    const selection = window.getSelection();
+    const inside = !!selection && !selection.isCollapsed && els.messages.contains(selection.anchorNode);
+    if (heldTextSelection && !inside && state.view === "room") renderMessagesSoon("the text selection was released");
+    heldTextSelection = inside;
+  });
+  function windowedItems(items, range) {
+    if (!range) return items;
+    const opening = listAccount.before ? listAccount.before(0) : 0;
+    const above = Math.max(0, ListIndex.topOf(listAccount, range.from) - opening - listAccount.gap);
+    const below = Math.max(0, ListIndex.total(listAccount) - ListIndex.topOf(listAccount, range.to));
+    const shown = items.slice(range.from, range.to);
+    return [
+      ...(range.from ? [{ kind: "space", name: "space:above", px: above }] : []),
+      ...shown,
+      ...(range.to < items.length ? [{ kind: "space", name: "space:below", px: below }] : []),
+    ];
+  }
+
+  let listAccount = null;
+  let drawnWindow = null;
+  const measuredRows = new Map();
+  let measuredRoom = null;
+  let measuredStamp = "";
+  let measuredPins = "";
+  let measuredCeiling = "";
+  const observedRows = new Set();
+  let measuredIndexes = new Map();
+  const rowSizeObserver = new ResizeObserver((entries) => {
+    if (!drawnWindow || !listAccount || state.view !== "room") return;
+    if (rowPrices.stamp !== pricesStamp()) { repriceSoon(); return; }
+    const eye = stuck ? null : eyeRow();
+    let changed = false;
+    for (const entry of entries) {
+      const node = entry.target;
+      if (!node.isConnected || !els.messages.contains(node)) continue;
+      const at = measuredIndexes.get(node.dataset.id);
+      if (at === undefined) continue;
+      if (listAccount.items[at]?.m?.bodyMissing) continue;
+      const measured = rowFlowBox(node, entry.borderBoxSize?.[0]?.blockSize);
+      const px = measured.height;
+      rowInsets.set(itemKind(listAccount.items[at]), measured.inset);
+      if (!(px > 0)) continue;
+      if (ListIndex.heightAt(listAccount, at) !== px) changed = ListIndex.measured(listAccount, at, px) || changed;
+      measuredRows.set(node.dataset.id, px);
+    }
+    if (!changed) return;
+    settleSpacers();
+    if (stuck) scrollToBottom("visible message size changed");
+    else holdTheEye(eye);
+    followWindowSoon();
+    renderTimelineSoon(false);
+  });
+  function observeDrawnRows() {
+    const rows = new Set([...els.messages.querySelectorAll(":scope > .msgs-page > [data-id]")].filter(row => !row.classList.contains("msgs-space")));
+    for (const row of observedRows) if (!rows.has(row)) { rowSizeObserver.unobserve(row); observedRows.delete(row); }
+    for (const row of rows) if (!observedRows.has(row)) { observedRows.add(row); rowSizeObserver.observe(row); }
+  }
+  function refreshAccount(room, items) {
+    if (!priceRows(room, items)) return;
+    const stamp = pricesStamp();
+    const sameGeometry = measuredRoom === room.id && measuredStamp === stamp;
+    const changed = room.dirtyHeights || new Set();
+    for (const id of changed) measuredRows.delete(id);
+    if (sameGeometry && listAccount?.items === items) {
+      for (const id of changed) {
+        const at = measuredIndexes.get(id);
+        if (at !== undefined) ListIndex.repriceRow(listAccount, at, priceItem(items[at]));
+      }
+      changed.clear();
+      return;
+    }
+    changed.clear();
+    if (measuredRoom !== room.id || measuredStamp !== stamp) {
+      measuredRows.clear();
+      measuredRoom = room.id;
+      measuredStamp = stamp;
+    }
+    const pins = items.find(item => item.kind === "pins")?.above.map(m => m.id).join("|") || "";
+    const ceiling = items.find(item => item.kind === "ceiling");
+    const ceilingKey = ceiling ? `${ceiling.hidden}:${ceiling.pinned}` : "";
+    if (pins !== measuredPins) { measuredRows.delete("pins"); measuredPins = pins; }
+    if (ceilingKey !== measuredCeiling) { measuredRows.delete("ceiling"); measuredCeiling = ceilingKey; }
+    const opening = parseFloat(getComputedStyle(els.messages).paddingTop) || 0;
+    const before = (i) => (i === 0 ? opening : 0);
+    listAccount = ListIndex.build(items, priceItem, rowPrices.gap, before);
+    measuredIndexes = new Map(items.map((item, i) => [item.name, i]));
+    const kept = new Set();
+    items.forEach((item, i) => {
+      kept.add(item.name);
+      if (measuredRows.has(item.name)) ListIndex.measured(listAccount, i, measuredRows.get(item.name));
+    });
+    for (const id of measuredRows.keys()) if (!kept.has(id)) measuredRows.delete(id);
+    ListIndex.shown = listAccount;
+  }
+  function takeRealHeights(offset = 0) {
+    if (!listAccount) return;
+    const missed = [];
+    let at = offset;
+    for (const page of els.messages.children) {
+      if (!page.classList.contains("msgs-page")) continue;
+      const first = page.firstElementChild;
+      const drawn = !first || typeof first.checkVisibility !== "function" || first.checkVisibility({ contentVisibilityAuto: true });
+      if (!drawn) { at += page.childElementCount; continue; }
+      for (const row of page.children) {
+        if (row.classList.contains("msgs-space")) continue;
+        const itself = typeof row.checkVisibility !== "function" || row.checkVisibility({ contentVisibilityAuto: true });
+        if (!itself) { at++; continue; }
+        const measured = rowFlowBox(row);
+        const real = measured.height;
+        const item = listAccount.items[at];
+        if (item?.m?.bodyMissing) { at++; continue; }
+        if (item) rowInsets.set(itemKind(item), measured.inset);
+        if (item && real > 0) measuredRows.set(item.name, real);
+        missed.push(Math.abs(ListIndex.heightAt(listAccount, at) - real));
+        ListIndex.measured(listAccount, at++, real);
+      }
+    }
+    if (missed.length < 8) return;
+    missed.sort((a, b) => a - b);
+    const typical = missed[missed.length >> 1];
+    if (typical > 40 && !accountSaidItMisses) {
+      accountSaidItMisses = true;
+      noteFinding(`the list's account is out by about ${Math.round(typical)} px on a row it can see`);
+    }
+  }
+  let accountSaidItMisses = false;
+
+  function guessPages(room, items) {
+    if (!priceRows(room, items)) return;
+    let at = 0;
+    for (const page of els.messages.children) {
+      if (!page.classList.contains("msgs-page")) continue;
+      const rows = page.childElementCount;
+      if (!rows) continue;
+      let sum = rowPrices.chrome + rowPrices.gap * (rows - 1);
+      for (let i = 0; i < rows; i++) sum += priceItem(items[at + i]);
+      at += rows;
+      page.style.containIntrinsicSize = `auto ${Math.round(sum)}px`;
+    }
+  }
+
+  const REPRICE_AFTER_MS = 400;
+  let repriceTimer = 0;
+  function repriceSoon() {
+    clearTimeout(repriceTimer);
+    repriceTimer = setTimeout(() => {
+      if (state.view !== "room" || !currentRoom() || !els.messages.children.length) return;
+      renderMessages("the window changed shape");
+    }, REPRICE_AFTER_MS);
+  }
+
+  function measureBornAbove(born, anchorAt) {
+    if (anchorAt < 0) return;
+    const shown = [];
+    for (const { node, at } of born) {
+      if (at >= anchorAt) break;
+      for (const el of [node.parentElement, node]) {
+        if (!el || el === els.messages) continue;
+        shown.push([el, el.style.contentVisibility]);
+        el.style.contentVisibility = "visible";
+      }
+    }
+    if (!shown.length) return;
+    els.messages.offsetHeight;
+    for (const [el, was] of shown) el.style.contentVisibility = was;
+  }
+
+  let listPaintFrame = 0;
+  function renderMessagesSoon(why) {
+    if (listPaintFrame) return;
+    const roomId = state.currentRoomId;
+    listPaintFrame = requestAnimationFrame(() => {
+      listPaintFrame = 0;
+      if (state.view === "room" && state.currentRoomId === roomId) renderMessages(why);
+    });
+  }
+  function renderMessages(why, savedAnchor) {
+    if (listPaintFrame) { cancelAnimationFrame(listPaintFrame); listPaintFrame = 0; }
+    const t0 = performance.now();
+    const room = currentRoom();
+    if (room?.historyRestoring) {
+      if (listRoomId !== room.id) {
+        const controls = els.messages.querySelector(".history-load");
+        if (controls) historyHintObserver.unobserve(controls);
+        els.messages.innerHTML = '<div class="conversation-loading" role="status">Loading conversation…</div>';
+      }
+      listRoomId = room.id;
+      return;
+    }
+    listRoomId = room ? room.id : null;
+    const resized = settledReader?.roomId === room?.id && settledReader.stamp !== pricesStamp();
+    const anchor = savedAnchor !== undefined ? savedAnchor
+      : keepingScroll ? (keepingScroll.eye ? { id: keepingScroll.eye.id, into: keepingScroll.eye.at } : null)
+      : resized ? settledReader.anchor : stuck ? null : readerAnchor();
+    if (resized) stuck = settledReader.following;
+    els.messages.classList.toggle("searching", !!state.search);
+    if (!room) { els.messages.innerHTML = ""; return; }
+    if (room.history?.bodyProtocol && !room.history.indexed && room.indexError) {
+      els.messages.innerHTML = `<div class="empty" role="status">The conversation could not be loaded. <button class="linklike">Try again</button></div>`;
+      els.messages.querySelector("button").onclick = () => void refreshHeld(room.id);
+      return;
+    }
+    if (!room.messages.length) {
+      els.messages.innerHTML = `<div class="empty"><div class="art">${ic("chat")}</div><strong>${esc(room.name)}</strong> is quiet.<br>Summon a vibemate from the left, then say hello. Use @Name to address someone; without @ every vibemate hears you.</div>`;
+      return;
+    }
+    if (listSearch !== (state.search || "")) {
+      listSearch = state.search || "";
+      listGeneration++;
+    }
+    const items = listItems(room);
+    const leaving = els.messages.querySelector(".history-load");
+    if (leaving && !items.some((item) => item.kind === "ceiling")) historyHintObserver.unobserve(leaving);
+    refreshAccount(room, items);
+    drawnWindow = drawnRange(items, anchor);
+    els.messages.classList.toggle("windowed", !!drawnWindow);
+    const shown = windowedItems(items, drawnWindow);
+    const loadedIds = new Set(shown.filter(item => item.kind === "msg" && !item.m.bodyMissing).map(item => item.name));
+    for (const node of els.messages.querySelectorAll(".history-placeholder")) if (loadedIds.has(node.dataset.id)) node.remove();
+    const born = [];
+    const selection = window.getSelection();
+    const savedSelection = selection && !selection.isCollapsed && selection.rangeCount
+      && els.messages.contains(selection.anchorNode) && els.messages.contains(selection.focusNode)
+      ? { anchorNode: selection.anchorNode, anchorOffset: selection.anchorOffset, focusNode: selection.focusNode, focusOffset: selection.focusOffset, isCollapsed: false, rangeCount: 1 } : null;
+    selectionDuringPatch = savedSelection;
+    try {
+    KeyedList.patchPaged(els.messages, shown, {
+      key: "id",
+      pageSize: PAGE_SIZE,
+      makePage: () => {
+        const page = document.createElement("div");
+        page.className = "msgs-page";
+        return page;
+      },
+      id: (item) => item.name,
+      make: (item) => listRow(room, item),
+      fill: (node, item, at, fresh) => {
+        if (fresh) born.push({ node, at });
+        fillListRow(room, node, item, fresh);
+      },
+    });
+    } finally {
+      selectionDuringPatch = null;
+      if (savedSelection?.anchorNode.isConnected && savedSelection.focusNode.isConnected) {
+        const { anchorNode, anchorOffset, focusNode, focusOffset } = savedSelection;
+        const current = window.getSelection();
+        if (current && (current.anchorNode !== anchorNode || current.anchorOffset !== anchorOffset || current.focusNode !== focusNode || current.focusOffset !== focusOffset)) {
+          current.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+        }
+      }
+    }
+    if (anchor) measureBornAbove(born, shown.findIndex((item) => item.kind === "msg" && item.name === anchor.id));
+    if (!drawnWindow) guessPages(room, items);
+    takeRealHeights(drawnWindow ? drawnWindow.from : 0);
+    observeDrawnRows();
     for (const perm of room.permissions) renderPermission(room, perm);
     for (const prop of room.proposals || []) renderProposal(room, prop);
     for (const asked of room.newRooms || []) renderNewRoom(room, asked);
     syncRecovery(room);
     refreshSeen(room);
-    if (!restoreReader(anchor)) scrollToBottom("the list was rebuilt");
+    settleSpacers();
+    if (keepingScroll) {
+      if (keepingScroll.eye) holdTheEye(keepingScroll.eye);
+      else els.messages.scrollTop = keepingScroll.top;
+    } else if (!restoreReader(anchor)) scrollToBottom("the list was rebuilt");
     renderTimeline();
+    rememberReader();
+    if (room.history?.indexed) {
+      const visibleIds = shown.filter(item => item.kind === "msg").map(item => item.name);
+      WindowBodies.touch(room, visibleIds);
+      trimBodyCache(room, visibleIds);
+      void loadBodies(room, visibleIds);
+    }
+    followWindowSoon();
     noteSlow(`full render of the list (${why || "unnamed"})`, performance.now() - t0);
   }
 
   function upsertMessage(roomId, m) {
     const room = state.rooms.get(roomId);
     if (!room) return;
+    measuredRows.delete(m.id);
+    if (m.pinned) measuredRows.delete("pins");
     if (m.from === "human" && !m.pending && !room.messages.some((x) => x.id === m.id)) {
       const local = room.messages.find((x) => x.pending && x.from === "human" && x.text === m.text);
       if (local) adoptLocalMessage(roomId, local.id, m.id);
@@ -3522,7 +4386,14 @@
     const wasFinal = idx >= 0 && !room.messages[idx].streaming;
     if (idx >= 0) {
       if (!("pinned" in m)) delete room.messages[idx].pinned;
+      if (m.seq > 0 && !("displayOrder" in m)) delete room.messages[idx].displayOrder;
       Object.assign(room.messages[idx], m);
+      if (room.history?.bodyProtocol && !m.bodyMissing) {
+        delete room.messages[idx].bodyMissing;
+        delete room.messages[idx].bodyChars;
+        delete room.messages[idx].bodyError;
+        WindowBodies.invalidate(room.messages[idx]);
+      }
     } else room.messages.push(m);
     room.messages.sort(HistoryWindow.compareMessages);
     idx = room.messages.findIndex(x => x.id === m.id);
@@ -3550,9 +4421,18 @@
         if (mine.pinned && mine.kind === "chat") renderMessages("a folded message was pinned");
         return;
       }
+      if (drawnWindow) {
+        renderMessages("a message arrived in the virtual list");
+        const born = els.messages.querySelector(`.msg[data-id="${CSS.escape(m.id)}"]`);
+        if (born) landing(born);
+        if (m.streaming && m.from !== "human") renderSideRoom();
+        else if (!stick && m.kind === "chat") noteNew(room, m);
+        if (!wasFinal && !m.streaming && m.kind === "chat" && m.from !== "human") noteFinished(room, m);
+        return;
+      }
       const empty = els.messages.querySelector(".empty");
       if (empty) empty.remove();
-      placeInList(messageElement(room, m));
+      placeInList(landing(messageElement(room, m)));
       if (m.from === "human") refreshSeen(room);
       if (m.streaming && m.from !== "human") renderSideRoom();
       else if (!stick && m.kind === "chat") noteNew(room, m);
@@ -3575,6 +4455,8 @@
     if (roomId !== state.currentRoomId) return;
     const el = els.messages.querySelector(`.msg[data-id="${id}"]`);
     if (el) el.remove();
+    measuredRows.delete(id);
+    if (state.view === "room") renderMessages("a message was removed");
   }
 
   const dirty = new Map();
@@ -4085,19 +4967,67 @@
     return out;
   }
 
+  const configChanging = new Map();
+  function acceptConfigReply(roomId, reply) {
+    const room = state.rooms.get(roomId), p = reply?.participant;
+    if (!room || !p) return null;
+    const order = room.participantOrder ||= new Map();
+    if (reply.history?.epoch === room.history?.epoch && Number.isFinite(reply.history?.streamSequence)
+      && reply.history.streamSequence >= (order.get(p.id) ?? -1)) {
+      const at = room.participants.findIndex(who => who.id === p.id);
+      if (at >= 0) {
+        const showing = state.currentRoomId === roomId && state.view === "room";
+        const before = showing ? visibilityFingerprint(room) : "";
+        room.participants[at] = p; order.set(p.id, reply.history.streamSequence);
+        if (showing) {
+          if (visibilityFingerprint(room) !== before) renderMessagesSoon("reported settings changed the participant");
+          renderSideRoom(); renderChatHead();
+        }
+      }
+    }
+    return findById(room, p.id);
+  }
   function renderConfig(panel, p, offline) {
     panel.innerHTML = "";
+    panel.dataset.configRoom = state.currentRoomId || "";
+    panel.dataset.configParticipant = p.id;
     if (offline) {
       panel.innerHTML = `<p class="hint">Offline. Reconnect to start a new session (${esc([p.launch && p.launch.model, p.launch && p.launch.effort, p.launch && p.launch.mode].filter(Boolean).join(" · ") || "vibemate defaults")}).</p>`;
       return;
     }
+    if (p.status === "starting") { panel.innerHTML = '<p class="hint">Starting. Settings will be available when this vibemate is ready.</p>'; return; }
+    const roomId = state.currentRoomId;
+    const key = `${roomId}:${p.id}`;
+    const change = async (control, onChange, value, id) => {
+      if (configChanging.has(key)) return;
+      const token = Symbol("settings change");
+      configChanging.set(key, token);
+      const focused = document.activeElement === control;
+      for (const node of panel.querySelectorAll("select,input")) node.disabled = true;
+      try {
+        const reply = await onChange(value);
+        const actual = acceptConfigReply(roomId, reply);
+        if (id && state.currentRoomId === roomId && !actual?.pendingSettings?.length) { recentlySaved.set(id, Date.now()); markSaved(id); }
+      } catch (error) { showError(error); }
+      finally {
+        if (configChanging.get(key) === token) configChanging.delete(key);
+        const now = state.rooms.get(roomId)?.participants.find(who => who.id === p.id) || p;
+        const shown = panel.isConnected ? panel : panel.id ? document.getElementById(panel.id) : null;
+        if (shown?.dataset.configParticipant === p.id && shown.dataset.configRoom === roomId && state.currentRoomId === roomId) {
+          renderConfig(shown, now, ["offline", "left"].includes(now.status));
+          if (focused && id) document.getElementById(id)?.focus({ preventScroll: true });
+        }
+      }
+    };
     const addSelect = (name, values, current, onChange, id) => {
       const label = document.createElement("label");
       label.className = "row";
       label.innerHTML = `<span>${esc(name)}</span>`;
       const select = document.createElement("select");
       if (id) select.id = id;
-      for (const v of values) {
+      const choices = current != null && !values.some(v => v.value === current)
+        ? [{ value: String(current), name: `${current} (reported)` }, ...values] : values;
+      for (const v of choices) {
         const opt = document.createElement("option");
         opt.value = v.value;
         opt.textContent = v.name || v.value;
@@ -4105,19 +5035,8 @@
         if (v.value === current) opt.selected = true;
         select.appendChild(opt);
       }
-      select.addEventListener("change", async () => {
-        select.disabled = true;
-        try {
-          await onChange(select.value);
-          if (id) {
-            recentlySaved.set(id, Date.now());
-            markSaved(id);
-          }
-        } catch (e) {
-          showError(e);
-        }
-        select.disabled = false;
-      });
+      select.disabled = configChanging.has(key);
+      select.addEventListener("change", () => void change(select, onChange, select.value, id));
       label.appendChild(select);
       panel.appendChild(label);
     };
@@ -4126,10 +5045,23 @@
       addSelect("Mode", p.modes.map((m) => ({ value: m.id, name: m.name || m.id, description: m.description })), p.mode, (value) => post(roomApi(`/participants/${encodeURIComponent(p.id)}/config`), { configId: "mode", value }), `cfg-${p.id}-mode`);
     }
     for (const option of p.configOptions || []) {
-      if (option.type !== "select") continue;
-      addSelect(option.name, flattenOptions(option.options), option.currentValue, (value) => post(roomApi(`/participants/${encodeURIComponent(p.id)}/config`), { configId: option.id, value }), `cfg-${p.id}-${String(option.id).replace(/[^\w-]/g, "_")}`);
+      const id = `cfg-${p.id}-${String(option.id).replace(/[^\w-]/g, "_")}`;
+      const apply = value => post(`/api/rooms/${encodeURIComponent(roomId)}/participants/${encodeURIComponent(p.id)}/config`, { configId: option.id, value });
+      if (option.type === "boolean") {
+        const label = document.createElement("label"); label.className = "switch";
+        const title = document.createElement("span"); title.textContent = option.name;
+        const input = document.createElement("input"); input.type = "checkbox"; input.id = id; input.checked = option.currentValue === true;
+        input.disabled = configChanging.has(key);
+        input.addEventListener("change", () => void change(input, apply, input.checked, id));
+        label.append(title, input); panel.appendChild(label);
+      } else if (option.type === "select") addSelect(option.name, flattenOptions(option.options), option.currentValue, apply, id);
     }
     if (!panel.children.length) panel.innerHTML = '<p class="hint">This vibemate exposes no session options.</p>';
+    if (p.pendingSettings?.length) {
+      const pending = document.createElement("p"); pending.className = "hint config-pending"; pending.setAttribute("role", "status");
+      pending.textContent = "Pending: " + p.pendingSettings.map(setting => `${setting.name} → ${setting.value}`).join("; ");
+      panel.appendChild(pending);
+    }
   }
 
   function renderMePanel(room) {
@@ -4218,6 +5150,8 @@
         <label class="switch"><span class="label">Reachable from messengers<span class="hint">A phone paired to viberoom (Settings → Channels) can open this room, write to it and read its replies. Off: the phone neither sees nor reaches this room.</span></span><input type="checkbox" id="rp-reachable" ${rs.reachableFromMessengers !== false ? "checked" : ""}></label>
         <label class="switch"><span class="label">Start this room with viberoom<span class="hint">Its vibemates are started when viberoom starts, one room after another. They pay nothing until the first turn; their processes and memory stay while they wait. With viberoom starting at sign-in, the phone reaches this room without a click.</span></span><input type="checkbox" id="rp-start-with-hub" ${rs.startWithHub ? "checked" : ""}></label>
         ${field("…and they come back", `<select id="rp-reconnect"><option value="inherit"${(rs.reconnectMode || "inherit") === "inherit" ? " selected" : ""}>As Welcome back is set</option><option value="load"${rs.reconnectMode === "load" ? " selected" : ""}>Continuing their saved sessions</option><option value="replay"${rs.reconnectMode === "replay" ? " selected" : ""}>Fresh, with the last messages replayed</option></select>`, "Only for the start above: when this room brings its own vibemates back, it decides with how much memory.", "A room that decides whether it starts also decides with how much memory its vibemates come back; the app-wide Welcome back setting is what a room follows when it has not chosen. It is not asked again in a dialog, because by the time a window could ask, the room has already begun.")}
+        <label class="switch"><span class="label">Wake vibemates after a restart<span class="hint">Off by default. After Restart finishes restoring this room, send the message below once. Requires Start this room with viberoom. Muted, stopped or unavailable vibemates stay quiet. Ordinary launches and sign-in do not send it.</span></span><input type="checkbox" id="rp-wake-restart" ${rs.wakeAfterRestart ? "checked" : ""}></label>
+        ${field("Message after restart", `<textarea id="rp-restart-message" rows="3" maxlength="8000" placeholder="Continue your tasks, if you have any.">${esc(rs.restartMessage || "")}</textarea>`, "Your saved instruction appears as an automatic room event. Empty text starts no replies.")}
         ${field("Max sentences per reply", `${UI.html("number-field", { id: "rp-maxlen", value: String(rs.maxSentences ?? ""), min: 1, max: 100, placeholder: "no limit" })}`)}
         ${field("Hop limit (vibemate-to-vibemate replies per human message)", `${UI.html("number-field", { id: "rp-hops", value: String(rs.hopLimit), min: 0, max: 10000 })}`)}
       </div>
@@ -4236,8 +5170,6 @@
         ${field("Most characters in a vibio or in the room rules", `${UI.html("number-field", { id: "rp-text-limit", value: String(rs.briefTextLimit ?? 8000), min: 500, max: 32000, step: 500 })}`, "Both go into every brief. Text over the limit is refused with the numbers, never cut.")}
       </div>
       <div class="section">
-        ${sectionTitle("eye", "Long rooms")}
-        ${field("Messages drawn before the older ones fold away", `${UI.html("number-field", { id: "rp-fold-after", value: String(rs.foldAfter ?? ""), min: 100, max: 20000, step: 100, placeholder: `app setting (${(state.settings || {}).foldAfter || FOLD_SHOWN})` })}`, "A long room draws only its newest messages; the older ones wait above a ceiling and come in 25 at a time as you scroll up, and pinned ones are always shown. Fewer draws faster; more shows more at once. Empty uses the app setting.")}
       </div>
       <div class="section">
         ${sectionTitle("save", "Troubleshooting")}
@@ -4297,10 +5229,11 @@
           searchOtherRooms: $("#rp-share-history").checked,
           reachableFromMessengers: $("#rp-reachable").checked,
           startWithHub: $("#rp-start-with-hub").checked,
+          wakeAfterRestart: $("#rp-wake-restart").checked,
+          restartMessage: $("#rp-restart-message").value,
           reconnectMode: $("#rp-reconnect").value,
           replyDelay: Number($("#rp-delay").value),
           transcripts: $("#rp-transcripts").value,
-          foldAfter: $("#rp-fold-after").value === "" ? null : Number($("#rp-fold-after").value),
         });
     });
     $("#rp-delete").addEventListener("click", async () => {
@@ -4372,6 +5305,7 @@
     els.pageInner.innerHTML = `
       <div class="page-head"><div><h1>Settings</h1><div class="hint">${state.version ? `${esc(state.version.name)} ${esc(state.version.version)} · room built ${esc(new Date(state.version.build).toLocaleString())}` : "room build unknown (older room process; run viberoom again to replace it)"}</div></div></div>
       <div id="sp-form">
+      <div class="section" id="sp-carrying"><h3>Carry conversations</h3><p class="hint">Save selected rooms for another computer, bring in a copy, or inspect removed versions.</p><button type="button" data-ui="button" data-kind="ghost" id="sp-carry">Export / Import rooms</button></div>
       <div class="page-cols">
         <div>
           <div class="section" id="sp-appearance">
@@ -4481,10 +5415,6 @@
           </div>
         </div>
         <div>
-          <div class="section" id="sp-fold">
-            ${sectionTitle("eye", "Long rooms")}
-            ${field("Messages drawn before the older ones fold away", `${UI.html("number-field", { id: "sp-fold-after", value: String(s.foldAfter || FOLD_SHOWN), min: 100, max: 20000, step: 100 })}`, "A long room draws only its newest messages; the older ones wait above a ceiling and come in 25 at a time as you scroll up, and pinned ones are always shown. Fewer draws faster; more shows more at once. You can choose a different value for each room.")}
-          </div>
           <div class="section" id="sp-transcripts">
             ${sectionTitle("save", "Troubleshooting")}
             ${field("Save diagnostic details", `<select id="sp-transcripts-mode">${[["off", "Off (default)"], ["errors", "When something fails"], ["full", "All activity"]].map(([v, label]) => `<option value="${v}"${(s.transcripts || "off") === v ? " selected" : ""}>${label}</option>`).join("")}</select>`, DIAGNOSTIC_LOG_HELP + " You can choose a different setting for each room.")}
@@ -4517,6 +5447,7 @@
       )}
       </div>`;
     bindDiagnosticLogControls();
+    document.querySelector("#sp-carry").addEventListener("click", () => void openCarry(null));
     bindChannelControls();
     const editorSection = $("#sp-editor");
     const editorCmdRow = $("#sp-editor-cmd").closest(".field");
@@ -4789,7 +5720,6 @@
           agentSkillsNeedApproval: $("#sp-skill-approval").checked,
           checkForUpdates: $("#sp-updates").checked,
           transcripts: $("#sp-transcripts-mode").value,
-          foldAfter: Number($("#sp-fold-after").value),
           diagrams: { preset: $("#sp-diagram-preset").value, primary: $("#sp-diagram-custom").checked ? $("#sp-diagram-color").value : null },
           editor: { mode: $("#sp-editor-mode").value, command: $("#sp-editor-cmd").value },
           appearance: { chatFontSize: Number($("#sp-chat-fs").value), font: $("#sp-font").value, mono: $("#sp-mono").value, look: $("#sp-look").value, custom: { [$("#sp-look").value]: Object.keys(pendingAdjust()).length ? pendingAdjust() : null } },
@@ -6449,6 +7379,8 @@
       ${stpSwitch("Share history with the other rooms", "stp-share-history", st.searchOtherRooms !== false)}
       ${stpSwitch("Reachable from messengers", "stp-reachable", st.reachableFromMessengers !== false)}
       ${stpSwitch("Start with viberoom", "stp-start-with-hub", st.startWithHub === true)}
+      ${stpSwitch("Wake vibemates after a requested restart", "stp-wake-restart", st.wakeAfterRestart === true)}
+      ${stpField("Message after restart", `<textarea id="stp-restart-message" rows="3" maxlength="8000">${esc(st.restartMessage || "")}</textarea>`)}
       ${stpField("…and they come back", stpSelect("stp-reconnect", st.reconnectMode || "inherit", [["inherit", "As Welcome back is set"], ["load", "Continuing their saved sessions"], ["replay", "Fresh, with the last messages replayed"]]))}
       ${stpField("Hop limit", `${UI.html("number-field", { id: "stp-hops", value: String(st.hopLimit ?? 100), min: 0, max: 10000 })}`)}
       ${stpField("Max sentences per reply", `${UI.html("number-field", { id: "stp-maxlen", value: String(st.maxSentences ?? ""), min: 1, max: 100, placeholder: "no limit" })}`)}
@@ -6498,6 +7430,8 @@
       searchOtherRooms: $("#stp-share-history").checked,
       reachableFromMessengers: $("#stp-reachable").checked,
       startWithHub: $("#stp-start-with-hub").checked,
+      wakeAfterRestart: $("#stp-wake-restart").checked,
+      restartMessage: $("#stp-restart-message").value,
       reconnectMode: $("#stp-reconnect").value,
       hopLimit: num("#stp-hops"),
       maxSentences: $("#stp-maxlen").value === "" ? null : num("#stp-maxlen"),
@@ -6789,6 +7723,7 @@
     state.dataFolder = snapshot.dataFolder || null;
     state.rooms = new Map((snapshot.rooms || []).map((r) => [r.id, r]));
     for (const room of state.rooms.values()) {
+      room.participantOrder = new Map((room.participants || []).map(p => [p.id, room.history?.streamSequence ?? -1]));
       const previous = previousRooms.get(room.id);
       const before = previous && (previous.settings?.foldAfter ?? previousSettings?.foldAfter ?? FOLD_SHOWN);
       const after = room.settings?.foldAfter ?? state.settings?.foldAfter ?? FOLD_SHOWN;
@@ -6853,10 +7788,16 @@
   function onRoomEvent(roomId, event) {
     const room = state.rooms.get(roomId);
     if (!room) return;
+    if (room.history?.bodyProtocol) {
+      const affected = event.type === "message.delivery" ? (event.updates || []).map(update => update.id)
+        : [event.message?.id || event.messageId || event.id].filter(Boolean);
+      const changes = room.bodyChanges ||= new Map();
+      for (const id of affected) changes.set(id, event.streamSequence || 0);
+      if (room.history.indexed) for (const id of affected) (room.dirtyHeights ||= new Set()).add(id);
+    }
     const delta = ["chunk", "thought", "toolcall", "plan"].includes(event.type);
     if ((delta || event.type === "message" || event.type === "message.delivery") && event.streamSequence !== undefined && event.streamSequence <= (room.history?.streamSequence ?? -1)) return;
     if (room.historyEvents && delta) room.historyEvents.push(event);
-    const handedBefore = room.history?.handedFromSeq;
     if (event.history) {
       if (room.history?.epoch && room.history.epoch !== event.history.epoch) return;
       if (room.history?.revision > event.history.revision && event.type !== "participant") return;
@@ -6872,19 +7813,20 @@
     const showing = current && state.view === "room";
     switch (event.type) {
       case "participant": {
+        const order = room.participantOrder ||= new Map();
+        if (event.streamSequence !== undefined) {
+          if (event.streamSequence < (order.get(event.participant.id) ?? -1)) return;
+          order.set(event.participant.id, event.streamSequence);
+        }
         const before = showing ? visibilityFingerprint(room) : "";
         const i = room.participants.findIndex((p) => p.id === event.participant.id);
+        const previous = i >= 0 ? room.participants[i] : null;
         const channelChanged = i >= 0 && room.participants[i].skillChannel !== event.participant.skillChannel;
         if (i >= 0) room.participants[i] = event.participant;
         else room.participants.push(event.participant);
-        if (!showing && remoteHidden(room) && handedBefore !== room.history?.handedFromSeq) {
-          room.restoreFrom = {};
-          if (listRoomId === room.id) listRoomId = null;
-        }
         if (showing) {
-          if (visibilityFingerprint(room) !== before || handedBefore !== room.history?.handedFromSeq) {
-            if (remoteHidden(room) && room.history?.version) void refreshHeld(roomId);
-            else renderMessages(`what ${event.participant.name} has seen moved`);
+          if (visibilityFingerprint(room) !== before) {
+            renderMessagesSoon(`what ${event.participant.name} has seen moved`);
           }
           else refreshSeen(room);
           if (channelChanged) refreshStartingLines(room);
@@ -6893,7 +7835,14 @@
           if (els.rcDialog.open) refreshReconnectDialog(room);
           if (state.detailsOpen && state.selection.kind === "participant" && state.selection.id === event.participant.id) {
             if (!editingInDetails()) renderDetails();
-            else refreshDetailsHeader(event.participant);
+            else {
+              refreshDetailsHeader(event.participant);
+              const config = p => JSON.stringify([p?.mode, p?.configOptions, p?.pendingSettings, p?.status === "starting"]);
+              if (config(previous) !== config(event.participant)) {
+                const panel = $("#pp-config");
+                if (panel) renderConfig(panel, event.participant, ["offline", "left"].includes(event.participant.status));
+              }
+            }
           }
         } else if ((state.view === "rooms" || state.view === "home")) {
           renderSideRooms();
@@ -6903,6 +7852,7 @@
         return;
       }
       case "participant.removed":
+        if (event.streamSequence !== undefined) (room.participantOrder ||= new Map()).set(event.id, event.streamSequence);
         room.participants = room.participants.filter((p) => p.id !== event.id);
         if (state.selection.kind === "participant" && state.selection.id === event.id) closeDetails();
         if (showing) {
@@ -6913,6 +7863,7 @@
         return;
       case "message":
         upsertMessage(roomId, event.message);
+        trimBodyCache(room);
         return;
       case "message.delivery": {
         const known = new Map(HistoryWindow.knownMessages(room).map(m => [m.id, m]));
@@ -6928,6 +7879,11 @@
       }
       case "message.removed":
         removeMessage(roomId, event.id);
+        return;
+      case "record.replaced":
+        previewCache.clear();
+        room.historyGeneration = (room.historyGeneration || 0) + 1;
+        void refreshHeld(roomId);
         return;
       case "messages.truncated":
         room.historyGeneration = (room.historyGeneration || 0) + 1;
@@ -7192,19 +8148,26 @@
     ws.onopen = () => {
       if (stream !== ws) return;
       retryDelay = 1000;
+      downSince = 0;
       els.conn.classList.add("ok");
+      renderGonePop();
     };
     ws.onmessage = (e) => {
       if (stream !== ws) return;
       const m = JSON.parse(e.data);
       const handle = HUB_EVENTS[m.type];
-      if (handle) handle(m);
+      if (!handle) return;
+      const started = performance.now();
+      handle(m);
+      noteBurst(m.type, performance.now() - started);
     };
     ws.onerror = () => { if (stream === ws) els.conn.classList.remove("ok"); };
     ws.onclose = () => {
       if (stream !== ws) return;
       els.conn.classList.remove("ok");
       stream = null;
+      if (!downSince) downSince = Date.now();
+      renderGonePop();
       void askKey();
       retryTimer = setTimeout(connect, retryDelay);
       retryDelay = Math.min(retryDelay * 2, 10000);
@@ -7215,9 +8178,48 @@
     const ws = stream;
     stream = null;
     ws.close();
+    downSince = 0;
+    renderGonePop();
     els.conn.classList.remove("ok");
     els.conn.title = "Paused while this tab is in the background; resumes when you come back";
   }
+  const connLabel = $("#conn-label");
+  const COMING_BACK_MS = 3000;
+  const NOBODY_THERE_MS = 15000;
+  let downSince = 0;
+  let goneTimer = 0;
+  function renderGonePop() {
+    clearTimeout(goneTimer);
+    const old = $("#gone-pop");
+    const down = downSince ? Date.now() - downSince : 0;
+    if (!downSince || down < COMING_BACK_MS) {
+      if (old) old.remove();
+      if (downSince) goneTimer = setTimeout(renderGonePop, COMING_BACK_MS - down);
+      if (connLabel) connLabel.textContent = downSince ? "reconnecting…" : "connected";
+      return;
+    }
+    const gone = down >= NOBODY_THERE_MS;
+    if (connLabel) connLabel.textContent = gone ? "not running" : "reconnecting…";
+    const folder = state.dataFolder && state.dataFolder.known && state.dataFolder.path;
+    const where = folder ? ` What happened is written down in <code>${esc(folder)}${folder.includes("\\") ? "\\" : "/"}hub.log</code>.` : "";
+    const words = gone
+      ? `<b>viberoom is not answering.</b> Everything in your rooms is kept on this computer and is safe — what has stopped is the program that serves them. Start viberoom again, and this window comes back on its own.${where}`
+      : "<b>Reconnecting to viberoom.</b> The room comes back by itself in a few seconds.";
+    const acts = gone
+      ? `<div class="up-acts">${UI.html("button", { label: "Check again", kind: "secondary", size: "sm", hook: "gp-retry" })}</div>`
+      : "";
+    const pop = old || document.createElement("div");
+    if (!old) {
+      pop.id = "gone-pop";
+      pop.className = "update-pop restart-pop";
+      $("#rail-pops").appendChild(pop);
+    }
+    pop.innerHTML = `<div class="up-main"><div class="up-text">${words}</div>${acts}</div>`;
+    const retry = pop.querySelector(".gp-retry");
+    if (retry) retry.addEventListener("click", () => { retryDelay = 1000; resyncStream(); });
+    if (!gone) goneTimer = setTimeout(renderGonePop, Math.max(500, NOBODY_THERE_MS - down));
+  }
+
   function resyncStream() {
     releaseStream();
     els.conn.title = "Connection to the room";
@@ -7259,6 +8261,23 @@
     }
     els.input.style.height = "auto";
     els.input.style.height = Math.min(composerCeiling(), Math.max(min, Math.min(cap, els.input.scrollHeight))) + "px";
+    watchComposerShift();
+  }
+
+  let composerShiftQueued = false;
+  function watchComposerShift() {
+    const list = els.messages;
+    if (!list || composerShiftQueued) return;
+    const before = { top: list.scrollTop, view: list.clientHeight };
+    composerShiftQueued = true;
+    requestAnimationFrame(() => {
+      composerShiftQueued = false;
+      const moved = Math.round(list.scrollTop - before.top);
+      if (!moved) return;
+      const grew = Math.round(list.clientHeight - before.view);
+      const room = Math.round(list.scrollHeight - list.clientHeight);
+      noteFinding(`the field changed height: the list ${grew >= 0 ? "grew" : "shrank"} by ${Math.abs(grew)} px and the reader moved ${moved} px (${Math.round(before.top)} → ${Math.round(list.scrollTop)} of ${room}${before.top >= room - grew - 2 ? ", from the very bottom" : ""})`);
+    });
   }
   window.addEventListener("resize", autosize);
   autosize();
@@ -7709,12 +8728,15 @@
   });
   async function goToLastReply(room, p) {
     const draft = room.messages.find((m) => m.from === p.id && m.streaming);
-    if (draft && jumpToMessage(els.messages.querySelector(`.msg[data-id="${cssEscape(draft.id)}"]`))) return;
+    if (draft && await jumpToId(draft.id)) return;
     const latest = room.history?.latest?.[p.id];
     if (latest && await revealSeq(latest.seq)) return;
     if (jumpToMessage([...els.messages.querySelectorAll(`.msg.agent[data-from="${cssEscape(p.id)}"]`)].pop())) return;
     const spoke = latest || room.messages.some((m) => m.from === p.id && m.kind === "chat");
     toast(spoke ? `${p.name}'s last reply could not be reached` : `${p.name} has not replied in this room yet`);
+  }
+  function optimisticOrder(room) {
+    return room.messages.reduce((last, m) => Math.max(last, m.displayOrder ?? m.seq ?? 0), 0) + 1;
   }
   els.composer.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -7728,7 +8750,7 @@
     clearQuotes();
     typingSentAt = 0;
     autosize();
-    const local = { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, seq: 0, from: "human", fromName: (state.settings || {}).humanName || "You", to: [], toNames: [], text, ts: Date.now(), kind: "chat", pending: true };
+    const local = { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, seq: 0, displayOrder: optimisticOrder(room), from: "human", fromName: (state.settings || {}).humanName || "You", to: [], toNames: [], text, ts: Date.now(), kind: "chat", pending: true };
     if (shots.length) local.images = shots.map((shot) => ({ file: "", name: shot.name, mimeType: shot.mimeType, bytes: 0, n: shot.n, url: shot.data }));
     if (quotes.length) local.quotes = quotes.map((q) => ({ ...q }));
     const localId = local.id;
@@ -7755,6 +8777,11 @@
     if (!m) return;
     m.id = realId;
     delete m.pending;
+    if (room.history?.indexed) itemLists.delete(room);
+    for (const chosen of [state.expanded, state.watched]) if (chosen.delete(localId)) chosen.add(realId);
+    if (room.bodyUses?.has(localId)) { room.bodyUses.set(realId, room.bodyUses.get(localId)); room.bodyUses.delete(localId); }
+    if (measuredRoom === roomId && measuredRows.has(localId)) { measuredRows.set(realId, measuredRows.get(localId)); measuredRows.delete(localId); }
+    if (settledReader?.roomId === roomId && settledReader.anchor?.id === localId) settledReader.anchor.id = realId;
     const el = els.messages.querySelector(`.msg[data-id="${localId}"]`);
     if (el) el.dataset.id = realId;
     const note = doneNotes.find((n) => n.id === localId);
@@ -8081,6 +9108,8 @@
     els.messages.addEventListener(type, () => (lastUserScrollAt = Date.now()), { passive: true });
   }
   els.messages.addEventListener("scroll", () => {
+    if (state.view !== "room") return;
+    if (rowPrices.stamp !== pricesStamp()) { repriceSoon(); return; }
     const top = els.messages.scrollTop;
     const byHand = Date.now() - lastUserScrollAt < 700;
     if (byHand && calm.reserve > 0) calmRelease();
@@ -8092,11 +9121,14 @@
     else if (top < lastScrollTop) stuck = false;
     if (stuck) calm.held = false;
     lastScrollTop = top;
+    rememberReader();
+    followWindowSoon();
     els.jumpLatest.hidden = stuck;
     updateTimelineView();
     updateWorkingNow();
     if (stuck) clearNotes();
     else pruneDoneNotes();
+    foldSettleSoon();
   });
   els.jumpLatest.addEventListener("click", scrollToBottom);
   document.addEventListener("mousedown", (e) => {
@@ -8107,8 +9139,7 @@
   setSideOpen(recall("sideOpen") !== "0");
   $("#rail-logo").addEventListener("click", () => setView("home"));
   $("#rail-new-room").addEventListener("click", openRoomDialog);
-  const connLabel = $("#conn-label");
-  new MutationObserver(() => (connLabel.textContent = els.conn.classList.contains("ok") ? "connected" : "reconnecting…")).observe(els.conn, { attributes: true, attributeFilter: ["class"] });
+  new MutationObserver(renderGonePop).observe(els.conn, { attributes: true, attributeFilter: ["class"] });
   if (recall("railOpen") === "1") els.app.classList.add("rail-open");
   els.backToRooms.addEventListener("click", () => {
     setView("rooms");
@@ -8124,25 +9155,82 @@
     searchTimer = setTimeout(applySearch, 120);
   });
   let storeSearchTimer = 0;
+  let allConversationSelection = null;
+  const conversationSelection = $("#conversation-selection");
+  function clearConversationSelection() {
+    allConversationSelection = null;
+    conversationSelection.hidden = true;
+  }
+  async function copyWholeConversation() {
+    const selected = allConversationSelection;
+    if (!selected || selected.busy) return;
+    selected.busy = true;
+    const button = conversationSelection.querySelector('[data-act="copy"]');
+    button.disabled = true; button.textContent = "Copying…";
+    try {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(selected.roomId)}/export?format=md&version=${encodeURIComponent(selected.version)}`, { signal: deadline(30000) });
+      if (!response.ok) {
+        const detail = await response.json();
+        throw new Error(detail.code === "history_changed" ? "The conversation changed. Select it again to copy the current record." : detail.error || "The conversation could not be loaded.");
+      }
+      const text = await response.text();
+      if (allConversationSelection !== selected || currentRoom()?.id !== selected.roomId) return;
+      await navigator.clipboard.writeText(text);
+      toast("Whole saved conversation copied as Markdown.", "ok");
+    } catch (error) { if (allConversationSelection === selected) showError(error); }
+    finally { selected.busy = false; button.disabled = false; button.textContent = "Copy"; }
+  }
+  conversationSelection.querySelector('[data-act="copy"]').addEventListener("click", () => void copyWholeConversation());
+  conversationSelection.querySelector('[data-act="clear"]').addEventListener("click", clearConversationSelection);
+  document.addEventListener("pointerdown", event => {
+    if (allConversationSelection && !conversationSelection.contains(event.target)) clearConversationSelection();
+  });
+  document.addEventListener("focusin", event => {
+    if (allConversationSelection && !conversationSelection.contains(event.target) && !els.messages.contains(event.target)) clearConversationSelection();
+  });
+  document.addEventListener("keydown", event => {
+    if (state.view !== "room" || document.querySelector("dialog[open]")) return;
+    if (event.key === "Escape" && allConversationSelection) {
+      clearConversationSelection(); event.preventDefault(); event.stopImmediatePropagation(); return;
+    }
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key === "f") {
+      event.preventDefault(); clearConversationSelection(); els.search.focus(); els.search.select(); return;
+    }
+    if (event.target.closest?.("input, textarea, select, [contenteditable]")) return;
+    if (key === "a") {
+      const room = currentRoom();
+      if (!room) return;
+      event.preventDefault(); window.getSelection()?.removeAllRanges();
+      allConversationSelection = { roomId: room.id, version: room.history?.version || "", busy: false };
+      conversationSelection.hidden = false;
+      els.messages.focus({ preventScroll: true });
+    } else if (key === "c" && allConversationSelection) {
+      event.preventDefault(); void copyWholeConversation();
+    }
+  });
   const searchPanel = $("#search-panel");
   const storeSearch = { scope: recall("searchScope") || "all", sort: "rank", seq: 0 };
   els.search.addEventListener("input", () => {
     clearTimeout(storeSearchTimer);
     const q = els.search.value.trim();
     if (q.length < 2) {
+      storeSearch.seq++;
       searchPanel.hidden = true;
       return;
     }
     storeSearchTimer = setTimeout(() => searchStore(q), 300);
   });
   els.search.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") searchPanel.hidden = true;
+    if (e.key === "Escape") { storeSearch.seq++; searchPanel.hidden = true; }
     if (e.key === "Enter" && els.search.value.trim().length >= 2) {
       clearTimeout(storeSearchTimer);
       searchStore(els.search.value.trim());
     }
   });
   async function searchStore(q) {
+    if (q.length < 2) { storeSearch.seq++; searchPanel.hidden = true; return; }
     const room = currentRoom();
     if (!room) return;
     const mine = ++storeSearch.seq;
@@ -8181,11 +9269,12 @@
     if (!row) return;
     const roomId = row.dataset.room;
     const seq = row.dataset.seq;
+    storeSearch.seq++;
     searchPanel.hidden = true;
     const jump = () => revealSeq(Number(seq));
-    if (roomId === state.currentRoomId) return void jump();
     els.search.value = "";
     applySearch();
+    if (roomId === state.currentRoomId) return void jump();
     selectRoom(roomId);
     requestAnimationFrame(() => requestAnimationFrame(jump));
   });
@@ -8193,16 +9282,13 @@
     if (!searchPanel.hidden && !e.target.closest("#search-panel, .chat-actions .search")) searchPanel.hidden = true;
   });
   function applySearch() {
-    state.search = els.search.value.trim();
+    const wasFiltered = !!state.search;
+    state.search = "";
     const room = currentRoom();
     if (!room) return;
-    els.messages.classList.toggle("searching", !!state.search);
-    const byId = new Map(HistoryWindow.knownMessages(room).map((m) => [m.id, m]));
-    for (const el of els.messages.querySelectorAll(".msg[data-id]")) {
-      const m = byId.get(el.dataset.id);
-      if (m) el.classList.toggle("hidden-by-search", !messageMatches(m));
-    }
-    renderTimeline();
+    els.messages.classList.remove("searching");
+    for (const el of els.messages.querySelectorAll(".hidden-by-search")) el.classList.remove("hidden-by-search");
+    if (wasFiltered) renderMessagesSoon("the local search filter was cleared");
   }
   els.inviteBtn.addEventListener("click", openInvite);
   els.invType.addEventListener("change", () => applyRecipe(false));
@@ -8309,6 +9395,15 @@
   });
   els.roomSettingsBtn.addEventListener("click", () => openDetails({ kind: "room" }));
   els.chatInfoBtn.addEventListener("click", () => openDetails({ kind: "room" }));
+
+  async function openCarry(room) {
+    await window.ViberoomCarry.open(room);
+  }
+
+  els.carryBtn.addEventListener("click", () => {
+    const room = currentRoom();
+    if (room) void openCarry(room);
+  });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.detailsOpen && !document.querySelector("dialog[open]") && !editingInDetails()) closeDetails();
   });
@@ -8335,18 +9430,21 @@
       const h = Math.max(0, t.ticks.clientHeight - tickH);
       const fits = els.messages.scrollHeight <= els.messages.clientHeight + 1;
       const stripTop = fits ? t.ticks.getBoundingClientRect().top : 0;
-      const tops = fits ? nodes.map((el) => el.getBoundingClientRect().top - stripTop) : nodes.map(topInList);
+      const tops = fits
+        ? nodes.map((row) => { const node = drawnRow(row.id); return node ? node.getBoundingClientRect().top - stripTop : 0; })
+        : nodes.map((row) => row.top);
       t.pos = fits ? null : tops;
-      t.heights = fits ? null : nodes.map((el) => el.offsetHeight);
       if (!fits && globalThis.VIBEROOM_TIMELINE) {
+        t.heights = null;
         drawSlots(nodes, tops, total);
         settleLater();
         return;
       }
+      t.heights = fits ? null : nodes.map((row) => row.height);
       const frag = document.createDocumentFragment();
       nodes.forEach((el, i) => {
         const tick = document.createElement("div");
-        const pinned = el.classList.contains("pinned");
+        const pinned = el.pinned;
         tick.className = `tl-tick${pinned ? " pinned i i-pin-long" : ""}`;
         tick.dataset.i = i;
         if (opts.colorOf) tick.style.setProperty("--tick", opts.colorOf(room, el));
@@ -8383,55 +9481,48 @@
       const { slotsOf, pinGroups, INK_FLOOR } = globalThis.VIBEROOM_TIMELINE;
       const height = t.ticks.clientHeight;
       const places = Math.max(1, Math.floor(height / tickH));
-      const authors = opts.colorOf ? nodes.map((el) => el.dataset.from || "") : nodes.map(() => "me");
+      const authors = opts.colorOf ? nodes.map((row) => row.m.from || "") : nodes.map(() => "me");
       const slots = slotsOf({ pos: tops, authors, total, slots: places });
       t.slots = slots;
       t.total = total;
-      if (t.ticks.children.length !== slots.length) {
-        const frag = document.createDocumentFragment();
-        for (let at = 0; at < slots.length; at++) {
-          const fresh = document.createElement("div");
-          fresh.className = "tl-slot";
-          fresh.dataset.at = String(at);
-          frag.appendChild(fresh);
-        }
-        t.ticks.replaceChildren(frag);
-      }
       const held = [];
       for (let at = 0; at < slots.length; at++) {
         const slot = slots[at];
         let count = 0;
         for (let i = slot.first; i >= 0 && i < slot.first + slot.count && i < nodes.length; i++) {
-          if (nodes[i].classList.contains("pinned")) count++;
+          if (nodes[i].pinned) count++;
         }
         if (count) held.push({ at, count });
       }
       const drawnPins = new Map(pinGroups(held, tickH, PIN_GLYPH_H).map((group) => [group.at, group.count]));
-      slots.forEach((slot, at) => {
-        const el = t.ticks.children[at];
-        if (!el) return;
-        el.hidden = !slot.count;
-        if (!slot.count) return;
-        const held = nodes[firstBy(nodes, authors, slot, slot.author)];
-        if (opts.colorOf && held) el.style.setProperty("--tick", opts.colorOf(currentRoom(), held));
-        const ink = INK_FLOOR + (1 - INK_FLOOR) * slot.strength;
-        el.style.setProperty("--mix", `${Math.round(ink * DENSITY)}%`);
-        const before = slot.separator ? 1 : 0;
-        const after = slots[at + 1] && slots[at + 1].separator ? 1 : 0;
-        el.style.top = `${at * tickH + before}px`;
-        el.style.height = `${tickH - before - after}px`;
-        const pins = drawnPins.get(at) || 0;
-        if (pins) {
-          el.classList.add("pinned", "i", "i-pin-long");
-          const glyph = el.querySelector(".tl-pin-glyph") || el.appendChild(document.createElement("span"));
-          glyph.className = "tl-pin-glyph";
-          glyph.title = pins === 1 ? "Pinned · go to it" : `${pins} pinned · go to them`;
-          if (pins > 1) glyph.dataset.many = String(pins);
-          else delete glyph.dataset.many;
-        } else {
-          el.classList.remove("pinned", "i", "i-pin-long");
-          el.querySelector(".tl-pin-glyph")?.remove();
-        }
+      KeyedList.patch(t.ticks, slots, {
+        key: "at",
+        id: (_slot, at) => at,
+        make: () => Object.assign(document.createElement("div"), { className: "tl-slot" }),
+        fill: (el, slot, at) => {
+          el.hidden = !slot.count;
+          if (!slot.count) return;
+          const held = nodes[firstBy(nodes, authors, slot, slot.author)];
+          if (opts.colorOf && held) el.style.setProperty("--tick", opts.colorOf(currentRoom(), held));
+          const ink = INK_FLOOR + (1 - INK_FLOOR) * slot.strength;
+          el.style.setProperty("--mix", `${Math.round(ink * DENSITY)}%`);
+          const before = slot.separator ? 1 : 0;
+          const after = slots[at + 1] && slots[at + 1].separator ? 1 : 0;
+          el.style.top = `${at * tickH + before}px`;
+          el.style.height = `${tickH - before - after}px`;
+          const pins = drawnPins.get(at) || 0;
+          if (pins) {
+            el.classList.add("pinned", "i", "i-pin-long");
+            const glyph = el.querySelector(".tl-pin-glyph") || el.appendChild(document.createElement("span"));
+            glyph.className = "tl-pin-glyph";
+            glyph.title = pins === 1 ? "Pinned · go to it" : `${pins} pinned · go to them`;
+            if (pins > 1) glyph.dataset.many = String(pins);
+            else delete glyph.dataset.many;
+          } else {
+            el.classList.remove("pinned", "i", "i-pin-long");
+            el.querySelector(".tl-pin-glyph")?.remove();
+          }
+        },
       });
       t.inView = null;
       updateView();
@@ -8481,7 +9572,7 @@
     function rowHtml(k, cls) {
       const el = t.items[k];
       const av = opts.avatarOf ? `<span class="tl-av">${opts.avatarOf(currentRoom(), el)}</span>` : "";
-      const pinned = el.classList.contains("pinned");
+      const pinned = el.pinned;
       return `<div class="tl-row ${cls}${pinned ? " pinned" : ""}" data-i="${k}">${av}<span class="tl-text">${esc(timelineText(el))}</span>${pinned ? `<span class="tl-pin" title="Pinned">${ic("pin")}</span>` : ""}</div>`;
     }
     function showPop(i, keepPlace, overSlot) {
@@ -8505,10 +9596,11 @@
       if (t.mark) t.mark.hidden = true;
       aim(null);
     }
-    function aim(el) {
-      if (t.aimed === el) return;
+    function aim(row) {
+      const node = row ? drawnRow(row.id) : null;
+      if (t.aimed === node) return;
       if (t.aimed) t.aimed.classList.remove("aimed");
-      t.aimed = el || null;
+      t.aimed = node || null;
       if (t.aimed) t.aimed.classList.add("aimed");
     }
     function markMessage(i) {
@@ -8562,15 +9654,15 @@
       const slot = t.slots && e.target.closest(".tl-slot");
       if (slot) {
         const i = itemUnder(slot, e.clientY);
-        if (i >= 0) jumpToMessage(t.items[i]);
+        if (i >= 0) void jumpToId(t.items[i].id);
         return;
       }
       const tick = e.target.closest(".tl-tick");
-      if (tick) jumpToMessage(t.items[Number(tick.dataset.i)]);
+      if (tick) void jumpToId(t.items[Number(tick.dataset.i)]?.id);
     });
     t.pop.addEventListener("click", (e) => {
       const row = e.target.closest(".tl-row");
-      if (row) jumpToMessage(t.items[Number(row.dataset.i)]);
+      if (row) void jumpToId(t.items[Number(row.dataset.i)]?.id);
     });
     const WHEEL_STEP = 30;
     let wheelAcc = 0;
@@ -8597,9 +9689,8 @@
     }
     return { render, rescale, updateView, follow };
   }
-  function timelineText(el) {
-    const t = el.querySelector(".text");
-    return (t ? t.textContent : el.textContent).trim().replace(/\s+/g, " ").slice(0, 240);
+  function timelineText(row) {
+    return String(row.m.text || "").trim().replace(/\s+/g, " ").slice(0, 240);
   }
   const doneNotes = [];
   const NOTE_TTL_MS = 4000;
@@ -8667,10 +9758,39 @@
     if (!note) return;
     const id = note.dataset.id;
     dropNote(id);
-    jumpToMessage(els.messages.querySelector(`.msg[data-id="${id}"]`));
+    void jumpToId(id);
   });
+  async function jumpToId(id) {
+    if (!id) return false;
+    const initial = currentRoom();
+    if (initial?.history?.indexed && initial.messages.find(m => m.id === id)?.bodyMissing) {
+      if (!await loadBodies(initial, [id], true)) {
+        toast("This message could not be loaded. Try again when the connection is back.", "warn");
+        return false;
+      }
+      if (currentRoom() !== initial) return false;
+    }
+    if (jumpToMessage(els.messages.querySelector(`.msg[data-id="${cssEscape(id)}"]`))) return true;
+    const room = currentRoom();
+    const held = room && HistoryWindow.knownMessages(room).find((m) => m.id === id);
+    if (held && held.seq > 0 && await revealSeq(held.seq)) return true;
+    if (room && await refreshHeld(room.id, { messageId: id, reader: { id, into: 12 } })) {
+      const ready = drawnRow(id);
+      if (ready) return jumpToMessage(ready);
+      const at = room.messages.findIndex(m => m.id === id);
+      if (at >= 0) {
+        setFoldIndex(room, Math.max(0, at - FOLD_STEP));
+        stuck = false;
+        renderMessages("a message was asked for by id", { id, into: 12 });
+        return jumpToMessage(els.messages.querySelector(`.msg[data-id="${cssEscape(id)}"]`));
+      }
+    }
+    toast("That message could not be reached; it may be older than this room holds.");
+    return false;
+  }
+
   function jumpToMessage(el) {
-    if (!el) return false;
+    if (!el || !el.isConnected) return false;
     if (!onScreen(el)) {
       const from = els.messages.scrollTop;
       el.scrollIntoView({ block: "center" });
@@ -8694,10 +9814,31 @@
     const shown = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
     return shown >= Math.min(r.height, box.height) - 1;
   }
-  const authorOf = (room, el) => findById(room, el.dataset.from);
+  const drawnRow = (id) => els.messages.querySelector(`.msg[data-id="${CSS.escape(id)}"]`);
+  function stripRows(room, mine) {
+    const items = listItems(room);
+    const account = listAccount && listAccount.items.length === items.length ? listAccount : null;
+    const rows = [];
+    items.forEach((item, at) => {
+      if (item.kind !== "msg") return;
+      const m = item.m;
+      if ((m.from === "human") !== mine) return;
+      if (m.kind === "hidden" || !messageMatches(m)) return;
+      rows.push({
+        id: m.id,
+        m,
+        at,
+        pinned: !!m.pinned,
+        top: account ? ListIndex.topOf(account, at) : 0,
+        height: account ? ListIndex.heightAt(account, at) : 0,
+      });
+    });
+    return account ? rows : [];
+  }
+  const authorOf = (room, row) => findById(room, row.m.from);
   const timelines = [
-    createTimeline($("#timeline"), () => [...els.messages.querySelectorAll(".msg.mine:not(.hidden-by-search)")], { slotH: MINE_SLOT_H }),
-    createTimeline($("#timeline-left"), () => [...els.messages.querySelectorAll(".msg.agent:not(.hidden-by-search)")], {
+    createTimeline($("#timeline"), (room) => stripRows(room, true), { slotH: MINE_SLOT_H }),
+    createTimeline($("#timeline-left"), (room) => stripRows(room, false), {
       colorOf: (room, el) => { const p = authorOf(room, el); return p ? colourOf(p) : FALLBACK_COLOR(); },
       avatarOf: (room, el) => { const p = authorOf(room, el); return p ? avatar(p, 16, {}) : ""; },
     }),
@@ -8721,7 +9862,10 @@
     followComposer();
     renderTimelineSoon(true);
   }).observe(els.composer);
-  new ResizeObserver(() => renderTimelineSoon(true)).observe(els.messages);
+  new ResizeObserver(() => {
+    renderTimelineSoon(true);
+    repriceSoon();
+  }).observe(els.messages);
   document.fonts.ready.then(() => renderTimeline());
   let timelineTimer = 0;
   let timelineFull = false;
@@ -8838,7 +9982,7 @@
     if (!room) return;
     const m = [...room.messages].reverse().find((x) => x.from === b.dataset.id && x.kind === "chat");
     const el = m && els.messages.querySelector(`.msg[data-id="${m.id}"]`);
-    if (el && m.streaming) jumpToMessage(el);
+    if (m?.streaming) void jumpToId(m.id);
     else scrollToBottom("the working figure was clicked");
   });
 
@@ -9086,7 +10230,7 @@
       }
       return;
     }
-    jumpToMessage(els.messages.querySelector(`.msg[data-id="${row.dataset.id}"]`));
+    void jumpToId(row.dataset.id);
     pinsPanel.hidden = true;
   });
   document.addEventListener("click", (e) => {

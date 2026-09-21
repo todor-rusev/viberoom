@@ -10,7 +10,7 @@
     "viberoom": "dist/main.js"
   },
   "scripts": {
-    "build": "node scripts/vendor-acp.mjs && tsc -p tsconfig.json",
+    "build": "node scripts/vendor-acp.mjs && node scripts/vendor-ui.mjs && tsc -p tsconfig.json && node scripts/prune-dist.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js",
     "dev": "npm run build && node dist/main.js --open",
@@ -32,13 +32,13 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
     "marked": "^16.4.2",
-    "mermaid": "^11.17.2",
     "prismjs": "^1.30.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.76.0",
     "@agentclientprotocol/codex-acp": "1.11.0",
+    "mermaid": "^11.17.2",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0"
   },

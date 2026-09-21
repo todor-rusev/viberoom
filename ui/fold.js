@@ -25,8 +25,12 @@
         index = byOrder < 0 ? tail : byOrder;
       }
     }
-    const firstDraft = messages.findIndex((m) => !(m.seq > 0));
-    return firstDraft >= 0 ? Math.min(index, firstDraft) : index;
+    return index;
+  }
+
+  function anchorSurplus(messages, anchor, shown = FOLD_SHOWN) {
+    if (!anchor) return 0;
+    return Math.max(0, foldIndexFor(messages, null, shown) - foldIndexFor(messages, anchor, shown));
   }
 
   function partsOf(messages, index) {
@@ -38,5 +42,5 @@
     };
   }
 
-  root.Fold = { FOLD_SHOWN, FOLD_STEP, orderOf, isPinnedChat, anchorAt, foldIndexFor, partsOf };
+  root.Fold = { FOLD_SHOWN, FOLD_STEP, orderOf, isPinnedChat, anchorAt, anchorSurplus, foldIndexFor, partsOf };
 })(typeof window !== "undefined" ? window : globalThis);
