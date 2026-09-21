@@ -117,6 +117,12 @@ async function handle(message: JsonRpcMessage): Promise<void> {
         reply(id, { content: [{ type: "text", text: String(res.body.message ?? "attached") }] });
         return;
       }
+      if (name === "memory") {
+        const res = await hub("/api/mcp/memory", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...args, token: TOKEN }) });
+        if (!res.ok) return errorResult("memory could not be maintained", res);
+        reply(id, { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] });
+        return;
+      }
       if (name === "describe_room") {
         const res = await hub(`/api/mcp/room?token=${encodeURIComponent(TOKEN)}`);
         if (!res.ok) return errorResult("the room could not be described", res);

@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { MemoryService } from "./memory-service.js";
 import { parseAgentSearchArgs, searchAgentHistory } from "./agent-history.js";
 import { parseReadMessageArgs } from "./message-read.js";
 import { parseMessageCheckArgs } from "./message-check.js";
@@ -134,6 +135,7 @@ export interface DataFolderAccess {
 
 export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo, onShutdownRequest: () => void, extras: { autostart?: AutostartOptions; dataFolder?: DataFolderAccess; run?: { startedAs: StartReason; startedAt: number } } = {}): Promise<RunningServer> {
   const transfers = new CarryTransfers(hub, info.version, log.child("carry"));
+  const memory = new MemoryService(hub);
   const uiDir = fileURLToPath(new URL("../ui/", import.meta.url));
   const assetsDir = fileURLToPath(new URL("../assets/", import.meta.url));
   const vendorDir = fileURLToPath(new URL("../vendor/", import.meta.url));
@@ -589,6 +591,11 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (path === "/api/memory" && req.method === "GET") {
+      sendJson(res, 200, memory.view(url.searchParams.get("room") || undefined, true));
+      return;
+    }
+
     if (req.method === "GET" && path === "/api/channels") {
       sendJson(res, 200, hub.channels.view());
       return;
@@ -753,6 +760,16 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     }
 
     const body = (await readJson(req)) as Record<string, unknown>;
+    if (path === "/api/memory") {
+      sendJson(res, 200, memory.human(typeof body.room === "string" ? body.room : undefined, body));
+      return;
+    }
+    if (path === "/api/mcp/memory") {
+      const { token, ...args } = body;
+      if (typeof token !== "string" || !hub.resolveMcpToken(token)) { sendJson(res, 403, { error: "This agent session is no longer available." }); return; }
+      sendJson(res, 200, memory.agent(typeof token === "string" ? token : "", args));
+      return;
+    }
 
     if (path === TRACE_REPORT_PATH) {
       const target = hub.resolveMcpToken(typeof body?.token === "string" ? body.token : "");

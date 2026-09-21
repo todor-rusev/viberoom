@@ -1032,6 +1032,14 @@ html[data-calm] .bubble .text.streamed { padding-bottom: 30px; }
 .section.template .field-note { margin: -2px 0 12px; }
 .carry-parts { display: flex; flex-direction: column; gap: 8px; text-align: left; }
 .carry-dialog { width: min(840px, 94vw); max-height: 90vh; padding: 24px; }
+.memory-dialog { width: min(820px, 94vw); max-height: 90vh; overflow: auto; padding: 24px; text-align: left; }
+.memory-notes { display: grid; gap: 12px; }
+.memory-note { padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+.memory-note textarea { width: 100%; box-sizing: border-box; }
+.memory-note-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.memory-note small, .memory-count { color: var(--ink-3); }
+.memory-history { margin-top: 18px; }
+.memory-feedback { white-space: pre-wrap; }
 .carry-heading, .carry-modes { display: flex; align-items: center; gap: 8px; }
 .carry-heading { justify-content: space-between; }
 .carry-heading h3 { margin: 0; }

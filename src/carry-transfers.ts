@@ -21,6 +21,7 @@ import { roomForExport } from "./export-room.js";
 import { FOLDER_ID_FILE } from "./identity.js";
 import { isBuiltinSkill } from "./skills.js";
 import { checkLookSpec } from "./looks.js";
+import { portableMemory, type PortableMemory } from "./shared-memory.js";
 import { dependencyFiles, dependencyStamp } from "./carry-dependencies.js";
 import { safeDataFile } from "./file-transaction.js";
 
@@ -31,12 +32,13 @@ interface Job {
   status: "working" | "uploaded" | "password" | "ready" | "error" | "applied";
   result?: unknown; error?: string; worker?: Worker;
   snapshot?: string; previewToken?: string;
-  versions?: Map<string, { version: string | null; setup: string | null; uuid: string }>;
+  versions?: Map<string, { version: string | null; setup: string | null; uuid: string; memoryRevision: number }>;
   fileName?: string;
+  userMemoryRevision?: number;
   applying?: boolean;
   pending?: Promise<void>;
 }
-interface SelectedRoom { uuid: string; target?: string | null; name?: string; conversation?: boolean; settings?: boolean; resources?: boolean; setup?: "ours" | "incoming"; branch?: BranchChoice; resourcesChoice?: "ours" | "incoming" }
+interface SelectedRoom { memory?: boolean; memoryChoice?: "ours" | "incoming"; uuid: string; target?: string | null; name?: string; conversation?: boolean; settings?: boolean; resources?: boolean; setup?: "ours" | "incoming"; branch?: BranchChoice; resourcesChoice?: "ours" | "incoming" }
 
 const json = (res: ServerResponse, status: number, value: unknown) => { res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" }); res.end(JSON.stringify(value)); };
 const setupStamp = (room: StoredRoom) => createHash("sha256").update(JSON.stringify({ name: room.name, dir: room.dir, ...roomForExport(room as unknown as Record<string, unknown>) })).digest("hex");
@@ -139,7 +141,7 @@ export class CarryTransfers {
     return { uuid: this.hub.folderId, label };
   }
   private portableRooms(ids: string[]): ExportJob["rooms"] {
-    if (!ids.length || new Set(ids).size !== ids.length) throw new Error("Choose at least one room, without repeating it.");
+    if (new Set(ids).size !== ids.length) throw new Error("Choose at least one room, without repeating it.");
     return ids.map(id => {
       const room = this.hub.getRoom(id), stored = room.toStored();
       const portable = roomForExport(stored as unknown as Record<string, unknown>);
@@ -188,21 +190,22 @@ export class CarryTransfers {
       if (!name || name.length > 60) throw new Error("A new room name must be 1–60 characters.");
       const id = existing?.id ?? this.hub.importedRoomAddress(name, reserved); reserved.add(id);
       const target: StoredRoom = existing?.toStored() ?? { id, uuid: carried.uuid, name, dir: join(this.hub.dataDir, "rooms", id, "workspace"), createdAt: Date.now(), settings: {}, participants: [] };
-      return { uuid: carried.uuid, target, made: !existing, conversation: asked.conversation !== false, settings: asked.settings !== false, resources: asked.resources !== false, ...(asked.resourcesChoice === "ours" || asked.resourcesChoice === "incoming" ? { resourcesChoice: asked.resourcesChoice } : {}), ...(asked.setup === "ours" || asked.setup === "incoming" ? { setup: asked.setup } : {}), ...(["ours", "incoming", "both"].includes(String(asked.branch)) ? { branch: asked.branch } : {}) };
+      return { uuid: carried.uuid, target, made: !existing, conversation: asked.conversation !== false, settings: asked.settings !== false, memory: asked.memory === true, ...(asked.memoryChoice === "ours" || asked.memoryChoice === "incoming" ? { memoryChoice: asked.memoryChoice } : {}), resources: asked.resources !== false, ...(asked.resourcesChoice === "ours" || asked.resourcesChoice === "incoming" ? { resourcesChoice: asked.resourcesChoice } : {}), ...(asked.setup === "ours" || asked.setup === "incoming" ? { setup: asked.setup } : {}), ...(["ours", "incoming", "both"].includes(String(asked.branch)) ? { branch: asked.branch } : {}) };
     });
   }
 
-  private plan(job: Job, selected: SelectedRoom[], dependencies: Record<string, "ours" | "incoming">): void {
+  private plan(job: Job, selected: SelectedRoom[], dependencies: Record<string, "ours" | "incoming">, userMemory = false, userMemoryChoice?: "ours" | "incoming"): void {
     if (job.kind !== "import" || job.status === "working" || job.applying) throw new Error("This transfer is still being prepared.");
     if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies) || Object.values(dependencies).some(value => value !== "ours" && value !== "incoming")) throw new Error("Choose which shared definitions to keep.");
     const stage = new CarryStage(join(job.dir, "stage"));
     let choices: RoomImportChoice[];
     try { choices = this.choices(stage, selected); } finally { stage.close(); }
     job.previewToken = undefined;
-    job.versions = new Map(choices.map(c => [c.target.id, { version: this.hub.rooms.get(c.target.id)?.historyStamp().version ?? null, setup: c.made ? null : setupStamp(c.target), uuid: c.target.uuid! }]));
+    job.userMemoryRevision = userMemory ? this.hub.history.memory.read("user").revision : undefined;
+    job.versions = new Map(choices.map(c => [c.target.id, { version: this.hub.rooms.get(c.target.id)?.historyStamp().version ?? null, setup: c.made ? null : setupStamp(c.target), uuid: c.target.uuid!, memoryRevision: this.hub.history.memory.read(`room:${c.target.uuid}`).revision }]));
     this.launch(job, async () => {
       const snapshot = await this.snapshot(job);
-      const result = await this.work<CarryPlanPreview>(job, { type: "plan", job: { snapshot, stageDir: join(job.dir, "stage"), dataDir: this.hub.dataDir, source: this.source(), choices, dependencyChoices: dependencies } });
+      const result = await this.work<CarryPlanPreview>(job, { type: "plan", job: { snapshot, stageDir: join(job.dir, "stage"), dataDir: this.hub.dataDir, source: this.source(), choices, dependencyChoices: dependencies, userMemory, userMemoryChoice } });
       job.previewToken = randomUUID();
       return { ...result, previewToken: job.previewToken };
     });
@@ -212,8 +215,10 @@ export class CarryTransfers {
     if (job.status !== "ready" || !job.previewToken || token !== job.previewToken || !job.versions) throw new Error("Review this import before applying it.");
     const stage = new CarryStage(join(job.dir, "stage"));
     try {
-      const plan = stage.meta<{ rooms: PlannedRoom[]; dependencies: PlannedDependency[]; directoryVersions: { path: string; hash: string }[]; fileVersions: { path: string; hash: string | null }[] }>("plan");
+      const plan = stage.meta<{ userMemory?: PortableMemory; rooms: PlannedRoom[]; dependencies: PlannedDependency[]; directoryVersions: { path: string; hash: string }[]; fileVersions: { path: string; hash: string | null }[] }>("plan");
+      if (job.userMemoryRevision !== undefined && job.userMemoryRevision !== this.hub.history.memory.read("user").revision) throw new Error("Shared user memory changed after the preview. Review the import again.");
       if (!plan) throw new Error("Choose how to handle every conflict before importing.");
+      for (const [id, expected] of job.versions) if (this.hub.history.memory.read(`room:${expected.uuid}`).revision !== expected.memoryRevision) throw new Error("Room memory changed after the preview. Review the import again; nothing was imported.");
       const files: FileChange[] = [];
       for (const dependency of plan.dependencies) {
         if (dependency.kind === "skill" && isBuiltinSkill(dependency.id)) throw new Error("Built-in skills stay with the installed viberoom. They cannot be replaced by an archive.");
@@ -241,10 +246,12 @@ export class CarryTransfers {
       const sources = [stage.meta<CarrySource>("source")!, ...stage.db.prepare("select value from meta where key like 'source:%'").all().map(row => JSON.parse(String(row.value)) as CarrySource)];
       const changedSources = sources.filter(source => knownSources.get(source.uuid) !== source.label);
       const changes = plan.rooms.filter(room => room.changed || changedSources.length).map(p => ({ stored: p.stored, setup: p.setup }));
-      if (changes.length || files.length || changedSources.length) this.hub.commitRoomTransfer(changes, files, () => {
+      if (changes.length || files.length || changedSources.length || plan.userMemory) this.hub.commitRoomTransfer(changes, files, () => {
+        if (plan.userMemory) this.hub.history.memory.importScope("user", plan.userMemory);
         for (const room of plan.rooms) {
           const history = this.hub.history, id = room.stored.id;
           history.carry.importRevisions(id, room.revisions);
+          if (room.memory) this.hub.history.memory.importRoom(room.stored.uuid!, room.memory);
           for (const state of room.states) {
             history.upsert(id, state.message, { track: false });
             if (state.deletedAt !== null) history.markDeleted(id, [state.message.id], state.deletedAt, { track: false });
@@ -259,7 +266,7 @@ export class CarryTransfers {
       job.status = "applied"; job.previewToken = undefined;
       for (const dependency of plan.dependencies) if (dependency.kind === "skill") this.hub.skillsChanged(dependency.id);
       if (plan.dependencies.some(d => d.kind === "look")) this.hub.emit("event", { type: "looks", looks: this.hub.looks.list() });
-      const result = { rooms: plan.rooms.map(r => ({ id: r.stored.id, name: r.stored.name })) };
+      const result = { userMemory: !!plan.userMemory, rooms: plan.rooms.map(r => ({ id: r.stored.id, name: r.stored.name })) };
       job.result = result;
       return result;
     } finally { stage.close(); }
@@ -269,7 +276,7 @@ export class CarryTransfers {
     if (!url.pathname.startsWith("/api/carry")) return false;
     const path = url.pathname;
     if (req.method === "GET" && path === "/api/carry") {
-      json(res, 200, { source: this.source(), rooms: [...this.hub.rooms.values()].map(r => ({ id: r.id, uuid: r.uuid, aliases: this.hub.history.carry.aliases(r.id), name: r.name, connected: r.hasConnectedAgents })) }); return true;
+      json(res, 200, { source: this.source(), userMemoryBytes: Buffer.byteLength(JSON.stringify(portableMemory(this.hub.history.memory.read("user")))), rooms: [...this.hub.rooms.values()].map(r => ({ id: r.id, uuid: r.uuid, aliases: this.hub.history.carry.aliases(r.id), name: r.name, connected: r.hasConnectedAgents, memoryBytes: Buffer.byteLength(JSON.stringify(portableMemory(this.hub.history.memory.read(`room:${r.uuid}`)))) })) }); return true;
     }
     if (req.method === "GET" && path === "/api/carry/removed") {
       const room = this.hub.getRoom(url.searchParams.get("room") ?? "");
@@ -350,12 +357,13 @@ export class CarryTransfers {
     catch { throw new Error("Invalid transfer options JSON."); }
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Transfer options must be an object.");
     if (body.passphrase !== undefined && typeof body.passphrase !== "string") throw new Error("The passphrase must be text; it was not used.");
-    for (const key of ["conversation", "settings", "resources"]) if (body[key] !== undefined && typeof body[key] !== "boolean") throw new Error("Part choices must be on or off.");
+    for (const key of ["conversation", "settings", "resources", "memory", "userMemory"]) if (body[key] !== undefined && typeof body[key] !== "boolean") throw new Error("Part choices must be on or off.");
     if (path === "/api/carry/source") { json(res, 200, this.saveSource(body.label)); return true; }
     if (path === "/api/carry/export" || path === "/api/carry/estimate") {
       if (!Array.isArray(body.rooms) || body.rooms.some(id => typeof id !== "string")) throw new Error("Choose the rooms to carry.");
       const rooms = this.portableRooms(body.rooms as string[]), estimate = path.endsWith("estimate");
-      const choice = { conversation: body.conversation !== false, settings: body.settings !== false, resources: body.resources !== false };
+      const choice = { conversation: body.conversation !== false, settings: body.settings !== false, resources: body.resources !== false, memory: body.memory === true, userMemory: body.userMemory === true };
+      if (!rooms.length && !choice.userMemory) throw new Error("Choose a room or shared user memory to export.");
       if (!estimate && !Object.values(choice).some(Boolean)) throw new Error("Choose at least one part to carry.");
       const source = estimate ? this.source() : this.saveSource(body.sourceLabel);
       const passphrase = typeof body.passphrase === "string" ? body.passphrase : undefined;
@@ -373,7 +381,7 @@ export class CarryTransfers {
         this.inspect(job, typeof body.passphrase === "string" ? body.passphrase : undefined); json(res, 202, { id: job.id });
       } else if (route[2] === "plan") {
         if (!Array.isArray(body.rooms)) throw new Error("Choose rooms from this archive.");
-        this.plan(job, body.rooms as SelectedRoom[], (body.dependencies ?? {}) as Record<string, "ours" | "incoming">); json(res, 202, { id: job.id });
+        this.plan(job, body.rooms as SelectedRoom[], (body.dependencies ?? {}) as Record<string, "ours" | "incoming">, body.userMemory === true, body.userMemoryChoice === "ours" || body.userMemoryChoice === "incoming" ? body.userMemoryChoice : undefined); json(res, 202, { id: job.id });
       } else if (route[2] === "apply") {
         if (job.applying) throw new Error("This import is already being applied.");
         job.applying = true;

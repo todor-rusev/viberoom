@@ -2,6 +2,7 @@
 
 import { DatabaseSync, backup as sqliteBackup } from "node:sqlite";
 import { CarryHistory } from "./carry-history.js";
+import { SharedMemory } from "./shared-memory.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import type { ChatMessage } from "./room.js";
 import { Logger } from "./log.js";
@@ -231,6 +232,7 @@ export class HistoryStore {
   private readonly db: DatabaseSync;
   private readonly log: Logger;
   readonly carry: CarryHistory;
+  readonly memory: SharedMemory;
 
   constructor(readonly path: string, log?: Logger) {
     this.log = log ?? new Logger("history");
@@ -244,6 +246,7 @@ export class HistoryStore {
     this.db.exec(SCHEMA);
     this.db.exec("create table if not exists file_transactions(id text primary key)");
     this.carry = new CarryHistory(this.db);
+    this.memory = new SharedMemory(this.db);
     this.reconcileColumns();
     const version = this.meta("schema_version");
     if (version === null || Number(version) < SCHEMA_VERSION) this.setMeta("schema_version", String(SCHEMA_VERSION));

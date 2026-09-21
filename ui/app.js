@@ -5089,6 +5089,7 @@
       </div>`
           : ""
       }
+      ${geek("me-memory-geek", `<div class="section"><button data-ui="button" data-kind="ghost" data-memory-open="user">Shared memory about you</button><p class="hint">Inspect, edit or remove the preferences learned across rooms.</p></div>`)}
       <div class="section danger">
         ${sectionTitle("alert", "Danger zone")}
         <p class="field-note">Erases everything in this viberoom: your vibe, all rooms and their history, vibemate sessions, your skills. Not undoable.</p>
@@ -5161,6 +5162,7 @@
       </div>
       <div class="section">
         ${sectionTitle("save", "Instruction delivery")}
+        <button data-ui="button" data-kind="ghost" data-memory-open="room">Shared memory for this room</button>
         ${field("Full brief every N vibemate turns", `${UI.html("number-field", { id: "rp-brief-turns", value: String(rs.fullBriefEveryTurns), min: 1, max: 10000 })}`)}
         ${field("…or every N new context tokens", `${UI.html("number-field", { id: "rp-brief-tokens", value: String(rs.fullBriefEveryTokens), min: 1000, max: 10000000, step: 1000 })}`)}
         <label class="switch"><span class="label">Repeat core rules in every header</span><input type="checkbox" id="rp-header-rules" ${rs.headerRules ? "checked" : ""}></label>
@@ -5397,7 +5399,7 @@
       </div>
       ${geek(
         "sp-geek",
-        `<div class="page-cols">
+        `<div class="section"><button data-ui="button" data-kind="ghost" data-memory-open="user">Shared memory about you</button><p class="hint">Review learned preferences, protected notes and their revision history.</p></div><div class="page-cols">
         <div>
           <div class="section">
             ${sectionTitle("rooms", "Defaults for new rooms")}
@@ -10452,6 +10454,7 @@
 
   window.addEventListener("pagehide", rememberHeldTurns);
 
+  document.addEventListener("click", event => { const button = event.target.closest("[data-memory-open]"); if (button) void window.ViberoomMemory.open(currentRoom()?.id, button.dataset.memoryOpen); });
   connect();
   void askKey();
 })();

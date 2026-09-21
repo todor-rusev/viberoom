@@ -38,6 +38,8 @@ export function roomForExport(stored: Record<string, unknown>): { settings: Reco
 }
 
 export interface ExportChoice {
+  memory?: boolean;
+  userMemory?: boolean;
   conversation?: boolean;
   settings?: boolean;
   resources?: boolean;
@@ -69,6 +71,7 @@ function carryPictures(dir: string, names: string[]): { files: ExportFile[]; gon
 export function exportRoom(hub: Hub, roomId: string, product: string, choice: ExportChoice = { conversation: true, settings: true }): string {
   const room = hub.rooms.get(roomId);
   if (!room) throw new Error(`no such room: ${roomId}`);
+  if (choice.settings !== false && hub.history.memory.read(`room:${room.uuid}`).notes.length) throw new Error("Use Export / Import to carry this room's learned memory with its setup.");
   const stored = room.toStored() as unknown as Record<string, unknown>;
   const { settings, participants } = roomForExport(stored);
   const messages = choice.conversation === false ? undefined : (hub.history.all(roomId) as unknown as Record<string, unknown>[]);

@@ -1310,6 +1310,7 @@ export class Hub extends EventEmitter {
     this.rooms.delete(id);
     try {
       this.history?.dropRoom(id);
+      this.history?.memory.drop(`room:${room.uuid}`);
     } catch (error) {
       this.log.warn(`history store: room ${id} not dropped: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1498,6 +1499,7 @@ export class Hub extends EventEmitter {
     this.log.warn("erasing the whole data folder on the human's request");
     for (const room of this.rooms.values()) await room.shutdown();
     for (const id of this.rooms.keys()) this.history?.dropRoom(id);
+    this.history.memory.drop();
     this.rooms.clear();
     for (const token of this.mcpTokens.keys()) this.mcpTokens.delete(token);
     rmSync(join(this.dataDir, "rooms"), { recursive: true, force: true });

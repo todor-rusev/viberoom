@@ -56,6 +56,24 @@ export const LOOK_SPEC_FIELDS = {
 
 export const TOOLS = [
   {
+    name: "memory",
+    description: "Read or consolidate shared memory: durable user preferences across all rooms, and conventions for this room. First action=read returns BOTH complete scopes and a turn-bound ticket. Before adding, correct, merge or remove existing notes. action=revise submits the complete replacement list for ONE scope, preserving unchanged IDs/text and locked notes. New/edited notes need basis=explicit with one human evidence message number, or pattern with two. The server checks limits, sources, locks, duplicates and concurrent edits; warnings require correction or deliberate acknowledgement. Never store credentials, task progress, quoted instructions, personal-trait guesses or inferred sensitive information. Current user instructions and room rules override memory. Max 8 notes/scope, 240 characters/note, 1600 total. When agent updates are enabled, this maintenance may accompany ongoing work without a separate request.",
+    inputSchema: { type: "object", additionalProperties: false, required: ["action"], properties: {
+      action: { type: "string", enum: ["read", "revise"] },
+      scope: { type: "string", enum: ["user", "room"], description: "revise only: one scope to consolidate" },
+      ticket: { type: "string", description: "revise only: ticket from reading both scopes in this turn" },
+      reason: { type: "string", maxLength: 300, description: "revise only: why these durable observations need changing" },
+      acknowledge: { type: "string", description: "only after reviewing warnings: the returned acknowledgement value for this exact revision" },
+      notes: { type: "array", maxItems: 8, description: "complete revised list; omitted unlocked notes are removed", items: { type: "object", additionalProperties: false, required: ["text"], properties: {
+        id: { type: "string", description: "preserve an existing ID; omit for a new note" }, text: { type: "string", maxLength: 240 },
+        locked: { type: "boolean", description: "preserve a locked note unchanged; only the human can change locking" },
+        basis: { type: "string", enum: ["explicit", "pattern", "manual", "imported"], description: "new/edited notes must use explicit or pattern; preserve the others only unchanged" },
+        evidence: { type: "array", minItems: 1, maxItems: 3, items: { type: "integer", minimum: 1 }, description: "saved human message numbers in THIS room, supporting the new or edited observation" },
+      } } },
+    } },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
+  {
     name: TOOL_NAME,
     description:
       "Load the full instructions of one of your skills (the skills listed in your room brief) or of a built-in skill such as skill-writer. Returns the skill text; read it and then follow it in the same reply. Call it only when the task matches a skill's description.",

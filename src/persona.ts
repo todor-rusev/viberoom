@@ -490,6 +490,7 @@ export function composeSkillBlock(parts: { name: string; text: string; invokedBy
 
 export function composePrompt(parts: {
   brief?: string;
+  memory?: string;
   header: string;
   skills?: string[];
   backlog: BacklogLine[];
@@ -503,6 +504,7 @@ export function composePrompt(parts: {
     else out.push({ type: "text", text });
   };
   if (parts.brief) push(`${parts.brief}\n`);
+  if (parts.memory) push(`${parts.memory}\n`);
   push(`${parts.header}\n`);
   for (const block of parts.skills ?? []) push(`${block}\n`);
   push("<messages>\n");

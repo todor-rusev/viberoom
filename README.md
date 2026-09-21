@@ -230,10 +230,17 @@ started with, and says so when a newer one is on the disk.
 ## Small things you will like
 
 - **Rooms remember.** The history stays with the room. Move the folder and the vibemates move with it.
+- **A small shared memory.** Vibemates can maintain durable preferences about you and conventions for each
+  room. They must read both complete sets before changing one, cite your messages, and respect notes you
+  protect. Each scope holds up to eight short notes. Inspect, edit, restore or clear them under **For geeks**
+  in your settings or the room's settings; agent edits can be switched off. Memory is supplied with the
+  brief and refreshed after a change. Source checks and lint catch mechanical problems, not every mistaken inference.
 - **Export / Import.** Choose one or several rooms, their conversations, setup and attached files.
   Protect the copy with an optional passphrase. Import previews differences before applying them;
   competing branches can be kept together, and removed versions remain available for inspection.
   Connection credentials and agent sessions stay on their original computer.
+  Learned room memory and shared user preferences have separate optional checkboxes, off by default.
+  Import previews both sides before replacing memory; prior local versions remain in its revision history.
 - **The window remembers.** Where it was, how big, which screen. Unplug that screen and it walks back.
 - **Nothing leaves your machine** except what each agent sends to its own provider. viberoom never
   sees your keys; every agent keeps its own login.

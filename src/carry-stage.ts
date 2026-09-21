@@ -13,10 +13,12 @@ import { canonicalResourceFile, isRoomResourceName, isStoredFileName } from "./f
 import type { ChatMessage } from "./room.js";
 import type { CarryState, MergeInput } from "./carry-merge.js";
 import { validateDependencies } from "./carry-dependencies.js";
+import { portableMemory, validatePortableMemory, type PortableMemory } from "./shared-memory.js";
 
 export interface PortableRoom {
   uuid: string; id: string; name: string; aliases: string[]; workspaceHint?: string;
-  parts: ExportPartName[];
+  parts: (ExportPartName | "memory")[];
+  memory?: PortableMemory;
   settings?: Record<string, unknown>; participants?: Record<string, unknown>[];
   counts: { messages: number; graves: number; files: number };
   missing: string[];
@@ -71,17 +73,24 @@ export class CarryStage {
     if (record.type === "manifest") {
       if (this.meta("source") || !object(record.source) || !isIdentity(record.source.uuid) || typeof record.source.label !== "string" || record.source.label.length > 100) throw new Error("The archive has an invalid or repeated source manifest.");
       this.setMeta("source", record.source); this.setMeta("product", record.product); this.setMeta("at", record.at);
+    } else if (record.type === "user-memory") {
+      if (this.meta("userMemory")) throw new Error("The archive repeats user memory.");
+      this.setMeta("userMemory", validatePortableMemory(record.value));
     } else if (record.type === "source") {
       if (!isIdentity(record.uuid) || typeof record.label !== "string" || record.label.length > 100) throw new Error("The archive has an invalid source label.");
       this.setMeta(`source:${record.uuid}`, { uuid: record.uuid, label: record.label });
     } else if (record.type === "room") {
       const room = record.value as PortableRoom;
-      if (!object(room) || !isIdentity(room.uuid) || typeof room.id !== "string" || typeof room.name !== "string" || !room.name.trim() || room.name.length > 60 || !Array.isArray(room.aliases) || room.aliases.some(x => !isIdentity(x)) || !Array.isArray(room.parts) || room.parts.some(p => !["conversation", "settings", "resources"].includes(p)) || !object(room.counts) || !Array.isArray(room.missing) || room.missing.some(x => typeof x !== "string") || room.missingSkills !== undefined && (!Array.isArray(room.missingSkills) || room.missingSkills.some(x => typeof x !== "string"))) throw new Error("The archive has invalid room metadata.");
+      if (!object(room) || !isIdentity(room.uuid) || typeof room.id !== "string" || typeof room.name !== "string" || !room.name.trim() || room.name.length > 60 || !Array.isArray(room.aliases) || room.aliases.some(x => !isIdentity(x)) || !Array.isArray(room.parts) || room.parts.some(p => !["conversation", "settings", "resources", "memory"].includes(p)) || !object(room.counts) || !Array.isArray(room.missing) || room.missing.some(x => typeof x !== "string") || room.missingSkills !== undefined && (!Array.isArray(room.missingSkills) || room.missingSkills.some(x => typeof x !== "string"))) throw new Error("The archive has invalid room metadata.");
       for (const count of Object.values(room.counts)) if (!Number.isSafeInteger(count) || Number(count) < 0) throw new Error("The archive has invalid room counts.");
       if (room.settings !== undefined || room.participants !== undefined) {
         const portable = roomForExport({ settings: room.settings, participants: room.participants });
         room.settings = portable.settings; room.participants = portable.participants;
       }
+      if (room.memory !== undefined) {
+        if (!room.parts.includes("memory")) throw new Error("Room memory must be declared in the archive.");
+        room.memory = validatePortableMemory(room.memory);
+      } else if (room.parts.includes("memory")) throw new Error("The declared room memory is missing.");
       this.db.prepare("insert into rooms(uuid,body) values(?,?)").run(room.uuid, JSON.stringify(room));
     } else if (["state", "revision", "alternative"].includes(String(record.type))) {
       if (!isIdentity(record.room) || !this.room(record.room)) throw new Error("An archive record refers to an unknown room.");
@@ -113,13 +122,13 @@ export class CarryStage {
 
   validate(): void {
     const source = this.meta<CarrySource>("source");
-    if (!source || !this.rooms().length) throw new Error("The archive contains no source or rooms.");
+    if (!source || !this.rooms().length && !this.meta("userMemory")) throw new Error("The archive contains no source, rooms or user memory.");
     for (const room of this.rooms()) {
       const input = this.input(room.uuid), files = this.values<CarryResource>("resources", room.uuid);
       const messages = input.states.filter(s => s.deletedAt === null).map(s => s.message);
       const graves = input.states.filter(s => s.deletedAt !== null).map(s => ({ message: s.message, deletedAt: s.deletedAt! }));
       if (room.counts.messages !== messages.length || room.counts.graves !== graves.length || room.counts.files !== files.length) throw new Error("The archive's room counts do not match its contents.");
-      validateExportContents({ manifest: { schema: 2, product: this.meta<string>("product") ?? "", at: this.meta<string>("at") ?? "", range: { firstSeq: null, lastSeq: null, firstAt: null, lastAt: null }, checksum: "", room, folder: source.uuid, counts: { ...room.counts, participants: room.participants?.length ?? 0, files: 0 }, parts: room.parts }, messages: messages as unknown as Record<string, unknown>[], graves: graves as unknown as ExportContents["graves"], settings: room.settings ?? null, participants: room.participants ?? [], files: [], unknownParts: 0 });
+      validateExportContents({ manifest: { schema: 2, product: this.meta<string>("product") ?? "", at: this.meta<string>("at") ?? "", range: { firstSeq: null, lastSeq: null, firstAt: null, lastAt: null }, checksum: "", room, folder: source.uuid, counts: { ...room.counts, participants: room.participants?.length ?? 0, files: 0 }, parts: room.parts.filter((p): p is ExportPartName => p !== "memory") }, messages: messages as unknown as Record<string, unknown>[], graves: graves as unknown as ExportContents["graves"], settings: room.settings ?? null, participants: room.participants ?? [], files: [], unknownParts: 0 });
       const db = new DatabaseSync(":memory:"), history = new CarryHistory(db);
       try {
         history.importRevisions(room.uuid, input.revisions);
@@ -137,7 +146,7 @@ export class CarryStage {
   }
 }
 
-export async function stageCarry(input: string, stageDir: string, passphrase?: string): Promise<{ rooms: PortableRoom[]; source: CarrySource; encrypted: boolean }> {
+export async function stageCarry(input: string, stageDir: string, passphrase?: string): Promise<{ rooms: PortableRoom[]; source: CarrySource; encrypted: boolean; userMemory?: PortableMemory }> {
   const stage = new CarryStage(stageDir);
   try {
     const prefix = Buffer.alloc(4096), fd = openSync(input, "r");
@@ -169,7 +178,7 @@ export async function stageCarry(input: string, stageDir: string, passphrase?: s
     stage.validate();
     await validateDependencies(stage.dir, stage.dependencies());
     stage.db.exec("commit");
-    return { rooms: stage.rooms(), source: stage.meta<CarrySource>("source")!, encrypted };
+    return { rooms: stage.rooms(), source: stage.meta<CarrySource>("source")!, encrypted, userMemory: stage.meta<PortableMemory>("userMemory") };
   } catch (error) {
     try { stage.db.exec("rollback"); } catch { }
     throw error;
@@ -182,6 +191,7 @@ export async function exportCarry(job: ExportJob): Promise<{ bytes: number; encr
   const warnings: { room: string; missing: string[]; missingSkills: string[] }[] = [];
   async function* records(): AsyncGenerator<Record<string, unknown>> {
     yield { type: "manifest", source: job.source, product: job.product, at: new Date().toISOString() };
+    if (job.choice.userMemory) yield { type: "user-memory", value: portableMemory(store.memory.read("user")) };
     for (const held of job.rooms) {
       const portable = roomForExport(held as unknown as Record<string, unknown>);
       const all = [...store.all(held.id).map(message => ({ message, deletedAt: null as number | null })), ...store.deleted(held.id).map(g => ({ message: g.message, deletedAt: g.deletedAt }))];
@@ -215,12 +225,15 @@ export async function exportCarry(job: ExportJob): Promise<{ bytes: number; encr
         }
         if (refs.size) state.message = { ...state.message, resourceRefs: [...refs.values()].map(ref => assets.has(ref.file) ? { ...ref, sha256: assets.get(ref.file)!.hash } : ref) };
       }
-      const parts: ExportPartName[] = [];
+      const parts: PortableRoom["parts"] = [];
       if (job.choice.conversation !== false) parts.push("conversation");
       if (job.choice.settings !== false) parts.push("settings");
       if (job.choice.resources !== false) parts.push("resources");
+      const memory = portableMemory(store.memory.read(`room:${held.uuid}`));
+      if (job.choice.memory) parts.push("memory");
       const metadata: PortableRoom = { uuid: held.uuid, id: held.id, name: held.name, aliases: store.carry.aliases(held.id), workspaceHint: held.dir, parts,
         ...(job.choice.settings !== false ? portable : {}),
+        ...(parts.includes("memory") ? { memory } : {}),
         counts: { messages: parts.includes("conversation") ? all.filter(s => s.deletedAt === null).length : 0, graves: parts.includes("conversation") ? all.filter(s => s.deletedAt !== null).length : 0, files: files.length },
         missing: [...wanted].filter(file => !allFiles.includes(file)),
         ...(job.choice.settings !== false ? { missingSkills: held.missingSkills ?? [] } : {}),

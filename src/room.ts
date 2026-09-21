@@ -1,6 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
 import { EventEmitter } from "node:events";
+import { memoryBlock } from "./shared-memory.js";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { HistoryStore, type DivertOp, type PendingOp, cursorOf, type Cursor } from "./history-store.js";
@@ -501,6 +502,7 @@ interface AgentRuntime {
   briefSentThisTurn: boolean;
   lastUsed: number;
   briefPending: string | null;
+  memoryStamp?: string;
   headerNotes: string[];
   historyNoticePending: boolean;
   briefRequestedAtSeq: number;
@@ -2623,6 +2625,13 @@ export class Room extends EventEmitter {
     this.agentInRoom(participantId);
   }
 
+  memoryTurn(participantId: string): string {
+    this.assertHistoryAccessForAgent(participantId);
+    const runtime = this.runtimes.get(participantId);
+    if (!runtime?.agent.alive || !runtime.turnActive || !runtime.turn || runtime.turn.hidden || runtime.retiring || runtime.workCancelled) throw new Error("Memory maintenance is available only during an active visible room turn.");
+    return runtime.turn.message.id;
+  }
+
   describeRoomForAgent(participantId: string): Record<string, unknown> {
     const participant = this.agentInRoom(participantId);
     const shape = this.templateOf();
@@ -3380,7 +3389,8 @@ export class Room extends EventEmitter {
     if (!runtime.mcpToken) return false;
     const call = params.toolCall;
     const known = runtime.turn?.message.toolCalls?.find((t) => t.toolCallId === call.toolCallId);
-    return canAutoApproveMessageCheck(call, known) || canAutoApproveRoomTool(call, known, SKILL_TOOL_NAME,
+    return canAutoApproveMessageCheck(call, known) || canAutoApproveRoomTool(call, known, "memory",
+      input => Object.keys(input).every(key => ["action", "scope", "ticket", "notes", "reason", "acknowledge"].includes(key)) && (input.action === "read" || input.action === "revise")) || canAutoApproveRoomTool(call, known, SKILL_TOOL_NAME,
       input => Object.keys(input).every(key => key === "name") && typeof input.name === "string" && !!input.name.trim());
   }
 
@@ -3579,9 +3589,12 @@ export class Room extends EventEmitter {
     const roster = this.roster();
     const settings = this.effectiveSettings();
     const tokensSinceBrief = runtime.lastUsed - runtime.usedAtBrief;
+    const userMemory = this.history.memory.read("user"), roomMemory = this.history.memory.read(`room:${this.uuid}`);
+    const memoryStamp = `${userMemory.revision}:${roomMemory.revision}`;
     let briefReason: string | null = null;
     if (!runtime.firstTurnDone) briefReason = "first turn";
     else if (runtime.briefPending) briefReason = runtime.briefPending;
+    else if (runtime.memoryStamp !== memoryStamp) briefReason = "shared memory changed";
     else if (runtime.turnsSinceBrief >= this.settings.fullBriefEveryTurns) briefReason = `every ${this.settings.fullBriefEveryTurns} turns`;
     else if (tokensSinceBrief >= this.settings.fullBriefEveryTokens) briefReason = `${tokensSinceBrief} tokens since last brief`;
 
@@ -3619,6 +3632,7 @@ export class Room extends EventEmitter {
     const prompt = composePrompt({
       brief: briefReason ? buildBrief(settings, persona, roster, runtime.notesForBrief ?? (participant.notes && (participant.notesSeq ?? -1) >= runtime.lastBriefSeq ? participant.notes : undefined), skillsForPrompt) : undefined,
       header: buildHeader(settings, persona, roster, this.hops, notes, skillsForPrompt),
+      memory: briefReason ? memoryBlock(userMemory, roomMemory) : undefined,
       skills: attached.map((s) => composeSkillBlock({ name: s.name, text: s.text, invokedBy: s.invokedBy, extraFiles: s.extraFiles })),
       backlog: unread.map<BacklogLine>((m) =>
         m.kind === "system"
@@ -3636,6 +3650,7 @@ export class Room extends EventEmitter {
       personaName: participant.name,
     });
     if (briefReason) {
+      runtime.memoryStamp = memoryStamp;
       runtime.briefPending = null;
       runtime.turnsSinceBrief = 0;
       runtime.briefSentThisTurn = true;
