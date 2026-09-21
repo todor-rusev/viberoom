@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, win32 } from "node:path";
 import { findChromium, hubUrl } from "./launcher.js";
 import { ensureDataRoot } from "./data-root.js";
 
@@ -32,7 +32,7 @@ const AUMID_BASE: Record<string, string> = { "chrome.exe": "Chrome", "msedge.exe
 
 export function appUserModelId(browserPath: string | null, url: string, profileDirName = "browser"): string | null {
   if (!browserPath) return null;
-  const base = AUMID_BASE[basename(browserPath).toLowerCase()];
+  const base = AUMID_BASE[win32.basename(browserPath).toLowerCase()];
   if (!base) return null;
   const u = new URL(url);
   const clean = profileDirName.replace(/[^A-Za-z0-9]/g, "");

@@ -131,7 +131,7 @@ export function editorCommand(target: OpenTarget, settings: EditorSettings, dete
     const parts = splitCommandLine(settings.command).map((p) => p.replace(/\{file\}/g, target.value).replace(/\{line\}/g, String(target.line)).replace(/\{column\}/g, String(target.column ?? 1)));
     if (!parts.length) return null;
     const [command, ...args] = parts;
-    return { ...spawnable(command, args, platform), action: "open-line", editor: basename(command) };
+    return { ...spawnable(command, args, platform), action: "open-line", editor: (platform === "win32" ? win32 : posix).basename(command) };
   }
   if (!detected) return null;
   const spec = EDITORS.find((e) => e.id === detected.id);
