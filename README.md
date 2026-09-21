@@ -229,6 +229,12 @@ started with, and says so when a newer one is on the disk.
 
 ## Small things you will like
 
+**Upgrading to 0.12.0:** this release adds complete indexed conversation navigation, reviewed and
+optionally encrypted room transfers, shared preference memory, and restart coordination. If your
+conversation store needs the new schema, viberoom writes a consistent backup beside `history.db`
+before upgrading it. Older builds cannot open the upgraded store; use the current build, or restore
+the pre-upgrade backup into a separate data folder when deliberately returning to an older version.
+
 - **Rooms remember.** The history stays with the room. Move the folder and the vibemates move with it.
 - **A small shared memory.** Vibemates can maintain durable preferences about you and conventions for each
   room. They must read both complete sets before changing one, cite your messages, and respect notes you
