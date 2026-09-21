@@ -27,6 +27,8 @@
     skillsRoom: null,
   };
 
+  const Layout = VIBEROOM_LAYOUT.create(parseFloat(getComputedStyle(document.documentElement).zoom) || 1);
+
   const $ = (selector) => document.querySelector(selector);
   const els = {
     app: $("#app"),
@@ -183,14 +185,14 @@
   function measureBlank() {
     const list = els.messages;
     if (!list) return null;
-    const b = list.getBoundingClientRect();
+    const b = Layout.rect(list);
     if (!b.height) return null;
     const painted = [];
     const unpainted = [];
     const near = new Set();
     const pages = [];
     for (const page of list.querySelectorAll(".msgs-page")) {
-      const pr = page.getBoundingClientRect();
+      const pr = Layout.rect(page);
       if (pr.bottom < b.top || pr.top > b.bottom) continue;
       near.add(page);
       const inside = page.firstElementChild;
@@ -200,11 +202,11 @@
     for (const e of list.querySelectorAll(".msg")) {
       const page = e.parentElement;
       if (page && page.classList.contains("msgs-page") && !near.has(page)) continue;
-      const r = e.getBoundingClientRect();
+      const r = Layout.rect(e);
       if (r.bottom < b.top || r.top > b.bottom) continue;
       const ok = typeof e.checkVisibility === "function" ? e.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true }) : true;
       const ink = e.querySelector(".bubble") || (e.classList.contains("system") || e.classList.contains("hidden") ? e.firstElementChild : null);
-      const br = ink && ink.getBoundingClientRect();
+      const br = ink && Layout.rect(ink);
       if (ok && br && br.height > 0) painted.push([Math.max(br.top, b.top), Math.min(br.bottom, b.bottom)]);
       else if (unpainted.length < 5) unpainted.push({ seq: e.dataset.seq || "", cls: e.className, h: Math.round(r.height), op: getComputedStyle(e).opacity, skipped: !ok, ...animationOf(e) });
     }
@@ -1081,7 +1083,7 @@
     row.classList.add("line-mark");
     const body = els.fvBody.querySelector(".code-body");
     if (body) {
-      const lineHeight = row.getBoundingClientRect().height || 18;
+      const lineHeight = Layout.rect(row).height || 18;
       els.fvBody.scrollTop = Math.max(0, index * lineHeight - els.fvBody.clientHeight / 2);
     }
   }
@@ -1502,8 +1504,45 @@
   function sectionTitle(iconName, text) {
     return `<h4>${ic(iconName)}${text}</h4>`;
   }
+  function settingsDisclosureOpen(id, initiallyOpen) {
+    const current = document.getElementById(id);
+    if (current?.matches('[data-ui="settings-group"], details[data-settings-disclosure]')) return current.open;
+    const saved = recall(`settings-group.${id}`);
+    return saved === null ? initiallyOpen : saved === "1";
+  }
+  function settingsGroup(id, title, body, tone = "plain") {
+    return UI.html("settings-group", { id, title, body: UI.raw(body), tone, open: settingsDisclosureOpen(id, true) });
+  }
+  function settingsFoldActions() {
+    return `<div class="row-btns start settings-fold-actions">${UI.html("button", { label: "Collapse all", kind: "ghost", size: "sm", data: { settingsOpen: "false" }, title: "Collapse all settings groups in this panel" })}${UI.html("button", { label: "Expand all", kind: "ghost", size: "sm", data: { settingsOpen: "true" }, title: "Expand all settings groups in this panel" })}</div>`;
+  }
+  function foldSettingsGroups(e) {
+    const button = e.target.closest("button[data-settings-open]");
+    const scope = button?.closest("#details-inner, #page-inner");
+    if (!scope) return;
+    const open = button.dataset.settingsOpen === "true";
+    for (const group of scope.querySelectorAll('[data-ui="settings-group"], details[data-settings-disclosure]')) {
+      group.open = open;
+      remember(`settings-group.${group.id}`, open ? "1" : "0");
+    }
+  }
+  document.addEventListener("click", foldSettingsGroups);
+  function rememberSettingsDisclosure(e) {
+    const group = e.target;
+    if (!group.isConnected || !group.matches('[data-ui="settings-group"], details[data-settings-disclosure]')) return;
+    remember(`settings-group.${group.id}`, group.open ? "1" : "0");
+  }
+  document.addEventListener("toggle", rememberSettingsDisclosure, true);
+  function revealSettingsFor(field) {
+    for (let group = field?.closest("details"); group; group = group.parentElement?.closest("details")) {
+      group.open = true;
+      if (group.matches('[data-ui="settings-group"], details[data-settings-disclosure]')) remember(`settings-group.${group.id}`, "1");
+    }
+  }
+  document.addEventListener("invalid", (e) => revealSettingsFor(e.target), true);
   function geek(id, bodyHtml, hint) {
-    return `<details class="geek" id="${id}"><summary>${ic("geek")}for geeks${hint ? `<span class="g-hint">${hint}</span>` : ""}<span class="chev">${ic("down")}</span></summary><div class="geek-body">${bodyHtml}</div></details>`;
+    const settings = ["pp-geek", "rp-geek", "sp-geek", "me-memory-geek"].includes(id);
+    return `<details class="geek" id="${id}"${settings ? ` data-settings-disclosure${settingsDisclosureOpen(id, false) ? " open" : ""}` : ""}><summary>${ic("geek")}for geeks${hint ? `<span class="g-hint">${hint}</span>` : ""}<span class="chev">${ic("down")}</span></summary><div class="geek-body">${bodyHtml}</div></details>`;
   }
   const SAVED_MARK_MS = 2000;
   const recentlySaved = new Map();
@@ -1539,12 +1578,14 @@
       lastField = null;
       try {
         const outcome = await onSave();
+        if (outcome === false) revealSettingsFor(document.getElementById(field) || container);
         if (field && outcome !== false) {
           recentlySaved.set(field, Date.now());
           markSaved(field);
         }
       } catch (e) {
         dirty = true;
+        revealSettingsFor(document.getElementById(field) || container);
         showError(e);
       }
       saving = false;
@@ -1670,8 +1711,8 @@
     if (dialog.classList.contains("light-dismiss") && !dialog.lightDismissWired) {
       dialog.lightDismissWired = true;
       const outside = (e) => {
-        const r = dialog.getBoundingClientRect();
-        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+        const r = Layout.rect(dialog);
+        return Layout.length(e.clientX) < r.left || Layout.length(e.clientX) > r.right || Layout.length(e.clientY) < r.top || Layout.length(e.clientY) > r.bottom;
       };
       let fromBackdrop = false;
       dialog.addEventListener("pointerdown", (e) => {
@@ -1690,8 +1731,8 @@
   const DIALOG_MIN_H = 220;
   const dialogSizeKey = (dialog) => `dialog.${dialog.id || "unnamed"}.size`;
   const dialogFits = (w, h) => ({
-    w: Math.max(DIALOG_MIN_W, Math.min(w, Math.round(window.innerWidth * 0.94))),
-    h: Math.max(DIALOG_MIN_H, Math.min(h, Math.round(window.innerHeight * 0.92))),
+    w: Math.max(DIALOG_MIN_W, Math.min(w, Math.round(Layout.length(window.innerWidth) * 0.94))),
+    h: Math.max(DIALOG_MIN_H, Math.min(h, Math.round(Layout.length(window.innerHeight) * 0.92))),
   });
   function restoreDialogSize(dialog) {
     const saved = recall(dialogSizeKey(dialog));
@@ -1734,16 +1775,16 @@
     if (!dialog.dataset.sized) {
       dialog.dataset.sized = "1";
       dialog.addEventListener("pointerdown", (e) => {
-        const r = dialog.getBoundingClientRect();
-        if (e.clientX > r.right - 22 && e.clientY > r.bottom - 22 && !dialog.style.width) {
+        const r = Layout.rect(dialog);
+        if (Layout.length(e.clientX) > r.right - 22 && Layout.length(e.clientY) > r.bottom - 22 && !dialog.style.width) {
           dialog.style.width = `${Math.round(r.width)}px`;
           dialog.style.height = `${Math.round(r.height)}px`;
           dialog.classList.add("sized");
         }
       });
       dialog.addEventListener("dblclick", (e) => {
-        const r = dialog.getBoundingClientRect();
-        if (e.clientX > r.right - 22 && e.clientY > r.bottom - 22) resetDialogSize(dialog);
+        const r = Layout.rect(dialog);
+        if (Layout.length(e.clientX) > r.right - 22 && Layout.length(e.clientY) > r.bottom - 22) resetDialogSize(dialog);
       });
       dialogSizes.observe(dialog);
     }
@@ -2298,7 +2339,7 @@
       remember("view", "settings");
       requestAnimationFrame(() => {
         const section = $("#sp-appearance");
-        if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
+        if (section) { revealSettingsFor(section); section.scrollIntoView({ behavior: "smooth", block: "start" }); }
       });
     });
     const all = $("#home-all-rooms");
@@ -2663,9 +2704,9 @@
   function dvFit() {
     const svg = dv.stage.firstElementChild;
     if (!svg) return;
-    const box = dv.el.getBoundingClientRect();
-    const w = Number(svg.dataset.w) || svg.getBoundingClientRect().width || 1;
-    const h = Number(svg.dataset.h) || svg.getBoundingClientRect().height || 1;
+    const box = Layout.rect(dv.el);
+    const w = Number(svg.dataset.w) || Layout.rect(svg).width || 1;
+    const h = Number(svg.dataset.h) || Layout.rect(svg).height || 1;
     dv.fit = Math.max(DV_MIN, Math.min((box.width - 80) / w, (box.height - DV_BAR_SPACE - 32) / h, DV_FIT_MAX));
     dv.scale = dv.fit;
     dv.x = (box.width - w * dv.scale) / 2;
@@ -2674,7 +2715,7 @@
   }
   function dvZoom(factor, cx, cy) {
     const next = Math.min(DV_MAX, Math.max(DV_MIN, dv.scale * factor));
-    const box = dv.el.getBoundingClientRect();
+    const box = Layout.rect(dv.el);
     const px = (cx ?? box.left + box.width / 2) - box.left;
     const py = (cy ?? box.top + box.height / 2) - box.top;
     dv.x = px - ((px - dv.x) / dv.scale) * next;
@@ -2685,7 +2726,7 @@
   function openDiagram(block) {
     const svg = block && block.querySelector(".mm-out svg");
     if (!svg) return;
-    const rect = svg.getBoundingClientRect();
+    const rect = Layout.rect(svg);
     const clone = svg.cloneNode(true);
     clone.dataset.w = String(rect.width || 800);
     clone.dataset.h = String(rect.height || 600);
@@ -2712,7 +2753,7 @@
     (e) => {
       if (e.target.closest("#dv-bar")) return;
       e.preventDefault();
-      dvZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+      dvZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12, Layout.length(e.clientX), Layout.length(e.clientY));
     },
     { passive: false },
   );
@@ -2720,14 +2761,18 @@
     if (e.target.closest("#dv-bar")) return;
     dv.dragging = true;
     dv.moved = false;
+    dv.pointer = { x: Layout.length(e.clientX), y: Layout.length(e.clientY) };
     dv.el.setPointerCapture(e.pointerId);
     dv.el.classList.add("dragging");
   });
   dv.el.addEventListener("pointermove", (e) => {
     if (!dv.dragging) return;
-    if (e.movementX || e.movementY) dv.moved = true;
-    dv.x += e.movementX;
-    dv.y += e.movementY;
+    const x = Layout.length(e.clientX), y = Layout.length(e.clientY);
+    const dx = x - dv.pointer.x, dy = y - dv.pointer.y;
+    if (dx || dy) dv.moved = true;
+    dv.x += dx;
+    dv.y += dy;
+    dv.pointer = { x, y };
     dvApply();
   });
   for (const type of ["pointerup", "pointercancel"]) {
@@ -3220,7 +3265,7 @@
     const el = els.messages.querySelector(`.msg[data-id="${CSS.escape(anchor.id)}"]`);
     if (!el) return false;
     if (els.messages.classList.contains("windowed")) {
-      els.messages.scrollTop += el.getBoundingClientRect().top - els.messages.getBoundingClientRect().top - anchor.into;
+      els.messages.scrollTop += Layout.rect(el).top - Layout.rect(els.messages).top - anchor.into;
       return true;
     }
     const page = el.closest(".msgs-page");
@@ -3733,7 +3778,7 @@
   function historyBoundaryReached() {
     const ceiling = els.messages.querySelector(".fold-ceiling");
     if (!ceiling) return false;
-    const box = els.messages.getBoundingClientRect(), boundary = ceiling.getBoundingClientRect();
+    const box = Layout.rect(els.messages), boundary = Layout.rect(ceiling);
     return boundary.bottom >= box.top && boundary.top <= box.bottom;
   }
   function requestHistoryAtTop(intent = false) {
@@ -4023,9 +4068,9 @@
     }
   }
   function eyeRow() {
-    const box = els.messages.getBoundingClientRect();
+    const box = Layout.rect(els.messages);
     for (const row of els.messages.querySelectorAll(".msg[data-id]")) {
-      const r = row.getBoundingClientRect();
+      const r = Layout.rect(row);
       if (r.bottom > box.top + 4 && r.top < box.bottom) return { id: row.dataset.id, at: r.top - box.top };
     }
     return null;
@@ -4034,8 +4079,8 @@
     if (!eye) return;
     const row = els.messages.querySelector(`.msg[data-id="${CSS.escape(eye.id)}"]`);
     if (!row) return;
-    const box = els.messages.getBoundingClientRect();
-    const moved = row.getBoundingClientRect().top - box.top - eye.at;
+    const box = Layout.rect(els.messages);
+    const moved = Layout.rect(row).top - box.top - eye.at;
     if (Math.abs(moved) > 0.5) els.messages.scrollTop += moved;
   }
 
@@ -4066,7 +4111,7 @@
         let inset = rowInsets.get(itemKind(items[at])) || 0;
         if (items[at].kind === "pins") {
           const child = drawnRow(anchor.id), block = child?.closest(".history-pins");
-          if (block) inset += child.getBoundingClientRect().top - block.getBoundingClientRect().top;
+          if (block) inset += Layout.rect(child).top - Layout.rect(block).top;
         }
         top = Math.max(0, ListIndex.topOf(listAccount, at) + inset - anchor.into);
       }
@@ -4473,8 +4518,8 @@
       const el = entry.target;
       const id = el.dataset.id;
       if (!state.watched.has(id)) { watchedLeave.unobserve(el); continue; }
-      const box = els.messages.getBoundingClientRect();
-      const r = entry.boundingClientRect;
+      const box = Layout.rect(els.messages);
+      const r = Layout.fromRect(entry.boundingClientRect);
       const below = r.top >= box.bottom;
       const above = r.bottom <= box.top;
       if (!below && !(above && stuck)) continue;
@@ -4763,20 +4808,20 @@
 
   const DETAILS_MIN = 320;
   const DETAILS_MAX = 760;
-  const DETAILS_DEFAULT = { room: 420, participant: 420, me: 400 };
 
   function detailsKey() {
     return state.selection.kind === "participant" ? "participant" : state.selection.kind;
   }
   function applyDetailsWidth(px, persist) {
     const w = Math.max(DETAILS_MIN, Math.min(DETAILS_MAX, Math.round(px)));
-    els.details.style.width = `${w}px`;
+    els.details.style.setProperty("--details-w", `${w}px`);
     if (persist) remember(`details.${detailsKey()}`, w);
   }
   function fitDetailsWidth() {
     const key = detailsKey();
     const saved = Number(recall(`details.${key}`));
-    applyDetailsWidth(saved || DETAILS_DEFAULT[key] || 400, false);
+    if (Number.isFinite(saved) && saved > 0) applyDetailsWidth(saved, false);
+    else els.details.style.removeProperty("--details-w");
   }
   function openDetails(selection) {
     state.selection = selection;
@@ -4828,7 +4873,7 @@
     if (header) header.innerHTML = profileHeader(p);
   }
   function panelTitle(title, sub) {
-    return `<div class="panel-title"><div><h3>${title}</h3>${sub ? `<div class="hint">${sub}</div>` : ""}</div>${UI.html("icon-button", { icon: "close", title: "Close", kind: "ghost", size: "sm", id: "details-close" })}</div>`;
+    return `<div class="panel-title"><div><h3>${title}</h3>${sub ? `<div class="hint">${sub}</div>` : ""}</div>${UI.html("icon-button", { icon: "close", title: "Close", kind: "ghost", size: "sm", id: "details-close" })}</div>${settingsFoldActions()}`;
   }
   function wireDetailsClose() {
     const b = $("#details-close");
@@ -4851,41 +4896,35 @@
         <button class="action danger" data-act="remove"><span class="ico">${ic("trash")}</span>Remove</button>
       </div>
       ${p.quiet ? wedgeCardHtml(p, Date.now()) : ""}
-      <div class="section" id="pp-persona">
-        ${sectionTitle("user", "Persona")}
+      ${settingsGroup("pp-persona", "Persona", `
         ${field("Vibename", `<input type="text" id="pp-name" maxlength="24" value="${esc(p.name)}">`)}
         ${field("Vibersona", `<input type="text" id="pp-tagline" maxlength="80" value="${esc(p.tagline || "")}" placeholder="a few words under the vibename">`, "Shown under the vibename.", "Everyone in the room sees it: you, and the other vibemates in their roster.")}
         ${field("Vibeface", `<div id="pp-avatar-picker"></div><input type="text" id="pp-avatar" maxlength="8" value="${esc(p.avatar || "")}" placeholder="custom emoji (optional)">`)}
         ${field("Vibio", `<textarea id="pp-role" rows="5" placeholder="who it is, how it speaks, what it cares about">${esc(p.role || "")}</textarea>`, `Only this vibemate reads it.<span class="count" id="pp-role-count"></span>`, "Reaches the vibemate as refreshed instructions in its brief on its next turn; its memory is kept. The other participants never see it. A vibio and the room rules go into every brief, so the room has a limit for them (the room's settings, for geeks); text over it is never cut in silence.")}
-      </div>
+      `)}
       ${p.trouble && p.status !== "thinking" && p.status !== "queued" ? `<div class="trouble"><b>${esc(p.trouble.what)}</b><span>${esc(p.trouble.advice)}</span>${troubleActionsHtml(p)}</div>` : ""}
       ${p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<p class="hint" style="color:var(${mutedStartup ? "--warm-ink" : "--danger"});margin:0 4px 10px">${esc(p.statusDetail)}</p>` : ""}
       ${!mutedStartup && vendorLoggedOut(p) && p.trouble?.kind !== "login" ? `<div class="pp-login"><div class="row-btns">${UI.html("button", { label: `Log in to ${p.agentVendor || "the vendor"}`, icon: "lock", kind: "primary", size: "sm", act: "open-login-dialog", data: { recipe: p.agentType, purpose: "login" } })}</div><p class="hint">${esc(p.agentVendor || "The vendor")} is not logged in on this machine; log in, and ${esc(p.name)} comes back by itself.</p></div>` : ""}
-      <div class="section" id="pp-engine">
-        ${sectionTitle("spark", "Coding agent")}
+      ${settingsGroup("pp-engine", "Coding agent", `
         <p class="hint">What runs ${esc(p.name)}${rec ? `: ${esc(rec.vendor)}` : ""}. Its model, how hard it thinks, what it may do without asking.${geekTip("These options come from the coding agent itself: the hub lists the ones it offers and sets your pick on its running session, so a change takes effect from the next turn, without restarting it or losing what it remembers.")}</p>
         <div id="pp-config"></div>
         ${field("Coding agent", `<div class="agent-grid" id="pp-recipe">${state.recipes.filter((r) => !r.unavailableReason || r.id === p.agentType).map((r) => `<button type="button" class="agent-tile${r.id === p.agentType ? " selected" : ""}" data-agent="${esc(r.id)}" title="${esc(r.label)}">${vendorLogo(r, "lg")}<span class="at-name">${esc(r.vendor)}</span></button>`).join("")}</div>`, "Another vendor: a new session with its notes and the last messages.", "A session cannot cross vendors, so the vibemate first writes its notes, then comes back on the new agent with those notes and the last messages of the room (like Fresh start with the last messages). Its name, vibio, colour and skills stay; model, effort and mode start from the new agent's defaults.")}
-      </div>
+      `)}
       ${geek(
         "pp-geek",
-        `<div class="section" id="pp-skills-section">
-        ${sectionTitle("skills", "Skills")}
+        `${settingsGroup("pp-skills-section", "Skills", `
         <div class="check-list" id="pp-skills"></div>
         <p class="hint" style="margin-top:8px">What this vibemate can load on request.${geekTip(`Listed in this vibemate's brief by name and description; the text arrives when you write /name or when the vibemate loads it. ${esc(skillChannelText(p))}`)}</p>
-      </div>
-      <div class="section" id="pp-timing">
-        ${sectionTitle("bolt", "Timing")}
+      `)}
+      ${settingsGroup("pp-timing", "Timing", `
         ${field("Reply delay override, seconds", `${UI.html("number-field", { id: "pp-delay", value: String(p.replyDelay ?? ""), min: 0, max: 120, step: 0.5, placeholder: `the room's: ${room.settings.replyDelay ?? 4} s` })}`, `Overrides the room's delay (${room.settings.replyDelay ?? 4} s, used only when two or more vibemates are in) for this vibemate only, even when it is alone. Empty: it follows the room.`, "Before each turn the vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive during the wait land in its backlog, so it can react to them or stay silent.")}
-      </div>
-      <div class="section danger">
-        ${sectionTitle("bolt", "Fresh start")}
+      `)}
+      ${settingsGroup("pp-fresh-start", "Fresh start", `
         <p class="hint">${esc(p.name)} comes back with an empty head: it forgets this conversation entirely. The room's history stays and you still see everything.${geekTip("A session's context cannot be erased, so the vibemate's process and session are closed and it starts a new one with no replay. Its stored session is dropped too, or a later reconnect would bring the old context back. Same thing as typing /fresh-start @Name in the composer (/respawn still works).")}</p>
         <div class="row-btns start">${UI.html("button", { label: `Fresh start for ${p.name}`, icon: "bolt", kind: "danger", size: "sm", act: "respawn" })}<label class="lp-with">${UI.html("button", { label: "With the last", size: "sm", act: "respawn-mem" })}${UI.html("number-field", { id: "pp-respawn-n", value: String(room.settings.replayAfterRestart ?? 10), min: 0, max: 500 })} messages</label></div>
         <p class="hint">With memory: a new session that gets only ${p.notes ? "its own notes and " : ""}the last N messages of this room; the rest is gone.</p>
-      </div>
-      <div class="section">
-        ${sectionTitle("info", "Stats")}
+      `, "danger")}
+      ${settingsGroup("pp-stats", "Stats", `
         <div class="kv">
           <span>Session</span><span>${p.sessionOrigin === "loaded" ? "restored (session/load)" : p.sessionOrigin === "replayed" ? "new, history replayed" : p.status === "offline" ? "offline" : "new"}${p.supportsLoad === false ? " · no session/load" : ""}</span>
           <span>Turns</span><span>${p.turns}</span>
@@ -4897,7 +4936,7 @@
           <span>Cost (estimate)</span><span>${fmtCost(p.cost) || "—"}</span>
           <span>Adapter</span><span>${esc(rec ? rec.label : p.agentLabel || "")}${p.agentInfo && p.agentInfo.version ? ` ${esc(p.agentInfo.version)}` : ""}</span>
         </div>
-      </div>`,
+      `)}`,
         "skills, timing, stats",
       )}`;
     wireDetailsClose();
@@ -5076,27 +5115,24 @@
         <h3>${esc(s.humanName || "")}</h3>
         <div class="tagline">${esc(s.humanDescription || "no vibe line yet")}</div>
       </div>
-      <div class="section" id="me-vibe">
-        ${sectionTitle("spark", "Vibe")}
+      ${settingsGroup("me-vibe", "Vibe", `
         ${field("Vibename", `<input type="text" id="me-name" maxlength="24" value="${esc(s.humanName || "")}">`, "How you appear in every room.")}
         ${field("Vibeface", `<div id="me-avatar-picker"></div><input type="text" id="me-avatar" maxlength="8" value="${esc(s.humanAvatar || "")}" placeholder="custom emoji (optional)">`)}
         ${field("Your vibe line", `<textarea id="me-desc" rows="3" maxlength="200" placeholder="e.g. software engineer, enjoys learning; likes short answers">${esc(s.humanDescription || "")}</textarea>`, "A sentence or two about you.", "The vibemates get it in every room's brief, unless a room adds its own line or replaces it (below, when you are in a room).")}
-      </div>
+      `)}
       ${
         rs
-          ? `<div class="section" id="me-room">
-        ${sectionTitle("chat", "In this room")}
+          ? settingsGroup("me-room", "In this room", `
         ${field("What vibemates get about you here", `<select id="hp-mode"><option value="inherit"${rs.humanDescriptionMode === "inherit" ? " selected" : ""}>Your vibe line</option><option value="append"${rs.humanDescriptionMode === "append" ? " selected" : ""}>Your vibe line + this room's</option><option value="override"${rs.humanDescriptionMode === "override" ? " selected" : ""}>Only this room's line</option><option value="none"${rs.humanDescriptionMode === "none" ? " selected" : ""}>Nothing about me in this room</option></select>`)}
         ${field("This room's line about you", `<textarea id="hp-desc" rows="3" maxlength="200" placeholder="e.g. host of this session, product owner">${esc(rs.humanDescription || "")}</textarea>`)}
-      </div>`
+      `)
           : ""
       }
       ${geek("me-memory-geek", `<div class="section"><button data-ui="button" data-kind="ghost" data-memory-open="user">Shared memory about you</button><p class="hint">Inspect, edit or remove the preferences learned across rooms.</p></div>`)}
-      <div class="section danger">
-        ${sectionTitle("alert", "Danger zone")}
+      ${settingsGroup("me-danger", "Danger zone", `
         <p class="field-note">Erases everything in this viberoom: your vibe, all rooms and their history, vibemate sessions, your skills. Not undoable.</p>
         <div class="row-btns start">${UI.html("button", { label: "Erase my vibe", icon: "bolt", kind: "danger", size: "sm", id: "me-erase" })}</div>
-      </div>`;
+      `, "danger")}`;
     wireDetailsClose();
     $("#me-avatar-picker").appendChild(
       window.Avatars.pickerElement(s.humanAvatar || "", (emoji) => {
@@ -5115,55 +5151,54 @@
     els.detailsInner.innerHTML = `
       ${panelTitle("Room settings", esc(room.name))}
       <div id="rp-form">
-      <div class="section">
-        ${sectionTitle("rooms", "Room")}
+      ${settingsGroup("rp-room", "Room", `
         ${field("Name", `<input type="text" id="rp-name" maxlength="60" value="${esc(room.name)}">`)}
         ${field("Emoji", `<div id="rp-emoji-picker"></div><input type="text" id="rp-emoji" maxlength="8" value="${esc(rs.emoji || "")}" placeholder="custom emoji (optional)">`, "A face for the room, next to its name.")}
         ${field("Topic", `<input type="text" id="rp-topic" maxlength="2000" value="${esc(rs.topic || "")}" placeholder="what this room is about (optional)">`)}
         ${field("Folder", `<span class="dir-row"><input type="text" id="rp-dir" maxlength="1000" value="${esc(room.dir)}" spellcheck="false">${UI.html("button", { label: "Browse", icon: "folder", kind: "ghost", id: "rp-dir-browse", title: "Choose a folder", hook: "browse-btn" })}</span>`, "Where the vibemates read and write. Changing it restarts them in the new folder; they replay the last messages.")}
+      `)}
+      ${settingsGroup("rp-rules-section", "Rules and language", `
         <div class="field mention-host"><span class="label">Room rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">One rule per line; type @ to reference a participant.<span class="count" id="rp-rules-count"></span></span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></div>
         ${field("Language", `<input type="text" id="rp-lang" value="${esc(lang)}" placeholder="follow the human (default), or e.g. English">`)}
-      </div>
-      <div class="section">
-        ${sectionTitle("user", "Turn taking")}
+      `)}
+      ${settingsGroup("rp-turn-taking", "Turn taking", `
         ${field("Who may speak", `<select id="rp-turns"><option value="one-at-a-time"${rs.turnTaking !== "parallel" ? " selected" : ""}>One vibemate at a time</option><option value="parallel"${rs.turnTaking === "parallel" ? " selected" : ""}>All addressed vibemates at once</option></select>`, null, "One at a time: the others queue and see the earlier replies before they answer; the addressed vibemates go first. All at once: fastest, but replies may cross.")}
         ${field("Reply delay, seconds", `${UI.html("number-field", { id: "rp-delay", value: String(rs.replyDelay ?? 4), min: 0, max: 120, step: 0.5 })}`, "With two or more vibemates, each waits a random 0–N seconds before it answers, so replies cross less often. A vibemate alone answers at once. A vibemate's own delay (in its panel) always applies.")}
         <label class="switch"><span class="label">Vibemates wake each other<span class="hint">A reply without @ wakes every other vibemate, as yours does; each may answer or stay silent. Off: only @Name wakes a vibemate. The hop limit applies either way.</span></span><input type="checkbox" id="rp-wake" ${rs.agentsWakeEachOther !== false ? "checked" : ""}></label>
         <label class="switch"><span class="label">Wait while you are typing<span class="hint">A vibemate about to start holds back while you type (a few seconds after your last keystroke). A reply already under way is not interrupted.</span></span><input type="checkbox" id="rp-wait-typing" ${rs.waitWhileHumanTypes !== false ? "checked" : ""}></label>
-      </div>
-      <div class="section template">
-        ${sectionTitle("rooms", "Turn this room into a template")}
+      `)}
+      ${settingsGroup("rp-messengers", "Messengers", `
+        <label class="switch"><span class="label">Reachable from messengers<span class="hint">A phone paired to viberoom (Settings → Channels) can open this room, write to it and read its replies. Off: the phone neither sees nor reaches this room.</span></span><input type="checkbox" id="rp-reachable" ${rs.reachableFromMessengers !== false ? "checked" : ""}></label>
+      `)}
+      ${settingsGroup("rp-startup", "Start and restart", `
+        <label class="switch"><span class="label">Start this room with viberoom<span class="hint">Its vibemates are started when viberoom starts, one room after another. They pay nothing until the first turn; their processes and memory stay while they wait. With viberoom starting at sign-in, the phone reaches this room without a click.</span></span><input type="checkbox" id="rp-start-with-hub" ${rs.startWithHub ? "checked" : ""}></label>
+        ${field("…and they come back", `<select id="rp-reconnect"><option value="inherit"${(rs.reconnectMode || "inherit") === "inherit" ? " selected" : ""}>As Welcome back is set</option><option value="load"${rs.reconnectMode === "load" ? " selected" : ""}>Continuing their saved sessions</option><option value="replay"${rs.reconnectMode === "replay" ? " selected" : ""}>Fresh, with the last messages replayed</option></select>`, "Only for the start above: when this room brings its own vibemates back, it decides with how much memory.", "A room that decides whether it starts also decides with how much memory its vibemates come back; the app-wide Welcome back setting is what a room follows when it has not chosen. It is not asked again in a dialog, because by the time a window could ask, the room has already begun.")}
+        <label class="switch"><span class="label">Wake vibemates after a restart<span class="hint">Off by default. After Restart finishes restoring this room, send the message below once. Requires Start this room with viberoom. Muted, stopped or unavailable vibemates stay quiet. Ordinary launches and sign-in do not send it.</span></span><input type="checkbox" id="rp-wake-restart" ${rs.wakeAfterRestart ? "checked" : ""}></label>
+        ${field("Message after restart", `<textarea id="rp-restart-message" rows="3" maxlength="8000" placeholder="Continue your tasks, if you have any.">${esc(rs.restartMessage || "")}</textarea>`, "Your saved instruction appears as an automatic room event. Empty text starts no replies.")}
+      `)}
+      ${settingsGroup("rp-turn-this-room-into-a-template", "Turn this room into a template", `
         <p class="field-note">Its settings, rules, folder and vibemates (with the coding agent each runs on) become one of your templates, listed first under "Start from a template". You see everything it will contain, and can change any of it, before you create it.</p>
         <div class="row-btns start stp-row">${UI.html("button", { label: "Preview and create template", icon: "rooms", kind: "primary", size: "sm", id: "rp-template" })}</div>
-      </div>
+      `)}
       ${geek(
         "rp-geek",
-        `<div class="section">
-        ${sectionTitle("clock", "Right now")}
+        `${settingsGroup("rp-right-now", "Right now", `
         <div class="kv">
           <span>Vibemate-to-vibemate replies since your last message</span><span>${room.hops} / ${room.hopLimit}</span>
           <span>Hushed</span><span>${room.focused ? "yes" : "no"}</span>
           <span>Full brief every</span><span>${rs.fullBriefEveryTurns} turns</span>
         </div>
-      </div>
-      <div class="section">
-        ${sectionTitle("chat", "Conversation")}
+      `)}
+      ${settingsGroup("rp-conversation", "Conversation", `
         ${field("Vibemates' own tools (files, shell, web)", `<select id="rp-tools"><option value="on-request"${rs.tools === "on-request" ? " selected" : ""}>Only when someone explicitly asks</option><option value="never"${rs.tools === "never" ? " selected" : ""}>Never (chat only)</option></select>`, null, "An instruction in every vibemate's brief; the vibemate's mode is the real limit.")}
         <label class="switch"><span class="label">Share this room's history with the other rooms<span class="hint">Vibemates here may search the other rooms that also share theirs, and those rooms' vibemates may find messages written here. Hidden and deleted messages are never shared. Off: this room is searched only from inside it.</span></span><input type="checkbox" id="rp-share-history" ${rs.searchOtherRooms !== false ? "checked" : ""}></label>
-        <label class="switch"><span class="label">Reachable from messengers<span class="hint">A phone paired to viberoom (Settings → Channels) can open this room, write to it and read its replies. Off: the phone neither sees nor reaches this room.</span></span><input type="checkbox" id="rp-reachable" ${rs.reachableFromMessengers !== false ? "checked" : ""}></label>
-        <label class="switch"><span class="label">Start this room with viberoom<span class="hint">Its vibemates are started when viberoom starts, one room after another. They pay nothing until the first turn; their processes and memory stay while they wait. With viberoom starting at sign-in, the phone reaches this room without a click.</span></span><input type="checkbox" id="rp-start-with-hub" ${rs.startWithHub ? "checked" : ""}></label>
-        ${field("…and they come back", `<select id="rp-reconnect"><option value="inherit"${(rs.reconnectMode || "inherit") === "inherit" ? " selected" : ""}>As Welcome back is set</option><option value="load"${rs.reconnectMode === "load" ? " selected" : ""}>Continuing their saved sessions</option><option value="replay"${rs.reconnectMode === "replay" ? " selected" : ""}>Fresh, with the last messages replayed</option></select>`, "Only for the start above: when this room brings its own vibemates back, it decides with how much memory.", "A room that decides whether it starts also decides with how much memory its vibemates come back; the app-wide Welcome back setting is what a room follows when it has not chosen. It is not asked again in a dialog, because by the time a window could ask, the room has already begun.")}
-        <label class="switch"><span class="label">Wake vibemates after a restart<span class="hint">Off by default. After Restart finishes restoring this room, send the message below once. Requires Start this room with viberoom. Muted, stopped or unavailable vibemates stay quiet. Ordinary launches and sign-in do not send it.</span></span><input type="checkbox" id="rp-wake-restart" ${rs.wakeAfterRestart ? "checked" : ""}></label>
-        ${field("Message after restart", `<textarea id="rp-restart-message" rows="3" maxlength="8000" placeholder="Continue your tasks, if you have any.">${esc(rs.restartMessage || "")}</textarea>`, "Your saved instruction appears as an automatic room event. Empty text starts no replies.")}
         ${field("Max sentences per reply", `${UI.html("number-field", { id: "rp-maxlen", value: String(rs.maxSentences ?? ""), min: 1, max: 100, placeholder: "no limit" })}`)}
         ${field("Hop limit (vibemate-to-vibemate replies per human message)", `${UI.html("number-field", { id: "rp-hops", value: String(rs.hopLimit), min: 0, max: 10000 })}`)}
-      </div>
-      <div class="section">
-        ${sectionTitle("eye", "Referee")}
+      `)}
+      ${settingsGroup("rp-referee-section", "Referee", `
         ${field("When a reply breaks a mechanical rule (unknown @, self-@, length)", `<select id="rp-referee"><option value="next-header"${rs.refereeAction !== "retry-hidden" ? " selected" : ""}>Post it; remind the agent in its next header</option><option value="retry-hidden"${rs.refereeAction === "retry-hidden" ? " selected" : ""}>Hold it; ask for a corrected version in a hidden turn</option></select>`)}
-      </div>
-      <div class="section">
-        ${sectionTitle("save", "Instruction delivery")}
+      `)}
+      ${settingsGroup("rp-instruction-delivery", "Instruction delivery", `
         <button data-ui="button" data-kind="ghost" data-memory-open="room">Shared memory for this room</button>
         ${field("Full brief every N vibemate turns", `${UI.html("number-field", { id: "rp-brief-turns", value: String(rs.fullBriefEveryTurns), min: 1, max: 10000 })}`)}
         ${field("…or every N new context tokens", `${UI.html("number-field", { id: "rp-brief-tokens", value: String(rs.fullBriefEveryTokens), min: 1000, max: 10000000, step: 1000 })}`)}
@@ -5172,22 +5207,18 @@
         ${field("Replay last N chat messages after a reconnect", `${UI.html("number-field", { id: "rp-replay", value: String(rs.replayAfterRestart), min: 0, max: 200 })}`)}
         ${field("Missed messages a vibemate reads at most on its next turn", `${UI.html("number-field", { id: "rp-backlog", value: String(rs.backlogCap), min: 1, max: 1000 })}`, "Everything posted since its last turn counts, including while it was muted; older messages are dropped with a note in its prompt.")}
         ${field("Most characters in a vibio or in the room rules", `${UI.html("number-field", { id: "rp-text-limit", value: String(rs.briefTextLimit ?? 8000), min: 500, max: 32000, step: 500 })}`, "Both go into every brief. Text over the limit is refused with the numbers, never cut.")}
-      </div>
-      <div class="section">
-      </div>
-      <div class="section">
-        ${sectionTitle("save", "Troubleshooting")}
+      `)}
+      ${settingsGroup("rp-troubleshooting", "Troubleshooting", `
         ${field("Save diagnostic details", `<select id="rp-transcripts">${[["inherit", `Use the app setting (now: ${esc(TRANSCRIPT_LABEL[(state.settings || {}).transcripts || "off"])})`], ["off", "Off"], ["errors", "When something fails"], ["full", "All activity"]].map(([v, label]) => `<option value="${v}"${(rs.transcripts || "inherit") === v ? " selected" : ""}>${label}</option>`).join("")}</select>`, DIAGNOSTIC_LOG_HELP)}
-      </div>`,
+      `)}`,
         "tools, hops, referee, briefs",
       )}
       <div class="save-row" style="margin-top:10px"><span class="hint">The vibemates get the changes on their next turn.</span></div>
       </div>
-      <div class="section danger" style="margin-top:12px">
-        ${sectionTitle("alert", "Danger zone")}
+      ${settingsGroup("rp-danger-zone", "Danger zone", `
         <p class="field-note">Closes every vibemate in this room and removes it from the list. Its history and files move to the trash folder of your viberoom data; a new room with the same name starts empty.</p>
         <div class="row-btns start">${UI.html("button", { label: "Close this room for good", icon: "trash", kind: "danger", size: "sm", id: "rp-delete" })}</div>
-      </div>`;
+      `, "danger")}`;
     wireDetailsClose();
     rulesToNodes($("#rp-rules"), room.customRulesText != null ? room.customRulesText : rs.customRules || "", room);
     attachRichMentions($("#rp-rules"), $("#rp-rules-menu"));
@@ -5308,12 +5339,12 @@
       missing.map((r) => `<div class="vendor-row" style="opacity:.75">${logo(r)}<span class="vc-name">${esc(r.vendor)}<span class="hint">${esc(r.installHint || r.unavailableReason || "")}</span></span>${UI.html("badge", { label: "not installed", tone: "asleep" })}</div>`).join("");
     els.pageInner.innerHTML = `
       <div class="page-head"><div><h1>Settings</h1><div class="hint">${state.version ? `${esc(state.version.name)} ${esc(state.version.version)} · room built ${esc(new Date(state.version.build).toLocaleString())}` : "room build unknown (older room process; run viberoom again to replace it)"}</div></div></div>
+      ${settingsFoldActions()}
       <div id="sp-form">
-      <div class="section" id="sp-carrying"><h3>Carry conversations</h3><p class="hint">Save selected rooms for another computer, bring in a copy, or inspect removed versions.</p><button type="button" data-ui="button" data-kind="ghost" id="sp-carry">Export / Import rooms</button></div>
+      ${settingsGroup("sp-carrying", "Carry conversations", `<p class="hint">Save selected rooms for another computer, bring in a copy, or inspect removed versions.</p><button type="button" data-ui="button" data-kind="ghost" id="sp-carry">Export / Import rooms</button>`)}
       <div class="page-cols">
         <div>
-          <div class="section" id="sp-appearance">
-            ${sectionTitle("eye", "Appearance")}
+          ${settingsGroup("sp-appearance", "Appearance", `
             ${(() => {
               const a = s.appearance || {};
               const lookId = TOKENS.looks[a.look] ? a.look : TOKENS.current.id;
@@ -5336,18 +5367,15 @@
               <div class="field row"><span class="label">Code font<span class="hint">For code blocks, paths and tool output.</span></span><select id="sp-mono">${Object.entries(FONTS.mono).map(([id, f]) => `<option value="${id}"${((s.appearance || {}).mono || "jetbrains-mono") === id ? " selected" : ""}>${esc(f.label)}</option>`).join("")}</select></div>
               <div class="bubble" id="sp-chat-sample" style="display:inline-block;font-size:${(s.appearance || {}).chatFontSize || 14.5}px">Messages will read like this, with <code>code</code> a step smaller.</div>
             </div>
-          </div>
-          <div class="section">
-            ${sectionTitle("lock", "Permissions")}
+          `)}
+          ${settingsGroup("sp-permissions", "Permissions", `
             <label class="switch"><span class="label">Vibemates act without asking<span class="hint">Off: they ask you before editing files or running commands.</span>${geekTip('New vibemates start in their vendor\'s "act without asking" mode (Claude bypassPermissions, Codex agent-full-access, Gemini yolo, Cursor agent, OpenCode build, Copilot agent + allow_all). Change it per vibemate when summoning one, or later in its panel.')}</span><input type="checkbox" id="sp-bypass" ${s.bypassPermissionsByDefault !== false ? "checked" : ""}></label>
-          </div>
-          <div class="section">
-            ${sectionTitle("bolt", "Pace")}
+          `)}
+          ${settingsGroup("sp-pace", "Pace", `
             ${field("Turn taking in new rooms", `<select id="sp-turns"><option value="one-at-a-time"${d.turnTaking !== "parallel" ? " selected" : ""}>One vibemate at a time</option><option value="parallel"${d.turnTaking === "parallel" ? " selected" : ""}>All addressed vibemates at once</option></select>`)}
             ${field("Reply delay in new rooms, seconds", `${UI.html("number-field", { id: "sp-delay", value: String(d.replyDelay ?? 4), min: 0, max: 120, step: 0.5 })}`, "Used when two or more vibemates share a room; each room can change it; a vibemate can override it in its own panel.", "Before each turn a vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive meanwhile land in its backlog. A vibemate alone answers at once unless it has its own delay.")}
-          </div>
-          <div class="section" id="sp-editor">
-            ${sectionTitle("pencil", "Open files at a line")}
+          `)}
+          ${settingsGroup("sp-editor", "Open files at a line", `
             <label class="field"><span class="label">A click on a path like main.ts:375 opens the file in${geekTip("Only an editor can jump to a line; the OS default app just opens the file. Auto looks for VS Code, Cursor, Windsurf, Zed, Sublime Text, Notepad++ and the JetBrains IDEs, in that order, on PATH and in their usual folders. Custom: a command with {file}, {line} and {column} placeholders, e.g. code --goto {file}:{line}.")}</span>
               <div class="chips editor-modes">
                 ${UI.html("choice", { label: "Auto", on: !["custom", "default-app"].includes((s.editor || {}).mode), data: { mode: "auto" } })}
@@ -5357,9 +5385,8 @@
               <input type="hidden" id="sp-editor-mode" value="${esc((s.editor || {}).mode || "auto")}">
             </label>
             ${field("Command", `<input type="text" id="sp-editor-cmd" maxlength="500" value="${esc((s.editor || {}).command || "")}" placeholder="code --goto {file}:{line}">`, "{file}, {line} and {column} are filled in; quotes group arguments.")}
-          </div>
-          <div class="section" id="sp-diagrams">
-            ${sectionTitle("wand", "Diagrams")}
+          `)}
+          ${settingsGroup("sp-diagrams", "Diagrams", `
             <div class="field"><span class="label">Colours of the boxes${geekTip("Vibemates draw diagrams as Mermaid (a ```mermaid block in a message); the room renders them here, with these colours. Mermaid derives the shades of borders and text from the box colour.")}</span>
               <div class="chips diagram-presets">${Object.entries(DIAGRAM_PRESETS).map(([id, p]) => UI.html("choice", { label: p.label, on: dg.preset === id, data: { preset: id }, lead: UI.raw(`<span class="swatch" style="${p.palette ? `background:linear-gradient(90deg, ${p.palette.map((c) => c.fill).join(", ")});border-color:${p.palette[0].stroke}` : `background:${p.primaryColor};border-color:${p.primaryBorderColor}`}"></span>`) })).join("")}</div>
               <input type="hidden" id="sp-diagram-preset" value="${esc(dg.preset)}">
@@ -5367,44 +5394,38 @@
             <label class="switch"><span class="label">My own colour for the boxes</span><input type="checkbox" id="sp-diagram-custom" ${dg.primary ? "checked" : ""}></label>
             <div class="field row" id="sp-diagram-color-row" ${dg.primary ? "" : "hidden"}><span class="label">Box colour</span><input type="color" id="sp-diagram-color" value="${esc(dg.primary || TOKENS.diagrams.customBoxDefault)}" style="width:46px;height:30px;padding:2px"></div>
             ${mermaidBlock("graph LR\n  A[You] --> B(Vibemate)\n  B --> C{Agreed?}\n  C -->|yes| D[Done]\n  C -->|no| B").replace('class="mermaid-block"', 'class="mermaid-block preview"')}
-          </div>
+          `)}
         </div>
         <div>
-          <div class="section" id="sp-channels">
-            ${sectionTitle("chat", "Channels")}
+          ${settingsGroup("sp-channels", "Channels", `
             ${channelsSectionHtml()}
-          </div>
-          <div class="section" id="sp-update">
-            ${sectionTitle("refresh", "Updates")}
+          `)}
+          ${settingsGroup("sp-update", "Updates", `
             <label class="switch"><span class="label">Check for updates once a day<span class="hint">At start, one request to the npm registry for the latest viberoom version; nothing else leaves this machine. A newer version shows as a bubble over your avatar.</span></span><input type="checkbox" id="sp-updates" ${s.checkForUpdates !== false ? "checked" : ""}></label>
             <p class="hint" id="sp-update-status">${updateStatusText()}</p>
             ${UI.html("button", { label: "Check now", size: "sm", id: "sp-update-check" })}
-          </div>
-          <div class="section" id="sp-autostart">
-            ${sectionTitle("refresh", "Start with the computer")}
+          `)}
+          ${settingsGroup("sp-autostart", "Start with the computer", `
             <label class="switch"><span class="label">Start viberoom when you sign in to this computer<span class="hint">A quiet start, without a window: the icon opens the window when you want it. Rooms with "Start this room with viberoom" bring their vibemates back by themselves, so a paired phone reaches them without a click. A viberoom already running is left alone. Switch this off before you remove or move viberoom.</span></span><input type="checkbox" id="sp-autostart-on" ${state.autostart && state.autostart.enabled ? "checked" : ""}${state.autostart ? "" : " disabled"}></label>
             <p class="hint" id="sp-autostart-status">${autostartStatusText()}</p>
-          </div>
+          `)}
           ${dataFolderRow()}
-          <div class="section" id="sp-restart">
-            ${sectionTitle("refresh", "Restart")}
+          ${settingsGroup("sp-restart", "Restart", `
             <p class="hint" style="margin-bottom:10px">Starts the room again with what is on disk. The vibemates come back the way Welcome back is set to bring them, and this window reconnects on its own. Closing the window does not do this: the room keeps running in the background, which is why it can stay on an older build than the one you have.</p>
             ${state.version && state.version.staleBuild ? `<p class="hint warn" style="margin-bottom:10px">Older build running. There is a newer build on this machine — <code>${esc(state.version.staleBuild)}</code> was written after this room started — and the room keeps running the one it started with. Restart takes the new one.</p>` : ""}
             ${state.version && state.version.staleSource ? `<p class="hint warn" style="margin-bottom:10px">This room is older than the code on disk: <code>${esc(state.version.staleSource)}</code> changed after it was built. Restart takes what is built; in a source checkout run <code>node scripts/update.mjs</code>, which builds first.</p>` : ""}
             ${UI.html("button", { label: "Restart viberoom", size: "sm", id: "sp-restart-now" })}
-          </div>
-          <div class="section">
-            ${sectionTitle("spark", "Vibemates on this machine")}
+          `)}
+          ${settingsGroup("sp-vibemates-on-this-machine", "Vibemates on this machine", `
             ${machine || '<p class="hint">No supported vibemate is installed yet.</p>'}
-          </div>
+          `)}
         </div>
       </div>
       ${geek(
         "sp-geek",
-        `<div class="section"><button data-ui="button" data-kind="ghost" data-memory-open="user">Shared memory about you</button><p class="hint">Review learned preferences, protected notes and their revision history.</p></div><div class="page-cols">
+        `${settingsGroup("sp-shared-memory", "Shared memory", `<button data-ui="button" data-kind="ghost" data-memory-open="user">Shared memory about you</button><p class="hint">Review learned preferences, protected notes and their revision history.</p>`)}<div class="page-cols">
         <div>
-          <div class="section">
-            ${sectionTitle("rooms", "Defaults for new rooms")}
+          ${settingsGroup("sp-defaults-for-new-rooms", "Defaults for new rooms", `
             <p class="field-note">Every new room starts with these; each room can change them in its own settings.</p>
             ${field("Hop limit", `${UI.html("number-field", { id: "sp-hops", value: String(d.hopLimit), min: 0, max: 10000 })}`, "How many vibemate-to-vibemate replies may follow one message of yours before the room waits for you again.")}
             ${field("Full brief every N turns", `${UI.html("number-field", { id: "sp-brief-turns", value: String(d.fullBriefEveryTurns), min: 1, max: 10000 })}`, "How often a vibemate gets the whole room brief again instead of the short header.")}
@@ -5412,15 +5433,13 @@
             ${field("Most characters in a vibio or in the room rules", `${UI.html("number-field", { id: "sp-text-limit", value: String(d.briefTextLimit ?? 8000), min: 500, max: 32000, step: 500 })}`, "Both go into every brief. Over the limit, the text is refused with the numbers, never cut; each room can raise or lower its own.")}
             <label class="switch"><span class="label">Repeat core rules in every header<span class="hint">The short header before each turn repeats the room's core rules (who is here, how to address, how long to write).</span></span><input type="checkbox" id="sp-header-rules" ${d.headerRules ? "checked" : ""}></label>
             ${field("Tools", `<select id="sp-tools"><option value="on-request"${d.tools === "on-request" ? " selected" : ""}>Only when asked</option><option value="never"${d.tools === "never" ? " selected" : ""}>Never</option></select>`, "Whether vibemates may use their own tools (files, shell, web) without being asked to.")}
-          </div>
-          <div class="section">
-            ${sectionTitle("skills", "Skills from vibemates")}
+          `)}
+          ${settingsGroup("sp-skills-from-vibemates", "Skills from vibemates", `
             <label class="switch"><span class="label">Vibemate-created skills need my approval<span class="hint">Off: a skill a vibemate creates is usable at once and shows as "unreviewed" until you open it. On: it stays a draft (not delivered, not attachable) until you approve it under Skills.</span></span><input type="checkbox" id="sp-skill-approval" ${s.agentSkillsNeedApproval ? "checked" : ""}></label>
-          </div>
+          `)}
         </div>
         <div>
-          <div class="section" id="sp-transcripts">
-            ${sectionTitle("save", "Troubleshooting")}
+          ${settingsGroup("sp-transcripts", "Troubleshooting", `
             ${field("Save diagnostic details", `<select id="sp-transcripts-mode">${[["off", "Off (default)"], ["errors", "When something fails"], ["full", "All activity"]].map(([v, label]) => `<option value="${v}"${(s.transcripts || "off") === v ? " selected" : ""}>${label}</option>`).join("")}</select>`, DIAGNOSTIC_LOG_HELP + " You can choose a different setting for each room.")}
             <p class="field-note" id="sp-log-size" role="status" aria-live="polite">Checking saved diagnostic details…</p>
             <p class="field-note">Includes current and removed rooms. Clearing these details keeps your conversations and shared files. Recording can create new details while vibemates work.</p>
@@ -5430,21 +5449,19 @@
             </div>
             <p class="field-note">Recent tool connection timings stay in memory. Copy them when reporting a connection problem; message text and access keys are not included.</p>
             ${UI.html("button", { label: "Copy tool connection details", size: "sm", id: "sp-connection-copy" })}
-          </div>
-          ${devBuild() ? `<div class="section" id="sp-slow">
-            ${sectionTitle("clock", "Rendering in this window")}
+          `)}
+          ${devBuild() ? `${settingsGroup("sp-slow", "Rendering in this window", `
             <p class="field-note">Only a viberoom started from its own sources shows this. It measures how long this window took to draw, so a slow moment can be reported with the place it happened in.</p>
             <p class="hint" style="margin-bottom:10px">Everything this window spent more than 8 ms on, newest first: the moment, the cost, what it was, and what the room was doing then. Anything over 50 ms the browser reports by itself, ours or not. When something feels slow, copy the list into the room: it says where to look, which a measurement from outside cannot.</p>
             ${slowTasksHtml()}
             ${UI.html("button", { label: "Copy the list", size: "sm", id: "sp-slow-copy" })}
             <p class="hint" style="margin:16px 0 10px">Every time the chat moved to the newest message by itself, and who asked for it. A move while you were reading higher up is the one to report.</p>
             ${endJumpsHtml()}
-          </div>` : ""}
-          <div class="section">
-            ${sectionTitle("settings", "Presets per vibemate")}
+          `)}` : ""}
+          ${settingsGroup("sp-presets-per-vibemate", "Presets per vibemate", `
             <p class="hint" style="margin-bottom:10px">Used when you summon one; leave a field empty for the built-in suggestion. The summon dialog always shows what the vibemate really offers. Bypass modes: Claude bypassPermissions, Codex agent-full-access, Gemini yolo, Cursor agent, OpenCode build, Copilot agent + allow_all.</p>
             ${presets || '<p class="hint">No supported vibemate is installed yet.</p>'}
-          </div>
+          `)}
         </div>
       </div>`,
         "room defaults, long rooms, diagnostics, presets per vibemate, rendering",
@@ -8293,14 +8310,14 @@
     let drag = null;
     grip.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
-      drag = { y: e.clientY, h: els.input.offsetHeight };
+      drag = { y: Layout.length(e.clientY), h: els.input.offsetHeight };
       grip.setPointerCapture(e.pointerId);
       els.composer.classList.add("resizing");
       e.preventDefault();
     });
     grip.addEventListener("pointermove", (e) => {
       if (!drag) return;
-      composerMin = Math.round(Math.min(composerCeiling(), Math.max(36, drag.h + drag.y - e.clientY)));
+      composerMin = Math.round(Math.min(composerCeiling(), Math.max(36, drag.h + drag.y - Layout.length(e.clientY))));
       autosize();
     });
     const stop = () => {
@@ -8474,7 +8491,7 @@
     const m = messageOfNode(range.startContainer);
     if (!m || m !== messageOfNode(range.endContainer)) return null;
     if (!range.startContainer.parentElement || !range.startContainer.parentElement.closest(".bubble .text")) return null;
-    return { m, text, rect: range.getBoundingClientRect() };
+    return { m, text, rect: Layout.rect(range) };
   }
 
   const quotePop = document.createElement("button");
@@ -8495,7 +8512,7 @@
     quotePop.hidden = false;
     const top = Math.max(8, found.rect.top - 36);
     quotePop.style.top = `${top}px`;
-    quotePop.style.left = `${Math.min(window.innerWidth - 96, Math.max(8, found.rect.left + found.rect.width / 2 - 40))}px`;
+    quotePop.style.left = `${Math.min(Layout.length(window.innerWidth) - 96, Math.max(8, found.rect.left + found.rect.width / 2 - 40))}px`;
   }
   els.messages.addEventListener("mouseup", () => setTimeout(placeQuotePop, 0));
   els.messages.addEventListener("keyup", (e) => {
@@ -9044,13 +9061,13 @@
 
   els.detailsResizer.addEventListener("mousedown", (event) => {
     event.preventDefault();
-    const startX = event.clientX;
-    const startW = els.details.getBoundingClientRect().width;
+    const startX = Layout.length(event.clientX);
+    const startW = Layout.rect(els.details).width;
     els.app.classList.add("resizing");
-    const move = (e) => applyDetailsWidth(startW + (startX - e.clientX), false);
+    const move = (e) => applyDetailsWidth(startW + (startX - Layout.length(e.clientX)), false);
     const up = (e) => {
       els.app.classList.remove("resizing");
-      applyDetailsWidth(startW + (startX - e.clientX), true);
+      applyDetailsWidth(startW + (startX - Layout.length(e.clientX)), true);
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
     };
@@ -9060,7 +9077,7 @@
   els.detailsResizer.addEventListener("dblclick", () => {
     const key = detailsKey();
     remember(`details.${key}`, "");
-    applyDetailsWidth(DETAILS_DEFAULT[key] || 400, false);
+    fitDetailsWidth();
   });
 
 
@@ -9436,9 +9453,9 @@
       const total = els.messages.scrollHeight || 1;
       const h = Math.max(0, t.ticks.clientHeight - tickH);
       const fits = els.messages.scrollHeight <= els.messages.clientHeight + 1;
-      const stripTop = fits ? t.ticks.getBoundingClientRect().top : 0;
+      const stripTop = fits ? Layout.rect(t.ticks).top : 0;
       const tops = fits
-        ? nodes.map((row) => { const node = drawnRow(row.id); return node ? node.getBoundingClientRect().top - stripTop : 0; })
+        ? nodes.map((row) => { const node = drawnRow(row.id); return node ? Layout.rect(node).top - stripTop : 0; })
         : nodes.map((row) => row.top);
       t.pos = fits ? null : tops;
       if (!fits && globalThis.VIBEROOM_TIMELINE) {
@@ -9637,14 +9654,14 @@
     }
     function itemUnder(el, clientY) {
       const { itemAt } = globalThis.VIBEROOM_TIMELINE;
-      const box = el.getBoundingClientRect();
+      const box = Layout.rect(el);
       const within = box.height ? (clientY - box.top) / box.height : 0.5;
       return itemAt(t.pos || [], t.slots[Number(el.dataset.at)], within);
     }
     t.ticks.addEventListener("mouseover", (e) => {
       const slot = t.slots && e.target.closest(".tl-slot");
       if (slot) {
-        const i = itemUnder(slot, e.clientY);
+        const i = itemUnder(slot, Layout.length(e.clientY));
         if (i >= 0) showPop(i, false, slot);
         return;
       }
@@ -9660,7 +9677,7 @@
     t.ticks.addEventListener("click", (e) => {
       const slot = t.slots && e.target.closest(".tl-slot");
       if (slot) {
-        const i = itemUnder(slot, e.clientY);
+        const i = itemUnder(slot, Layout.length(e.clientY));
         if (i >= 0) void jumpToId(t.items[i].id);
         return;
       }
@@ -9704,8 +9721,8 @@
   function bubbleInView(id) {
     const head = els.messages.querySelector(`.msg[data-id="${id}"] .head`);
     if (!head) return false;
-    const box = els.messages.getBoundingClientRect();
-    const r = head.getBoundingClientRect();
+    const box = Layout.rect(els.messages);
+    const r = Layout.rect(head);
     return r.bottom > box.top && r.top < box.bottom;
   }
   function pushNote(note) {
@@ -9803,8 +9820,8 @@
       el.scrollIntoView({ block: "center" });
       requestAnimationFrame(() => {
         const m = els.messages;
-        const r = el.getBoundingClientRect();
-        const box = m.getBoundingClientRect();
+        const r = Layout.rect(el);
+        const box = Layout.rect(m);
         const centre = m.scrollTop + (r.top - box.top) - (box.height - r.height) / 2;
         m.scrollTop = centre + (centre < from ? 240 : -240);
         m.scrollTo({ top: centre, behavior: "smooth" });
@@ -9816,8 +9833,8 @@
     return true;
   }
   function onScreen(el) {
-    const r = el.getBoundingClientRect();
-    const box = els.messages.getBoundingClientRect();
+    const r = Layout.rect(el);
+    const box = Layout.rect(els.messages);
     const shown = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
     return shown >= Math.min(r.height, box.height) - 1;
   }
@@ -10173,9 +10190,9 @@
     if (save) save.addEventListener("click", () => saveNotes(el.querySelector(".lp-notes-area").value));
     const clear = el.querySelector(".lp-notes-clear");
     if (clear) clear.addEventListener("click", () => saveNotes(""));
-    const r = lifePop.anchor.getBoundingClientRect();
+    const r = Layout.rect(lifePop.anchor);
     el.style.left = `${Math.round(r.right + 12)}px`;
-    el.style.top = `${Math.round(Math.max(8, Math.min(r.top - 10, window.innerHeight - el.offsetHeight - 8)))}px`;
+    el.style.top = `${Math.round(Math.max(8, Math.min(r.top - 10, Layout.length(window.innerHeight) - el.offsetHeight - 8)))}px`;
   }
   async function respawnWith(p, n) {
     const text =

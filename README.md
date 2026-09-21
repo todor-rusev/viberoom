@@ -229,11 +229,13 @@ started with, and says so when a newer one is on the disk.
 
 ## Small things you will like
 
-**Upgrading to 0.12.0:** this release adds complete indexed conversation navigation, reviewed and
-optionally encrypted room transfers, shared preference memory, and restart coordination. If your
-conversation store needs the new schema, viberoom writes a consistent backup beside `history.db`
-before upgrading it. Older builds cannot open the upgraded store; use the current build, or restore
-the pre-upgrade backup into a separate data folder when deliberately returning to an older version.
+**Upgrading to 0.13.0:** the window is drawn more compactly at your browser's normal zoom: what used to
+need 80% now fits at 100%. If you had zoomed out to make room, return to the default size once (Ctrl+0 / ⌘0,
+or *Default size* in the desktop window), or the two scales multiply. Settings are grouped into sections you
+can fold, with *Collapse all* and *Expand all* above them, and the settings panels start wider. Coming from
+0.11 or older: viberoom writes a consistent backup beside `history.db` before upgrading the conversation
+store. Older builds cannot open the upgraded store; use the current build, or restore the pre-upgrade
+backup into a separate data folder when deliberately returning to an older version.
 
 - **Rooms remember.** The history stays with the room. Move the folder and the vibemates move with it.
 - **A small shared memory.** Vibemates can maintain durable preferences about you and conventions for each

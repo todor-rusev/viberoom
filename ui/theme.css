@@ -339,6 +339,11 @@
   --tool-call-fs: calc(12px * var(--fs-scale));
   --tool-call-pre-fs: calc(11.5px * var(--fs-scale));
   --tool-call-label-fs: calc(10.5px * var(--fs-scale));
+  --settings-group-bg: #eef0fb;
+  --settings-group-ink: #1c1b33;
+  --settings-group-heading-ink: #5b5bf0;
+  --settings-group-danger-bg: #fff0ee;
+  --settings-group-danger-ink: #e0554a;
   --tool-fold-ink: #8080a3;
   --tool-fold-bg: #f6f6fb;
   --tool-fold-hover-bg: #eef0fb;
@@ -626,6 +631,12 @@
   --tpl-check-ink: #ffffff;
   --browser-theme-color: #6d5dfc;
 }
+html {
+  --ui-scale: 0.8;
+  --layout-vw: calc(1vw / var(--ui-scale));
+  --layout-vh: calc(1vh / var(--ui-scale));
+  zoom: var(--ui-scale);
+}
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; overflow: hidden; }
 body { font-family: var(--font); color: var(--page-ink); background: var(--page-bg); font-size: var(--fs-md); font-weight: 600; line-height: var(--line-height); -webkit-font-smoothing: antialiased; }
@@ -836,7 +847,7 @@ code .open-link { color: inherit; }
 .emoji-menu { min-width: 0; width: 352px; padding: 8px; }
 .emoji-menu .avatar-picker { margin: 0; grid-template-columns: repeat(8, 1fr); }
 #rp-emoji-picker .avatar-picker { max-height: 236px; }
-.dialog { border: 0; border-radius: calc(22px * var(--r-scale)); padding: 24px 26px; width: 580px; max-width: 94vw; max-height: 90vh; box-shadow: var(--shadow-dialog); overflow: auto; overflow-x: hidden; background: var(--card); color: var(--ink); }
+.dialog { border: 0; border-radius: calc(22px * var(--r-scale)); padding: 24px 26px; width: 580px; max-width: calc(94 * var(--layout-vw)); max-height: calc(90 * var(--layout-vh)); box-shadow: var(--shadow-dialog); overflow: auto; overflow-x: hidden; background: var(--card); color: var(--ink); }
 .dialog::backdrop { background: var(--dialog-backdrop); backdrop-filter: blur(4px); }
 .dialog[open] { animation: pop var(--t-slow) var(--ease-pop); }
 .dialog[open]::backdrop { animation: fade-in var(--t-base) var(--ease-out); }

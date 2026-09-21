@@ -3,6 +3,27 @@
   "use strict";
   const UI = globalThis.UI;
 
+  UI.define("settings-group", {
+    group: "settingsGroup",
+    describe: "A named settings group on its own paper; the native heading folds it without removing any fields or changing their values.",
+    props: {
+      id: { type: "string", required: true },
+      title: { type: "string", required: true },
+      body: { type: "node", required: true },
+      open: { type: "boolean", default: true },
+      tone: { type: "enum", values: ["plain", "danger"], default: "plain" },
+    },
+    build: ({ id, title, body, open, tone }, ui) => ui.h("details", { id, class: "section", open, "data-tone": tone },
+      ui.h("summary", {}, ui.h("h4", {}, title), ui.h("span", { class: "chev", "aria-hidden": "true" }, ui.icon("down"))),
+      ui.h("div", { class: "group-body" }, body)),
+    states: ["rest"],
+    samples: [
+      { label: "open", props: { id: "sample-settings-open", title: "Room", body: UI.raw('<p class="hint">Choose a name and a topic for this room.</p>') } },
+      { label: "closed", props: { id: "sample-settings-closed", title: "Start and restart", body: UI.raw('<p class="hint">Choose how this room comes back.</p>'), open: false } },
+      { label: "danger", props: { id: "sample-settings-danger", title: "Danger zone", body: UI.raw('<p class="hint">Actions that remove this room.</p>'), tone: "danger" } },
+    ],
+  });
+
   UI.define("logo-tile", {
     group: "logoTile",
     describe: "A vendor's mark on a tile: the vendor's own drawing laid over the look's ink through a mask, so it reads on any paper; a letter stands in where there is no drawing, a glyph from the icon set for the marks the room adds (muted). As a badge it sits in a face's corner.",
