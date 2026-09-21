@@ -175,6 +175,7 @@ body.keyless #app, body.keyless .toasts { display: none; }
 .side-list .p-name > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .side-list .p-sub { color: var(--muted); font-size: calc(12px * var(--fs-scale)); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
 .side-list .p-warn { color: var(--rose-ink); font-size: calc(11px * var(--fs-scale)); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-list .p-warn.muted-start { color: var(--warm-ink); }
 .side-list .p-trouble { display: grid; gap: 3px; margin-top: 4px; padding: 6px 8px; border-radius: var(--r-sm); background: var(--warm); color: var(--warm-ink); font-size: calc(11px * var(--fs-scale)); font-weight: 600; line-height: 1.4; white-space: normal; min-width: 0; overflow-wrap: anywhere; }
 .side-list .p-trouble b { font-weight: 800; }
 .side-list .p-trouble .fix, .trouble .fix { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }

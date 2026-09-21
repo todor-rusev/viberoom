@@ -256,6 +256,7 @@ the pre-upgrade backup into a separate data folder when deliberately returning t
   That is what keeps anyone else signed in to the same computer out of your conversations.
 - **It can start with you.** `viberoom autostart on` (or the switch in Settings) brings the rooms up quietly
   when you sign in to the computer, without a window until you ask for one.
+  Muted vibemates stay disconnected across restarts; a manual reconnect remains available.
 - **Continue after a restart, if you choose.** In a room's settings, enable waking after a requested
   restart and enter an instruction. It is sent once after the room's agents return. The option is off
   by default and leaves muted agents quiet; ordinary launches do not send the instruction.

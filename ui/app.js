@@ -2339,8 +2339,8 @@
   }
 
 
-  function offlineAgents(room) {
-    return room ? room.participants.filter((p) => p.kind === "agent" && p.status === "offline") : [];
+  function offlineAgents(room, includeMuted = false) {
+    return room ? room.participants.filter((p) => p.kind === "agent" && p.status === "offline" && (includeMuted || !p.muted)) : [];
   }
 
   function renderSideRoom() {
@@ -2360,6 +2360,7 @@
       fill: (li, p, _at, fresh) => {
         const selected = state.detailsOpen && ((state.selection.kind === "participant" && state.selection.id === p.id) || (p.kind === "human" && state.selection.kind === "me"));
         const asleep = p.kind === "agent" && (p.status === "offline" || p.status === "left");
+        const mutedStartup = p.status === "offline" && p.muted && p.startupSkipped === "muted";
         const unstaffed = p.kind === "agent" && p.status === "unstaffed";
         const shown = shownStatus(room, p);
         const className = (p.kind === "human" ? "me" : "") + (selected ? " selected" : "") + (asleep ? " offline" : "") + (unstaffed ? " unstaffed" : "");
@@ -2368,7 +2369,7 @@
         const troubled = p.kind === "agent" && !working && p.trouble && (p.status === "error" || p.trouble.stage === "turn" || (p.trouble.actions && p.trouble.actions.length > 0));
         const unplugged = vendorLoggedOut(p);
         const loginRow = unplugged && p.status === "offline" && !troubled ? `<div class="p-fix">${UI.html("button", { label: "Log in", kind: "primary", size: "xs", act: "open-login-dialog", icon: "lock", title: `${p.agentVendor || "The vendor"} is not logged in: log in, and ${p.name} comes back`, data: { recipe: p.agentType, purpose: "login" } })}</div>` : "";
-        const warn = troubled ? troubleHtml(p) : working ? "" : p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>${loginRow}` : loginRow;
+        const warn = mutedStartup ? `<div class="p-warn muted-start" title="Unmute and reconnect when you want this vibemate to return">${esc(p.statusDetail || "Not summoned — muted")}</div>` : troubled ? troubleHtml(p) : working ? "" : p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>${loginRow}` : loginRow;
         const status = unstaffed
           ? UI.html("badge", { label: "summon", tone: "attention", title: "Click to summon this vibemate: pick the coding agent that runs it" })
           : asleep
@@ -4837,6 +4838,7 @@
   function renderAgentPanel(room, p) {
     const rec = state.recipes.find((r) => r.id === p.agentType);
     const offline = p.status === "offline";
+    const mutedStartup = offline && p.muted && p.startupSkipped === "muted";
     els.detailsInner.innerHTML = `
       ${panelTitle("Vibemate", esc(room.name))}
       <div class="profile">
@@ -4857,7 +4859,7 @@
         ${field("Vibio", `<textarea id="pp-role" rows="5" placeholder="who it is, how it speaks, what it cares about">${esc(p.role || "")}</textarea>`, `Only this vibemate reads it.<span class="count" id="pp-role-count"></span>`, "Reaches the vibemate as refreshed instructions in its brief on its next turn; its memory is kept. The other participants never see it. A vibio and the room rules go into every brief, so the room has a limit for them (the room's settings, for geeks); text over it is never cut in silence.")}
       </div>
       ${p.trouble && p.status !== "thinking" && p.status !== "queued" ? `<div class="trouble"><b>${esc(p.trouble.what)}</b><span>${esc(p.trouble.advice)}</span>${troubleActionsHtml(p)}</div>` : ""}
-      ${p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<p class="hint" style="color:var(--danger);margin:0 4px 10px">${esc(p.statusDetail)}</p>` : ""}
+      ${p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<p class="hint" style="color:var(${mutedStartup ? "--warm-ink" : "--danger"});margin:0 4px 10px">${esc(p.statusDetail)}</p>` : ""}
       ${vendorLoggedOut(p) && p.trouble?.kind !== "login" ? `<div class="pp-login"><div class="row-btns">${UI.html("button", { label: `Log in to ${p.agentVendor || "the vendor"}`, icon: "lock", kind: "primary", size: "sm", act: "open-login-dialog", data: { recipe: p.agentType, purpose: "login" } })}</div><p class="hint">${esc(p.agentVendor || "The vendor")} is not logged in on this machine; log in, and ${esc(p.name)} comes back by itself.</p></div>` : ""}
       <div class="section" id="pp-engine">
         ${sectionTitle("spark", "Coding agent")}
@@ -7133,7 +7135,7 @@
     }
   });
   function openReconnectDialog(room, only) {
-    const offline = offlineAgents(room).filter((p) => !only || p.id === only.id);
+    const offline = offlineAgents(room, !!only).filter((p) => !only || p.id === only.id);
     if (!offline.length) return;
     if (!only) reconnectPrompted.add(room.id);
     els.rcError.hidden = true;
@@ -7143,12 +7145,13 @@
       ? `${only.name} is offline in "${room.name}" (its session ended with the previous room run). Choose how it comes back:`
       : `${offline.length} vibemate${offline.length > 1 ? "s are" : " is"} offline in "${room.name}" (their sessions ended with the previous room run). Choose how they come back:`;
     els.rcTable.dataset.ids = offline.map((p) => p.id).join(",");
+    els.rcTable.dataset.only = only?.id || "";
     els.rcTable.innerHTML = "";
     renderReconnectRows(room);
     openDialog(els.rcDialog);
   }
   function reconnectListed(room) {
-    return (els.rcTable.dataset.ids || "").split(",").filter(Boolean).map((id) => findById(room, id)).filter(Boolean);
+    return (els.rcTable.dataset.ids || "").split(",").filter(Boolean).map((id) => findById(room, id)).filter(p => p && (!p.muted || p.id === els.rcTable.dataset.only));
   }
   const reconnectStuck = (p) => p.trouble?.kind === "login" || state.recipes.find((r) => r.id === p.agentType)?.loginState === "missing";
   const reconnectBack = (p) => ["idle", "queued", "thinking", "writing"].includes(p.status);
@@ -7199,6 +7202,8 @@
     const failures = [];
     for (const row of rows) {
       if (row.choice === "skip") continue;
+      const participant = findById(room, row.id);
+      if (!participant || participant.muted && row.id !== els.rcTable.dataset.only) continue;
       try {
         await post(roomApi(`/participants/${encodeURIComponent(row.id)}/reconnect`), { mode: row.choice, replay });
       } catch (error) {

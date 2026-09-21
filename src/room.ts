@@ -124,6 +124,7 @@ export interface Participant {
   role?: string;
   avatar?: string;
   muted?: boolean;
+  startupSkipped?: "muted";
   createdByVibemate?: boolean;
   replyDelay?: number;
   skills?: string[];
@@ -885,7 +886,8 @@ export class Room extends EventEmitter {
         agentLabel: recipe?.label ?? s.agentType,
         agentVendor: recipe?.vendor ?? s.agentType,
         status: "offline",
-        statusDetail: "not connected since the room restarted",
+        statusDetail: s.muted ? "Not summoned — muted" : "not connected since the room restarted",
+        ...(s.muted ? { startupSkipped: "muted" as const } : {}),
         turns: 0,
         color: s.color,
         colorSlot: s.colorSlot ?? (COLORS.indexOf(s.color) >= 0 ? COLORS.indexOf(s.color) : undefined),
@@ -1287,8 +1289,18 @@ export class Room extends EventEmitter {
     this.postRoomEvent(text);
   }
 
-  noteStartedWithHub(mode: string): void {
-    this.postRoomEvent(`Started with viberoom: the vibemates are back (${mode}).`);
+  noteStartedWithHub(mode: string, skippedMuted = 0): void {
+    this.postRoomEvent(skippedMuted
+      ? `Started with viberoom (${mode}): ${skippedMuted} muted vibemate${skippedMuted === 1 ? " was" : "s were"} left not summoned.`
+      : `Started with viberoom: the vibemates are back (${mode}).`);
+  }
+
+  noteMutedStartup(id: string): void {
+    const participant = this.participants.get(id);
+    if (!participant?.muted || participant.status !== "offline") return;
+    participant.startupSkipped = "muted";
+    participant.statusDetail = "Not summoned — muted";
+    this.push({ type: "participant", participant });
   }
 
   private restartMessageHandled = false;
@@ -1846,7 +1858,7 @@ export class Room extends EventEmitter {
 
   retryAfterLogin(recipeId: string): void {
     for (const participant of this.participants.values()) {
-      if (participant.kind !== "agent" || participant.agentType !== recipeId || participant.trouble?.kind !== "login") continue;
+      if (participant.kind !== "agent" || participant.muted || participant.agentType !== recipeId || participant.trouble?.kind !== "login") continue;
       const runtime = this.runtimes.get(participant.id);
       if (runtime?.agent.alive) {
         this.notice(`${participant.name}: ${getRecipe(recipeId)?.vendor ?? recipeId} is logged in again; sending it the messages it missed.`, "info");
@@ -1872,6 +1884,10 @@ export class Room extends EventEmitter {
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
     if (!!participant.muted === muted) return participant;
     participant.muted = muted;
+    if (!muted && participant.startupSkipped === "muted") {
+      participant.startupSkipped = undefined;
+      participant.statusDetail = "not summoned yet; reconnect when ready";
+    }
     const runtime = this.runtimes.get(id);
     if (muted && runtime) {
       this.dropScheduledTurn(id);
@@ -2077,6 +2093,7 @@ export class Room extends EventEmitter {
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
     if (this.runtimes.has(id) || participant.status === "starting") return participant;
     participant.status = "starting";
+    participant.startupSkipped = undefined;
     participant.statusDetail = undefined;
     this.push({ type: "participant", participant });
     const launch = participant.launch ?? { model: participant.model ?? null, effort: participant.effort ?? null, mode: participant.mode ?? null };

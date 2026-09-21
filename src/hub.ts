@@ -398,8 +398,10 @@ export class Hub extends EventEmitter {
       this.markOpened(room.id);
       room.noteStartingWithHub(true);
       const restored: string[] = [];
+      let skippedMuted = 0;
       try {
         for (const p of offline) {
+          if (p.muted) { room.noteMutedStartup(p.id); skippedMuted++; continue; }
           try {
             await reconnect(room, p.id);
             restored.push(p.id);
@@ -410,7 +412,7 @@ export class Hub extends EventEmitter {
       } finally {
         room.noteStartingWithHub(false);
       }
-      room.noteStartedWithHub(this.reconnectModeFor(room));
+      room.noteStartedWithHub(this.reconnectModeFor(room), skippedMuted);
       if (afterRestart) room.wakeAfterRestart(restored);
       started.push(room.id);
     }

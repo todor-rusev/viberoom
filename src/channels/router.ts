@@ -710,11 +710,12 @@ export class ChannelRouter {
       case "reconnect": {
         if (!room) return answer("That room is gone.").then(() => "done" as const);
         const named = action.participantId ? room.participants.get(action.participantId) : undefined;
-        const offline = named ? (named.status === "offline" ? [named] : []) : [...room.participants.values()].filter((p) => p.kind === "agent" && p.status === "offline");
-        if (!offline.length) return answer(`Nobody is offline in ${roomName(room)} now.`).then(() => "done" as const);
+        const offline = named ? (named.status === "offline" ? [named] : []) : [...room.participants.values()].filter((p) => p.kind === "agent" && p.status === "offline" && !p.muted);
+        if (!offline.length) return answer(`Nobody is waiting to reconnect in ${roomName(room)} now.`).then(() => "done" as const);
         this.buttons.delete(m.button!.data);
         await answer(`Reconnecting ${offline.map((p) => p.name).join(", ")}…`);
         for (const p of offline) {
+          if (p.muted && !named) continue;
           try {
             await room.reconnect(p.id, this.host.reconnectOptions());
           } catch (error) {
