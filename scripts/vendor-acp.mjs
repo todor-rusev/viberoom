@@ -93,8 +93,8 @@ function patchClaudeAdapter(file) {
     source = source.replace(anchor, replacement);
   };
   once(
-    "        const ensureActiveTurn = (resultUserMessageUuid) => {",
-    "        const ensureActiveTurn = (resultUserMessageUuid, dispatchedTurn) => {",
+    "        const ensureActiveTurn = async (resultUserMessageUuid) => {",
+    "        const ensureActiveTurn = async (resultUserMessageUuid, dispatchedTurn) => {",
   );
   once(
     `            const head = firstUnsettledQueuedTurn();
@@ -134,8 +134,8 @@ function patchClaudeAdapter(file) {
                         const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind) && absorbedPrompts.length === 0;`,
   );
   once(
-    "                                ensureActiveTurn(message.user_message_uuid);",
-    `                                ensureActiveTurn(message.user_message_uuid, dispatchedOwner);
+    "                                await ensureActiveTurn(message.user_message_uuid);",
+    `                                await ensureActiveTurn(message.user_message_uuid, dispatchedOwner);
                                 // Only after the adapter accepted the owner (orphan/cancel checks included).
                                 // Share its terminal outcome rather than reactivating each command and resetting
                                 // the stop reason/usage, or bypassing early refusal/error/deferral exits.
@@ -145,7 +145,7 @@ function patchClaudeAdapter(file) {
                                         const share = (reason, settle) => {
                                             for (const extra of rest) {
                                                 if (extra.settled) continue;
-                                                this.finishFileChangeAudit(session, extra, reason);
+                                                session.fileChangeReporter?.finish(extra.fileChangeReport, reason);
                                                 extra.settled = true;
                                                 extra.usageMarkdownAbort?.abort();
                                                 session.turnQueue = (session.turnQueue ?? []).filter((turn) => turn !== extra);
@@ -193,12 +193,12 @@ function patchClaudeAdapter(file) {
   );
   once(
     `            if (isHeldOpen(turn) && !turnAwaitingSubagents(turn)) {
-                settleActive(turn.deferredSettle);
+                await settleActive(turn.deferredSettle);
             }`,
     `            if (isHeldOpen(turn) && !turnAwaitingSubagents(turn)) {
                 console.error("viberoom-trace released after=" + (turn.viberoomHeldAt ? Math.round((Date.now() - turn.viberoomHeldAt) / 1000) + "s" : "unknown"));
                 turn.viberoomHeldAt = undefined;
-                settleActive(turn.deferredSettle);
+                await settleActive(turn.deferredSettle);
             }`,
   );
   once(
