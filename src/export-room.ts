@@ -121,6 +121,7 @@ interface ImportPlan extends ImportPreview {
 }
 
 function planImport(hub: Hub, text: string): ImportPlan {
+  hub.settleImports();
   const contents = readExport(text);
   if (contents.unknownParts) throw new ExportUnreadable("This archive includes parts this version cannot import. Update viberoom before bringing it in.");
   if (contents.settings) {

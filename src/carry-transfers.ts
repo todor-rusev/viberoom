@@ -37,8 +37,22 @@ interface Job {
   userMemoryRevision?: number;
   applying?: boolean;
   pending?: Promise<void>;
+  planInput?: PlanInput;
+  progress?: string;
+  hurry?: boolean;
 }
-interface SelectedRoom { memory?: boolean; memoryChoice?: "ours" | "incoming"; uuid: string; target?: string | null; name?: string; conversation?: boolean; settings?: boolean; resources?: boolean; setup?: "ours" | "incoming"; branch?: BranchChoice; resourcesChoice?: "ours" | "incoming" }
+interface PlanInput { selected: SelectedRoom[]; dependencies: Record<string, "ours" | "incoming">; userMemory: boolean; userMemoryChoice?: "ours" | "incoming" | "both" }
+class StalePreview extends Error {}
+
+function decisions(preview: CarryPlanPreview): string {
+  return JSON.stringify({
+    userMemory: preview.userMemory ?? null,
+    dependencies: preview.dependencies,
+    rooms: preview.rooms.map(r => ({ uuid: r.uuid, target: r.targetId, made: r.made, setup: r.setup, settingsDiff: r.settingsDiff, memory: r.memory ?? null,
+      removed: r.counts.removed, alternatives: r.counts.alternatives, changed: r.branch?.changed ?? 0, conflicts: r.resources.conflicts })),
+  });
+}
+interface SelectedRoom { memory?: boolean; memoryChoice?: "ours" | "incoming" | "both"; uuid: string; target?: string | null; name?: string; conversation?: boolean; settings?: boolean; resources?: boolean; setup?: "ours" | "incoming"; branch?: BranchChoice; resourcesChoice?: "ours" | "incoming" }
 
 const json = (res: ServerResponse, status: number, value: unknown) => { res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" }); res.end(JSON.stringify(value)); };
 const setupStamp = (room: StoredRoom) => createHash("sha256").update(JSON.stringify({ name: room.name, dir: room.dir, ...roomForExport(room as unknown as Record<string, unknown>) })).digest("hex");
@@ -190,35 +204,89 @@ export class CarryTransfers {
       if (!name || name.length > 60) throw new Error("A new room name must be 1–60 characters.");
       const id = existing?.id ?? this.hub.importedRoomAddress(name, reserved); reserved.add(id);
       const target: StoredRoom = existing?.toStored() ?? { id, uuid: carried.uuid, name, dir: join(this.hub.dataDir, "rooms", id, "workspace"), createdAt: Date.now(), settings: {}, participants: [] };
-      return { uuid: carried.uuid, target, made: !existing, conversation: asked.conversation !== false, settings: asked.settings !== false, memory: asked.memory === true, ...(asked.memoryChoice === "ours" || asked.memoryChoice === "incoming" ? { memoryChoice: asked.memoryChoice } : {}), resources: asked.resources !== false, ...(asked.resourcesChoice === "ours" || asked.resourcesChoice === "incoming" ? { resourcesChoice: asked.resourcesChoice } : {}), ...(asked.setup === "ours" || asked.setup === "incoming" ? { setup: asked.setup } : {}), ...(["ours", "incoming", "both"].includes(String(asked.branch)) ? { branch: asked.branch } : {}) };
+      return { uuid: carried.uuid, target, made: !existing, conversation: asked.conversation !== false, settings: asked.settings !== false, memory: asked.memory === true, ...(["ours", "incoming", "both"].includes(String(asked.memoryChoice)) ? { memoryChoice: asked.memoryChoice } : {}), resources: asked.resources !== false, ...(asked.resourcesChoice === "ours" || asked.resourcesChoice === "incoming" ? { resourcesChoice: asked.resourcesChoice } : {}), ...(asked.setup === "ours" || asked.setup === "incoming" ? { setup: asked.setup } : {}), ...(["ours", "incoming", "both"].includes(String(asked.branch)) ? { branch: asked.branch } : {}) };
     });
   }
 
-  private plan(job: Job, selected: SelectedRoom[], dependencies: Record<string, "ours" | "incoming">, userMemory = false, userMemoryChoice?: "ours" | "incoming"): void {
-    if (job.kind !== "import" || job.status === "working" || job.applying) throw new Error("This transfer is still being prepared.");
-    if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies) || Object.values(dependencies).some(value => value !== "ours" && value !== "incoming")) throw new Error("Choose which shared definitions to keep.");
+  private stagedChoices(job: Job, selected: SelectedRoom[]): RoomImportChoice[] {
     const stage = new CarryStage(join(job.dir, "stage"));
-    let choices: RoomImportChoice[];
-    try { choices = this.choices(stage, selected); } finally { stage.close(); }
-    job.previewToken = undefined;
-    job.userMemoryRevision = userMemory ? this.hub.history.memory.read("user").revision : undefined;
-    job.versions = new Map(choices.map(c => [c.target.id, { version: this.hub.rooms.get(c.target.id)?.historyStamp().version ?? null, setup: c.made ? null : setupStamp(c.target), uuid: c.target.uuid!, memoryRevision: this.hub.history.memory.read(`room:${c.target.uuid}`).revision }]));
-    this.launch(job, async () => {
-      const snapshot = await this.snapshot(job);
-      const result = await this.work<CarryPlanPreview>(job, { type: "plan", job: { snapshot, stageDir: join(job.dir, "stage"), dataDir: this.hub.dataDir, source: this.source(), choices, dependencyChoices: dependencies, userMemory, userMemoryChoice } });
-      job.previewToken = randomUUID();
-      return { ...result, previewToken: job.previewToken };
-    });
+    try { return this.choices(stage, selected); } finally { stage.close(); }
   }
 
-  private async apply(job: Job, token: unknown): Promise<unknown> {
-    if (job.status !== "ready" || !job.previewToken || token !== job.previewToken || !job.versions) throw new Error("Review this import before applying it.");
+  private plan(job: Job, input: PlanInput): void {
+    if (job.kind !== "import" || job.status === "working" || job.applying) throw new Error("This transfer is still being prepared.");
+    if (!input.dependencies || typeof input.dependencies !== "object" || Array.isArray(input.dependencies) || Object.values(input.dependencies).some(value => value !== "ours" && value !== "incoming")) throw new Error("Choose which shared definitions to keep.");
+    this.hub.settleImports();
+    const choices = this.stagedChoices(job, input.selected);
+    job.planInput = input;
+    this.launch(job, () => this.planNow(job, input, choices));
+  }
+
+  private async planNow(job: Job, input: PlanInput, choices = this.stagedChoices(job, input.selected)): Promise<CarryPlanPreview & { previewToken: string }> {
+    job.previewToken = undefined;
+    job.userMemoryRevision = input.userMemory ? this.hub.history.memory.read("user").revision : undefined;
+    job.versions = new Map(choices.map(c => [c.target.id, { version: this.hub.rooms.get(c.target.id)?.historyStamp().version ?? null, setup: c.made ? null : setupStamp(c.target), uuid: c.target.uuid!, memoryRevision: this.hub.history.memory.read(`room:${c.target.uuid}`).revision }]));
+    const snapshot = await this.snapshot(job);
+    const result = await this.work<CarryPlanPreview>(job, { type: "plan", job: { snapshot, stageDir: join(job.dir, "stage"), dataDir: this.hub.dataDir, source: this.source(), choices, dependencyChoices: input.dependencies, userMemory: input.userMemory, userMemoryChoice: input.userMemoryChoice } });
+    job.previewToken = randomUUID();
+    const rooms = result.rooms.map(r => ({ ...r, live: this.hub.rooms.get(r.targetId)?.liveVibemates().map(v => v.name) ?? [] }));
+    return { ...result, rooms, previewToken: job.previewToken };
+  }
+
+  private startApply(job: Job): void {
+    const reviewed = job.result as CarryPlanPreview;
+    job.applying = true; job.hurry = false; job.status = "working"; job.error = undefined; job.progress = undefined;
+    job.pending = this.applyNow(job, reviewed).then(outcome => {
+      if ("review" in outcome) { job.result = outcome.review; job.status = "ready"; }
+      else { job.result = outcome.applied; job.status = "applied"; job.previewToken = undefined; }
+    }, error => {
+      job.status = "error";
+      job.error = error instanceof Error ? error.message : "The import could not be completed.";
+      this.log.warn(`carry import: ${job.error}`);
+    }).finally(() => { job.applying = false; job.progress = undefined; job.touched = Date.now(); });
+  }
+
+  private async applyNow(job: Job, reviewed: CarryPlanPreview): Promise<{ applied: unknown } | { review: unknown }> {
+    this.hub.settleImports();
+    const restarting = this.roomsToRestart(job);
+    const paused = restarting.length ? await this.hub.pauseRoomsForImport(restarting, {
+      waiting: names => { job.progress = `Waiting for ${names.join(", ")} to finish writing`; },
+      hurry: () => !!job.hurry,
+    }) : null;
+    try {
+      for (let attempt = 1; ; attempt++) {
+        job.progress = "Bringing it in";
+        try {
+          return { applied: await this.commitPlan(job) };
+        } catch (error) {
+          if (!(error instanceof StalePreview) || attempt >= 3) throw error;
+        }
+        job.progress = "Updating the summary with what changed meanwhile";
+        const fresh = await this.planNow(job, job.planInput!);
+        if (!fresh.ready || decisions(fresh) !== decisions(reviewed)) return { review: { ...fresh, refreshed: true } };
+      }
+    } finally {
+      if (paused) await this.hub.resumeRoomsAfterImport(paused);
+    }
+  }
+
+  private roomsToRestart(job: Job): string[] {
     const stage = new CarryStage(join(job.dir, "stage"));
     try {
-      const plan = stage.meta<{ userMemory?: PortableMemory; rooms: PlannedRoom[]; dependencies: PlannedDependency[]; directoryVersions: { path: string; hash: string }[]; fileVersions: { path: string; hash: string | null }[] }>("plan");
-      if (job.userMemoryRevision !== undefined && job.userMemoryRevision !== this.hub.history.memory.read("user").revision) throw new Error("Shared user memory changed after the preview. Review the import again.");
+      const plan = stage.meta<{ rooms: PlannedRoom[] }>("plan");
+      return (plan?.rooms ?? []).filter(r => r.setup && this.hub.rooms.get(r.stored.id)?.hasConnectedAgents).map(r => r.stored.id);
+    } finally { stage.close(); }
+  }
+
+  private async commitPlan(job: Job): Promise<unknown> {
+    const versions = job.versions;
+    if (!versions) throw new Error("Review this import before applying it.");
+    const stage = new CarryStage(join(job.dir, "stage"));
+    try {
+      const plan = stage.meta<{ userMemory?: PortableMemory; userMemoryMode?: "merge" | "replace"; rooms: PlannedRoom[]; dependencies: PlannedDependency[]; directoryVersions: { path: string; hash: string }[]; fileVersions: { path: string; hash: string | null }[] }>("plan");
+      if (job.userMemoryRevision !== undefined && job.userMemoryRevision !== this.hub.history.memory.read("user").revision) throw new StalePreview("Shared user memory changed after the preview. Review the import again.");
       if (!plan) throw new Error("Choose how to handle every conflict before importing.");
-      for (const [id, expected] of job.versions) if (this.hub.history.memory.read(`room:${expected.uuid}`).revision !== expected.memoryRevision) throw new Error("Room memory changed after the preview. Review the import again; nothing was imported.");
+      for (const [id, expected] of versions) if (this.hub.history.memory.read(`room:${expected.uuid}`).revision !== expected.memoryRevision) throw new StalePreview("Room memory changed after the preview. Review the import again; nothing was imported.");
       const files: FileChange[] = [];
       for (const dependency of plan.dependencies) {
         if (dependency.kind === "skill" && isBuiltinSkill(dependency.id)) throw new Error("Built-in skills stay with the installed viberoom. They cannot be replaced by an archive.");
@@ -231,27 +299,33 @@ export class CarryTransfers {
         if (dependency.kind === "skill") files.push({ path: dependency.targetDir, directory: dependency.files.map(file => ({ path: file.path, data: Buffer.from(file.data, "base64") })) });
         else for (const file of dependency.files) files.push({ path: join("looks", file.path), data: Buffer.from(file.data, "base64") });
       }
-      for (const [id, at] of job.versions) {
+      for (const [id, at] of versions) {
         const room = this.hub.rooms.get(id);
-        if ((room?.historyStamp().version ?? null) !== at.version || (room ? setupStamp(room.toStored()) : null) !== at.setup || (room && room.uuid !== at.uuid)) throw new Error("A target room changed after the preview. Review the import again; nothing was imported.");
+        if ((room?.historyStamp().version ?? null) !== at.version || (room ? setupStamp(room.toStored()) : null) !== at.setup || (room && room.uuid !== at.uuid)) throw new StalePreview("A target room changed after the preview. Review the import again; nothing was imported.");
       }
       for (const file of plan.fileVersions) {
         const path = safeDataFile(this.hub.dataDir, file.path);
         const hash = existsSync(path) ? lstatSync(path).isDirectory() ? "#directory" : createHash("sha256").update(readFileSync(path)).digest("hex") : null;
-        if (hash !== file.hash) throw new Error("A resource, skill or look changed after the preview. Review the import again; nothing was imported.");
+        if (hash !== file.hash) throw new StalePreview("A resource, skill or look changed after the preview. Review the import again; nothing was imported.");
       }
-      for (const directory of plan.directoryVersions) if (dependencyStamp(dependencyFiles(safeDataFile(this.hub.dataDir, directory.path))) !== directory.hash) throw new Error("A skill's files changed after the preview. Review the import again; nothing was imported.");
+      for (const directory of plan.directoryVersions) if (dependencyStamp(dependencyFiles(safeDataFile(this.hub.dataDir, directory.path))) !== directory.hash) throw new StalePreview("A skill's files changed after the preview. Review the import again; nothing was imported.");
       for (const room of plan.rooms) for (const resource of room.resources) files.push({ path: join("rooms", room.stored.id, "files", resource.file), data: readFileSync(join(stage.dir, "blobs", resource.blob)) });
       const knownSources = new Map(this.hub.history.carry.sources().map(source => [source.uuid, source.label]));
       const sources = [stage.meta<CarrySource>("source")!, ...stage.db.prepare("select value from meta where key like 'source:%'").all().map(row => JSON.parse(String(row.value)) as CarrySource)];
       const changedSources = sources.filter(source => knownSources.get(source.uuid) !== source.label);
       const changes = plan.rooms.filter(room => room.changed || changedSources.length).map(p => ({ stored: p.stored, setup: p.setup }));
       if (changes.length || files.length || changedSources.length || plan.userMemory) this.hub.commitRoomTransfer(changes, files, () => {
-        if (plan.userMemory) this.hub.history.memory.importScope("user", plan.userMemory);
+        if (plan.userMemory) {
+          if (plan.userMemoryMode === "merge") this.hub.history.memory.mergeScope("user", plan.userMemory);
+          else this.hub.history.memory.importScope("user", plan.userMemory);
+        }
         for (const room of plan.rooms) {
           const history = this.hub.history, id = room.stored.id;
           history.carry.importRevisions(id, room.revisions);
-          if (room.memory) this.hub.history.memory.importRoom(room.stored.uuid!, room.memory);
+          if (room.memory) {
+            if (room.memoryMode === "merge") this.hub.history.memory.mergeRoom(room.stored.uuid!, room.memory);
+            else this.hub.history.memory.importRoom(room.stored.uuid!, room.memory);
+          }
           for (const state of room.states) {
             history.upsert(id, state.message, { track: false });
             if (state.deletedAt !== null) history.markDeleted(id, [state.message.id], state.deletedAt, { track: false });
@@ -263,12 +337,9 @@ export class CarryTransfers {
         }
         for (const source of changedSources) this.hub.history.carry.source(source.uuid, source.label);
       });
-      job.status = "applied"; job.previewToken = undefined;
       for (const dependency of plan.dependencies) if (dependency.kind === "skill") this.hub.skillsChanged(dependency.id);
       if (plan.dependencies.some(d => d.kind === "look")) this.hub.emit("event", { type: "looks", looks: this.hub.looks.list() });
-      const result = { userMemory: !!plan.userMemory, rooms: plan.rooms.map(r => ({ id: r.stored.id, name: r.stored.name })) };
-      job.result = result;
-      return result;
+      return { userMemory: !!plan.userMemory, rooms: plan.rooms.map(r => ({ id: r.stored.id, name: r.stored.name, messages: r.added ?? r.states.length, files: r.resources.length })) };
     } finally { stage.close(); }
   }
 
@@ -276,7 +347,7 @@ export class CarryTransfers {
     if (!url.pathname.startsWith("/api/carry")) return false;
     const path = url.pathname;
     if (req.method === "GET" && path === "/api/carry") {
-      json(res, 200, { source: this.source(), userMemoryBytes: Buffer.byteLength(JSON.stringify(portableMemory(this.hub.history.memory.read("user")))), rooms: [...this.hub.rooms.values()].map(r => ({ id: r.id, uuid: r.uuid, aliases: this.hub.history.carry.aliases(r.id), name: r.name, connected: r.hasConnectedAgents, memoryBytes: Buffer.byteLength(JSON.stringify(portableMemory(this.hub.history.memory.read(`room:${r.uuid}`)))) })) }); return true;
+      json(res, 200, { source: this.source(), userMemoryBytes: Buffer.byteLength(JSON.stringify(portableMemory(this.hub.history.memory.read("user")))), rooms: [...this.hub.rooms.values()].map(r => ({ id: r.id, uuid: r.uuid, aliases: this.hub.history.carry.aliases(r.id), name: r.name, emoji: r.settings.emoji ?? "", connected: r.hasConnectedAgents, memoryBytes: Buffer.byteLength(JSON.stringify(portableMemory(this.hub.history.memory.read(`room:${r.uuid}`)))) })) }); return true;
     }
     if (req.method === "GET" && path === "/api/carry/removed") {
       const room = this.hub.getRoom(url.searchParams.get("room") ?? "");
@@ -293,7 +364,7 @@ export class CarryTransfers {
       }
       return true;
     }
-    const route = path.match(/^\/api\/carry\/([0-9a-f-]{36})(?:\/(download|inspect|plan|apply|cancel|dependency|review))?$/);
+    const route = path.match(/^\/api\/carry\/([0-9a-f-]{36})(?:\/(download|inspect|plan|apply|cancel|dependency|review|hurry))?$/);
     if (req.method === "GET" && route) {
       const job = this.get(route[1]);
       if (route[2] === "review") {
@@ -333,7 +404,7 @@ export class CarryTransfers {
         const file = join(job.dir, "export.viberoom"), size = (await stat(file)).size;
         res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": size, "Cache-Control": "no-store", "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(job.fileName!)}` });
         await pipeline(createReadStream(file), res);
-      } else if (!route[2]) json(res, 200, { id: job.id, kind: job.kind, status: job.applying ? "working" : job.status, result: job.result, error: job.error });
+      } else if (!route[2]) json(res, 200, { id: job.id, kind: job.kind, status: job.applying ? "working" : job.status, result: job.result, error: job.error, ...(job.progress ? { progress: job.progress } : {}) });
       else json(res, 404, { error: "Unknown transfer action." });
       return true;
     }
@@ -381,11 +452,16 @@ export class CarryTransfers {
         this.inspect(job, typeof body.passphrase === "string" ? body.passphrase : undefined); json(res, 202, { id: job.id });
       } else if (route[2] === "plan") {
         if (!Array.isArray(body.rooms)) throw new Error("Choose rooms from this archive.");
-        this.plan(job, body.rooms as SelectedRoom[], (body.dependencies ?? {}) as Record<string, "ours" | "incoming">, body.userMemory === true, body.userMemoryChoice === "ours" || body.userMemoryChoice === "incoming" ? body.userMemoryChoice : undefined); json(res, 202, { id: job.id });
+        const userMemoryChoice = ["ours", "incoming", "both"].includes(String(body.userMemoryChoice)) ? body.userMemoryChoice as PlanInput["userMemoryChoice"] : undefined;
+        this.plan(job, { selected: body.rooms as SelectedRoom[], dependencies: (body.dependencies ?? {}) as Record<string, "ours" | "incoming">, userMemory: body.userMemory === true, userMemoryChoice }); json(res, 202, { id: job.id });
       } else if (route[2] === "apply") {
         if (job.applying) throw new Error("This import is already being applied.");
-        job.applying = true;
-        try { json(res, 200, await this.apply(job, body.previewToken)); } finally { job.applying = false; }
+        if (job.status !== "ready" || !job.previewToken || body.previewToken !== job.previewToken || !job.versions) throw new Error("Review this import before applying it.");
+        if (!(job.result as CarryPlanPreview | undefined)?.ready) throw new Error("Choose how to handle every conflict before importing.");
+        this.startApply(job); json(res, 202, { id: job.id });
+      } else if (route[2] === "hurry") {
+        if (job.applying) job.hurry = true;
+        json(res, 200, { ok: true });
       }
       else if (route[2] === "cancel") {
         if (job.applying) throw new Error("This import is already being applied; wait for its result.");

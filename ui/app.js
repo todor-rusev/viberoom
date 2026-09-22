@@ -1193,10 +1193,25 @@
     const look = TOKENS.active();
     return TOKENS.diagrams.forScheme(DIAGRAM_PRESETS[d.preset] || DIAGRAM_PRESETS.pop, look.scheme, look.elements.diagram.nodeInk);
   }
+  function diagramFontPx() {
+    const scale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chat-fs")) || 1;
+    return Math.round(13 * scale * 10) / 10;
+  }
+  function diagramStage() {
+    let stage = document.getElementById("diagram-stage");
+    if (!stage) {
+      stage = document.createElement("div");
+      stage.id = "diagram-stage";
+      stage.setAttribute("aria-hidden", "true");
+      stage.style.cssText = "position:absolute;left:-10000px;top:0;visibility:hidden;zoom:calc(1 / var(--ui-scale, 1))";
+      document.body.appendChild(stage);
+    }
+    return stage;
+  }
   function mermaidThemeVariables(d) {
     d = diagramSettings(d);
     const preset = diagramPreset(d);
-    const vars = Object.assign({}, preset, { fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font").trim() || "Nunito, sans-serif", fontSize: "13px" });
+    const vars = Object.assign({}, preset, { fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font").trim() || "Nunito, sans-serif", fontSize: `${diagramFontPx()}px` });
     delete vars.label;
     delete vars.palette;
     if (preset.palette) preset.palette.forEach((c, i) => (vars[`pie${i + 1}`] = c.fill));
@@ -1220,8 +1235,7 @@
     ".cluster rect { stroke-dasharray: 4 3; stroke-width: 1.5px; }",
     ".cluster-label, .cluster-label p { font-weight: 800; }",
   ].join(" ");
-  function paintDiagram(root, palette) {
-    const ink = TOKENS.active().elements.diagram.nodeInk;
+  function paintDiagram(root, palette, ink = TOKENS.active().elements.diagram.nodeInk) {
     const byKey = new Map();
     const pick = (key) => {
       if (!byKey.has(key)) byKey.set(key, palette[byKey.size % palette.length]);
@@ -1262,6 +1276,12 @@
     return mermaidLoading;
   }
   let mermaidSeq = 0;
+  let mermaidTurn = Promise.resolve();
+  function withMermaid(work) {
+    const run = mermaidTurn.then(work, work);
+    mermaidTurn = run.catch(() => {});
+    return run;
+  }
   async function renderDiagrams(root, d) {
     const blocks = [...root.querySelectorAll(".mermaid-block:not([data-rendered])")];
     if (!blocks.length) return;
@@ -1273,6 +1293,9 @@
       showError(e);
       return;
     }
+    return withMermaid(() => drawDiagrams(mermaid, blocks, d));
+  }
+  async function drawDiagrams(mermaid, blocks, d) {
     const palette = diagramPalette(d);
     mermaid.initialize({
       startOnLoad: false,
@@ -1280,14 +1303,15 @@
       securityLevel: "strict",
       themeVariables: mermaidThemeVariables(d),
       themeCSS: mermaidCss(),
-      flowchart: { curve: "basis", padding: 14, nodeSpacing: 44, rankSpacing: 52 },
+      htmlLabels: true,
+      flowchart: { htmlLabels: true, curve: "basis", padding: 14, nodeSpacing: 44, rankSpacing: 52 },
     });
     for (const block of blocks) {
       const out = block.querySelector(".mm-out");
       const src = block.dataset.src || "";
       try {
         const t0 = performance.now();
-        const { svg } = await mermaid.render(`mm-${++mermaidSeq}`, src);
+        const { svg } = await mermaid.render(`mm-${++mermaidSeq}`, src, diagramStage());
         out.innerHTML = svg;
         if (palette) paintDiagram(out, palette);
         block.classList.add("ok");
@@ -1503,7 +1527,7 @@
     const s = state.settings || {};
     return { name: s.humanName || "You", color: TOKENS.active().elements.face.humanInk, avatar: s.humanAvatar, kind: "human" };
   }
-  function copyableHtml(el, m) {
+  function copyClone(el, m) {
     const collapsed = m && el.querySelector(".text.clamped");
     let clone;
     if (collapsed) {
@@ -1511,18 +1535,150 @@
       clone.innerHTML = renderText(currentRoom(), m.text, m.images, m.quotes);
     } else clone = (el.querySelector(".text > .words") || el.querySelector(".text")).cloneNode(true);
     for (const node of clone.querySelectorAll('[data-ui="file-card"], [data-ui="icon-button"], .live-tail, .mermaid-block svg, .mm-bar')) node.remove();
-    for (const link of clone.querySelectorAll("a.open-link, .img-ref")) link.replaceWith(document.createTextNode(link.textContent));
     clone.classList.remove("clamped");
+    return clone;
+  }
+  function copyableHtml(el, m) {
+    const clone = copyClone(el, m);
+    for (const link of clone.querySelectorAll("a.open-link, .img-ref")) link.replaceWith(document.createTextNode(link.textContent));
     return clone.innerHTML.trim();
   }
+
+  const PORTABLE_STYLE = {
+    pre: `font-family:Consolas,Menlo,'Courier New',monospace;font-size:90%;background:${TOKENS.portable.codeBg};border:1px solid ${TOKENS.portable.codeEdge};border-radius:6px;padding:8px 10px;white-space:pre-wrap`,
+    code: `font-family:Consolas,Menlo,'Courier New',monospace;font-size:90%;background:${TOKENS.portable.codeBg};border-radius:4px;padding:1px 4px`,
+    blockquote: `margin:6px 0;padding:2px 0 2px 10px;border-left:3px solid ${TOKENS.portable.rule};color:${TOKENS.portable.quoteInk}`,
+    table: "border-collapse:collapse;margin:6px 0",
+    th: `border:1px solid ${TOKENS.portable.rule};padding:4px 8px;background:${TOKENS.portable.codeBg};text-align:left`,
+    td: `border:1px solid ${TOKENS.portable.rule};padding:4px 8px`,
+    img: "max-width:100%;height:auto",
+  };
+  function readAsDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+  async function pictureData(src) {
+    const response = await fetch(src, { signal: deadline(30000) });
+    if (!response.ok) throw new Error(`the picture did not load (${response.status})`);
+    return readAsDataUrl(await response.blob());
+  }
+  function diagramPng(src) {
+    return withMermaid(async () => {
+      const mermaid = await loadMermaid();
+      const d = diagramSettings();
+      const preset = DIAGRAM_PRESETS[d.preset] || DIAGRAM_PRESETS.pop;
+      const vars = Object.assign({}, preset, { fontFamily: "Arial, Helvetica, sans-serif", fontSize: "14px" });
+      delete vars.label;
+      delete vars.palette;
+      if (preset.palette) preset.palette.forEach((c, i) => (vars[`pie${i + 1}`] = c.fill));
+      if (d.primary) {
+        vars.primaryColor = d.primary;
+        delete vars.primaryBorderColor;
+        delete vars.primaryTextColor;
+      }
+      mermaid.initialize({ startOnLoad: false, theme: "base", securityLevel: "strict", htmlLabels: false, themeVariables: vars, themeCSS: mermaidCss(), flowchart: { htmlLabels: false, curve: "basis", padding: 14, nodeSpacing: 44, rankSpacing: 52 } });
+      const { svg } = await mermaid.render(`mm-copy-${++mermaidSeq}`, src, diagramStage());
+      const holder = document.createElement("div");
+      holder.innerHTML = svg;
+      const root = holder.querySelector("svg");
+      if (preset.palette && !d.primary) paintDiagram(root, preset.palette, preset.primaryTextColor || TOKENS.portable.ink);
+      const box = root.viewBox && root.viewBox.baseVal;
+      const width = Math.ceil(box && box.width ? box.width : 600), height = Math.ceil(box && box.height ? box.height : 400);
+      root.setAttribute("width", String(width));
+      root.setAttribute("height", String(height));
+      root.removeAttribute("style");
+      const image = new Image();
+      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(root))}`;
+      await image.decode();
+      const canvas = document.createElement("canvas"), scale = 2;
+      canvas.width = width * scale;
+      canvas.height = height * scale;
+      const g = canvas.getContext("2d");
+      g.fillStyle = TOKENS.portable.paper;
+      g.fillRect(0, 0, canvas.width, canvas.height);
+      g.drawImage(image, 0, 0, canvas.width, canvas.height);
+      return { src: canvas.toDataURL("image/png"), width, height };
+    });
+  }
+  async function portableHtml(el, m) {
+    const room = currentRoom();
+    const holder = copyClone(el, m);
+    const codeColours = new Map();
+    const liveCode = [...el.querySelectorAll(".text pre > code")], copyCode = [...holder.querySelectorAll("pre > code")];
+    if (liveCode.length === copyCode.length) {
+      copyCode.forEach((code, i) => {
+        const block = getComputedStyle(liveCode[i].parentElement);
+        codeColours.set(code.parentElement, `;background:${block.backgroundColor};color:${block.color};border-color:${block.backgroundColor}`);
+        const liveWords = liveCode[i].querySelectorAll(".token"), copyWords = code.querySelectorAll(".token");
+        if (liveWords.length === copyWords.length) copyWords.forEach((word, j) => codeColours.set(word, `color:${getComputedStyle(liveWords[j]).color}`));
+      });
+    }
+    for (const block of holder.querySelectorAll(".mermaid-block")) {
+      const src = block.getAttribute("data-src") || "";
+      try {
+        const png = await diagramPng(src);
+        const img = document.createElement("img");
+        img.src = png.src;
+        img.width = png.width;
+        img.alt = "Diagram";
+        block.replaceWith(img);
+      } catch {
+        const pre = document.createElement("pre");
+        pre.textContent = src;
+        block.replaceWith(pre);
+      }
+    }
+    for (const node of holder.querySelectorAll("[hidden], .mm-code")) node.remove();
+    for (const ref of holder.querySelectorAll(".img-ref")) ref.replaceWith(document.createTextNode(`[image ${ref.dataset.n || ref.textContent.trim()}]`));
+    for (const link of holder.querySelectorAll("a.open-link")) {
+      const target = link.dataset.open || "";
+      if (/^https?:\/\//i.test(target)) {
+        const a = document.createElement("a");
+        a.href = target;
+        a.textContent = link.textContent;
+        link.replaceWith(a);
+      } else link.replaceWith(document.createTextNode(link.textContent));
+    }
+    for (const quote of holder.querySelectorAll(".quote")) {
+      const block = document.createElement("blockquote");
+      const head = document.createElement("b");
+      head.textContent = (quote.querySelector(".q-head") || quote).textContent.trim();
+      block.append(head, document.createElement("br"), (quote.querySelector(".q-text") || quote).textContent);
+      quote.replaceWith(block);
+    }
+    for (const [i, image] of (m.images || []).entries()) {
+      const figure = document.createElement("p"), n = image.n || i + 1;
+      try {
+        const img = document.createElement("img");
+        img.src = image.url && image.url.startsWith("data:") ? image.url : await pictureData(shotUrl(room.id, image));
+        img.alt = image.name || `Image ${n}`;
+        figure.append(img, document.createElement("br"), `Image ${n}${image.name ? `: ${image.name}` : ""}`);
+      } catch {
+        figure.textContent = `[Image ${n}${image.name ? `: ${image.name}` : ""} could not be copied]`;
+      }
+      holder.appendChild(figure);
+    }
+    for (const [tag, style] of Object.entries(PORTABLE_STYLE)) {
+      for (const node of holder.querySelectorAll(tag)) if (!(tag === "code" && node.closest("pre"))) node.setAttribute("style", style);
+    }
+    for (const [node, colours] of codeColours) if (node.isConnected || holder.contains(node)) node.setAttribute("style", `${node.getAttribute("style") || ""}${colours}`.replace(/^;/, ""));
+    for (const node of holder.querySelectorAll("*")) {
+      for (const attr of [...node.attributes]) if (attr.name === "class" || attr.name.startsWith("data-") || ["role", "tabindex", "title"].includes(attr.name)) node.removeAttribute(attr.name);
+    }
+    return holder.innerHTML.trim();
+  }
   async function copyMessage(el, m) {
-    const html = copyableHtml(el, m);
     const text = String(m.text || "");
     try {
       if (navigator.clipboard && window.ClipboardItem) {
-        await navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([text], { type: "text/plain" }) })]);
+        const html = portableHtml(el, m).then((h) => new Blob([h], { type: "text/html" }));
+        await navigator.clipboard.write([new ClipboardItem({ "text/html": html, "text/plain": new Blob([text], { type: "text/plain" }) })]);
       } else await navigator.clipboard.writeText(text);
-      toast("Copied: the words, formatted; the tool calls stayed here.");
+      toast((m.images || []).length || el.querySelector(".mermaid-block") ? "Copied with its formatting, pictures and diagrams; the tool calls stayed here." : "Copied with its formatting; the tool calls stayed here.");
     } catch (error) {
       showError(error);
     }
@@ -9719,7 +9875,7 @@
   });
 
   async function openCarry(room) {
-    await window.ViberoomCarry.open(room);
+    await window.ViberoomCarry.open(room, { openRoom: (id) => selectRoom(id) });
   }
 
   els.carryBtn.addEventListener("click", () => {

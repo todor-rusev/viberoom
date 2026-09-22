@@ -1,6 +1,6 @@
 {
   "name": "viberoom",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "description": "viberoom: bring your AI assistants together in one conversation",
   "type": "module",
   "engines": {

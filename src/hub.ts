@@ -6,14 +6,15 @@ import { Automations } from "./automations.js";
 import { parseAutomation, parseSchedule, previewSchedule } from "./automation-schedule.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { writeFileAtomic } from "./atomic.js";
-import { commitFiles, recoverFileTransactions, type FileChange } from "./file-transaction.js";
+import { onRenameRefused, writeFileAtomic } from "./atomic.js";
+import { commitFiles, recoverFileTransactions, type FileChange, type FileOps } from "./file-transaction.js";
+import { carriedParticipants } from "./carry-plan.js";
 import { folderIdentity, isIdentity, newIdentity } from "./identity.js";
 import { qrSvg } from "./qr.js";
 import { pickBotKey } from "./bot-key.js";
 import { ensureDataRoot } from "./data-root.js";
 import { RequestTraceRing } from "./mcp-diagnostics.js";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Logger, type TranscriptMode } from "./log.js";
 import { HISTORY_DB_FILE, HistoryStore, type SearchHit, type SearchQuery } from "./history-store.js";
@@ -244,7 +245,12 @@ export class Hub extends EventEmitter {
     this.templates = new TemplateLibrary(join(this.dataDir, "templates"), log.child("templates"));
     this.looks = new LookLibrary(join(this.dataDir, "looks"), log.child("looks"));
     this.history = this.openHistory();
-    recoverFileTransactions(this.dataDir, this.history);
+    onRenameRefused((path, error) => this.log.warn(`the system refuses renames in ${dirname(path)} (${error.code}); files there are written in place instead`));
+    try {
+      recoverFileTransactions(this.dataDir, this.history);
+    } catch (error) {
+      this.log.warn(`${error instanceof Error ? error.message : String(error)} Imports wait until it is; it is tried again before the next one.`);
+    }
     this.agents = new AgentManager({
       dataDir: this.dataDir, enabled: () => this.settings.checkAgentUpdates !== false,
       warn: message => this.log.warn(message),
@@ -1063,6 +1069,54 @@ export class Hub extends EventEmitter {
     return id;
   }
 
+  fileOps: FileOps = {};
+
+  settleImports(): void {
+    recoverFileTransactions(this.dataDir, this.history, this.fileOps);
+  }
+
+  async pauseRoomsForImport(ids: string[], options: { waiting: (names: string[]) => void; hurry: () => boolean }): Promise<Map<string, string[]>> {
+    const rooms = ids.map((id) => this.getRoom(id));
+    for (const room of rooms) room.closeDoor();
+    let cut = false;
+    for (;;) {
+      const writing = rooms.flatMap((room) => room.writingVibemates().map((v) => ({ room, ...v })));
+      if (!writing.length) break;
+      if (options.hurry() && !cut) {
+        cut = true;
+        for (const w of writing) w.room.cancelTurn(w.id);
+      }
+      options.waiting(writing.map((w) => w.name));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    const running = new Map<string, string[]>();
+    for (const room of rooms) {
+      running.set(room.id, room.liveVibemates().map((v) => v.id));
+      await room.shutdown();
+    }
+    return running;
+  }
+
+  async resumeRoomsAfterImport(paused: Map<string, string[]>): Promise<void> {
+    for (const [id, ids] of paused) {
+      const room = this.rooms.get(id);
+      if (!room) continue;
+      room.reopenDoor();
+      const mode = this.reconnectModeFor(room);
+      for (const pid of ids) {
+        const p = room.participants.get(pid);
+        if (!p || p.kind !== "agent" || p.muted) continue;
+        try {
+          await this.importReconnect(room, pid, mode);
+        } catch (error) {
+          this.log.warn(`room ${room.id}: ${p.name} did not come back after the import: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
+  }
+
+  importReconnect: (room: Room, id: string, mode: "load" | "replay") => Promise<unknown> = (room, id, mode) => room.reconnect(id, { mode });
+
   commitRoomTransfer(changes: { stored: StoredRoom; setup: boolean }[], files: FileChange[], writeRecord: () => void): void {
     const changed = new Map(changes.map(c => [c.stored.id, c]));
     if (changed.size !== changes.length) throw new Error("The import targets a room more than once.");
@@ -1072,7 +1126,11 @@ export class Hub extends EventEmitter {
       if (room && room.uuid !== stored.uuid) throw new Error("The target room changed. Preview the import again.");
       if (!room && resolve(stored.dir) !== resolve(this.dataDir, "rooms", stored.id, "workspace")) throw new Error("A carried room must start with its own local working folder.");
       if (room?.historyDiverted) throw new Error(`The conversation in ${room.name} has unsaved writes. Let those finish before importing.`);
-      if (setup && room?.hasConnectedAgents) throw new Error(`Disconnect the agents in ${room.name} before replacing their setup, then preview the import again.`);
+      if (setup && room?.hasConnectedAgents) throw new Error(`The vibemates in ${room.name} are still running. Look at the import again.`);
+    }
+    for (const change of changes) {
+      const room = this.rooms.get(change.stored.id);
+      if (change.setup && room) change.stored = { ...change.stored, participants: carriedParticipants(room.toStored().participants, change.stored.participants as unknown as Record<string, unknown>[]) };
     }
     const rooms = [...this.rooms.values()].map(room => changed.get(room.id)?.stored ?? room.toStored());
     for (const change of changes) if (!this.rooms.has(change.stored.id)) rooms.push(change.stored as ReturnType<Room["toStored"]>);
@@ -1080,7 +1138,7 @@ export class Hub extends EventEmitter {
     commitFiles(this.dataDir, this.history, [...workspaces, ...files, { path: "rooms.json", data: JSON.stringify({ version: 1, rooms }, null, 2) + "\n" }], () => {
       for (const { stored } of changes) if (!this.history.migration(stored.id)) this.history.adoptMirror(stored.id);
       writeRecord();
-    });
+    }, this.fileOps);
     for (const { stored, setup } of changes) {
       let room = this.rooms.get(stored.id);
       if (!room || setup) {

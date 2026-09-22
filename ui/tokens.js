@@ -1531,5 +1531,7 @@
     };
   }
 
-  globalThis.VIBEROOM_TOKENS = { looks, current: looks.classic, active, diagrams, adjustables, cssGroups, cssVars, alpha, mix, kebab, fonts, make, describe, docs, kindOf };
+  const portable = { paper: "#ffffff", ink: "#1f1e1d", codeBg: "#f5f5f4", codeEdge: "#e7e5e4", rule: "#d6d3d1", quoteInk: "#57534e" };
+
+  globalThis.VIBEROOM_TOKENS = { looks, current: looks.classic, active, diagrams, portable, adjustables, cssGroups, cssVars, alpha, mix, kebab, fonts, make, describe, docs, kindOf };
 })();

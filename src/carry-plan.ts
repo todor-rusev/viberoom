@@ -13,7 +13,7 @@ import { safeDataFile } from "./file-transaction.js";
 import { SkillLibrary } from "./skills.js";
 import { Logger } from "./log.js";
 import { writeCarryReview } from "./carry-review.js";
-import { portableMemory, type PortableMemory } from "./shared-memory.js";
+import { combineMemory, portableMemory, type PortableMemory } from "./shared-memory.js";
 
 export interface RoomImportChoice {
   uuid: string;
@@ -21,7 +21,7 @@ export interface RoomImportChoice {
   made: boolean;
   conversation: boolean; settings: boolean; resources: boolean;
   memory?: boolean;
-  memoryChoice?: "ours" | "incoming";
+  memoryChoice?: "ours" | "incoming" | "both";
   setup?: "ours" | "incoming";
   branch?: BranchChoice;
   resourcesChoice?: "ours" | "incoming";
@@ -30,7 +30,7 @@ export interface RoomCarryPreview {
   uuid: string; targetId: string; name: string; incomingName: string; made: boolean;
   branch: (Omit<CarryBranch, "members"> & { review: { text: string; records: string } }) | null;
   settingsDiffer: boolean;
-  memory?: { ours: PortableMemory; incoming: PortableMemory; choice: "ours" | "incoming" | null };
+  memory?: { ours: PortableMemory; incoming: PortableMemory; choice: "ours" | "incoming" | "both" | null; combinable: boolean };
   settingsDiff: { field: string; ours: unknown; incoming: unknown }[];
   newSetup?: { settings: Record<string, unknown>; participants: Record<string, unknown>[]; memory?: PortableMemory };
   setup: "ours" | "incoming" | null;
@@ -42,6 +42,8 @@ export interface PlannedRoom {
   stored: StoredRoom; setup: boolean; aliases: string[]; states: CarryState[]; revisions: CarryRevision[];
   alternatives: CarryAlternative[]; resources: CarryResource[]; heads: CarryHead[]; changed: boolean;
   memory?: PortableMemory;
+  memoryMode?: "merge" | "replace";
+  added: number;
 }
 export interface PlannedDependency extends CarryDependency { targetDir: string }
 export interface CarryPlanJob {
@@ -49,10 +51,10 @@ export interface CarryPlanJob {
   choices: RoomImportChoice[];
   dependencyChoices: Record<string, "ours" | "incoming">;
   userMemory?: boolean;
-  userMemoryChoice?: "ours" | "incoming";
+  userMemoryChoice?: "ours" | "incoming" | "both";
 }
 export interface CarryPlanPreview {
-  userMemory?: { ours: PortableMemory; incoming: PortableMemory; choice: "ours" | "incoming" | null };
+  userMemory?: { ours: PortableMemory; incoming: PortableMemory; choice: "ours" | "incoming" | "both" | null; combinable: boolean };
   rooms: RoomCarryPreview[];
   dependencies: { key: string; kind: string; id: string; targetDir: string; differs: boolean; choice: "ours" | "incoming" | null; files: { path: string; action: "add" | "replace" | "remove"; oursBytes: number | null; incomingBytes: number | null }[] }[];
   ready: boolean;
@@ -87,12 +89,22 @@ function localize(states: CarryState[], before: CarryState[]): CarryState[] {
   });
 }
 
+const PORTABLE_FIELDS = ["id", "name", "agentType", "tagline", "role", "avatar", "color", "colorSlot", "launch", "muted", "createdByVibemate", "replyDelay", "skills"];
+
 function setupDiff(local: StoredRoom, room: PortableRoom) {
   const fields = { name: room.name, ...room.settings, participants: room.participants ?? [] };
   const here = { name: local.name, ...local.settings, participants: local.participants } as Record<string, unknown>;
-  const portableFields = ["id", "name", "agentType", "tagline", "role", "avatar", "color", "colorSlot", "launch", "muted", "createdByVibemate", "replyDelay", "skills"];
-  here.participants = local.participants.map(p => Object.fromEntries(portableFields.filter(k => (p as unknown as Record<string, unknown>)[k] !== undefined).map(k => [k, (p as unknown as Record<string, unknown>)[k]])));
+  here.participants = local.participants.map(p => Object.fromEntries(PORTABLE_FIELDS.filter(k => (p as unknown as Record<string, unknown>)[k] !== undefined).map(k => [k, (p as unknown as Record<string, unknown>)[k]])));
   return Object.entries(fields).filter(([field, value]) => JSON.stringify(here[field]) !== JSON.stringify(value)).map(([field, value]) => ({ field, ours: here[field] ?? null, incoming: value }));
+}
+
+export function carriedParticipants(local: StoredRoom["participants"], incoming: Record<string, unknown>[]): StoredRoom["participants"] {
+  const here = new Map(local.map(p => [p.id, p as unknown as Record<string, unknown>]));
+  return incoming.map(p => {
+    const mine = here.get(String(p.id));
+    if (!mine || mine.agentType !== p.agentType) return p;
+    return { ...Object.fromEntries(Object.entries(mine).filter(([key]) => !PORTABLE_FIELDS.includes(key))), ...p };
+  }) as unknown as StoredRoom["participants"];
 }
 
 export function prepareCarryPlan(job: CarryPlanJob): CarryPlanPreview {
@@ -111,13 +123,16 @@ export function prepareCarryPlan(job: CarryPlanJob): CarryPlanPreview {
     };
     const incomingUserMemory = job.userMemory ? stage.meta<PortableMemory>("userMemory") : null;
     if (!job.choices.length && !incomingUserMemory) throw new Error("Choose a room or the shared user memory to bring in.");
-    let userMemory: PortableMemory | undefined;
+    let userMemory: PortableMemory | undefined, userMemoryMode: "merge" | "replace" | undefined;
     if (incomingUserMemory) {
       const ours = portableMemory(store.memory.read("user"));
       const differs = JSON.stringify(ours) !== JSON.stringify(incomingUserMemory);
-      preview.userMemory = { ours, incoming: incomingUserMemory, choice: job.userMemoryChoice ?? (differs ? null : "ours") };
-      if (differs && !job.userMemoryChoice) preview.ready = false;
-      if (differs && job.userMemoryChoice === "incoming") userMemory = incomingUserMemory;
+      const combined = differs ? combineMemory(ours, incomingUserMemory) : null;
+      const asked = job.userMemoryChoice === "both" && !combined ? undefined : job.userMemoryChoice;
+      const choice = asked ?? (!differs ? "ours" : combined ? "both" : null);
+      preview.userMemory = { ours, incoming: incomingUserMemory, choice, combinable: !!combined };
+      if (differs && !choice) preview.ready = false;
+      if (differs && (choice === "incoming" || choice === "both")) { userMemory = incomingUserMemory; userMemoryMode = choice === "both" ? "merge" : "replace"; }
     }
     if (new Set(job.choices.map(c => c.uuid)).size !== job.choices.length || new Set(job.choices.map(c => c.target.id)).size !== job.choices.length) throw new Error("Choose each source and destination room only once in this import.");
     for (const choice of job.choices) {
@@ -136,9 +151,11 @@ export function prepareCarryPlan(job: CarryPlanJob): CarryPlanPreview {
       const differences: RoomCarryPreview["settingsDiff"] = choice.settings && room.parts.includes("settings") && !choice.made ? setupDiff(choice.target, room) : [];
       const localMemory = portableMemory(store.memory.read(`room:${choice.target.uuid}`));
       const memoryDiffers = !!(choice.memory && room.memory && JSON.stringify(localMemory) !== JSON.stringify(room.memory));
-      const memoryChoice = choice.memoryChoice ?? (choice.made ? "incoming" : memoryDiffers ? null : "ours");
-      const useMemory = memoryDiffers && memoryChoice === "incoming";
-      if (memoryDiffers && !choice.made && !choice.memoryChoice) preview.ready = false;
+      const combined = memoryDiffers && !choice.made ? combineMemory(localMemory, room.memory!) : null;
+      const asked = choice.memoryChoice === "both" && !combined ? undefined : choice.memoryChoice;
+      const memoryChoice = asked ?? (choice.made ? "incoming" : !memoryDiffers ? "ours" : combined ? "both" : null);
+      const useMemory = memoryDiffers && (memoryChoice === "incoming" || memoryChoice === "both");
+      if (memoryDiffers && !memoryChoice) preview.ready = false;
       const useSetup = choice.settings && room.parts.includes("settings") && (choice.made || choice.setup === "incoming");
       if (merged.branch && !choice.branch || differences.length && !choice.setup) preview.ready = false;
       const resources = choice.resources && room.parts.includes("resources") ? stage.values<CarryResource>("resources", room.uuid) : [];
@@ -165,10 +182,10 @@ export function prepareCarryPlan(job: CarryPlanJob): CarryPlanPreview {
       const writes = [...writesByName.values()], available = new Set(writes.map(r => r.file));
       if (resourceConflicts.length && !choice.resourcesChoice) preview.ready = false;
       const replaceSetup = choice.made || useSetup && differences.length > 0;
-      const stored: StoredRoom = useSetup && replaceSetup ? { ...choice.target, name: room.name, settings: room.settings ?? {}, participants: (room.participants ?? []) as unknown as StoredRoom["participants"] } : choice.target;
+      const stored: StoredRoom = useSetup && replaceSetup ? { ...choice.target, name: room.name, settings: room.settings ?? {}, participants: carriedParticipants(choice.target.participants, room.participants ?? []) } : choice.target;
       if (choice.made) stored.name = choice.target.name;
       preview.rooms.push({ uuid: room.uuid, targetId: stored.id, name: stored.name, incomingName: room.name, made: choice.made, branch,
-        ...(choice.memory && room.memory ? { memory: { ours: localMemory, incoming: room.memory, choice: memoryChoice } } : {}),
+        ...(choice.memory && room.memory ? { memory: { ours: localMemory, incoming: room.memory, choice: memoryChoice, combinable: !!combined } } : {}),
         settingsDiffer: differences.length > 0, settingsDiff: differences, setup: choice.settings && room.parts.includes("settings") ? choice.made ? "incoming" : choice.setup ?? null : null,
         ...(choice.made && useSetup ? { newSetup: { settings: room.settings ?? {}, participants: room.participants ?? [] } } : {}),
         counts: merged.counts, resources: { write: writes.length, already, conflicts: resourceConflicts, bytes: writes.reduce((n, r) => n + r.bytes, 0), missing: [...refs].filter(file => !available.has(file) && !existsSync(join(filesDir, file))) }, workspaceHint: room.workspaceHint,
@@ -181,7 +198,7 @@ export function prepareCarryPlan(job: CarryPlanJob): CarryPlanPreview {
       const changedAlternatives = alternatives.filter(a => knownAlternatives.get(a.revision) !== JSON.stringify(a));
       const knownAliases = new Set(store.carry.aliases(stored.id));
       const aliases = [...new Set([room.uuid, ...room.aliases])].filter(uuid => uuid !== stored.uuid && !knownAliases.has(uuid));
-      plans.push({ stored, setup: replaceSetup, aliases, states, heads, revisions, alternatives: changedAlternatives, resources: writes, ...(useMemory ? { memory: room.memory } : {}),
+      plans.push({ stored, setup: replaceSetup, aliases, states, added: merged.counts.added, heads, revisions, alternatives: changedAlternatives, resources: writes, ...(useMemory ? { memory: room.memory, memoryMode: memoryChoice === "both" ? "merge" as const : "replace" as const } : {}),
         changed: !!(useMemory || replaceSetup || states.length || heads.length || revisions.length || changedAlternatives.length || aliases.length || writes.length) });
     }
     const takeDependencies: PlannedDependency[] = [];
@@ -210,7 +227,7 @@ export function prepareCarryPlan(job: CarryPlanJob): CarryPlanPreview {
       for (const file of extra) changed.push({ path: file.path, action: "remove", oursBytes: file.bytes, incomingBytes: null });
       preview.dependencies.push({ key, kind: dependency.kind, id: dependency.id, targetDir: relativeDir, differs, choice: selected, files: changed });
     }
-    stage.setMeta("plan", preview.ready ? { rooms: plans, userMemory, dependencies: takeDependencies, removeFiles, directoryVersions, fileVersions: [...fileVersions].map(([path, hash]) => ({ path, hash })) } : null);
+    stage.setMeta("plan", preview.ready ? { rooms: plans, userMemory, userMemoryMode, dependencies: takeDependencies, removeFiles, directoryVersions, fileVersions: [...fileVersions].map(([path, hash]) => ({ path, hash })) } : null);
     stage.setMeta("preview", preview);
     return preview;
   } finally { store.close(); stage.close(); }

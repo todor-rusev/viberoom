@@ -17,6 +17,18 @@ export function validatePortableMemory(raw: unknown): PortableMemory {
   const checked = lintMemory(raw.notes);
   return { enabled: raw.enabled, notes: checked.notes.map(n => ({ text: n.text, locked: n.locked ?? false })) };
 }
+export function combineMemory(ours: PortableMemory, incoming: PortableMemory): PortableMemory | null {
+  const seen = new Set(ours.notes.map(n => normalized(n.text)));
+  const added = incoming.notes.filter(n => {
+    const key = normalized(n.text);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const notes = [...ours.notes, ...added];
+  if (notes.length > MEMORY_LIMITS.notes || notes.reduce((sum, n) => sum + chars(n.text), 0) > MEMORY_LIMITS.scopeChars) return null;
+  return { enabled: ours.enabled, notes };
+}
 export interface MemoryInput { id?: string; text: string; locked?: boolean; basis?: MemoryNote["basis"]; evidence?: number[] }
 export interface MemoryWarning { code: string; message: string }
 export const memoryHash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -80,6 +92,18 @@ export class SharedMemory {
     const before = this.read(key), checked = validatePortableMemory(value);
     if (memoryHash(portableMemory(before)) === memoryHash(checked)) return;
     this.write(key, before.revision, { enabled: checked.enabled, notes: checked.notes.map(n => ({ ...n, id: randomUUID(), basis: "imported", sources: [], author: "Imported room setup", updatedAt: new Date().toISOString() })) }, "Import", "Imported reviewed room memory");
+  }
+  mergeRoom(uuid: string, value: PortableMemory): void {
+    this.mergeScope(`room:${uuid}`, value);
+  }
+  mergeScope(key: string, value: PortableMemory): void {
+    const before = this.read(key), combined = combineMemory(portableMemory(before), validatePortableMemory(value));
+    if (!combined) throw new Error("The combined memory would not fit its limits. Review the import again and choose one side.");
+    const known = new Set(before.notes.map(n => normalized(n.text)));
+    const added = combined.notes.filter(n => !known.has(normalized(n.text)));
+    if (!added.length) return;
+    const at = new Date().toISOString();
+    this.write(key, before.revision, { enabled: before.enabled, notes: [...before.notes, ...added.map(n => ({ ...n, id: randomUUID(), basis: "imported" as const, sources: [], author: "Imported room setup", updatedAt: at }))] }, "Import", "Combined memory from another computer");
   }
   write(scope: string, revision: number, next: Pick<MemoryState, "enabled" | "notes">, actor: string, reason: string, purge = false): MemoryState {
     const change = () => {

@@ -2660,6 +2660,18 @@ export class Room extends EventEmitter {
     for (const [id, task] of this.automationTasks) if (!task.runtime.workBusy && !task.runtime.turnActive) this.finishAutomation(id, { status: "interrupted", detail: "The room stopped before the task began." });
   }
 
+  reopenDoor(): void {
+    this.closing = false;
+  }
+
+  liveVibemates(): { id: string; name: string }[] {
+    return [...this.runtimes.keys()].map((id) => ({ id, name: this.participants.get(id)?.name ?? id }));
+  }
+
+  writingVibemates(): { id: string; name: string }[] {
+    return [...this.participants.values()].filter((p) => p.kind === "agent" && (p.status === "thinking" || p.status === "queued")).map((p) => ({ id: p.id, name: p.name }));
+  }
+
   async shutdown(): Promise<void> {
     this.closeDoor();
     for (const [id, runtime] of this.runtimes) {

@@ -118,6 +118,8 @@
     "key-mini": `<circle class="paper" cx="42" cy="40" r="12"/><circle class="accent-fill" cx="42" cy="40" r="3.4"/><path class="stroke" d="M54 40h32M78 40v9M86 40v6"/>`,
     "phone-mini": `<rect class="paper" x="44" y="12" width="32" height="56" rx="7"/><path class="chrome" d="M54 17h12" stroke-width="3"/><circle class="ok-fill" cx="60" cy="42" r="9"/><path class="on-ok" d="M55.5 42l3.2 3.2 5.8-5.8" stroke-width="2"/>`,
     failed: `<path class="bad-fill" d="M60 13l30 52H30z"/><path class="on-bad" d="M60 33v14M60 55v1" stroke-width="4"/>`,
+    "carry-out": `<rect class="paper" x="14" y="18" width="58" height="38" rx="5"/><path class="chrome" d="M22 28h30M22 36h20M22 44h26" stroke-width="3"/><path class="paper" d="M6 60h74l-6 8H12z"/><path class="accent cx-trail" d="M60 40c12-3 20-12 25-24" stroke-dasharray="2 5"/><g class="cx-pkg"><path class="paper" d="M82 14l15-6 15 6v15l-15 6-15-6z"/><path class="stroke" d="M82 14l15 6 15-6M97 20v15"/><path class="accent" d="M89.5 11l15 6" stroke-width="2"/></g>`,
+    "carry-in": `<rect class="paper-fill" x="42" y="18" width="70" height="54" rx="7"/><path class="chrome" d="M44.5 30h65" stroke-linecap="butt"/><circle class="chrome" cx="49" cy="24" r="1.6"/><circle class="chrome" cx="55" cy="24" r="1.6"/><circle class="chrome" cx="61" cy="24" r="1.6"/><rect class="outline" x="42" y="18" width="70" height="54" rx="7"/><path class="chrome" d="M52 42h30M52 51h40M52 60h22" stroke-width="3"/><path class="accent cx-trail" d="M28 30c9 1 15 6 19 14" stroke-dasharray="2 5"/><g class="cx-pkg"><path class="paper" d="M4 13l15-6 15 6v15l-15 6-15-6z"/><path class="stroke" d="M4 13l15 6 15-6M19 19v15"/><path class="accent" d="M11.5 10l15 6" stroke-width="2"/></g>`,
   };
 
   function scene(name) {
