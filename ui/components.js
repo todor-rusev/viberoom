@@ -70,7 +70,8 @@
     },
     build: ({ name, label, color, size, emoji, badge, status, me, kind, ring, alert, dim, title }, ui) =>
       ui.h("span", { class: "avatar", role: "img", "aria-label": name, title, "data-kind": kind !== "tile" ? kind : null, "data-me": me || null, "data-ring": ring || null, "data-alert": alert || null, "data-dim": dim || null, style: `--face-color:${color};--face-size:${size}px;width:${size}px;height:${size}px` },
-        ui.h("span", { class: "tile", "data-emoji": emoji || null, style: `font-size:${Math.round(emoji ? size * 0.56 : size * 0.38)}px` }, label),
+        ui.h("span", { class: "tile", "data-emoji": emoji || null, style: `font-size:${Math.round(emoji ? size * 0.56 : size * 0.38)}px` },
+          ui.h("span", { class: "glyph" }, label)),
         badge,
         status ? ui.h("span", { class: "status", "data-status": status }) : null),
     states: ["rest"],
@@ -617,7 +618,7 @@
     describe: "A line the room attaches to a reply, inside its bubble: an adapter's notice before the words, or the fact that the reply was stopped, right after them. The words stay; the note says what happened to them.",
     props: {
       text: { type: "string", required: true },
-      tone: { type: "enum", values: ["info", "attention"], default: "info", note: "info: a quiet fact; attention: something that changed the reply" },
+      tone: { type: "enum", values: ["info", "attention", "error"], default: "info", note: "info: a quiet fact; attention: something that changed the reply; error: the reply's turn failed" },
       icon: { type: "icon", default: "info" },
       hook: { type: "string" },
     },
@@ -625,6 +626,7 @@
     states: ["rest"],
     samples: [
       { label: "a quiet fact", props: { text: "This reply was written in plan mode." } },
+      { label: "the turn failed", props: { text: "The turn failed after this: usage limit reached", tone: "error", icon: "alert" } },
       { label: "an adapter's notice", props: { text: "Auto mode is unavailable for this account; running in the default mode.", tone: "attention" } },
       { label: "stopped", props: { text: "Stopped by Sam", tone: "attention", icon: "stop" } },
     ],

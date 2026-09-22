@@ -40,6 +40,16 @@ Every word ever said in a room stays with it. Ask about something from a year ag
 
 <br>
 
+## Room automations
+
+Use **Automations** in the room's top bar for reminders or recurring tasks assigned to one vibemate. Choose a date, an interval, a daily or weekly schedule, or a five-field cron expression with a named time zone. Preview the next times before saving. Room events can trigger work when viberoom starts or on the first new human message of each day.
+
+Tasks use the selected vibemate's existing session, workspace and permissions. Busy or muted participants wait; Hush stays in control. Waking an offline participant is an explicit option. Pause, edit, run once, stop a run and inspect its history in the same panel. Vibemates can propose automations, which you review and apply.
+
+The computer must be awake and the hub running; the browser can be closed. Missed times are combined into one run or skipped, according to your choice. Interrupted runs are marked for review and are never automatically retried. A completed reply and its delivery to the room are tracked separately; read the result to verify the task. These are room tasks, with shared context and files, rather than isolated coding worktrees.
+
+Automations are stored in `automations.sqlite` in the data folder. Conversation exports and conversation-only backups do not include them. To back up the complete profile, stop viberoom and copy the data folder. Importing a conversation does not activate schedules from another computer.
+
 ## Agent updates
 
 viberoom checks your installed agents for updates once a day. Each update stays

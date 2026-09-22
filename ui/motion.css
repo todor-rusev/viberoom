@@ -1,0 +1,50 @@
+/* viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE */
+:where(button, summary, a[href], [role="button"], label.check-row, .choice, .action, .agent-tile, .tn,
+  .card.hover, .card.cta, .room-card, .skill-list li, .side-list li, .tl-row, .done-note, .search-row,
+  .look-card, .menu button, .mention-menu button):not(:disabled, .quiet-glyphs, .quiet-glyphs *) .i {
+  transition: transform var(--t-base) var(--ease-pop);
+}
+:where(button, summary, a[href], [role="button"], label.check-row, .choice, .action, .agent-tile, .tn,
+  .card.hover, .card.cta, .room-card, .skill-list li, .side-list li, .tl-row, .done-note, .search-row,
+  .look-card, .menu button, .mention-menu button):not(:disabled, .quiet-glyphs, .quiet-glyphs *):hover .i {
+  transform: translateY(-1px) scale(1.12);
+}
+:where(button, summary, [role="button"], .action, .agent-tile, .tn, .menu button, .mention-menu button):not(:disabled, .quiet-glyphs, .quiet-glyphs *):active .i {
+  transform: scale(0.88); animation: none; transition-duration: var(--t-fast);
+}
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-settings, .i-at, .i-more), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-settings, .i-at, .i-more) { animation: g-turn 560ms var(--ease-pop); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-refresh, .i-transfer, .i-sun), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-refresh, .i-transfer, .i-sun) { animation: g-spin 640ms var(--ease-pop); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-plus, .i-close, .i-tool), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-plus, .i-close, .i-tool) { animation: g-quarter 480ms var(--ease-pop); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-trash, .i-alert, .i-failed, .i-hush, .i-mute, .i-unmute, .i-phone, .i-filter), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-trash, .i-alert, .i-failed, .i-hush, .i-mute, .i-unmute, .i-phone, .i-filter) { animation: g-shake 520ms var(--ease-out); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > .i-bell, :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > .i-bell { animation: g-swing 700ms var(--ease-out); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-spark, .i-wand, .i-bolt), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-spark, .i-wand, .i-bolt) { animation: g-twinkle 700ms var(--ease-pop); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-clock, .i-automation), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-clock, .i-automation) { animation: g-tick 560ms var(--ease-pop); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-check, .i-done, .i-save, .i-package, .i-database, .i-rooms, .i-chat, .i-skills, .i-puzzle, .i-browser, .i-code, .i-terminal, .i-unplugged), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-check, .i-done, .i-save, .i-package, .i-database, .i-rooms, .i-chat, .i-skills, .i-puzzle, .i-browser, .i-code, .i-terminal, .i-unplugged) { animation: g-pop 480ms var(--ease-pop); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-send, .i-forward, .i-play, .i-logout, .i-expand), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-send, .i-forward, .i-play, .i-logout, .i-expand) { animation: g-step-right 520ms var(--ease-pop); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-back, .i-collapse), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-back, .i-collapse) { animation: g-step-left 520ms var(--ease-pop); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-down, .i-inbox, .i-info, .i-question, .i-bot), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i, .chev) > :is(.i-down, .i-inbox, .i-info, .i-question, .i-bot) { animation: g-bob 560ms var(--ease-pop); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-pin, .i-quote, .i-pencil, .i-geek, .i-key, .i-lock, .i-folder, .i-files, .i-link, .i-copy), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-pin, .i-quote, .i-pencil, .i-geek, .i-key, .i-lock, .i-folder, .i-files, .i-link, .i-copy) { animation: g-tilt 520ms var(--ease-pop); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-search, .i-eye), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-search, .i-eye) { animation: g-lean 520ms var(--ease-pop); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-hand, .i-smile, .i-user, .i-name), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-hand, .i-smile, .i-user, .i-name) { animation: g-wave 640ms var(--ease-out); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > .i-maximize, :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > .i-maximize { animation: g-grow 480ms var(--ease-pop); }
+:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-minimize, .i-stop, .i-pause), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-minimize, .i-stop, .i-pause) { animation: g-shrink 480ms var(--ease-pop); }
+:where(.rail, .rail-item, .rail-logo, .rail-toggle, .chat-toolbar, .side-head.room, .participants, .automations-dialog, .send-btn, .mm-expand, .head [data-act="pin"], .tn-tw, .dir-chip) .i { animation: none; }
+@keyframes g-turn { to { transform: rotate(60deg) scale(1.1); } }
+@keyframes g-spin { to { transform: rotate(360deg) scale(1.08); } }
+@keyframes g-quarter { 50% { transform: rotate(90deg) scale(1.15); } 100% { transform: rotate(90deg) scale(1.1); } }
+@keyframes g-shake { 20% { transform: rotate(-12deg) scale(1.08); } 45% { transform: rotate(10deg) scale(1.08); } 70% { transform: rotate(-5deg) scale(1.08); } 100% { transform: scale(1.08); } }
+@keyframes g-swing { 20% { transform: rotate(16deg) scale(1.1); } 45% { transform: rotate(-12deg) scale(1.1); } 70% { transform: rotate(6deg) scale(1.1); } 100% { transform: scale(1.1); } }
+@keyframes g-twinkle { 35% { transform: scale(1.3) rotate(22deg); opacity: 0.7; } 100% { transform: scale(1.1); opacity: 1; } }
+@keyframes g-tick { 30% { transform: rotate(-14deg) scale(1.1); } 65% { transform: rotate(16deg) scale(1.1); } 100% { transform: scale(1.1); } }
+@keyframes g-pop { 40% { transform: scale(1.35); } 100% { transform: translateY(-1px) scale(1.12); } }
+@keyframes g-step-right { 40% { transform: translateX(3px) scale(1.1); } 100% { transform: translateX(1px) scale(1.1); } }
+@keyframes g-step-left { 40% { transform: translateX(-3px) scale(1.1); } 100% { transform: translateX(-1px) scale(1.1); } }
+@keyframes g-bob { 35% { transform: translateY(3px) scale(1.1); } 70% { transform: translateY(-2px) scale(1.1); } 100% { transform: scale(1.1); } }
+@keyframes g-tilt { 45% { transform: rotate(-22deg) scale(1.12); } 100% { transform: rotate(-12deg) scale(1.1); } }
+@keyframes g-lean { 45% { transform: rotate(-16deg) scale(1.15); } 100% { transform: rotate(-8deg) scale(1.1); } }
+@keyframes g-wave { 20% { transform: rotate(14deg) scale(1.1); } 45% { transform: rotate(-10deg) scale(1.1); } 70% { transform: rotate(8deg) scale(1.1); } 100% { transform: scale(1.1); } }
+@keyframes g-grow { 50% { transform: scale(1.35); } 100% { transform: scale(1.15); } }
+@keyframes g-shrink { 50% { transform: scale(0.8); } 100% { transform: scale(0.92); } }
+@media (prefers-reduced-motion: reduce) {
+  :where(.i) { animation: none !important; transition: none; transform: none; }
+}

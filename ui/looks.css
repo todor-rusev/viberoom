@@ -343,6 +343,8 @@
   --reply-note-bg: #262848;
   --reply-note-attention-ink: #f5c94f;
   --reply-note-attention-bg: #46381a;
+  --reply-note-error-ink: #ff7a70;
+  --reply-note-error-bg: #401c1e;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #f1efff;
   --login-dialog-quiet-ink: #a4a2cc;
@@ -954,6 +956,8 @@
   --reply-note-bg: #f7f5ef;
   --reply-note-attention-ink: #9a6b0f;
   --reply-note-attention-bg: #fbeecf;
+  --reply-note-error-ink: #c24d43;
+  --reply-note-error-bg: #f9e3df;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #1f1e1d;
   --login-dialog-quiet-ink: #8a8577;
@@ -1565,6 +1569,8 @@
   --reply-note-bg: #f4efe5;
   --reply-note-attention-ink: #7d5f12;
   --reply-note-attention-bg: #f4e9cf;
+  --reply-note-error-ink: #a34a3f;
+  --reply-note-error-bg: #f2e0dc;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #2b2a27;
   --login-dialog-quiet-ink: #6f6b62;
@@ -2176,6 +2182,8 @@
   --reply-note-bg: #fdf7ec;
   --reply-note-attention-ink: #8a6a1c;
   --reply-note-attention-bg: #fbe4a4;
+  --reply-note-error-ink: #c2456f;
+  --reply-note-error-bg: #f7c9d8;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #5a3e36;
   --login-dialog-quiet-ink: #8f7a6e;
@@ -2787,6 +2795,8 @@
   --reply-note-bg: #131a15;
   --reply-note-attention-ink: #f5c542;
   --reply-note-attention-bg: #3a2f0c;
+  --reply-note-error-ink: #ff6b5e;
+  --reply-note-error-bg: #3a1512;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #d7e3d9;
   --login-dialog-quiet-ink: #7c9282;
@@ -3398,6 +3408,8 @@
   --reply-note-bg: #f4f4f5;
   --reply-note-attention-ink: #8a6510;
   --reply-note-attention-bg: #faf1da;
+  --reply-note-error-ink: #b3372c;
+  --reply-note-error-bg: #fbeeec;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #17181a;
   --login-dialog-quiet-ink: #6b6d72;
@@ -4009,6 +4021,8 @@
   --reply-note-bg: #1e1e21;
   --reply-note-attention-ink: #e8bd52;
   --reply-note-attention-bg: #3a3014;
+  --reply-note-error-ink: #f08a7e;
+  --reply-note-error-bg: #3c1c1a;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #f2f2f3;
   --login-dialog-quiet-ink: #9a9aa1;

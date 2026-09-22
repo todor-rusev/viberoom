@@ -1,6 +1,8 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
 import { validArguments } from "./tool-validation.js";
+import type { AutomationJob, AutomationRun } from "./automation-store.js";
+import type { AutomationOutcome } from "./automations.js";
 import { EventEmitter } from "node:events";
 import { memoryBlock } from "./shared-memory.js";
 import { instructionBlock, planInstructionDelivery, type InstructionRevisions } from "./instruction-delivery.js";
@@ -305,6 +307,8 @@ export interface ChatMessage {
   plan?: PlanEntry[];
   stopReason?: StopReason;
   stoppedBy?: string;
+  cancelledBy?: "human" | "agent";
+  failed?: string;
   usage?: Usage | null;
   durationMs?: number;
 }
@@ -623,6 +627,10 @@ export class Room extends EventEmitter {
   private typingTimer: NodeJS.Timeout | null = null;
   private closing = false;
   private readonly runtimes = new Map<string, AgentRuntime>();
+  private readonly automationTasks = new Map<string, {
+    run: AutomationRun; runtime: AgentRuntime; resolve: (outcome: AutomationOutcome) => void;
+    cleanup: () => void; outcome: AutomationOutcome; continuing: boolean;
+  }>();
   private readonly drafts = new Map<string, ChatMessage>();
   private readonly quotesAwaitingNumber = new Map<string, Set<string>>();
   private readonly permissions = new Map<string, PermissionEntry>();
@@ -1389,7 +1397,64 @@ export class Room extends EventEmitter {
     const message = this.buildHumanMessage(text, images, quotes);
     this.commit(message);
     this.route(message);
+    this.emit("humanActivity");
     return message;
+  }
+
+  automationNotice(text: string): void { this.postRoomEvent(text, "human", false, { tone: "attention" }); }
+
+  async prepareAutomation(job: AutomationJob, allowWake = true): Promise<string | null> {
+    if (this.closing) return "This room is stopping.";
+    if (this.recordHold) return "The room's history needs a decision first.";
+    if (this.focused) return "The room is hushed. Speak in it to resume work.";
+    if (job.action === "reminder") return null;
+    const id = job.targetId!, participant = this.participants.get(id);
+    if (!participant || participant.kind !== "agent" || participant.status === "left") return "The selected vibemate is no longer in this room. Edit the automation.";
+    if (participant.muted) return "The selected vibemate is muted.";
+    if (participant.trouble || participant.status === "error") return "The selected vibemate needs attention before it can work.";
+    if (participant.status === "offline" && job.wakeOffline && allowWake) return null;
+    const runtime = this.runtimes.get(id);
+    if (!runtime?.agent.alive) return "The selected vibemate is offline.";
+    if (this.focused || participant.muted || this.closing || this.recordHold) return "The room paused while the vibemate was connecting.";
+    if (runtime.workCancelled) return "The selected vibemate was stopped. Speak to it to resume work.";
+    if (runtime.turnActive || runtime.workBusy || runtime.pendingTurn || runtime.delayTimer || runtime.retiring || this.automationTasks.has(id) || participant.status !== "idle") return "Waiting for the selected vibemate to finish.";
+    return null;
+  }
+
+  async executeAutomation(run: AutomationRun, signal: AbortSignal): Promise<AutomationOutcome> {
+    if (signal.aborted) return { status: "cancelled", detail: String(signal.reason ?? "Cancelled.") };
+    if (run.job.action === "agent" && run.job.wakeOffline && this.participants.get(run.job.targetId!)?.status === "offline") {
+      const gate = await this.prepareAutomation(run.job);
+      if (gate) return { status: "deferred", detail: gate };
+      await this.reconnect(run.job.targetId!, { mode: "load" });
+    }
+    const reason = await this.prepareAutomation(run.job, false);
+    if (reason) return { status: "deferred", detail: reason };
+    if (signal.aborted) return { status: "cancelled", detail: String(signal.reason ?? "Cancelled.") };
+    const id = run.job.targetId;
+    const message: ChatMessage = { id: randomUUID(), seq: ++this.seq, from: "system", fromName: "", to: id ? [id] : [],
+      toNames: id ? [this.participants.get(id)!.name] : [], ts: Date.now(), kind: "system",
+      audience: "human", details: { about: "room" },
+      text: run.job.action === "reminder" ? `Reminder · ${run.job.name}\n${run.job.text}` : `Automation · ${run.job.name} → ${this.participants.get(id!)!.name}` };
+    if (this.commit(message) !== "record") return { status: "failed", detail: "The task notice could not be durably recorded; no agent was started." };
+    if (run.job.action === "reminder") return { status: "completed", messageId: message.id };
+    const runtime = this.runtimes.get(id!)!;
+    return new Promise(resolve => {
+      const abort = () => {
+        if (this.automationTasks.get(id!)?.run.id !== run.id || this.runtimes.get(id!) !== runtime) return;
+        this.cancelTurn(id!);
+      };
+      this.automationTasks.set(id!, { run, runtime, resolve, cleanup: () => signal.removeEventListener("abort", abort),
+        continuing: false, outcome: { status: "interrupted", detail: "No completed reply was confirmed." } });
+      signal.addEventListener("abort", abort, { once: true });
+      this.requestTurn(id!, true);
+    });
+  }
+
+  private finishAutomation(id: string, outcome?: AutomationOutcome): void {
+    const task = this.automationTasks.get(id);
+    if (!task) return;
+    this.automationTasks.delete(id); task.cleanup(); task.resolve(outcome ?? task.outcome);
   }
 
   acceptExternalMessage(input: { opId: string; via: MessageVia; text: string; images?: ImageInput[]; quotes?: QuoteInput[] }): ExternalReceipt {
@@ -1408,6 +1473,7 @@ export class Room extends EventEmitter {
     const stored = this.commit(message, input.opId);
     if (stored !== "record") this.unsavedExternal.set(input.opId, { message, stored });
     this.route(message);
+    this.emit("humanActivity");
     return { id: message.id, seq: message.seq, stored, repeated: false, rerouted: false };
   }
 
@@ -2591,6 +2657,7 @@ export class Room extends EventEmitter {
       runtime.delayTimer = null;
       runtime.pendingTurn = false;
     }
+    for (const [id, task] of this.automationTasks) if (!task.runtime.workBusy && !task.runtime.turnActive) this.finishAutomation(id, { status: "interrupted", detail: "The room stopped before the task began." });
   }
 
   async shutdown(): Promise<void> {
@@ -3469,6 +3536,7 @@ export class Room extends EventEmitter {
   }
 
   private forgetRuntime(id: string): void {
+    this.finishAutomation(id, { status: "interrupted", detail: "The assigned session ended before the result was confirmed." });
     const runtime = this.runtimes.get(id);
     if (runtime?.mcpToken) this.skills?.revokeToken(runtime.mcpToken);
     if (runtime?.delayTimer) clearTimeout(runtime.delayTimer);
@@ -3585,6 +3653,7 @@ export class Room extends EventEmitter {
   private dropScheduledTurn(id: string): void {
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
+    if (!runtime?.workBusy && !runtime?.turnActive) this.finishAutomation(id, { status: "cancelled", detail: "Stopped before the task began." });
     if (runtime) {
       runtime.pendingTurn = false;
       runtime.addressed = false;
@@ -3609,9 +3678,12 @@ export class Room extends EventEmitter {
     runtime.workCancelled = false;
     this.speaking = id;
     runtime.addressed = false;
+    const automation = this.automationTasks.get(id);
+    if (automation) automation.continuing = false;
     try {
       await this.runTurnInner(id, participant, runtime);
     } finally {
+      if (automation && this.automationTasks.get(id) === automation && (!automation.continuing || runtime.workCancelled || this.closing)) this.finishAutomation(id);
       if (this.speaking === id) this.speaking = null;
       try {
         if (participant.status === "queued") {
@@ -3651,7 +3723,7 @@ export class Room extends EventEmitter {
     const unreadAll = this.messages.filter(
       (m) => m.kind !== "hidden" && m.audience !== "human" && m.seq > runtime.lastSeenSeq && (m.kind === "system" || m.from !== id || m.seq <= runtime.replayOwnUntilSeq),
     );
-    if (!unreadAll.some((m) => m.kind === "chat" || m.wakes)) return;
+    if (!unreadAll.some((m) => m.kind === "chat" || m.wakes) && !this.automationTasks.has(id)) return;
     const cap = this.settings.backlogCap;
     const omitted = Math.max(0, unreadAll.length - cap);
     const unread = omitted ? unreadAll.slice(omitted) : unreadAll;
@@ -3752,7 +3824,10 @@ export class Room extends EventEmitter {
     runtime.replayOwnUntilSeq = -1;
     runtime.log.info(`turn: ${unread.length} unread (${omitted} omitted), full refresh=${briefReason ?? "no"}, blocks=${[delivery.brief && "brief", delivery.roomRules && "rules", delivery.vibio && "vibio"].filter(Boolean).join(",") || "none"}, notes=${notes.length}`);
 
-    const retry = await this.executeTurn(participant, runtime, this.promptBlocks(prompt, runtime), null, false, offerHistoryNotice, supplied);
+    const blocks = this.promptBlocks(prompt, runtime);
+    const automation = this.automationTasks.get(id);
+    if (automation) blocks.unshift({ type: "text", text: `<automation-task>\nSaved by ${this.humanName}: ${automation.run.job.name}\n${automation.run.job.text}\n\nThis task is assigned to you using this room's context and existing permissions. Your final reply will be shown in the room without waking other participants. Finish with the result, or [silent] if there is nothing to report.\n</automation-task>` });
+    const retry = await this.executeTurn(participant, runtime, blocks, null, false, offerHistoryNotice, supplied);
     if (retry) {
       await this.executeTurn(participant, runtime, [{ type: "text", text: retry.prompt }], retry);
     }
@@ -3834,11 +3909,17 @@ export class Room extends EventEmitter {
       return null;
     }
     if (failure || !result) {
+      const automation = !hidden ? this.automationTasks.get(id) : undefined;
+      if (automation) automation.outcome = { status: "failed", detail: failure ?? "No result was returned." };
       runtime.briefPending = runtime.briefPending ?? "previous turn failed";
       runtime.briefSentThisTurn = false;
       participant.statusDetail = `last turn failed: ${(failure ?? "no result").replace(/\s+/g, " ").slice(0, 120)}`;
       participant.failedTurns = (participant.failedTurns ?? 0) + 1;
-      this.push({ type: "message.removed", id: draft.id });
+      const keepFailed = published && !hidden && !retry && !!(draft.toolCalls?.length || draft.text || draft.thought);
+      if (keepFailed) {
+        this.commit({ ...draft, seq: ++this.seq, to: [], toNames: [], streaming: false, audience: "human",
+          failed: (failure ?? "no result").replace(/\s+/g, " ").slice(0, 240), usage: draft.usage ?? null, durationMs: Date.now() - startedAt });
+      } else this.push({ type: "message.removed", id: draft.id });
       runtime.log.error(`turn failed: ${failure}`);
       const kept = runtime.transcript.dump(`turn failed: ${(failure ?? "no result").slice(0, 120)}`);
       if (kept) runtime.log.info(`the protocol around the failure was kept: ${kept}`);
@@ -3879,6 +3960,8 @@ export class Room extends EventEmitter {
       return null;
     }
     const failedBefore = participant.failedTurns ?? 0;
+    const automation = !hidden ? this.automationTasks.get(id) : undefined;
+    if (automation) automation.outcome = { status: result.stopReason === "cancelled" ? "cancelled" : result.stopReason === "end_turn" ? "completed" : "failed", delivery: "silent", detail: result.stopReason === "end_turn" ? "The assigned vibemate finished its reply." : `The reply ended with ${result.stopReason}.` };
     const next = this.finalizeTurn(participant, runtime, draft, result, Date.now() - startedAt, retry, published, publishedAt, hidden);
     if (historyNoticeOffered && result.stopReason !== "cancelled" && !runtime.workCancelled && (participant.failedTurns ?? 0) === failedBefore) {
       runtime.historyNoticePending = false;
@@ -3918,6 +4001,8 @@ export class Room extends EventEmitter {
     this.push({ type: "participant", participant });
 
     const cancelled = result.stopReason === "cancelled";
+    const stoppedByHuman = cancelled && !!runtime.workCancelled;
+    const cancelledByAgent = cancelled && !stoppedByHuman;
     if (cancelled) runtime.briefPending = runtime.briefPending ?? "previous turn was cancelled";
 
     const extracted = extractNotes(draft.text);
@@ -3956,6 +4041,8 @@ export class Room extends EventEmitter {
       runtime.briefRequestedAtSeq = runtime.lastSeenSeq;
       runtime.lastSeenSeq = runtime.turnStartSeq;
       runtime.briefPending = "requested by the agent";
+      const automation = this.automationTasks.get(participant.id);
+      if (automation) automation.continuing = true;
       this.notice(`${participant.name} asked for the room brief (hidden turn); re-sending with the same messages.`, "info");
       this.requestTurn(participant.id);
       return null;
@@ -3964,7 +4051,10 @@ export class Room extends EventEmitter {
     const pull = !retry ? skillPull(text) : null;
     if (pull) {
       this.push({ type: "message.removed", id: draft.id });
-      return this.handleSkillPull(participant, runtime, text, pull);
+      const next = this.handleSkillPull(participant, runtime, text, pull);
+      const automation = this.automationTasks.get(participant.id);
+      if (automation) automation.continuing = runtime.pendingTurn;
+      return next;
     }
 
     if (!text || text.toLowerCase() === SILENT_MARKER) {
@@ -3972,13 +4062,19 @@ export class Room extends EventEmitter {
       if (published && !keepBubble) this.push({ type: "message.removed", id: draft.id });
       if (keepBubble) {
         this.commit({ ...draft, seq: ++this.seq, to: [], toNames: [], text: "", streaming: false,
-          stopReason: result.stopReason, stoppedBy: this.humanName, audience: "human", usage: result.usage ?? null, durationMs });
+          stopReason: result.stopReason, cancelledBy: stoppedByHuman ? "human" : "agent",
+          ...(stoppedByHuman ? { stoppedBy: this.humanName } : {}),
+          audience: "human", usage: result.usage ?? null, durationMs });
       }
       if (retry) {
         this.closeRetry(retry, cancelled ? "the correction turn was stopped; nothing was posted" : "the agent withdrew the reply");
-        if (cancelled) this.postRoomEvent(`${participant.name} was stopped by ${this.humanName}${stoppedWork(draft)}.`, undefined, false, { tone: "attention" });
+        if (cancelled) this.postRoomEvent(stoppedByHuman
+          ? `${participant.name} was stopped by ${this.humanName}${stoppedWork(draft)}.`
+          : `${participant.name}'s agent ended the turn${stoppedWork(draft)}.`, undefined, false, { tone: "attention" });
       } else if (cancelled) {
-        this.postRoomEvent(`${participant.name} was stopped by ${this.humanName}${stoppedWork(draft)}.`, undefined, false, { tone: "attention" });
+        this.postRoomEvent(stoppedByHuman
+          ? `${participant.name} was stopped by ${this.humanName}${stoppedWork(draft)}.`
+          : `${participant.name}'s agent ended the turn${stoppedWork(draft)}.`, undefined, false, { tone: "attention" });
       } else {
         this.postSystem(`${participant.name} read the room and has nothing to add.`);
       }
@@ -3987,6 +4083,8 @@ export class Room extends EventEmitter {
 
     const bareContextFull = isBareContextFullError(text);
     if (!(draft.toolCalls?.length) && (ADAPTER_ERROR_PATTERN.test(text) || bareContextFull)) {
+      const automation = this.automationTasks.get(participant.id);
+      if (automation) automation.outcome = { status: "failed", detail: text.slice(0, 1000) };
       runtime.briefPending = runtime.briefPending ?? "previous turn returned an adapter error";
       this.push({ type: "message.removed", id: draft.id });
       participant.failedTurns = (participant.failedTurns ?? 0) + 1;
@@ -4043,11 +4141,14 @@ export class Room extends EventEmitter {
       text,
       streaming: false,
       stopReason: result.stopReason,
-      ...(cancelled ? { stoppedBy: this.humanName } : {}),
+      ...(cancelled ? { cancelledBy: stoppedByHuman ? "human" : "agent" } : {}),
+      ...(stoppedByHuman ? { stoppedBy: this.humanName } : {}),
       usage: result.usage ?? null,
       durationMs,
     };
-    this.commit(message);
+    const stored = this.commit(message);
+    const automation = this.automationTasks.get(participant.id);
+    if (automation) automation.outcome = stored === "record" ? { ...automation.outcome, delivery: "posted", messageId: message.id } : { ...automation.outcome, delivery: "unconfirmed", detail: "The reply finished but could not be durably recorded. Its delivery is unconfirmed." };
     if (participant.contextEvent?.kind === "compacted") {
       participant.contextEvent = undefined;
       this.push({ type: "participant", participant });
@@ -4067,7 +4168,7 @@ export class Room extends EventEmitter {
     if (result.stopReason !== "end_turn") {
       this.postRoomEvent(`${participant.name} stopped with ${result.stopReason}.`, undefined, false, { tone: "attention" });
     }
-    this.route(message);
+    if (!automation) this.route(message);
     return null;
   }
 

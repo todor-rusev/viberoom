@@ -31,6 +31,15 @@ export interface AutostartStatus {
   note?: string;
 }
 
+export interface AutostartControl {
+  status(): AutostartStatus;
+  setEnabled(enabled: boolean): AutostartStatus | Promise<AutostartStatus>;
+}
+
+export function cliAutostartControl(options: AutostartOptions): AutostartControl {
+  return { status: () => autostartStatus(options), setEnabled: enabled => installAutostart(options, enabled) };
+}
+
 export const LAUNCH_AGENT_LABEL = "dev.viberoom.hub";
 
 export function autostartEntryPath(platform: NodeJS.Platform, home: string, env: NodeJS.ProcessEnv): string {

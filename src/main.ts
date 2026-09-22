@@ -42,7 +42,7 @@ import {
 } from "./launcher.js";
 import { busyMessage, claimPort } from "./claim.js";
 import { aumidSyncScript, installShortcuts, windowsShortcutPaths } from "./shortcuts.js";
-import { autostartLogPath, autostartStatus, installAutostart, recordAutoStart, refreshAutostart, type AutostartOptions } from "./autostart.js";
+import { autostartLogPath, autostartStatus, cliAutostartControl, installAutostart, recordAutoStart, refreshAutostart, type AutostartOptions } from "./autostart.js";
 import { askEnter, renderInstalled, runMenu, unicodeSupported } from "./tui.js";
 import { listRecipes } from "./recipes.js";
 import { checkLogin } from "./login-status.js";
@@ -372,6 +372,7 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
       if (!(await stopInstance(running.url, options.dataDir, log))) {
         throw new Error(`the older viberoom on port ${options.port} did not stop; stop it (viberoom stop, or Ctrl+C in its terminal) and run viberoom again`);
       }
+      options.afterRestart = true;
     }
   }
 
@@ -379,13 +380,7 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
   const runStartedAt = Date.now();
   const hub = new Hub(options.dataDir, log, options.name);
   faultWitness = () => hub.writingNow();
-  hub.setRun({ id: runId(process.pid, runStartedAt), build: info.build });
-  hub.startBackups();
-  void hub.startChannels();
-  const once = options.reconnectOnce;
-  void hub.startRoomsAtBoot(once ? (room, id) => room.reconnect(id, { mode: once }) : undefined, { afterRestart: options.afterRestart });
   hub.restartWith = (sessions) => handOverToFreshHub(options, log, sessions);
-  if (options.afterRestart) hub.noteBackAfterRestart(info.build);
   if (options.name && hub.settings.humanName !== options.name) hub.updateSettings({ humanName: options.name });
 
   let shuttingDown = false;
@@ -412,7 +407,7 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
   };
 
   const claim = await claimPort<Awaited<ReturnType<typeof startServer>>>({
-    bind: () => startServer(hub, options.port, log.child("http"), info, () => void shutdown(), { autostart: autostartOptions(options), dataFolder, run: { startedAs: startReason(options), startedAt: runStartedAt } }),
+    bind: () => startServer(hub, options.port, log.child("http"), info, () => void shutdown(), { autostart: cliAutostartControl(autostartOptions(options)), dataFolder, run: { startedAs: startReason(options), startedAt: runStartedAt } }),
     ask: async () => {
       const who = await runningInstance(options.port, options.dataDir);
       return who ? { build: who.build, dataDir: who.dataDir, pid: who.pid, url: who.url } : null;
@@ -427,7 +422,7 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
   if (claim.kind === "ours") throw new Error(`a viberoom for these rooms already answers at ${claim.holder.url} (build ${claim.holder.build ?? "unknown"}); this one stepped aside rather than open the same history twice`);
   if (claim.kind === "busy") throw new Error(busyMessage(options.port, claim.silentMs));
   server = claim.server;
-  hub.setHubUrl(server.url);
+  void hub.startServices({ url: server.url, run: { id: runId(process.pid, runStartedAt), build: info.build }, afterRestart: options.afterRestart, reconnectMode: options.reconnectOnce ?? undefined });
   if (hub.settings.checkForUpdates) {
     void checkForUpdate(hub.dataDir, info.version).then((update) => {
       hub.setUpdate(update);
@@ -531,6 +526,7 @@ async function startBackground(options: CliOptions, log: Logger, info: BuildInfo
   if (running) {
     log.info(`an older viberoom build is running at ${url}; replacing it with the build from ${info.build}`);
     if (!(await stopInstance(url, options.dataDir, log))) throw new Error(`the older viberoom on port ${port} did not stop; try: viberoom stop`);
+    options.afterRestart = true;
   }
   const how = await launchHiddenHub(options, log, info, port);
   if (how === "already-running") log.info(`a viberoom for these rooms was already answering at ${url}; this start stepped aside`);

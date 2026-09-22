@@ -52,6 +52,11 @@ This product bundles the following third-party material:
 - marked (served from node_modules at run time, not copied): MIT License,
   Copyright (c) 2018+, MarkedJS; Copyright (c) 2011-2018, Christopher Jeffrey.
 
+- cron-parser and its Luxon dependency (installed from npm at run time, not
+  copied into the bundle): MIT License, Copyright (c) 2014-2023 Harri Siirak
+  and Copyright 2019 JS Foundation and other contributors, respectively.
+  Their packages include the full licence texts.
+
 Everything else is original to this project and licensed under the GNU Affero
 General Public License, version 3 or (at your option) any later version (see
 LICENSE). If you run a modified viberoom as a network service, section 13 of

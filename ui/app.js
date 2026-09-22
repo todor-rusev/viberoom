@@ -66,9 +66,11 @@
     roomList: $("#room-list"),
     backToRooms: $("#back-to-rooms"),
     sideRoomName: $("#side-room-name"),
-    sideRoomSub: $("#side-room-sub"),
     roomSettingsBtn: $("#room-settings-btn"),
     inviteBtn: $("#invite-btn"),
+    roster: $("#roster"),
+    participantsMe: $("#participants-me"),
+    sideRoomCount: $("#side-room-count"),
     participants: $("#participants"),
     reconnectAllBtn: $("#reconnect-all-btn"),
     focusBtn: $("#focus-btn"),
@@ -77,7 +79,6 @@
     roomsGrid: $("#rooms-grid"),
     roomsSub: $("#rooms-sub"),
     chatView: $("#chat-view"),
-    chatRoomName: $("#chat-room-name"),
     chatRoomSub: $("#chat-room-sub"),
     chatInfoBtn: $("#chat-info-btn"),
     carryBtn: $("#carry-btn"),
@@ -362,9 +363,13 @@
     if (shown === "thinking" || shown === "notes") return false;
     return !!(m.text || (m.toolCalls && m.toolCalls.length));
   }
-  function stopNoteText(m, humanName) {
-    const who = m.stoppedBy || humanName || "you";
-    return m.text ? `Stopped by ${who}` : `Stopped by ${who} before it wrote anything`;
+  function stopNoteText(m) {
+    if (m.cancelledBy === "agent") return m.text ? "The agent ended this turn; nobody here stopped it" : "The agent ended this turn before it wrote anything";
+    if (!m.stoppedBy) return m.text ? "This turn was cut short" : "This turn was cut short before it wrote anything";
+    return m.text ? `Stopped by ${m.stoppedBy}` : `Stopped by ${m.stoppedBy} before it wrote anything`;
+  }
+  function failNoteText(m) {
+    return m.text ? `The turn failed after this: ${m.failed}` : `The turn failed before it wrote anything: ${m.failed}`;
   }
   function refreshLiveTails() {
     const room = currentRoom();
@@ -1355,6 +1360,17 @@
     const el = els.messages;
     return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   }
+  function atEnd() {
+    const el = els.messages;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 12;
+  }
+  function replyStreaming() {
+    const room = currentRoom();
+    return !!room && room.messages.some((m) => m.streaming);
+  }
+  function deliberateReturn() {
+    return atEnd() && !replyStreaming();
+  }
   let stuck = true;
   let readingAway = false;
   const CALM = (() => { const v = new URLSearchParams(location.search).get("calm"); return ["hold", "reserve", "reserve-cap"].includes(v) ? v : "off"; })();
@@ -1412,8 +1428,49 @@
   let settled = 0;
   const endJumps = [];
   function noteJump(why) {
-    endJumps.push({ at: Date.now(), why: why || "(unnamed)", following: stuck, from: Math.round(els.messages.scrollTop), fromEnd: Math.round(els.messages.scrollHeight - els.messages.scrollTop - els.messages.clientHeight) });
+    const el = els.messages;
+    const entry = { at: Date.now(), why: why || "(unnamed)", following: stuck, readingAway, streaming: replyStreaming(), from: Math.round(el.scrollTop), fromEnd: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight) };
+    endJumps.push(entry);
     if (endJumps.length > 30) endJumps.splice(0, endJumps.length - 20);
+    if (!stuck && entry.fromEnd > 12) reportJump(entry);
+  }
+  function noteHeldPlace(why) {
+    const el = els.messages;
+    endJumps.push({ at: Date.now(), why, held: true, following: stuck, readingAway, streaming: replyStreaming(), from: Math.round(el.scrollTop), fromEnd: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight) });
+    if (endJumps.length > 30) endJumps.splice(0, endJumps.length - 20);
+  }
+  let lastListChange = null;
+  let arrivalFromEnd = 0;
+  function noteArrival(byHand) {
+    const el = els.messages;
+    const fromEnd = Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
+    if (byHand) { arrivalFromEnd = fromEnd; return; }
+    const was = arrivalFromEnd;
+    if (stuck || fromEnd > 12 || was <= 40) return;
+    arrivalFromEnd = 0;
+    const last = lastListChange ? `${lastListChange.why}, ${Date.now() - lastListChange.at} ms ago` : "no change of the list noted";
+    const entry = { at: Date.now(), why: `arrived at the end by itself (last: ${last})`, following: false, readingAway, streaming: replyStreaming(), from: Math.round(el.scrollTop), fromEnd: was };
+    endJumps.push(entry);
+    if (endJumps.length > 30) endJumps.splice(0, endJumps.length - 20);
+    reportJump(entry);
+  }
+  function reportJump(entry) {
+    const room = currentRoom();
+    if (!room) return;
+    const anchor = readerAnchor();
+    void post("/api/window/finding", {
+      kind: "end-jump",
+      roomId: room.id,
+      why: entry.why,
+      fromEnd: entry.fromEnd,
+      scrollTop: entry.from,
+      readingAway: entry.readingAway,
+      streaming: entry.streaming,
+      holdsText: humanHoldsText(),
+      msgs: room.messages.length,
+      anchorId: anchor ? anchor.id : "",
+      into: anchor ? Math.round(anchor.into) : 0,
+    }).catch(() => {});
   }
   function scrollToBottom(why) {
     calmRelease();
@@ -1539,12 +1596,12 @@
     const rows = [...endJumps]
       .reverse()
       .slice(0, 20)
-      .map((j) => `<tr><td>${esc(new Date(j.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</td><td title="${esc(j.why)}">${esc(j.why)}</td><td class="dim">${j.following ? "following the end" : `${j.fromEnd} px above the end`}</td></tr>`)
+      .map((j) => `<tr><td>${esc(new Date(j.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</td><td title="${esc(j.why)}">${j.held ? "held: " : ""}${esc(j.why)}</td><td class="dim">${j.following ? "following the end" : `${j.fromEnd} px above the end`}${j.streaming ? " · a reply was streaming" : ""}</td></tr>`)
       .join("");
     return `<div class="slow-scroll"><table class="slow-table">${rows}</table></div>`;
   }
   function endJumpsText() {
-    return [...endJumps].reverse().map((j) => `${new Date(j.at).toLocaleTimeString()} - ${j.why} - ${j.following ? "following the end" : `${j.fromEnd} px above the end`}`).join("\n");
+    return [...endJumps].reverse().map((j) => `${new Date(j.at).toLocaleTimeString()} - ${j.held ? "held: " : ""}${j.why} - ${j.following ? "following the end" : `${j.fromEnd} px above the end`}${j.streaming ? " - a reply was streaming" : ""}`).join("\n");
   }
   function slowTasksText() {
     return [...slowTasks].reverse().map((t) => `${new Date(t.at).toLocaleTimeString()} - ${t.ms ? `${t.ms} ms - ` : ""}${t.name}${t.busy ? ` - ${t.busy}` : ""}`).join("\n");
@@ -1562,7 +1619,7 @@
     return UI.html("settings-group", { id, title, body: UI.raw(body), tone, open: settingsDisclosureOpen(id, true) });
   }
   function settingsFoldActions() {
-    return `<div class="row-btns start settings-fold-actions">${UI.html("button", { label: "Collapse all", kind: "ghost", size: "sm", data: { settingsOpen: "false" }, title: "Collapse all settings groups in this panel" })}${UI.html("button", { label: "Expand all", kind: "ghost", size: "sm", data: { settingsOpen: "true" }, title: "Expand all settings groups in this panel" })}</div>`;
+    return `<div class="settings-fold-actions" role="group" aria-label="Settings sections">${UI.html("icon-button", { icon: "chevrons-up", kind: "ghost", size: "sm", data: { settingsOpen: "false" }, title: "Collapse all settings sections" })}${UI.html("icon-button", { icon: "chevrons-down", kind: "ghost", size: "sm", data: { settingsOpen: "true" }, title: "Expand all settings sections" })}</div>`;
   }
   function foldSettingsGroups(e) {
     const button = e.target.closest("button[data-settings-open]");
@@ -2437,12 +2494,11 @@
     renderWedgeBanner(currentRoom());
     const room = currentRoom();
     if (!room) return;
-    const st = roomStats(room);
     els.sideRoomName.textContent = room.name;
     els.sideRoomEmoji.textContent = room.settings.emoji || "";
-    els.sideRoomSub.textContent = room.settings.topic || `${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}${st.agents.length ? ` · ${st.online} online` : ""}${st.waiting ? ` · ${st.waiting} waiting` : ""}`;
-    const ordered = [...room.participants].sort((a, b) => (a.kind === "human" ? -1 : b.kind === "human" ? 1 : 0));
-    KeyedList.patch(els.participants, ordered, {
+    const st = roomStats(room);
+    els.sideRoomCount.textContent = `${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}${st.agents.length ? ` · ${st.online} online` : ""}${st.waiting ? ` · ${st.waiting} waiting` : ""}`;
+    const rowSpec = {
       key: "id",
       id: (p) => p.id,
       make: () => document.createElement("li"),
@@ -2496,7 +2552,9 @@
         if (li.className !== className) li.className = className;
         if (p.kind === "agent" && !unstaffed) patchLifeRing(li, p);
       },
-    });
+    };
+    KeyedList.patch(els.participantsMe, room.participants.filter((p) => p.kind === "human"), rowSpec);
+    KeyedList.patch(els.participants, room.participants.filter((p) => p.kind === "agent"), rowSpec);
     renderLifePop();
     renderHushButton(room);
     els.reconnectAllBtn.hidden = offlineAgents(room).length === 0;
@@ -2533,19 +2591,26 @@
 
 
   function renderChatHead() {
+    renderAutomationBadge();
     const room = currentRoom();
     renderWorkingNow();
     if (!room) {
-      els.chatRoomName.textContent = "No room";
       els.chatRoomSub.textContent = "";
       return;
     }
-    const st = roomStats(room);
-    els.chatRoomName.textContent = roomTitle(room);
+    const directory = room.dir.split(/[\\/]/).filter(Boolean).slice(-1)[0] || room.dir;
     els.chatRoomSub.innerHTML =
-      `<span>${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}${st.agents.length ? ` · ${st.online} online` : ""}${st.waiting ? ` · ${st.waiting} waiting` : ""}</span>` +
-      (room.settings.topic ? `<span>· ${esc(room.settings.topic)}</span>` : "") +
-      UI.html("chip", { label: room.dir.split(/[\\/]/).filter(Boolean).slice(-1)[0] || room.dir, icon: "folder", title: `working directory of the vibemates: ${room.dir}`, hook: "dir-chip" });
+      `<button type="button" data-ui="button" data-kind="ghost" data-size="sm" class="dir-chip open-link" data-open-kind="directory" data-open="${esc(room.dir)}" title="${esc(`Open folder: ${room.dir}`)}" aria-label="${esc(`Open folder: ${room.dir}`)}">${ic("folder-solid")}<span class="dir-label">${esc(directory)}</span></button>`;
+  }
+
+  function renderAutomationBadge() {
+    const count = state.automationPending?.[currentRoom()?.id] || 0;
+    const button = $("#automations-btn");
+    if (button) {
+      button.innerHTML = Icons.svg("clock-solid") + (count ? `<span class="automation-count" aria-hidden="true">${count}</span>` : "");
+      button.title = count ? `Automations: ${count} proposal${count === 1 ? "" : "s"} to review` : "Automations: scheduled tasks and reminders";
+      button.setAttribute("aria-label", button.title);
+    }
   }
 
 
@@ -3067,7 +3132,10 @@
     more.hidden = !long;
     more.textContent = expanded ? "Show less" : "Show more";
     const stopNote = el.querySelector(".stop-note");
-    if (stopNote) stopNote.innerHTML = !m.streaming && m.stopReason === "cancelled" ? UI.html("reply-note", { text: stopNoteText(m, (state.settings || {}).humanName), tone: "attention", icon: "stop" }) : "";
+    if (stopNote) stopNote.innerHTML = m.streaming ? ""
+      : m.stopReason === "cancelled" ? UI.html("reply-note", { text: stopNoteText(m), tone: "attention", icon: "stop" })
+      : m.failed ? UI.html("reply-note", { text: failNoteText(m), tone: "error", icon: "alert" })
+      : "";
     renderShots(el.querySelector(".shots"), room, m);
     renderWaiting(el, room, m);
     const thought = el.querySelector(".thought");
@@ -3592,7 +3660,7 @@
           anchor = replacement ? { ...anchor, id: replacement.id } : null;
         }
         if (roomId === state.currentRoomId && state.view === "room") {
-          if (targetIndex >= 0) stuck = false;
+          if (targetIndex >= 0) leaveTheEnd();
           renderMessages("the loaded history was refreshed", anchor);
           renderSideRoom();
         }
@@ -3689,7 +3757,7 @@
       setFoldIndex(room, Math.max(0, index - FOLD_STEP));
     }
     if (!els.messages.querySelector(`.msg[data-seq="${CSS.escape(String(seq))}"]`)) {
-      stuck = false;
+      leaveTheEnd();
       renderMessages("a message was asked for", { id: room.messages[index].id, into: 12 });
     }
     return jumpToMessage(els.messages.querySelector(`.msg[data-seq="${CSS.escape(String(seq))}"]`));
@@ -4215,15 +4283,14 @@
     const inside = !!selection && !selection.isCollapsed && (els.messages.contains(selection.anchorNode) || els.messages.contains(selection.focusNode));
     heldTextSelection = inside;
     if (inside) heldTextElement = textPart(els.messages.contains(selection.anchorNode) ? selection.anchorNode : selection.focusNode);
-    if (inside && !wasHeld) leaveTheEndForText();
+    if (inside && !wasHeld) leaveTheEnd();
     if (wasHeld && !inside && state.view === "room") {
       rememberReleasedText();
       renderMessagesSoon("the text selection was released");
       resumeAfterText();
     }
   });
-  function leaveTheEndForText() {
-    if (!stuck) return;
+  function leaveTheEnd() {
     stuck = false;
     readingAway = true;
     calm.held = false;
@@ -4231,7 +4298,7 @@
   }
   function resumeAfterText() {
     if (stuck || humanHoldsText()) return;
-    if (nearBottom()) scrollToBottom("the text selection was released at the end");
+    if (deliberateReturn()) scrollToBottom("the text selection was released at the end");
   }
   function windowedItems(items, range) {
     if (!range) return items;
@@ -4405,6 +4472,7 @@
     });
   }
   function renderMessages(why, savedAnchor) {
+    lastListChange = { why, at: Date.now() };
     if (listPaintFrame) { cancelAnimationFrame(listPaintFrame); listPaintFrame = 0; }
     const t0 = performance.now();
     const room = currentRoom();
@@ -4424,7 +4492,8 @@
     const anchor = savedAnchor !== undefined ? savedAnchor
       : keepingScroll ? (keepingScroll.eye ? { id: keepingScroll.eye.id, into: keepingScroll.eye.at } : null)
       : resized ? settledReader.anchor : stuck ? null : readerAnchor();
-    if (resized && !humanHoldsText()) stuck = settledReader.following;
+    if (resized && !humanHoldsText()) { stuck = settledReader.following; if (!stuck) readingAway = true; }
+    const eyeBefore = stuck || humanHoldsText() ? null : eyeRow();
     els.messages.classList.toggle("searching", !!state.search);
     if (!room) { els.messages.innerHTML = ""; return; }
     if (room.history?.bodyProtocol && !room.history.indexed && room.indexError) {
@@ -4495,7 +4564,13 @@
     else if (keepingScroll) {
       if (keepingScroll.eye) holdTheEye(keepingScroll.eye);
       else els.messages.scrollTop = keepingScroll.top;
-    } else if (!restoreReader(anchor) && !humanHoldsText()) scrollToBottom("the list was rebuilt");
+    } else if (!restoreReader(anchor) && !humanHoldsText()) {
+      if (stuck) scrollToBottom("the list was rebuilt");
+      else {
+        if (eyeBefore && els.messages.querySelector(`.msg[data-id="${CSS.escape(eyeBefore.id)}"]`)) holdTheEye(eyeBefore);
+        noteHeldPlace(anchor ? "the list was rebuilt and the place was not found" : "the list was rebuilt without a place to return to");
+      }
+    }
     renderTimeline();
     rememberReader();
     if (room.history?.indexed) {
@@ -5440,8 +5515,7 @@
         .join("") +
       missing.map((r) => `<div class="vendor-row" style="opacity:.75">${logo(r)}<span class="vc-name">${esc(r.vendor)}<span class="hint">${esc(r.installHint || r.unavailableReason || "")}</span></span>${UI.html("badge", { label: "not installed", tone: "asleep" })}</div>`).join("");
     els.pageInner.innerHTML = `
-      <div class="page-head"><div><h1>Settings</h1><div class="hint">${state.version ? `${esc(state.version.name)} ${esc(state.version.version)} · room built ${esc(new Date(state.version.build).toLocaleString())}` : "room build unknown (older room process; run viberoom again to replace it)"}</div></div></div>
-      ${settingsFoldActions()}
+      <div class="page-head app-settings-head"><div class="app-settings-title"><span class="app-settings-heading-icon">${ic("settings-solid")}</span><div><h1>Settings</h1><div class="hint">${state.version ? `${esc(state.version.name)} ${esc(state.version.version)} · room built ${esc(new Date(state.version.build).toLocaleString())}` : "room build unknown (older room process; run viberoom again to replace it)"}</div></div></div>${settingsFoldActions()}</div>
       <div id="sp-form">
       ${settingsGroup("sp-carrying", "Carry conversations", `<p class="hint">Save selected rooms for another computer, bring in a copy, or inspect removed versions.</p><button type="button" data-ui="button" data-kind="ghost" id="sp-carry">Export / Import rooms</button>`)}
       <div class="page-cols">
@@ -5794,11 +5868,13 @@
     $("#sp-autostart-on")?.addEventListener("change", async (e) => {
       e.stopPropagation();
       const box = e.target;
+      const wanted = box.checked;
       box.disabled = true;
       try {
-        const res = await post("/api/autostart", { enabled: box.checked });
+        const res = await post("/api/autostart", { enabled: wanted });
         state.autostart = res.autostart || state.autostart;
-        toast(res.autostart && res.autostart.enabled ? "viberoom starts when you sign in." : "viberoom no longer starts when you sign in.", "success");
+        if (res.autostart?.enabled !== wanted) toast(res.autostart?.note || "The operating system did not apply the startup setting.", "warn");
+        else toast(wanted ? "viberoom starts when you sign in." : "viberoom no longer starts when you sign in.", "success");
       } catch (error) {
         showError(error);
       }
@@ -7844,6 +7920,7 @@
     const previousSettings = state.settings;
     const previousReader = previousRooms.get(state.currentRoomId)?.history && state.view === "room" && !stuck ? readerAnchor() : null;
     state.settings = snapshot.settings;
+    state.automationPending = snapshot.automationPending || {};
     state.looks = snapshot.looks || [];
     registerLooks(state.looks);
     applyAppearance();
@@ -8123,6 +8200,11 @@
   }
 
   const HUB_EVENTS = {
+    autostart: m => {
+      state.autostart = m.autostart;
+      if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
+    },
+    automations: m => { state.automationPending = m.pending || {}; renderAutomationBadge(); void window.ViberoomAutomations.refresh(); },
     snapshot: (m) => {
       loadSnapshot(m.snapshot);
       loadSecretCards(m.snapshot.secrets);
@@ -8541,6 +8623,68 @@
     if (!transfer) return [];
     return Array.from(transfer.files || []).filter((f) => f && f.type && f.type.startsWith("image/"));
   }
+  function filesFrom(transfer) {
+    return transfer ? Array.from(transfer.files || []).filter(Boolean) : [];
+  }
+
+  const FILE_MAX_BYTES = 20 * 1024 * 1024;
+  const attachBtn = $("#attach-btn");
+  const attachInput = $("#attach-input");
+  let uploads = 0;
+  function addFiles(files) {
+    const pictures = files.filter((f) => f.type && f.type.startsWith("image/"));
+    const documents = files.filter((f) => !(f.type && f.type.startsWith("image/")));
+    if (pictures.length) addShotFiles(pictures);
+    if (documents.length) attachDocuments(documents);
+  }
+  function insertLine(text) {
+    const el = els.input;
+    const value = el.value;
+    const start = el.selectionStart ?? value.length;
+    const end = el.selectionEnd ?? start;
+    const before = value.slice(0, start);
+    const after = value.slice(end);
+    const lead = before && !/\n$/.test(before) ? "\n" : "";
+    const tail = after && !/^\n/.test(after) ? "\n" : "";
+    const line = `${lead}${text}${tail}`;
+    el.value = before + line + after;
+    const caret = before.length + line.length;
+    el.setSelectionRange(caret, caret);
+    autosize();
+    updateComposerClear();
+  }
+  function attachDocuments(files) {
+    const room = currentRoom();
+    if (!room) return;
+    for (const file of files) {
+      if (file.size > FILE_MAX_BYTES) {
+        showError(new Error(`${file.name || "that file"} is ${Math.round(file.size / 1024 / 1024)} MB; the room takes files up to ${FILE_MAX_BYTES / 1024 / 1024} MB`));
+        continue;
+      }
+      const reader = new FileReader();
+      reader.onload = async () => {
+        uploads += 1;
+        els.composer.classList.add("uploading");
+        try {
+          const r = await post(roomApi("/files"), { name: file.name || "", data: String(reader.result) }, { deadline: 120000 });
+          insertLine(r.line);
+        } catch (error) {
+          showError(error);
+        } finally {
+          uploads -= 1;
+          if (!uploads) els.composer.classList.remove("uploading");
+          els.input.focus();
+        }
+      };
+      reader.onerror = () => showError(new Error(`could not read ${file.name || "the file"}`));
+      reader.readAsDataURL(file);
+    }
+  }
+  attachBtn.addEventListener("click", () => attachInput.click());
+  attachInput.addEventListener("change", () => {
+    addFiles(Array.from(attachInput.files || []));
+    attachInput.value = "";
+  });
 
   els.shotsTray.addEventListener("click", (e) => {
     const drop = e.target.closest(".shot-drop");
@@ -8678,10 +8822,10 @@
   }
 
   els.input.addEventListener("paste", (e) => {
-    const files = imageFilesFrom(e.clipboardData);
+    const files = filesFrom(e.clipboardData);
     if (files.length) {
       e.preventDefault();
-      addShotFiles(files);
+      addFiles(files);
       return;
     }
     const quotes = pastedQuotes(e.clipboardData);
@@ -8697,11 +8841,11 @@
     });
     target.addEventListener("dragleave", () => els.composer.classList.remove("drop-target"));
     target.addEventListener("drop", (e) => {
-      const files = imageFilesFrom(e.dataTransfer);
+      const files = filesFrom(e.dataTransfer);
       els.composer.classList.remove("drop-target");
       if (!files.length) return;
       e.preventDefault();
-      addShotFiles(files);
+      addFiles(files);
       els.input.focus();
     });
   }
@@ -8714,7 +8858,7 @@
     typingSentAt = now;
     post(roomApi("/typing"), {}).catch(() => undefined);
   });
-  els.participants.addEventListener("click", (e) => {
+  els.roster.addEventListener("click", (e) => {
     const li = e.target.closest("li[data-id]");
     const room = currentRoom();
     if (!li || !room) return;
@@ -8866,7 +9010,7 @@
         .finally(done);
     }
   });
-  els.participants.addEventListener("dblclick", (e) => {
+  els.roster.addEventListener("dblclick", (e) => {
     if (e.target.closest("button, [data-ui=\"row-button\"]")) return;
     const li = e.target.closest("li[data-id]");
     const p = li && findById(currentRoom(), li.dataset.id);
@@ -9253,6 +9397,10 @@
   for (const type of ["wheel", "touchmove", "keydown", "mousedown"]) {
     els.messages.addEventListener(type, () => (lastUserScrollAt = Date.now()), { passive: true });
   }
+  function wheelPastEnd(e) {
+    if (e.deltaY > 0 && !stuck && atEnd() && !humanHoldsText()) scrollToBottom("the wheel pushed past the end");
+  }
+  els.messages.addEventListener("wheel", wheelPastEnd, { passive: true });
   els.messages.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || (e.target.closest && e.target.closest("button, a, input, textarea, select, summary, [role=button]"))) return;
     textPress = e.target.nodeType === 3 ? e.target.parentElement : e.target;
@@ -9274,18 +9422,17 @@
     if (rowPrices.stamp !== pricesStamp()) { repriceSoon(); return; }
     const top = els.messages.scrollTop;
     const byHand = Date.now() - lastUserScrollAt < 700;
+    noteArrival(byHand);
     if (byHand && calm.reserve > 0) calmRelease();
     if (byHand) {
       if (top < lastScrollTop) {
         stuck = false;
         readingAway = true;
-      } else if (top > lastScrollTop && !humanHoldsText() && els.messages.scrollHeight - top - els.messages.clientHeight < 12) {
+      } else if (top > lastScrollTop && !humanHoldsText() && deliberateReturn()) {
         stuck = true;
         readingAway = false;
       }
-    } else if (calm.held) { }
-    else if (!humanHoldsText() && nearBottom() && !readingAway) stuck = true;
-    else if (top < lastScrollTop) {
+    } else if (!calm.held && top < lastScrollTop) {
       stuck = false;
       readingAway = true;
     }
@@ -9532,11 +9679,12 @@
       e.preventDefault();
       try {
         const target = link.dataset.open;
-        if (IMAGE_RE.test(target) && !/^(https?:|mailto:)/i.test(target) && /[\\/]/.test(target)) {
+        const directory = link.dataset.openKind === "directory";
+        if (!directory && IMAGE_RE.test(target) && !/^(https?:|mailto:)/i.test(target) && /[\\/]/.test(target)) {
           openLightbox(imageUrl(target), target.split(/[\\/]/).pop());
           return;
         }
-        if (readableInRoom(target)) {
+        if (!directory && readableInRoom(target)) {
           const spec = splitLine(target);
           const file = spec ? spec.path : target;
           const room = currentRoom();
@@ -9565,6 +9713,10 @@
   });
   els.roomSettingsBtn.addEventListener("click", () => openDetails({ kind: "room" }));
   els.chatInfoBtn.addEventListener("click", () => openDetails({ kind: "room" }));
+  $("#automations-btn").addEventListener("click", () => {
+    const room = currentRoom();
+    if (room) void window.ViberoomAutomations.open(room.id, id => currentRoom()?.id === room.id ? jumpToId(id).catch(showError) : false, confirmDialog);
+  });
 
   async function openCarry(room) {
     await window.ViberoomCarry.open(room);
@@ -9950,7 +10102,7 @@
       const at = room.messages.findIndex(m => m.id === id);
       if (at >= 0) {
         setFoldIndex(room, Math.max(0, at - FOLD_STEP));
-        stuck = false;
+        leaveTheEnd();
         renderMessages("a message was asked for by id", { id, into: 12 });
         return jumpToMessage(els.messages.querySelector(`.msg[data-id="${cssEscape(id)}"]`));
       }
@@ -9961,6 +10113,7 @@
 
   function jumpToMessage(el) {
     if (!el || !el.isConnected) return false;
+    leaveTheEnd();
     if (!onScreen(el)) {
       const from = els.messages.scrollTop;
       el.scrollIntoView({ block: "center" });
@@ -10242,7 +10395,7 @@
       if (lifePop && lifePop.hover && !lifePop.el.matches(":hover") && !lifePop.anchor.matches(":hover")) closeLifePop();
     }, 180);
   }
-  els.participants.addEventListener("mouseover", (e) => {
+  els.roster.addEventListener("mouseover", (e) => {
     const av = e.target.closest("li[data-id] .avatar");
     const li = av && av.closest("li[data-id]");
     if (!av || (e.relatedTarget && av.contains(e.relatedTarget))) return;
@@ -10255,7 +10408,7 @@
       if (!lifePop || lifePop.hover) openLifePop(p, li, true);
     }, 220);
   });
-  els.participants.addEventListener("mouseout", (e) => {
+  els.roster.addEventListener("mouseout", (e) => {
     const av = e.target.closest("li[data-id] .avatar");
     const li = av && av.closest("li[data-id]");
     if (!av || (e.relatedTarget && av.contains(e.relatedTarget))) return;
@@ -10373,7 +10526,9 @@
     const room = currentRoom();
     const pins = room && state.view === "room" ? pinnedMessages(room) : [];
     pinsBtn.hidden = pins.length === 0;
-    pinsBtn.innerHTML = `${ic("pin")} Pinned · ${pins.length}`;
+    pinsBtn.innerHTML = `${ic("pin-solid")}${pins.length}`;
+    pinsBtn.title = `${pins.length} pinned message${pins.length === 1 ? "" : "s"}`;
+    pinsBtn.setAttribute("aria-label", pinsBtn.title);
     if (!pins.length) pinsPanel.hidden = true;
     if (pinsPanel.hidden) return;
     pinsPanel.innerHTML = pins

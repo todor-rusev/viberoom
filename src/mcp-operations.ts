@@ -21,6 +21,13 @@ export async function executeOperation(name: string, args: Record<string, unknow
     if (!res.ok) return errorResult(`skill "${skill}" could not be loaded`, res);
     return { content: [{ type: "text", text: String(res.body.text ?? "") }] };
   }
+  if (name === "list_automations" || name === "propose_automation") {
+    const res = name === "list_automations"
+      ? await hub(`/api/mcp/automations?token=${encodeURIComponent(TOKEN)}`)
+      : await hub("/api/mcp/automations/propose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...args, token: TOKEN }) });
+    if (!res.ok) return errorResult("The automations request could not be confirmed.", res);
+    return jsonResult(res.body);
+  }
   if (name === "create_skill" || name === "update_skill") {
     const res = await hub("/api/mcp/skills", {
       method: "POST",

@@ -4,6 +4,7 @@
 
   const GEAR = `<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>`;
   const BELL_OFF = `<path d="M6 8a6 6 0 0 1 10.5-4M18 8v5l2 3H4l2-3V8"/><path d="M10 20a2 2 0 0 0 4 0M3 3l18 18"/>`;
+  const SOLID_GEAR = `<path fill="#000" fill-rule="evenodd" stroke-width=".8" d="M10 2h4l.7 3 1.6.9 2.9-.9 2 3.5-2.2 2.1v1.8l2.2 2.1-2 3.5-2.9-.9-1.6.9-.7 3h-4l-.7-3-1.6-.9-2.9.9-2-3.5L5 12.9v-1.8L2.8 9l2-3.5 2.9.9L9.3 5z M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"/>`;
 
   const ICONS = {
     rooms: `<rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/>`,
@@ -11,6 +12,14 @@
     skills: `<path d="M2 4.5h5.5a4 4 0 0 1 4 4V20a3 3 0 0 0-3-3H2z"/><path d="M22 4.5h-5.5a4 4 0 0 0-4 4V20a3 3 0 0 1 3-3H22z"/>`,
     puzzle: `<path d="M10 4a2 2 0 1 1 4 0h3a1 1 0 0 1 1 1v3a2 2 0 1 1 0 4v3a1 1 0 0 1-1 1h-3a2 2 0 1 1-4 0H7a1 1 0 0 1-1-1v-3a2 2 0 1 1 0-4V5a1 1 0 0 1 1-1h3z"/>`,
     settings: GEAR,
+    automation: `<path d="M2 11a10 10 0 0 1 17-6M19 1v4h-4M22 13a10 10 0 0 1-17 6M5 23v-4h4"/><g transform="translate(6 6) scale(.5)" stroke-width="3.4">${GEAR}</g>`,
+    transfer: `<path d="M7 4v15M3 15l4 4 4-4M17 20V5M13 9l4-4 4 4"/>`,
+    "settings-solid": SOLID_GEAR,
+    "transfer-solid": `<path fill="#000" stroke-width="1.2" d="M5.5 3h3v11H12l-5 6-5-6h3.5z"/><path fill="#000" fill-opacity=".4" stroke-width="1.2" d="M15.5 21h3V10H22l-5-6-5 6h3.5z"/>`,
+    "pin-solid": `<path fill="#000" fill-opacity=".35" stroke-width="1.8" d="M8 3h8l-1 7 3 3v2H6v-2l3-3z"/><path stroke-width="2.4" d="M12 15v7"/>`,
+    "folder-solid": `<path fill="#000" fill-opacity=".2" stroke-width="1.7" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path fill="#000" fill-opacity=".35" stroke-width="1.7" d="M3 11h18l-2 8H5z"/>`,
+    "search-solid": `<circle cx="10.5" cy="10.5" r="6.5" fill="#000" fill-opacity=".18" stroke-width="2"/><path d="M16 16l5 5" stroke-width="3.2"/>`,
+    "clock-solid": `<circle cx="12" cy="12" r="8.5" fill="#000" fill-opacity=".18" stroke-width="2.2"/><path d="M12 7.5V12l3.2 2.2" stroke-width="2.4"/>`,
     user: `<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`,
     plus: `<path d="M12 5v14M5 12h14"/>`,
     search: `<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.3-4.3"/>`,
@@ -23,6 +32,8 @@
     close: `<path d="M18 6L6 18M6 6l12 12"/>`,
     down: `<path d="M6 9l6 6 6-6"/>`,
     stop: `<rect x="6" y="6" width="12" height="12" rx="2"/>`,
+    play: `<path d="M7 4l14 8-14 8z"/>`,
+    pause: `<path d="M8 5v14M16 5v14" stroke-width="3"/>`,
     refresh: `<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/>`,
     bell: `<path d="M6 8a6 6 0 1 1 12 0v5l2 3H4l2-3V8z"/><path d="M10 20a2 2 0 0 0 4 0"/>`,
     "bell-off": BELL_OFF,
@@ -90,6 +101,7 @@
   }
 
   const SCENES = {
+    automation: `<rect class="auto-paper" x="10" y="12" width="70" height="58" rx="10"/><path class="auto-calendar" d="M10 29h70M27 6v14M63 6v14"/><path class="auto-ticks" d="M24 41h7M42 41h7M24 53h7M42 53h7"/><g class="auto-clock"><circle class="auto-clock-face" cx="86" cy="51" r="23"/><path class="auto-hand" d="M86 36v15l10 6"/><path class="auto-spark" d="M101 13v10M96 18h10M7 76h5"/></g>`,
     browser: `<rect class="paper-fill" x="14" y="16" width="72" height="52" rx="6"/><path class="chrome" d="M16.5 28h67" stroke-linecap="butt"/><circle class="chrome" cx="21" cy="22" r="1.6"/><circle class="chrome" cx="27" cy="22" r="1.6"/><circle class="chrome" cx="33" cy="22" r="1.6"/><rect class="chrome" x="40" y="19" width="40" height="6" rx="3"/><rect class="outline" x="14" y="16" width="72" height="52" rx="6"/><circle class="stroke" cx="50" cy="42" r="6"/><path class="stroke" d="M37 60c3-8 23-8 26 0"/><path class="accent arrow" d="M92 30l16-16M108 14h-10M108 14v10"/>`,
     code: `<rect class="paper-fill" x="10" y="14" width="60" height="44" rx="6"/><path class="chrome" d="M12.5 26h55" stroke-linecap="butt"/><circle class="chrome" cx="17" cy="20" r="1.6"/><circle class="chrome" cx="23" cy="20" r="1.6"/><circle class="chrome" cx="29" cy="20" r="1.6"/><rect class="outline" x="10" y="14" width="60" height="44" rx="6"/><rect class="stroke" x="21" y="36" width="38" height="12" rx="3"/><rect class="accent-fill" x="64" y="40" width="48" height="26" rx="7"/><path class="on-accent" d="M74 53h6M84 53h6M94 53h6" stroke-width="3.2"/>`,
     question: `<path class="paper" d="M22 12h76a8 8 0 0 1 8 8v22a8 8 0 0 1-8 8H48l-14 11V50H22a8 8 0 0 1-8-8V20a8 8 0 0 1 8-8z"/><path class="accent" d="M54 25a6 6 0 1 1 8.4 5.5c-1.6.8-2.4 1.8-2.4 3.5" stroke-width="2.6"/><circle class="accent-fill" cx="60" cy="40" r="1.6"/><rect class="stroke" x="36" y="62" width="56" height="12" rx="4"/><path class="accent" d="M42 68h2" stroke-width="2.6"/>`,

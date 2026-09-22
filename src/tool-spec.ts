@@ -56,6 +56,32 @@ export const LOOK_SPEC_FIELDS = {
 
 export const OPERATIONS: OperationSpec[] = [
   {
+    name: "list_automations", exposure: "deferred",
+    summary: "Read this room's scheduled tasks, reminders, proposals and execution history.",
+    description: "Read this room's automations and available recipient IDs. Schedules run only while the hub is running. Completed means the assigned agent turn finished, not that its business goal was verified. Use propose_automation to suggest a change; only the human can apply it.",
+    inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true },
+  },
+  {
+    name: "propose_automation", exposure: "deferred",
+    summary: "Propose a room reminder or scheduled agent task for the human to review and apply.",
+    description: "Propose a complete automation definition; nothing is scheduled until the human applies it in Automations. Read list_automations first for recipient IDs and current revisions. For an edit include id and revision. Choose one agent; existing room permissions, Hush, mute and busy states still apply. No shell scripts or permission bypass. Event first-human-message fires once per day in timeZone; room-start means hub startup. Cron has five fields and an IANA time zone; once.at is an ISO timestamp with explicit offset or epoch milliseconds. catchUp=once coalesces missed occurrences; skip discards occurrences more than one minute late. Run now is a human action, not this operation.",
+    inputSchema: { type: "object", required: ["definition", "why"], properties: {
+      id: { type: "string", minLength: 1, maxLength: 100 }, revision: { type: "integer", minimum: 1 },
+      why: { type: "string", minLength: 1, maxLength: 1000 },
+      definition: { type: "object", additionalProperties: false, required: ["name", "action", "text", "targetId", "schedule", "enabled", "catchUp", "wakeOffline", "maxMinutes"], properties: {
+        name: { type: "string", minLength: 1, maxLength: 100 }, action: { type: "string", enum: ["reminder", "agent"] },
+        text: { type: "string", minLength: 1, maxLength: 8000 }, targetId: { type: ["string", "null"], maxLength: 100 },
+        enabled: { type: "boolean" }, wakeOffline: { type: "boolean" }, catchUp: { type: "string", enum: ["once", "skip"] }, maxMinutes: { type: "integer", minimum: 1, maximum: 1440 },
+        schedule: { oneOf: [
+          { type: "object", additionalProperties: false, required: ["kind", "at"], properties: { kind: { const: "once" }, at: { anyOf: [{ type: "integer", minimum: 0 }, { type: "string", maxLength: 40 }] } } },
+          { type: "object", additionalProperties: false, required: ["kind", "minutes"], properties: { kind: { const: "interval" }, minutes: { type: "integer", minimum: 1, maximum: 525600 } } },
+          { type: "object", additionalProperties: false, required: ["kind", "expression", "timeZone"], properties: { kind: { const: "cron" }, expression: { type: "string", minLength: 1, maxLength: 120 }, timeZone: { type: "string", minLength: 1, maxLength: 100 } } },
+          { type: "object", additionalProperties: false, required: ["kind", "event", "timeZone"], properties: { kind: { const: "event" }, event: { type: "string", enum: ["first-human-message", "room-start"] }, timeZone: { type: "string", minLength: 1, maxLength: 100 } } },
+        ] },
+      } },
+    } }, annotations: { readOnlyHint: false, destructiveHint: false },
+  },
+  {
     name: "memory",
     exposure: "direct",
     summary: "Read and revise durable user preferences and room conventions in shared memory.",

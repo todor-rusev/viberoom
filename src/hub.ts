@@ -1,7 +1,10 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
 import { EventEmitter } from "node:events";
-import { randomBytes } from "node:crypto";
+import { AutomationStore } from "./automation-store.js";
+import { Automations } from "./automations.js";
+import { parseAutomation, parseSchedule, previewSchedule } from "./automation-schedule.js";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { writeFileAtomic } from "./atomic.js";
 import { commitFiles, recoverFileTransactions, type FileChange } from "./file-transaction.js";
@@ -29,6 +32,7 @@ import { LookLibrary, checkLookSpec, loadTokens, type LookCheck, type LookSpec }
 import { ChannelRouter, type ChannelsView } from "./channels/router.js";
 import { ChannelsStore, fileRootRefusal, type FileRoot } from "./channels/state.js";
 import { TelegramAdapter, TelegramApiError } from "./channels/telegram.js";
+import type { AutostartStatus } from "./autostart.js";
 
 export interface VendorPreset {
   model: string | null;
@@ -111,6 +115,7 @@ export interface SecretRequest {
 }
 
 export type HubEvent =
+  | { type: "automations"; pending: Record<string, number> }
   | { type: "update"; update: UpdateInfo }
   | { type: "agent.updates"; updates: AgentUpdatesView }
   | { type: "room.event"; roomId: string; event: RoomEvent }
@@ -119,6 +124,7 @@ export type HubEvent =
   | { type: "rooms.opened"; roomIds: string[] }
   | { type: "secret"; request: SecretRequest }
   | { type: "settings"; settings: ProgramSettings }
+  | { type: "autostart"; autostart: AutostartStatus }
   | { type: "skills"; skills: SkillMeta[] }
   | { type: "templates" }
   | { type: "looks"; looks: LookSpec[] }
@@ -203,6 +209,10 @@ const SHUTDOWN_STAGE_MS = 5_000;
 const ROOM_AGENT_MS = 1_000;
 
 export class Hub extends EventEmitter {
+  automations: Automations | null = null;
+  private automationsUnavailable = "";
+  private automationsStarted = false;
+  private readonly automationBoot = randomUUID();
   readonly dataDir: string;
   readonly requestDiagnostics = new RequestTraceRing();
   readonly rooms = new Map<string, Room>();
@@ -302,6 +312,14 @@ export class Hub extends EventEmitter {
     this.settings = this.loadSettings(initialHumanName);
     if (options.backgroundAgentChecks !== false) this.agents.start();
     this.loadRooms();
+    try {
+      const store = new AutomationStore(join(this.dataDir, "automations.sqlite"));
+      const assignedRoom = (key: string) => [...this.rooms.values()].find(room => room.uuid === key);
+      this.automations = new Automations(store, {
+        prepare: job => assignedRoom(job.roomKey)?.prepareAutomation(job) ?? Promise.resolve("The room no longer exists."),
+        execute: (run, signal) => assignedRoom(run.roomKey)?.executeAutomation(run, signal) ?? Promise.resolve({ status: "interrupted", detail: "The room was removed." }),
+      }, () => this.automationsChanged(), message => this.log.warn(message));
+    } catch (error) { this.automationsUnavailable = `Automations are unavailable: ${error instanceof Error ? error.message : String(error)}`; this.log.warn(this.automationsUnavailable); }
     this.tellRoomsWhatEndedTheLastRun();
     if (this.renamedAttachments) this.saveRooms();
     this.channelsStore = new ChannelsStore(join(this.dataDir, "channels.json"));
@@ -389,6 +407,18 @@ export class Hub extends EventEmitter {
   }
 
   private bootRooms: Promise<string[]> | null = null;
+  private servicesStarted: Promise<string[]> | null = null;
+
+  startServices(options: { url: string; run: { id: string; build: string }; afterRestart?: boolean; reconnectMode?: "load" | "replay" }): Promise<string[]> {
+    if (this.servicesStarted) return this.servicesStarted;
+    this.setRun(options.run);
+    this.setHubUrl(options.url);
+    this.startBackups();
+    void this.startChannels();
+    if (options.afterRestart) this.noteBackAfterRestart(options.run.build);
+    const mode = options.reconnectMode;
+    return this.servicesStarted = this.startRoomsAtBoot(mode ? (room, id) => room.reconnect(id, { mode }) : undefined, { afterRestart: options.afterRestart });
+  }
 
   startRoomsAtBoot(reconnect: (room: Room, id: string) => Promise<unknown> = (room, id) => room.reconnect(id, { mode: this.reconnectModeFor(room) }), options: { afterRestart?: boolean } = {}): Promise<string[]> {
     return this.bootRooms ??= this.restoreRoomsAtBoot(reconnect, options.afterRestart === true);
@@ -467,9 +497,10 @@ export class Hub extends EventEmitter {
       ? `${input.askedBy} asked${where} for viberoom to restart when ${nameList(waiting)} ${waiting.length > 1 ? "finish" : "finishes"}.`
       : `${input.askedBy} asked${where} for viberoom to restart now; a reply being written this moment is cut short.`);
     this.announceRestart();
+    const accepted = this.restartPending()!;
     if (waiting.length) this.restart.timer = setInterval(() => this.checkRestart(), RESTART_POLL_MS).unref();
     else this.goRestart();
-    return this.restartPending()!;
+    return accepted;
   }
 
   restartNow(by: string): void {
@@ -688,6 +719,81 @@ export class Hub extends EventEmitter {
 
   setHubUrl(url: string): void {
     this.hubUrl = url.replace(/\/+$/, "");
+    if (this.automations && !this.automationsStarted) {
+      this.automationsStarted = true;
+      for (const room of this.rooms.values()) this.automationEvent(room, "room-start");
+      this.automations.start();
+    }
+  }
+
+  private automationEvent(room: Room, event: "first-human-message" | "room-start"): void {
+    try {
+      if (this.automations?.store.event(room.uuid, event, this.automationBoot, Date.now())) this.automationsChanged();
+    } catch (error) { this.log.warn(`Automation event could not be recorded: ${String(error)}`); }
+  }
+
+  private automationPending(): Record<string, number> {
+    try { return Object.fromEntries([...this.rooms.values()].map(room => [room.id, room.readOnly ? 0 : this.automations?.store.proposals(room.uuid).filter(p => p.status === "pending").length ?? 0])); }
+    catch { return {}; }
+  }
+  private automationsChanged(): void { this.emit("event", { type: "automations", pending: this.automationPending() } satisfies HubEvent); }
+
+  private automationStore(): AutomationStore {
+    if (!this.automations) throw new Error(this.automationsUnavailable || "Automations are unavailable.");
+    return this.automations.store;
+  }
+  automationView(roomId: string) {
+    const room = this.getRoom(roomId), store = this.automations?.store;
+    if (room.readOnly) throw new Error("Resolve the room's history decision before accessing automations.");
+    if (!store) return { available: false, error: this.automationsUnavailable, jobs: [], runs: [], proposals: [] };
+    return { available: true, error: this.automations!.error, participants: [...room.participants.values()].filter(p => p.kind === "agent" && p.status !== "left").map(p => ({ id: p.id, name: p.name, status: p.status, muted: !!p.muted })), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, now: Date.now(), jobs: store.jobs(room.uuid),
+      runs: store.runs(room.uuid).map(run => ({ ...run, stopping: this.automations!.stopping(run.id) })),
+      proposals: store.proposals(room.uuid).filter(proposal => proposal.status === "pending") };
+  }
+  previewAutomation(roomId: string, schedule: unknown) {
+    this.getRoom(roomId);
+    const parsed = parseSchedule(schedule);
+    return { schedule: parsed, times: previewSchedule(parsed, Date.now()) };
+  }
+  saveAutomation(roomId: string, raw: unknown, id: string | null, revision: number | null) {
+    const room = this.getRoom(roomId), parsed = parseAutomation(raw, Date.now(), !id);
+    this.validateAutomationTarget(room, parsed.targetId);
+    const job = this.automationStore().save(room.uuid, parsed, id, revision, Date.now());
+    this.automationsChanged(); return job;
+  }
+  private validateAutomationTarget(room: Room, targetId: string | null): void {
+    if (room.readOnly) throw new Error("Resolve the room's history decision before changing automations.");
+    if (!targetId) return;
+    const participant = room.participants.get(targetId);
+    if (!participant || participant.kind !== "agent" || participant.status === "left") throw new Error("Choose a vibemate in this room.");
+  }
+  proposeAutomation(roomId: string, participantId: string, raw: unknown, why: string, id: string | null, revision: number | null) {
+    const room = this.getRoom(roomId), parsed = parseAutomation(raw);
+    this.validateAutomationTarget(room, parsed.targetId);
+    const participant = room.participants.get(participantId);
+    if (!participant || participant.kind !== "agent") throw new Error("Unknown proposing participant.");
+    const proposal = this.automationStore().propose(room.uuid, participant.name, why, parsed, id, revision, Date.now());
+    room.automationNotice(`${participant.name} proposed an automation: ${parsed.name}. Review it in Automations.`);
+    this.automationsChanged(); return proposal;
+  }
+  automationAction(roomId: string, action: string, id: string, revision?: number, apply?: boolean) {
+    const room = this.getRoom(roomId), store = this.automationStore();
+    if (room.readOnly) throw new Error("Resolve the room's history decision before changing automations.");
+    let result: unknown = { ok: true };
+    if (action === "run") {
+      if (store.get(room.uuid, id).revision !== revision) throw new Error("This automation changed. Review it before running.");
+      result = store.manual(room.uuid, id, Date.now());
+    }
+    else if (action === "delete") store.remove(room.uuid, id, Number(revision), Date.now());
+    else if (action === "cancel") this.automations!.cancel(room.uuid, id);
+    else if (action === "resolve") {
+      const proposal = store.proposals(room.uuid).find(p => p.id === id);
+      if (apply && proposal) this.validateAutomationTarget(room, proposal.definition.targetId);
+      result = store.resolve(room.uuid, id, apply === true, Date.now());
+    } else throw new Error("Unknown automation action.");
+    this.automationsChanged();
+    queueMicrotask(() => { void this.automations?.tick(); });
+    return result;
   }
 
   resolveMcpToken(token: string): { room: Room; participantId: string } | null {
@@ -1156,6 +1262,7 @@ export class Hub extends EventEmitter {
       this.emit("event", { type: "room.event", roomId: id, event } satisfies HubEvent);
       if (event.type === "participant" || event.type === "participant.removed" || event.type === "room") this.saveRooms();
     });
+    room.on("humanActivity", () => this.automationEvent(room, "first-human-message"));
     this.rooms.set(id, room);
     return room;
   }
@@ -1317,6 +1424,7 @@ export class Hub extends EventEmitter {
   async removeRoom(id: string): Promise<void> {
     const room = this.getRoom(id);
     await room.shutdown();
+    this.automations?.store.removeRoom(room.uuid);
     this.rooms.delete(id);
     try {
       this.history?.dropRoom(id);
@@ -1381,6 +1489,7 @@ export class Hub extends EventEmitter {
       settings: this.settings,
       update: this.update,
       agentUpdates: this.agents.view(),
+      automationPending: this.automationPending(),
       recipes: publicRecipes(),
       logins: this.logins.list(),
       skills: this.skills.list(),
@@ -1421,6 +1530,7 @@ export class Hub extends EventEmitter {
     if (this.channelsRetry) clearTimeout(this.channelsRetry);
     this.channelsRetry = null;
     this.leaving.abort();
+    this.automations?.stop();
     await stage("ways-in", plain, async () => {
       for (const room of this.rooms.values()) room.closeDoor();
       await this.agents.shutdown();
@@ -1436,6 +1546,7 @@ export class Hub extends EventEmitter {
       this.backupTimer = null;
       await stage("backup", plain, async () => { await this.backupHistory(); });
     }
+    await stage("automations", plain, () => this.automations?.close());
     await stage("history", plain, () => this.history.close());
     return steps;
   }
@@ -1445,7 +1556,7 @@ export class Hub extends EventEmitter {
     this.channelsRetry = null;
     this.log.warn("erasing the whole data folder on the human's request");
     for (const room of this.rooms.values()) await room.shutdown();
-    for (const id of this.rooms.keys()) this.history?.dropRoom(id);
+    for (const [id, room] of this.rooms) { this.history?.dropRoom(id); this.automations?.store.removeRoom(room.uuid); }
     this.history.memory.drop();
     this.rooms.clear();
     for (const token of this.mcpTokens.keys()) this.mcpTokens.delete(token);

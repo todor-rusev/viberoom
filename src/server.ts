@@ -1,6 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
 import { parseToolUsage } from "./tool-usage.js";
+import { automationRequest } from "./automation-schedule.js";
 import { cursorOf, type Cursor, type PageQuery } from "./history-store.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -21,16 +22,16 @@ import { keyMatches, loadOrCreateKey, openingNonce, openingValid } from "./local
 import { clearDiagnosticLogs, diagnosticLogStats } from "./diagnostic-logs.js";
 import { parseClientTraces, traceOperation, TRACE_ID_HEADER, TRACE_REPORT_PATH, TRACE_SINCE_HEADER, validTraceId, type RequestTrace } from "./mcp-diagnostics.js";
 import type { Hub, HubEvent } from "./hub.js";
-import { createReadStream, existsSync as fileExists } from "node:fs";
+import { createReadStream, existsSync as fileExists, mkdirSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { classifyOpenTarget, describeOpen, detectEditor, editorCommand, isExecutablePath, openCommand, type DetectedEditor } from "./open.js";
 import { imageMediaType, languageOf, looksBinary, parseCsv, sliceLines, viewerKind, IMAGE_VIEW_MAX_BYTES, STREAM_MAX_BYTES, VIEWER_MAX_BYTES, WINDOW_MAX_LINES } from "./viewer.js";
 import { createFolder, homeFolder, listFolders, listRoots } from "./fsbrowse.js";
-import { autostartStatus, installAutostart, type AutostartOptions } from "./autostart.js";
+import type { AutostartControl, AutostartStatus } from "./autostart.js";
 import { findingReading, recordWitness } from "./findings.js";
 import type { Shape } from "./record-fields.js";
 import { HUB_HOST, hubUrl, type StartReason } from "./launcher.js";
-import { contentTypeOf, isStoredFileName, IMAGE_MAX_BYTES, IMAGES_PER_MESSAGE, type ImageInput } from "./files.js";
+import { contentTypeOf, decodeData, isStoredFileName, saveDocument, IMAGE_MAX_BYTES, IMAGES_PER_MESSAGE, type ImageInput } from "./files.js";
 import { QUOTES_PER_MESSAGE, type QuoteInput } from "./quotes.js";
 import { commandTarget, parseRoomCommand } from "./commands.js";
 import { acceptUpgrade, type WebSocketPeer } from "./ws.js";
@@ -109,6 +110,7 @@ export interface RunningServer {
   server: Server;
   key: string;
   close(): void;
+  updateAutostart(status: AutostartStatus): void;
 }
 
 import { checkForUpdate, installUpdate, newerBuildThanRunning, restartWithNewBuild, runsFromSourceCheckout } from "./update.js";
@@ -134,7 +136,7 @@ export interface DataFolderAccess {
   narrow: () => { others: string[]; known: boolean };
 }
 
-export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo, onShutdownRequest: () => void, extras: { autostart?: AutostartOptions; dataFolder?: DataFolderAccess; run?: { startedAs: StartReason; startedAt: number } } = {}): Promise<RunningServer> {
+export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo, onShutdownRequest: () => void, extras: { autostart?: AutostartControl; dataFolder?: DataFolderAccess; run?: { startedAs: StartReason; startedAt: number } } = {}): Promise<RunningServer> {
   const transfers = new CarryTransfers(hub, info.version, log.child("carry"));
   const memory = new MemoryService(hub);
   const uiDir = fileURLToPath(new URL("../ui/", import.meta.url));
@@ -153,7 +155,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
   const dataFolder = (): unknown => (extras.dataFolder ? { path: extras.dataFolder.path, ...extras.dataFolder.state() } : null);
   const startedAt = extras.run ? extras.run.startedAt : Date.now();
   const startedAs: StartReason = extras.run ? extras.run.startedAs : "by-hand";
-  const snapshot = (): unknown => ({ ...(snapshotForWindow(hub.snapshot()) as Record<string, unknown>), autostart: extras.autostart ? autostartStatus(extras.autostart) : null, dataFolder: dataFolder(), version: { ...info, pid: process.pid, startedAt, startedAs } });
+  const snapshot = (): unknown => ({ ...(snapshotForWindow(hub.snapshot()) as Record<string, unknown>), autostart: extras.autostart?.status() ?? null, dataFolder: dataFolder(), version: { ...info, pid: process.pid, startedAt, startedAs } });
 
   const broadcast = (event: HubEvent): void => {
     const json = JSON.stringify(eventForWindow(event));
@@ -714,6 +716,13 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    const automationGet = req.method === "GET" && path.match(/^\/api\/rooms\/([^/]+)\/automations$/);
+    if (automationGet) { sendJson(res, 200, hub.automationView(decodeURIComponent(automationGet[1]))); return; }
+    if (req.method === "GET" && path === "/api/mcp/automations") {
+      const target = hub.resolveMcpToken(url.searchParams.get("token") ?? "");
+      if (!target) { sendJson(res, 403, { error: "This agent session is no longer available." }); return; }
+      sendJson(res, 200, { ...hub.automationView(target.room.id), participants: [...target.room.participants.values()].filter(p => p.kind === "agent" && p.status !== "left").map(p => ({ id: p.id, name: p.name, status: p.status, muted: !!p.muted })), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, now: Date.now() }); return;
+    }
     const roomGet = req.method === "GET" && path.match(/^\/api\/rooms\/([^/]+)$/);
     if (roomGet) {
       const room = hub.getRoom(decodeURIComponent(roomGet[1]));
@@ -761,6 +770,21 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     }
 
     const body = (await readJson(req)) as Record<string, unknown>;
+    const automationPost = path.match(/^\/api\/rooms\/([^/]+)\/automations\/(save|preview|run|delete|cancel|resolve)$/);
+    if (automationPost) {
+      const roomId = decodeURIComponent(automationPost[1]), action = automationPost[2];
+      automationRequest(body, action);
+      if (action === "save") sendJson(res, 200, hub.saveAutomation(roomId, body.definition, typeof body.id === "string" ? body.id : null, typeof body.revision === "number" ? body.revision : null));
+      else if (action === "preview") sendJson(res, 200, hub.previewAutomation(roomId, body.schedule));
+      else sendJson(res, 200, hub.automationAction(roomId, action, String(body.id ?? ""), typeof body.revision === "number" ? body.revision : undefined, body.apply === true));
+      return;
+    }
+    if (path === "/api/mcp/automations/propose") {
+      const target = hub.resolveMcpToken(typeof body.token === "string" ? body.token : "");
+      if (!target) { sendJson(res, 403, { error: "This agent session is no longer available." }); return; }
+      automationRequest(body, "propose", true);
+      sendJson(res, 200, hub.proposeAutomation(target.room.id, target.participantId, body.definition, String(body.why ?? ""), typeof body.id === "string" ? body.id : null, typeof body.revision === "number" ? body.revision : null)); return;
+    }
     if (path === "/api/agents/updates/check") {
       await hub.agents.checkUpdates(true);
       sendJson(res, 200, { updates: hub.agents.view() }); return;
@@ -822,7 +846,9 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     if (path === "/api/autostart") {
       if (!extras.autostart) throw new Error("autostart is not available for this room");
-      sendJson(res, 200, { ok: true, autostart: installAutostart(extras.autostart, body.enabled === true) });
+      const autostart = await extras.autostart.setEnabled(body.enabled === true);
+      broadcast({ type: "autostart", autostart });
+      sendJson(res, 200, { ok: true, autostart });
       return;
     }
 
@@ -944,6 +970,21 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
           said,
         });
         log.warn(`a window went blank under itself: ${finding.blankPx ?? "?"} px of ${finding.listPx ?? "?"} in ${room.name} (${finding.stage ?? "?"})`);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (String(body.kind) === "end-jump") {
+        const { kind: _kind, roomId: _roomId, ...said } = body;
+        const writing = room.messages.filter((m) => m.streaming).map((m) => m.from);
+        const finding = recordWitness(hub.dataDir, {
+          kind: "end-jump",
+          key: `end-jump:${roomId}:${Date.now()}`,
+          ours: { room: room.name, roomId, writing },
+          shape: END_JUMP,
+          said,
+        });
+        log.warn(`a window moved to the end while the human was reading: ${finding.why ?? "?"} (${finding.fromEnd ?? "?"} px above the end, room ${room.name})`);
         sendJson(res, 200, { ok: true });
         return;
       }
@@ -1258,13 +1299,19 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
-    const roomAction = path.match(/^\/api\/rooms\/([^/]+)\/(send|typing|invite|settings|focus|rename|dir|delete|open|template-preview|save-template)$/);
+    const roomAction = path.match(/^\/api\/rooms\/([^/]+)\/(send|files|typing|invite|settings|focus|rename|dir|delete|open|template-preview|save-template)$/);
     if (roomAction) {
       const room = hub.getRoom(decodeURIComponent(roomAction[1]));
       const action = roomAction[2];
       if (action === "open") {
         hub.markOpened(room.id);
         sendJson(res, 200, { ok: true, openRooms: hub.openRooms });
+      } else if (action === "files") {
+        const data = typeof body.data === "string" ? body.data : "";
+        if (!data) throw new Error("the file has no content");
+        mkdirSync(room.filesDir(), { recursive: true });
+        const saved = saveDocument(room.filesDir(), optionalString(body.name) ?? undefined, decodeData(data, "the file"));
+        sendJson(res, 200, { ok: true, file: saved.file, path: saved.path, line: `📎 ${saved.file} — ${saved.path}` });
       } else if (action === "send") {
         const text = String(body.text ?? "");
         const command = parseRoomCommand(text);
@@ -1474,6 +1521,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         url,
         server,
         key: localKey.value,
+        updateAutostart: autostart => broadcast({ type: "autostart", autostart }),
         close: () => {
           const cleanup = transfers.close().catch(error => log.warn(`transfer cleanup: ${error instanceof Error ? error.message : String(error)}`));
           clearInterval(heartbeat);
@@ -1526,6 +1574,18 @@ const BLANK_FRAGMENT: Shape = {
       },
     },
   },
+};
+
+const END_JUMP: Shape = {
+  why: { kind: "string", max: 200 },
+  fromEnd: { kind: "number", min: 0 },
+  scrollTop: { kind: "number", min: 0 },
+  readingAway: { kind: "boolean" },
+  streaming: { kind: "boolean" },
+  holdsText: { kind: "boolean" },
+  msgs: { kind: "integer", min: 0 },
+  anchorId: { kind: "string", max: 64 },
+  into: { kind: "number" },
 };
 
 const HELD_LIVE: Shape = {

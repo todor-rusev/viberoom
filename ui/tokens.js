@@ -538,6 +538,8 @@
       bg: p.soft,
       attentionInk: p.warmInk,
       attentionBg: p.warm,
+      errorInk: p.roseInk,
+      errorBg: p.rose,
       fs: "calc(12px * var(--fs-scale))",
     },
     loginDialog: {

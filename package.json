@@ -1,6 +1,6 @@
 {
   "name": "viberoom",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "viberoom: bring your AI assistants together in one conversation",
   "type": "module",
   "engines": {
@@ -32,6 +32,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
     "ajv": "8.20.0",
+    "cron-parser": "5.10.1",
     "marked": "^16.4.2",
     "prismjs": "^1.30.0",
     "zod": "^4.6.5"
@@ -41,6 +42,7 @@
     "@agentclientprotocol/codex-acp": "1.12.0",
     "@anthropic-ai/claude-agent-sdk": "0.3.276",
     "@types/node": "^24.0.0",
+    "jsdom": "26.1.0",
     "mermaid": "^11.17.2",
     "typescript": "^5.9.0"
   },

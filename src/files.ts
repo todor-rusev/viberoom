@@ -51,13 +51,14 @@ export function contentTypeOf(file: string): string {
   return "application/octet-stream";
 }
 
-function decode(data: string): Buffer {
+export function decodeData(data: string, what = "the image"): Buffer {
   const comma = data.startsWith("data:") ? data.indexOf(",") : -1;
   const base64 = comma >= 0 ? data.slice(comma + 1) : data;
   const buffer = Buffer.from(base64, "base64");
-  if (!buffer.length) throw new Error("the image is empty");
+  if (!buffer.length) throw new Error(`${what} is empty`);
   return buffer;
 }
+const decode = (data: string): Buffer => decodeData(data);
 
 function labelFor(name: string | undefined, ext: string, hash: string): string {
   const trimmed = (name ?? "").trim().replace(/[\r\n\t]/g, " ");
@@ -81,7 +82,7 @@ export function saveImage(dir: string, input: ImageInput): Attachment {
   return attachment;
 }
 
-const FILE_MAX_BYTES = 20 * 1024 * 1024;
+export const FILE_MAX_BYTES = 20 * 1024 * 1024;
 
 export function saveDocument(dir: string, name: string | undefined, data: Buffer): { path: string; file: string } {
   if (!data.length) throw new Error("the file is empty");
