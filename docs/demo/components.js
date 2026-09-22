@@ -3,6 +3,27 @@
   "use strict";
   const UI = globalThis.UI;
 
+  UI.define("settings-group", {
+    group: "settingsGroup",
+    describe: "A named settings group on its own paper; the native heading folds it without removing any fields or changing their values.",
+    props: {
+      id: { type: "string", required: true },
+      title: { type: "string", required: true },
+      body: { type: "node", required: true },
+      open: { type: "boolean", default: true },
+      tone: { type: "enum", values: ["plain", "danger"], default: "plain" },
+    },
+    build: ({ id, title, body, open, tone }, ui) => ui.h("details", { id, class: "section", open, "data-tone": tone },
+      ui.h("summary", {}, ui.h("h4", {}, title), ui.h("span", { class: "chev", "aria-hidden": "true" }, ui.icon("down"))),
+      ui.h("div", { class: "group-body" }, body)),
+    states: ["rest"],
+    samples: [
+      { label: "open", props: { id: "sample-settings-open", title: "Room", body: UI.raw('<p class="hint">Choose a name and a topic for this room.</p>') } },
+      { label: "closed", props: { id: "sample-settings-closed", title: "Start and restart", body: UI.raw('<p class="hint">Choose how this room comes back.</p>'), open: false } },
+      { label: "danger", props: { id: "sample-settings-danger", title: "Danger zone", body: UI.raw('<p class="hint">Actions that remove this room.</p>'), tone: "danger" } },
+    ],
+  });
+
   UI.define("logo-tile", {
     group: "logoTile",
     describe: "A vendor's mark on a tile: the vendor's own drawing laid over the look's ink through a mask, so it reads on any paper; a letter stands in where there is no drawing, a glyph from the icon set for the marks the room adds (muted). As a badge it sits in a face's corner.",
@@ -49,7 +70,8 @@
     },
     build: ({ name, label, color, size, emoji, badge, status, me, kind, ring, alert, dim, title }, ui) =>
       ui.h("span", { class: "avatar", role: "img", "aria-label": name, title, "data-kind": kind !== "tile" ? kind : null, "data-me": me || null, "data-ring": ring || null, "data-alert": alert || null, "data-dim": dim || null, style: `--face-color:${color};--face-size:${size}px;width:${size}px;height:${size}px` },
-        ui.h("span", { class: "tile", "data-emoji": emoji || null, style: `font-size:${Math.round(emoji ? size * 0.56 : size * 0.38)}px` }, label),
+        ui.h("span", { class: "tile", "data-emoji": emoji || null, style: `font-size:${Math.round(emoji ? size * 0.56 : size * 0.38)}px` },
+          ui.h("span", { class: "glyph" }, label)),
         badge,
         status ? ui.h("span", { class: "status", "data-status": status }) : null),
     states: ["rest"],
@@ -430,15 +452,18 @@
       open: { type: "boolean", default: false, note: "open, the card shows the call; the body is built only then" },
       input: { type: "string", note: "shown up to 4000 characters" },
       output: { type: "string" },
+      loadState: { type: "enum", values: ["ready", "loading", "error"], default: "ready" },
     },
-    build: ({ id, title, kind, variant, status, open, input, output }, ui) =>
+    build: ({ id, title, kind, variant, status, open, input, output, loadState }, ui) =>
       ui.h("div", { "data-status": status, "data-state": open ? "open" : null, "data-variant": variant !== "tool" ? variant : null },
         ui.build("chip", { label: variant !== "tool" ? title : `${title}${kind ? ` · ${kind}` : ""} · ${status}`, icon: variant === "message-check" ? "inbox" : variant === "history-search" ? "search" : "tool", tone: TOOL_TONE[status] || "plain", button: true, title: open ? "Collapse" : "Expand", data: { tool: id } }),
         open
           ? ui.h("div", { class: "body" },
+              loadState === "loading" ? ui.h("div", { class: "sec quiet", role: "status" }, "Loading tool details…") : null,
+              loadState === "error" ? ui.h("div", { class: "sec quiet", role: "status" }, "Could not load tool details. ", ui.h("button", { type: "button", "data-tool-retry": id }, "Try again")) : null,
               ui.h("div", { class: "sec" }, ui.h("b", null, "call"), ui.h("pre", null, title)),
               input ? ui.h("div", { class: "sec" }, ui.h("b", null, "input"), ui.h("pre", null, input.slice(0, 4000))) : null,
-              output ? ui.h("div", { class: "sec" }, ui.h("b", null, "output"), ui.h("pre", null, output)) : ui.h("div", { class: "sec quiet" }, "no output recorded"))
+              output ? ui.h("div", { class: "sec" }, ui.h("b", null, "output"), ui.h("pre", null, output)) : loadState === "ready" ? ui.h("div", { class: "sec quiet" }, "no output recorded") : null)
           : null),
     states: ["rest"],
     samples: [
@@ -510,7 +535,7 @@
 
   UI.define("login-dialog", {
     group: "loginDialog",
-    describe: "A vendor's sign-in or install, from any place in the room, in one modal (U147): the vendor's mark and a title, a scene (one drawing: a browser opening, a code to type, a question, a terminal, a package coming in, done, failed) that says what happens, one sentence, the task itself when there is one (a page to open, a code to type, a question to answer), the vendor's own lines behind 'for geeks', and the way out. viberoom never sees a password or a key: the vendor signs the human in, this dialog shows what it says.",
+    describe: "A vendor's sign-in or install, from any place in the room, in one modal (U147): the vendor's mark and a title, a scene (one drawing: a browser opening, a code to type, a question, a terminal, a package coming in, done, failed) that says what happens, one sentence, the task itself when there is one (a page to open, a code to type, a question to answer), the vendor's own lines behind 'for geeks', and the way out. The vendor handles sign-in; this dialog displays its output and forwards any answers entered here.",
     props: {
       vendor: { type: "string", required: true },
       icon: { type: "string", note: "the vendor's drawing (a recipe's icon); a letter without" },
@@ -518,6 +543,8 @@
       state: { type: "enum", values: ["idle", "running", "done", "failed", "cancelled"], required: true, note: "idle: nothing started yet" },
       scene: { type: "enum", values: ["browser", "code", "question", "terminal", "package", "done", "failed"], required: true },
       words: { type: "string", required: true, note: "one sentence: what happens, or what happened" },
+      confirmed: { type: "boolean", default: false, note: "a fresh vendor check confirmed readiness" },
+      checking: { type: "boolean", default: false, note: "the vendor check is still running" },
       status: { type: "string", note: "the vendor's own word on its state, under the title" },
       kind: { type: "enum", values: ["command", "acp", "terminal", "url"], default: "command", note: "terminal: the human finishes in a window and presses I'm done; url: the vendor's page" },
       url: { type: "string", note: "the page to open" },
@@ -529,12 +556,12 @@
       flowId: { type: "string" },
       data: { type: "object" },
     },
-    build: ({ vendor, icon, purpose, state, scene, words, status, kind, url, code, wantsInput, lines, geek, terminal, flowId, data }, ui) => {
+    build: ({ vendor, icon, purpose, state, scene, words, confirmed, checking, status, kind, url, code, wantsInput, lines, geek, terminal, flowId, data }, ui) => {
       const installing = purpose === "install";
       const running = state === "running";
       const title = installing
         ? (state === "done" ? `${vendor} is installed` : state === "failed" ? `${vendor} was not installed` : `Install ${vendor}`)
-        : (state === "done" ? `${vendor} is logged in` : state === "failed" ? `${vendor} did not sign you in` : `Log in to ${vendor}`);
+        : (state === "done" ? confirmed ? `${vendor} is ready` : `${vendor}: check sign-in` : state === "failed" ? `${vendor} did not sign you in` : `Log in to ${vendor}`);
       const startLabel = installing
         ? (kind === "terminal" ? `Open a terminal to install ${vendor}` : kind === "url" ? "Open the page" : `Install ${vendor}`)
         : (kind === "terminal" ? `Open a terminal to sign in` : `Log in to ${vendor}`);
@@ -548,6 +575,10 @@
         if (kind === "terminal") foot.push(ui.build("button", { label: "I'm done", kind: "primary", act: "recheck-login", icon: "check" }));
         foot.push(ui.build("button", { label: "Cancel", kind: "ghost", act: "cancel-login" }));
       } else if (state === "done") {
+        if (!confirmed) {
+          foot.push(ui.build("button", { label: checking ? "Checking…" : "Check again", disabled: checking, kind: "paper", act: "recheck-login", icon: "refresh" }));
+          if (!checking) foot.push(ui.build("button", { label: "Open sign-in", kind: "paper", act: "start-login", icon: "lock" }));
+        }
         foot.push(ui.build("button", { label: "Close", kind: "primary", act: "close-login" }));
       } else {
         foot.push(ui.build("button", { label: "Try again", kind: "primary", act: "retry-login", icon: "refresh" }));
@@ -587,7 +618,7 @@
     describe: "A line the room attaches to a reply, inside its bubble: an adapter's notice before the words, or the fact that the reply was stopped, right after them. The words stay; the note says what happened to them.",
     props: {
       text: { type: "string", required: true },
-      tone: { type: "enum", values: ["info", "attention"], default: "info", note: "info: a quiet fact; attention: something that changed the reply" },
+      tone: { type: "enum", values: ["info", "attention", "error"], default: "info", note: "info: a quiet fact; attention: something that changed the reply; error: the reply's turn failed" },
       icon: { type: "icon", default: "info" },
       hook: { type: "string" },
     },
@@ -595,6 +626,7 @@
     states: ["rest"],
     samples: [
       { label: "a quiet fact", props: { text: "This reply was written in plan mode." } },
+      { label: "the turn failed", props: { text: "The turn failed after this: usage limit reached", tone: "error", icon: "alert" } },
       { label: "an adapter's notice", props: { text: "Auto mode is unavailable for this account; running in the default mode.", tone: "attention" } },
       { label: "stopped", props: { text: "Stopped by Sam", tone: "attention", icon: "stop" } },
     ],

@@ -318,6 +318,11 @@
   --tool-call-fs: calc(12px * var(--fs-scale));
   --tool-call-pre-fs: calc(11.5px * var(--fs-scale));
   --tool-call-label-fs: calc(10.5px * var(--fs-scale));
+  --settings-group-bg: #2c2e56;
+  --settings-group-ink: #f1efff;
+  --settings-group-heading-ink: #8a8aff;
+  --settings-group-danger-bg: #401c1e;
+  --settings-group-danger-ink: #ff7a70;
   --tool-fold-ink: #a4a2cc;
   --tool-fold-bg: #262848;
   --tool-fold-hover-bg: #2c2e56;
@@ -338,6 +343,8 @@
   --reply-note-bg: #262848;
   --reply-note-attention-ink: #f5c94f;
   --reply-note-attention-bg: #46381a;
+  --reply-note-error-ink: #ff7a70;
+  --reply-note-error-bg: #401c1e;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #f1efff;
   --login-dialog-quiet-ink: #a4a2cc;
@@ -924,6 +931,11 @@
   --tool-call-fs: calc(12px * var(--fs-scale));
   --tool-call-pre-fs: calc(11.5px * var(--fs-scale));
   --tool-call-label-fs: calc(10.5px * var(--fs-scale));
+  --settings-group-bg: #ebe7db;
+  --settings-group-ink: #1f1e1d;
+  --settings-group-heading-ink: #d97757;
+  --settings-group-danger-bg: #f9e3df;
+  --settings-group-danger-ink: #c24d43;
   --tool-fold-ink: #8a8577;
   --tool-fold-bg: #f7f5ef;
   --tool-fold-hover-bg: #ebe7db;
@@ -944,6 +956,8 @@
   --reply-note-bg: #f7f5ef;
   --reply-note-attention-ink: #9a6b0f;
   --reply-note-attention-bg: #fbeecf;
+  --reply-note-error-ink: #c24d43;
+  --reply-note-error-bg: #f9e3df;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #1f1e1d;
   --login-dialog-quiet-ink: #8a8577;
@@ -1530,6 +1544,11 @@
   --tool-call-fs: calc(12px * var(--fs-scale));
   --tool-call-pre-fs: calc(11.5px * var(--fs-scale));
   --tool-call-label-fs: calc(10.5px * var(--fs-scale));
+  --settings-group-bg: #e8e1d3;
+  --settings-group-ink: #2b2a27;
+  --settings-group-heading-ink: #2f6f68;
+  --settings-group-danger-bg: #f2e0dc;
+  --settings-group-danger-ink: #a34a3f;
   --tool-fold-ink: #6f6b62;
   --tool-fold-bg: #f4efe5;
   --tool-fold-hover-bg: #e8e1d3;
@@ -1550,6 +1569,8 @@
   --reply-note-bg: #f4efe5;
   --reply-note-attention-ink: #7d5f12;
   --reply-note-attention-bg: #f4e9cf;
+  --reply-note-error-ink: #a34a3f;
+  --reply-note-error-bg: #f2e0dc;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #2b2a27;
   --login-dialog-quiet-ink: #6f6b62;
@@ -2136,6 +2157,11 @@
   --tool-call-fs: calc(12px * var(--fs-scale));
   --tool-call-pre-fs: calc(11.5px * var(--fs-scale));
   --tool-call-label-fs: calc(10.5px * var(--fs-scale));
+  --settings-group-bg: #f1e4d2;
+  --settings-group-ink: #5a3e36;
+  --settings-group-heading-ink: #917ad8;
+  --settings-group-danger-bg: #f7c9d8;
+  --settings-group-danger-ink: #c2456f;
   --tool-fold-ink: #8f7a6e;
   --tool-fold-bg: #fdf7ec;
   --tool-fold-hover-bg: #f1e4d2;
@@ -2156,6 +2182,8 @@
   --reply-note-bg: #fdf7ec;
   --reply-note-attention-ink: #8a6a1c;
   --reply-note-attention-bg: #fbe4a4;
+  --reply-note-error-ink: #c2456f;
+  --reply-note-error-bg: #f7c9d8;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #5a3e36;
   --login-dialog-quiet-ink: #8f7a6e;
@@ -2742,6 +2770,11 @@
   --tool-call-fs: calc(12px * var(--fs-scale));
   --tool-call-pre-fs: calc(11.5px * var(--fs-scale));
   --tool-call-label-fs: calc(10.5px * var(--fs-scale));
+  --settings-group-bg: #172019;
+  --settings-group-ink: #d7e3d9;
+  --settings-group-heading-ink: #3ddc84;
+  --settings-group-danger-bg: #3a1512;
+  --settings-group-danger-ink: #ff6b5e;
   --tool-fold-ink: #7c9282;
   --tool-fold-bg: #131a15;
   --tool-fold-hover-bg: #172019;
@@ -2762,6 +2795,8 @@
   --reply-note-bg: #131a15;
   --reply-note-attention-ink: #f5c542;
   --reply-note-attention-bg: #3a2f0c;
+  --reply-note-error-ink: #ff6b5e;
+  --reply-note-error-bg: #3a1512;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #d7e3d9;
   --login-dialog-quiet-ink: #7c9282;
@@ -3348,6 +3383,11 @@
   --tool-call-fs: calc(12px * var(--fs-scale));
   --tool-call-pre-fs: calc(11.5px * var(--fs-scale));
   --tool-call-label-fs: calc(10.5px * var(--fs-scale));
+  --settings-group-bg: #f0f0f1;
+  --settings-group-ink: #17181a;
+  --settings-group-heading-ink: #202123;
+  --settings-group-danger-bg: #fbeeec;
+  --settings-group-danger-ink: #b3372c;
   --tool-fold-ink: #6b6d72;
   --tool-fold-bg: #f4f4f5;
   --tool-fold-hover-bg: #f0f0f1;
@@ -3368,6 +3408,8 @@
   --reply-note-bg: #f4f4f5;
   --reply-note-attention-ink: #8a6510;
   --reply-note-attention-bg: #faf1da;
+  --reply-note-error-ink: #b3372c;
+  --reply-note-error-bg: #fbeeec;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #17181a;
   --login-dialog-quiet-ink: #6b6d72;
@@ -3954,6 +3996,11 @@
   --tool-call-fs: calc(12px * var(--fs-scale));
   --tool-call-pre-fs: calc(11.5px * var(--fs-scale));
   --tool-call-label-fs: calc(10.5px * var(--fs-scale));
+  --settings-group-bg: #1c1c20;
+  --settings-group-ink: #f2f2f3;
+  --settings-group-heading-ink: #e8e8ea;
+  --settings-group-danger-bg: #3c1c1a;
+  --settings-group-danger-ink: #f08a7e;
   --tool-fold-ink: #9a9aa1;
   --tool-fold-bg: #1e1e21;
   --tool-fold-hover-bg: #1c1c20;
@@ -3974,6 +4021,8 @@
   --reply-note-bg: #1e1e21;
   --reply-note-attention-ink: #e8bd52;
   --reply-note-attention-bg: #3a3014;
+  --reply-note-error-ink: #f08a7e;
+  --reply-note-error-bg: #3c1c1a;
   --reply-note-fs: calc(12px * var(--fs-scale));
   --login-dialog-ink: #f2f2f3;
   --login-dialog-quiet-ink: #9a9aa1;

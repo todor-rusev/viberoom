@@ -7,13 +7,18 @@
   const files = DATA.files || {};
   const images = DATA.images || {};
   const READ_ONLY = "This is a recorded conversation, not a live hub: nobody is listening here. Run viberoom to talk to real vibemates.";
+  const RECORDING = (what) => `${what} on a live hub; this page is a recording of one conversation.`;
   if (window.DEMO_LOOK) state.settings.appearance = { ...state.settings.appearance, look: window.DEMO_LOOK };
   window.DEMO_QUERY = state.openRooms && state.openRooms.length ? `?room=${encodeURIComponent(state.openRooms[0])}` : "";
 
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const plain = (body, type) => new Response(body, { status: 200, headers: { "content-type": type } });
   const fail = (message, status = 400) => json({ error: message }, status);
   const sockets = new Set();
   const emit = (message) => { for (const s of sockets) if (s.onmessage) s.onmessage({ data: JSON.stringify(message) }); };
+  const changed = () => setTimeout(() => emit({ type: "snapshot", snapshot: state }), 0);
+  const roomOf = (id) => (state.rooms || []).find((r) => r.id === decodeURIComponent(id));
+  const agentsOf = (room) => (room.participants || []).filter((p) => p.kind === "agent" && p.status !== "left").map((p) => ({ id: p.id, name: p.name, status: p.status, muted: !!p.muted }));
 
   const WINDOW_MAX_LINES = 400;
   const normalise = (p) => String(p || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
@@ -70,48 +75,128 @@
     return json({ ok: true, kind: entry.kind, path: target, language: entry.language, ...sliceLines(entry.text, from, to), bytes: entry.text.length });
   };
 
+  const memoryView = () => ({
+    limits: { notes: 8, noteChars: 240, scopeChars: 1600, revisions: 20 },
+    rule: "Shared memory is written by the vibemates of a live room and reviewed by you. This recording carries none.",
+    user: { revision: 0, enabled: true, notes: [] }, room: { revision: 0, enabled: true, notes: [] },
+    warnings: { user: [], room: [] }, revisions: { user: [], room: [] },
+  });
+  const updatesView = () => ({ instance: "demo", revision: 1, checking: false, enabled: false, checkedAt: null, nextCheckAt: null, snoozeUntil: 0, updates: [], notification: null, batch: null });
+  const automationsView = (room) => ({ available: true, error: "", participants: agentsOf(room), jobs: [], runs: [], proposals: [] });
+  const search = (params) => {
+    const q = String(params.get("q") || "").trim().toLowerCase();
+    const scope = params.get("rooms") || "all";
+    const limit = Math.max(1, Math.min(200, Number(params.get("limit")) || 40));
+    const hits = [];
+    if (q) for (const room of state.rooms || []) {
+      if (scope !== "all" && room.id !== scope) continue;
+      for (const m of room.messages || []) {
+        if (m.kind !== "chat" || !m.text) continue;
+        const at = m.text.toLowerCase().indexOf(q);
+        if (at < 0) continue;
+        const start = Math.max(0, at - 60);
+        const end = Math.min(m.text.length, at + q.length + 80);
+        hits.push({ roomId: room.id, roomName: room.name, seq: m.seq, from: m.from, fromName: m.fromName, ts: m.ts, deleted: false, snippet: `${start ? "…" : ""}${m.text.slice(start, end).replace(/\s+/g, " ")}${end < m.text.length ? "…" : ""}` });
+      }
+    }
+    hits.sort((a, b) => b.ts - a.ts);
+    return json({ hits: hits.slice(0, limit), stale: false, usedTrigram: false });
+  };
+  const exportMarkdown = (room) => {
+    const lines = [`# ${room.name}`, ""];
+    for (const m of room.messages || []) {
+      if (m.kind !== "chat") continue;
+      lines.push(`**${m.fromName || m.from}** · ${new Date(m.ts).toISOString()}`, "", m.text || "", "");
+    }
+    return plain(lines.join("\n"), "text/markdown; charset=utf-8");
+  };
+
   const route = (method, path, params, body) => {
-    const room = (id) => (state.rooms || []).find((r) => r.id === decodeURIComponent(id));
+    const roomPath = path.match(/^\/api\/rooms\/([^/]+)(\/.*)?$/);
+    const room = roomPath ? roomOf(roomPath[1]) : null;
+    const rest = roomPath ? roomPath[2] || "" : "";
+    if (roomPath && !room) return fail("no such room", 404);
     if (method === "GET") {
       if (path === "/api/state") return json(state);
       if (path === "/api/version") return json(state.version || {});
       if (path === "/api/settings") return json(state.settings);
       if (path === "/api/skills") return json({ skills: state.skills || [] });
+      const skill = path.match(/^\/api\/skills\/([^/]+)$/);
+      if (skill) { const found = (state.skills || []).find((s) => s.name === decodeURIComponent(skill[1])); return found ? json({ skill: found }) : fail("no such skill", 404); }
       if (path === "/api/templates") return json({ templates: [] });
       if (path === "/api/looks") return json({ looks: state.looks || [] });
       if (path === "/api/update") return json(state.update || {});
+      if (path === "/api/memory") return json(memoryView());
+      if (path === "/api/channels") return json(state.channels);
+      if (path === "/api/search") return search(params);
+      if (path === "/api/diagnostic-logs") return json({ bytes: 0, files: 0, skipped: 0, unavailable: "A recording keeps no diagnostic details; a live hub writes them to its data folder." });
+      if (path === "/api/diagnostic-requests") return json({ recording: true, note: "This page is a recorded conversation; there were no diagnostic requests." });
       if (path === "/api/resolve") {
         const target = resolveInRoom(params.get("room"), params.get("path") || "");
         return target ? json({ ok: true, path: target, kind: "file" }) : fail("not a file of this room's folder", 404);
       }
       if (path === "/api/file") return fileAnswer(params.get("room"), params);
-      const one = path.match(/^\/api\/rooms\/([^/]+)$/);
-      if (one) { const r = room(one[1]); return r ? json(r) : fail("no such room", 404); }
       if (path === "/api/rooms") return json(state.rooms || []);
       if (path.startsWith("/api/fs/dirs")) return json({ path: "", dirs: [] });
       if (path.startsWith("/api/recipes/")) return fail(READ_ONLY);
+      if (room) {
+        if (rest === "") return json(room);
+        if (rest === "/automations") return json(automationsView(room));
+        if (rest === "/export") return exportMarkdown(room);
+        const tool = rest.match(/^\/messages\/([^/]+)\/tools\/([^/]+)$/);
+        if (tool) {
+          const message = (room.messages || []).find((m) => m.id === decodeURIComponent(tool[1]));
+          const call = message && (message.toolCalls || []).find((c) => c.toolCallId === decodeURIComponent(tool[2]));
+          return call ? json(call) : fail("This tool call is no longer available.", 404);
+        }
+        if (rest.startsWith("/history")) return fail("The whole recording is on this page already; there is no older history to load.", 404);
+        if (/^\/messages\/[^/]+\/edit-preview$/.test(rest)) return fail(RECORDING("Messages are edited"));
+      }
       return fail("not part of the recorded demo", 404);
     }
     if (path === "/api/settings") {
       const patch = body || {};
       const next = { ...state.settings };
-      if (patch.appearance && typeof patch.appearance === "object") {
-        const a = { ...next.appearance, ...patch.appearance };
-        if (patch.appearance.custom) {
-          a.custom = { ...(next.appearance.custom || {}) };
-          for (const [lookId, values] of Object.entries(patch.appearance.custom)) { if (values === null) delete a.custom[lookId]; else a.custom[lookId] = { ...(a.custom[lookId] || {}), ...values }; }
-        }
-        next.appearance = a;
+      for (const [key, value] of Object.entries(patch)) {
+        if (key === "appearance" && value && typeof value === "object") {
+          const a = { ...next.appearance, ...value };
+          if (value.custom) {
+            a.custom = { ...(next.appearance.custom || {}) };
+            for (const [lookId, values] of Object.entries(value.custom)) { if (values === null) delete a.custom[lookId]; else a.custom[lookId] = { ...(a.custom[lookId] || {}), ...values }; }
+          }
+          next.appearance = a;
+        } else if (key === "roomDefaults" && value && typeof value === "object") next.roomDefaults = { ...(next.roomDefaults || {}), ...value };
+        else next[key] = value;
       }
-      for (const key of ["diagrams", "humanName", "humanDescription", "humanAvatar", "checkForUpdates", "reconnectMode"]) if (patch[key] !== undefined) next[key] = patch[key];
       state.settings = next;
-      setTimeout(() => emit({ type: "settings", settings: next }), 0);
+      changed();
       return json({ ok: true, settings: next });
     }
-    if (path === "/api/window") return json({ ok: true });
-    if (/^\/api\/rooms\/[^/]+\/(open|typing)$/.test(path)) return json({ ok: true });
-    if (/^\/api\/rooms\/[^/]+\/send$/.test(path)) return fail(READ_ONLY);
+    if (path === "/api/window" || path === "/api/window/finding") return json({ ok: true });
+    if (path === "/api/recipes/check") return json({ ok: true });
+    if (path === "/api/agents/updates/check") return json({ updates: updatesView() });
+    if (path.startsWith("/api/agents/updates/")) return fail(RECORDING("Agents are updated"));
+    if (path === "/api/memory") return fail(RECORDING("Shared memory is edited"));
+    if (path.startsWith("/api/carry")) return fail(RECORDING("Conversations are carried between machines"));
+    if (path.startsWith("/api/channels") || path.startsWith("/api/secrets") || path === "/api/qr") return fail(RECORDING("A phone is paired"));
+    if (path.startsWith("/api/restart") || path === "/api/autostart" || path === "/api/data-folder/narrow" || path === "/api/update/install" || path === "/api/profile/erase") return fail(RECORDING("viberoom itself is managed"));
+    if (path.startsWith("/api/looks")) return fail(RECORDING("Looks are imported and kept"));
+    if (path.startsWith("/api/skills")) return fail(RECORDING("Skills are written"));
+    if (path === "/api/fs/mkdir" || path === "/api/rooms" || path === "/api/rooms/from-template") return fail(RECORDING("Rooms and folders are made"));
     if (path === "/api/open") return fail("In the demo a file cannot open on your machine; it is shown here when the room can draw it.");
+    if (room) {
+      if (rest === "/open" || rest === "/typing") return json({ ok: true });
+      const pin = rest.match(/^\/messages\/([^/]+)\/pin$/);
+      if (pin) {
+        const message = (room.messages || []).find((m) => m.id === decodeURIComponent(pin[1]));
+        if (!message) return fail("no such message", 404);
+        message.pinned = body && typeof body.pinned === "boolean" ? body.pinned : !message.pinned;
+        changed();
+        return json({ ok: true, pinned: message.pinned });
+      }
+      if (rest.startsWith("/automations/")) return fail(RECORDING("Automations are scheduled and run"));
+      if (rest === "/send" || rest === "/invite" || rest === "/save-template" || /^\/participants\//.test(rest) || /^\/messages\/[^/]+\/edit$/.test(rest)) return fail(READ_ONLY);
+    }
     return fail(READ_ONLY);
   };
 

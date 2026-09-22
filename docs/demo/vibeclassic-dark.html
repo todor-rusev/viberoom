@@ -14,6 +14,8 @@
   <link rel="stylesheet" href="looks-custom.css" id="looks-custom">
   <link rel="stylesheet" href="components.css">
   <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="automations.css">
+  <link rel="stylesheet" href="motion.css">
 </head>
 <body>
   <div id="app" class="shell view-rooms">
@@ -46,15 +48,18 @@
       <div class="side-room" id="side-room" hidden>
         <div class="side-head room">
           <button data-ui="icon-button" data-kind="ghost" data-size="sm" id="back-to-rooms" title="All rooms"><span data-icon="back"></span></button>
-          <div class="side-room-title"><h2><span id="side-room-name">Room</span> <span id="side-room-emoji"></span></h2><div class="hint" id="side-room-sub"></div></div>
+          <div class="side-room-title"><h2><span id="side-room-name">Room</span> <span id="side-room-emoji"></span></h2></div>
           <button data-ui="icon-button" data-kind="ghost" data-size="sm" id="room-settings-btn" title="Room settings"><span data-icon="settings"></span></button>
           <button data-ui="icon-button" data-kind="ghost" data-size="sm" id="side-toggle" title="Fold this column"><span data-icon="collapse"></span></button>
         </div>
         <div class="side-actions">
           <button id="invite-btn" data-ui="button" data-kind="primary" data-size="cta" data-full><span class="cta-ico" data-icon="spark"></span><span class="label">Summon a Vibemate</span></button>
         </div>
-        <div class="side-label">In this room</div>
-        <ul id="participants" class="side-list participants"></ul>
+        <div id="roster">
+          <ul id="participants-me" class="side-list participants"></ul>
+          <div id="side-room-count" class="side-label"></div>
+          <ul id="participants" class="side-list participants"></ul>
+        </div>
         <div class="side-foot">
           <button id="reconnect-all-btn" data-ui="button" data-full class="wake" hidden title="Bring offline vibemates back"><span data-icon="refresh"></span><span class="label">Wake everyone up</span></button>
           <button id="focus-btn" data-ui="button" data-full class="hush" title="Stop every running reply; vibemates stay quiet until you speak again"><span class="hush-face">🤫</span><span class="label">Hush the room</span></button>
@@ -69,45 +74,55 @@
         </header>
         <div class="rooms-grid" id="rooms-grid"></div>
       </section>
-      <section class="chat" id="chat-view" hidden>
+      <section class="chat" id="chat-view" aria-labelledby="side-room-name" hidden>
         <header class="main-head chat-head">
-          <div class="chat-title">
-            <h1 id="chat-room-name">…</h1>
-            <div id="working-now" class="working-now" hidden></div>
+          <div class="chat-toolbar">
             <div class="chat-sub" id="chat-room-sub"></div>
+            <div class="chat-actions">
+              <label class="search" title="Search full history"><span class="search-icon" data-icon="search-solid"></span><input id="search" type="search" placeholder="Search…" aria-label="Search full history" autocomplete="off"></label>
+              <button id="pins-btn" data-ui="chip" data-button type="button" hidden title="Pinned messages"></button>
+              <button id="automations-btn" data-ui="icon-button" data-kind="ghost" data-size="sm" title="Automations: scheduled tasks and reminders" aria-label="Automations: scheduled tasks and reminders"><span data-icon="clock-solid"></span></button>
+              <button id="carry-btn" data-ui="icon-button" data-kind="ghost" data-size="sm" title="Export / Import" aria-label="Export or import rooms and conversations"><span data-icon="transfer-solid"></span></button>
+              <button id="chat-info-btn" data-ui="icon-button" data-size="sm" title="Room settings" aria-label="Room settings"><span data-icon="settings-solid"></span></button>
+            </div>
           </div>
-          <div class="chat-actions">
-            <button id="pins-btn" data-ui="chip" data-button type="button" hidden title="Pinned messages"></button>
-            <label class="search"><span class="search-icon" data-icon="search"></span><input id="search" type="search" placeholder="Search in this room…" autocomplete="off"></label>
-            <button id="chat-info-btn" data-ui="icon-button" title="Room settings"><span data-icon="settings"></span></button>
-          </div>
+          <div id="working-now" class="working-now" hidden></div>
         </header>
         <div id="cast-banner" class="cast-banner" hidden></div>
         <div id="wedge-banner" class="wedge-banner" hidden></div>
-        <div id="messages" class="messages"></div>
-        <div id="pins-panel" class="pins-panel" hidden></div>
-        <div id="search-panel" class="search-panel" hidden></div>
-        <div id="timeline-left" class="timeline left" hidden>
-          <div class="tl-view"></div>
-          <div class="tl-ticks"></div>
-          <div class="tl-pop" hidden></div>
+        <div id="conversation-selection" class="conversation-selection" role="status" hidden>
+          <span>Whole saved conversation selected · copy as Markdown</span>
+          <button class="linklike" data-act="copy">Copy</button>
+          <button class="linklike" data-act="clear">Cancel</button>
         </div>
-        <button type="button" id="jump-latest" class="jump-latest" title="Back to the latest messages" hidden><span data-icon="chevrons-down"></span></button>
-        <div id="done-notes" class="done-notes" hidden></div>
-        <div id="timeline" class="timeline" hidden>
-          <div class="tl-view"></div>
-          <div class="tl-ticks"></div>
-          <div class="tl-pop" hidden></div>
+        <div class="chat-conversation">
+          <div id="messages" class="messages" tabindex="0"></div>
+          <div id="pins-panel" class="pins-panel" hidden></div>
+          <div id="search-panel" class="search-panel" hidden></div>
+          <div id="timeline-left" class="timeline left" hidden>
+            <div class="tl-view"></div>
+            <div class="tl-ticks"></div>
+            <div class="tl-pop" hidden></div>
+          </div>
+          <button type="button" id="jump-latest" class="jump-latest" title="Back to the latest messages" hidden><span data-icon="chevrons-down"></span></button>
+          <div id="done-notes" class="done-notes" hidden></div>
+          <div id="timeline" class="timeline" hidden>
+            <div class="tl-view"></div>
+            <div class="tl-ticks"></div>
+            <div class="tl-pop" hidden></div>
+          </div>
         </div>
         <div id="mention-menu" class="mention-menu" hidden></div>
         <div id="emoji-menu" class="mention-menu emoji-menu" hidden></div>
         <form id="composer" class="composer">
           <div class="composer-grip" id="composer-grip" title="Drag to make the box taller; double-click to reset"></div>
           <button type="button" class="smile-btn" id="emoji-btn" title="Add an emoji"><span data-icon="smile"></span></button>
+          <button type="button" class="smile-btn attach-btn" id="attach-btn" title="Attach a picture or a file (or paste / drop one)"><span data-icon="plus"></span></button>
+          <input type="file" id="attach-input" multiple hidden>
           <div class="composer-box">
             <div class="quotes-tray" id="quotes-tray" hidden></div>
             <div class="shots-tray" id="shots-tray" hidden></div>
-            <textarea id="input" rows="1" placeholder="Message the room… @Name or /skill" title="Enter sends, Shift+Enter is a new line; paste or drop an image"></textarea>
+            <textarea id="input" rows="1" placeholder="Message the room… @Name or /skill" title="Enter sends, Shift+Enter is a new line; paste or drop a picture or a file"></textarea>
           </div>
           <button type="button" id="composer-clear" class="composer-clear" title="Clear the message" hidden>×</button>
           <button type="submit" class="send-btn" title="Send"><span data-icon="send"></span></button>
@@ -347,8 +362,16 @@
   <script src="components.js"></script>
   <script src="avatars.js"></script>
   <script src="fold.js"></script>
+  <script src="keyed-list.js"></script>
+  <script src="list-index.js"></script>
   <script src="history-window.js"></script>
-  <script src="/timeline-slots.js"></script>
+  <script src="window-bodies.js"></script>
+  <script src="timeline-slots.js"></script>
+  <script src="carry.js"></script>
+  <script src="memory.js"></script>
+  <script src="automations.js"></script>
+  <script src="layout.js"></script>
+  <script src="agent-updates.js"></script>
   <script src="demo-data.js"></script>
   <script>window.DEMO_LOOK = "classic-dark";</script>
   <script src="demo.js"></script>

@@ -506,6 +506,13 @@
       preFs: "calc(11.5px * var(--fs-scale))",
       labelFs: "calc(10.5px * var(--fs-scale))",
     },
+    settingsGroup: {
+      bg: p.lav,
+      ink: p.ink,
+      headingInk: p.primary,
+      dangerBg: p.rose,
+      dangerInk: p.roseInk,
+    },
     toolFold: {
       ink: p.muted,
       bg: p.soft,
@@ -531,6 +538,8 @@
       bg: p.soft,
       attentionInk: p.warmInk,
       attentionBg: p.warm,
+      errorInk: p.roseInk,
+      errorBg: p.rose,
       fs: "calc(12px * var(--fs-scale))",
     },
     loginDialog: {
@@ -1418,6 +1427,7 @@
       chip: "chip: a small tag that names a thing; fill, border, shadow, hoverLift, activeDrop",
       fileCard: "file-card: a fragment of a file or a picture under the message that names it (the dark card)",
       toolCall: "tool-call: a chip that opens to the call; the status colours",
+      settingsGroup: "settings-group: a named, collapsible group of settings; its paper, words and heading, with a separate danger tone",
       toolFold: "tool-fold: the calls of a finished reply, in one line",
       askCard: "ask-card: a decision the room puts in front of you (a permission, a proposal)",
       replyNote: "reply-note: a line the room attaches to a reply, inside its bubble",

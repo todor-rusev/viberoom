@@ -27,6 +27,14 @@
     skillsRoom: null,
   };
 
+  const Layout = VIBEROOM_LAYOUT.create(parseFloat(getComputedStyle(document.documentElement).zoom) || 1);
+  const agentUpdates = VIBEROOM_AGENT_UPDATES.create({
+    post: (...args) => post(...args), recipes: () => state.recipes,
+    onStatus: text => { const el = document.getElementById("sp-agent-update-status"); if (el) el.textContent = text; },
+    onError: error => showError(error),
+    onChange: () => { if (document.querySelector("#invite-dialog")?.open) renderInviteTiles(); },
+  });
+
   const $ = (selector) => document.querySelector(selector);
   const els = {
     app: $("#app"),
@@ -58,9 +66,11 @@
     roomList: $("#room-list"),
     backToRooms: $("#back-to-rooms"),
     sideRoomName: $("#side-room-name"),
-    sideRoomSub: $("#side-room-sub"),
     roomSettingsBtn: $("#room-settings-btn"),
     inviteBtn: $("#invite-btn"),
+    roster: $("#roster"),
+    participantsMe: $("#participants-me"),
+    sideRoomCount: $("#side-room-count"),
     participants: $("#participants"),
     reconnectAllBtn: $("#reconnect-all-btn"),
     focusBtn: $("#focus-btn"),
@@ -69,9 +79,9 @@
     roomsGrid: $("#rooms-grid"),
     roomsSub: $("#rooms-sub"),
     chatView: $("#chat-view"),
-    chatRoomName: $("#chat-room-name"),
     chatRoomSub: $("#chat-room-sub"),
     chatInfoBtn: $("#chat-info-btn"),
+    carryBtn: $("#carry-btn"),
     search: $("#search"),
     messages: $("#messages"),
     jumpLatest: $("#jump-latest"),
@@ -167,7 +177,7 @@
     }
   }
   function noteSlow(name, ms) {
-    if (blankWatch.since && blankWatch.redraws.length < 6 && /render|drawn|caught up|streamed/.test(name)) blankWatch.redraws.push(name);
+    if (blankWatch.since && blankWatch.redraws.length < 6 && !name.startsWith("browser task") && /render|drawn|caught up|streamed/.test(name)) blankWatch.redraws.push(name);
     if (!(ms >= 8)) return;
     slowTasks.push({ at: Date.now(), ms: Math.round(ms), name, busy: busyLabel() });
     if (slowTasks.length > 60) slowTasks.splice(0, slowTasks.length - 40);
@@ -182,18 +192,30 @@
   function measureBlank() {
     const list = els.messages;
     if (!list) return null;
-    const b = list.getBoundingClientRect();
+    const b = Layout.rect(list);
     if (!b.height) return null;
     const painted = [];
     const unpainted = [];
+    const near = new Set();
+    const pages = [];
+    for (const page of list.querySelectorAll(".msgs-page")) {
+      const pr = Layout.rect(page);
+      if (pr.bottom < b.top || pr.top > b.bottom) continue;
+      near.add(page);
+      const inside = page.firstElementChild;
+      const shown = inside && typeof inside.checkVisibility === "function" ? inside.checkVisibility({ contentVisibilityAuto: true }) : true;
+      if (pages.length < 3) pages.push({ h: Math.round(pr.height), kids: page.children.length, skipped: !shown });
+    }
     for (const e of list.querySelectorAll(".msg")) {
-      const r = e.getBoundingClientRect();
+      const page = e.parentElement;
+      if (page && page.classList.contains("msgs-page") && !near.has(page)) continue;
+      const r = Layout.rect(e);
       if (r.bottom < b.top || r.top > b.bottom) continue;
       const ok = typeof e.checkVisibility === "function" ? e.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true }) : true;
-      const bubble = e.querySelector(".bubble");
-      const br = bubble && bubble.getBoundingClientRect();
+      const ink = e.querySelector(".bubble") || (e.classList.contains("system") || e.classList.contains("hidden") ? e.firstElementChild : null);
+      const br = ink && Layout.rect(ink);
       if (ok && br && br.height > 0) painted.push([Math.max(br.top, b.top), Math.min(br.bottom, b.bottom)]);
-      else if (unpainted.length < 5) unpainted.push({ seq: e.dataset.seq || "", cls: e.className, h: Math.round(r.height), op: getComputedStyle(e).opacity, skipped: !ok });
+      else if (unpainted.length < 5) unpainted.push({ seq: e.dataset.seq || "", cls: e.className, h: Math.round(r.height), op: getComputedStyle(e).opacity, skipped: !ok, ...animationOf(e) });
     }
     painted.sort((x, y) => x[0] - y[0]);
     let gap = 0;
@@ -211,7 +233,29 @@
       gapAt = cover;
     }
     const under = gap > 40 ? document.elementsFromPoint(Math.round(b.left + b.width / 2), Math.round(gapAt + gap / 2)).slice(0, 5).map((e) => `${e.tagName}.${(e.className || "").toString().split(" ")[0] || ""}`) : [];
-    return { blankPx: Math.round(gap), blankTop: Math.round(gapAt - b.top), listPx: Math.round(b.height), scrollTop: Math.round(list.scrollTop), painted: painted.length, unpainted, under, msgs: list.querySelectorAll(".msg").length };
+    return { blankPx: Math.round(gap), blankTop: Math.round(gapAt - b.top), listPx: Math.round(b.height), scrollTop: Math.round(list.scrollTop), painted: painted.length, unpainted, pages, under, msgs: list.querySelectorAll(".msg").length };
+  }
+  function animationOf(el) {
+    try {
+      const run = typeof el.getAnimations === "function" ? el.getAnimations()[0] : null;
+      if (!run) return { anim: "none" };
+      return { anim: String(run.playState), animAt: Math.round(Number(run.currentTime) || 0) };
+    } catch {
+      return { anim: "unknown" };
+    }
+  }
+
+  function reportBlank(stage, extra) {
+    const room = currentRoom();
+    if (!room || !blankWatch.facts) return;
+    void post("/api/window/finding", {
+      kind: "blank-fragment",
+      roomId: room.id,
+      since: blankWatch.since,
+      stage,
+      ...blankWatch.facts,
+      ...extra,
+    }).catch(() => {});
   }
   function watchBlank() {
     if (!els.messages) return;
@@ -228,19 +272,50 @@
       blankWatch.scrolled = false;
       blankWatch.redraws = [];
       const room = currentRoom();
-      noteFinding(`blank fragment began: ${JSON.stringify({ ...facts, streaming: !!room && room.messages.some((m) => m.streaming) })}`);
+      blankWatch.facts = { ...facts, streaming: !!room && room.messages.some((m) => m.streaming) };
+      noteFinding(`blank fragment began: ${JSON.stringify(blankWatch.facts)}`);
+      reportBlank("began", {});
     } else if (!blank && blankWatch.since) {
-      noteFinding(`blank fragment ended after ${Math.round((Date.now() - blankWatch.since) / 1000)} s: ${blankWatch.scrolled ? "a scroll came in between" : "no scroll"}; redraws in between: ${blankWatch.redraws.join(" | ") || "none"}`);
+      const seconds = Math.round((Date.now() - blankWatch.since) / 1000);
+      noteFinding(`blank fragment ended after ${seconds} s: ${blankWatch.scrolled ? "a scroll came in between" : "no scroll"}; redraws in between: ${blankWatch.redraws.join(" | ") || "none"}`);
+      reportBlank("ended", { seconds, scrolled: blankWatch.scrolled, redraws: blankWatch.redraws.slice(0, 8) });
       blankWatch.since = 0;
       blankWatch.clear = 0;
     } else if (!blank) blankWatch.clear++;
   }
   setInterval(watchBlank, 3000);
+  const LONG_FRAMES = typeof PerformanceObserver === "function" && (PerformanceObserver.supportedEntryTypes || []).includes("long-animation-frame");
   try {
     new PerformanceObserver((list) => {
-      for (const e of list.getEntries()) noteSlow("browser task", e.duration);
-    }).observe({ entryTypes: ["longtask"] });
+      for (const e of list.getEntries()) noteSlow(`browser task${LONG_FRAMES ? heldBy(e) : ""}`, e.duration);
+    }).observe({ entryTypes: [LONG_FRAMES ? "long-animation-frame" : "longtask"] });
   } catch {
+  }
+  function heldBy(entry) {
+    const script = [...(entry.scripts || [])].sort((a, b) => b.duration - a.duration)[0];
+    const before = entry.renderStart ? Math.max(0, Math.round(entry.renderStart - entry.startTime)) : Math.round(entry.duration);
+    const after = Math.max(0, Math.round(entry.duration) - before);
+    const named = script ? [script.sourceFunctionName || script.invoker, String(script.sourceURL || "").split(/[/\\]/).pop()].filter(Boolean).join(" in ") : "";
+    const blocking = entry.blockingDuration >= 1 ? `, ${Math.round(entry.blockingDuration)} ms blocking` : "";
+    return ` · ${before} ms script${named ? ` in ${named}` : ""}, ${after} ms style & paint${blocking}`;
+  }
+
+  const bursts = new Map();
+  let burstTimer = 0;
+  function noteBurst(kind, ms) {
+    const seen = bursts.get(kind) || { times: 0, total: 0, worst: 0 };
+    seen.times++;
+    seen.total += ms;
+    seen.worst = Math.max(seen.worst, ms);
+    bursts.set(kind, seen);
+    clearTimeout(burstTimer);
+    burstTimer = setTimeout(flushBursts, 400);
+  }
+  function flushBursts() {
+    for (const [kind, seen] of bursts) {
+      noteSlow(seen.times === 1 ? `hub said ${kind}` : `hub said ${kind} ×${seen.times} (worst ${Math.round(seen.worst)} ms)`, seen.total);
+    }
+    bursts.clear();
   }
 
   const FONTS = globalThis.VIBEROOM_TOKENS.fonts;
@@ -288,9 +363,13 @@
     if (shown === "thinking" || shown === "notes") return false;
     return !!(m.text || (m.toolCalls && m.toolCalls.length));
   }
-  function stopNoteText(m, humanName) {
-    const who = m.stoppedBy || humanName || "you";
-    return m.text ? `Stopped by ${who}` : `Stopped by ${who} before it wrote anything`;
+  function stopNoteText(m) {
+    if (m.cancelledBy === "agent") return m.text ? "The agent ended this turn; nobody here stopped it" : "The agent ended this turn before it wrote anything";
+    if (!m.stoppedBy) return m.text ? "This turn was cut short" : "This turn was cut short before it wrote anything";
+    return m.text ? `Stopped by ${m.stoppedBy}` : `Stopped by ${m.stoppedBy} before it wrote anything`;
+  }
+  function failNoteText(m) {
+    return m.text ? `The turn failed after this: ${m.failed}` : `The turn failed before it wrote anything: ${m.failed}`;
   }
   function refreshLiveTails() {
     const room = currentRoom();
@@ -325,6 +404,22 @@
     return window.Avatars.searchableGrid(list, current, onPick, current !== null && current !== undefined ? { label: "—", title: "No emoji" } : null);
   }
   const CLAMP_CHARS = 700;
+  const CLAMP_PREFIX_CHARS = 1200;
+  function clampedSource(text) {
+    if (!text || text.length <= CLAMP_PREFIX_CHARS) return text;
+    const paragraph = text.lastIndexOf("\n\n", CLAMP_PREFIX_CHARS);
+    let head = text.slice(0, paragraph > CLAMP_PREFIX_CHARS / 2 ? paragraph : CLAMP_PREFIX_CHARS);
+    if (!head.endsWith("\n") && head.slice(head.lastIndexOf("\n") + 1).trimStart().startsWith("|")) head = head.slice(0, head.lastIndexOf("\n") + 1);
+    const lines = head.split("\n");
+    let end = lines.length;
+    while (end > 0 && !lines[end - 1].trim()) end--;
+    let from = end;
+    while (from > 0 && lines[from - 1].trimStart().startsWith("|")) from--;
+    const table = lines.slice(from, end);
+    if (table.length && !table.some((line) => /^\s*\|[\s:|-]+\|\s*$/.test(line))) head = lines.slice(0, from).join("\n");
+    if ((head.match(/^```/gm) || []).length % 2) head += "\n```";
+    return head;
+  }
 
   window.Icons.install();
   const ic = (name, cls) => window.Icons.svg(name, cls);
@@ -491,6 +586,21 @@
             return "~";
           },
         },
+        {
+          name: "windowsPath",
+          level: "inline",
+          start(src) {
+            return src.search(/(?:[A-Za-z]:\\|~\\)/);
+          },
+          tokenizer(src) {
+            if (!/^(?:[A-Za-z]:\\|~\\)/.test(src)) return;
+            const match = new RegExp(OPEN_RE.source).exec(src);
+            if (match && match.index === 0) return { type: "windowsPath", raw: match[0], text: match[0] };
+          },
+          renderer(token) {
+            return esc(token.text);
+          },
+        },
       ],
       renderer: {
         html(token) {
@@ -554,10 +664,30 @@
     }
     tail.innerHTML = renderText(room, text.slice(done));
   }
+  let selectionDuringPatch = null;
+  let textPress = null;
+  const deferredMessageParts = new WeakMap();
   function holdsSelection(el) {
-    const sel = window.getSelection();
+    if (textPress && el.contains(textPress)) return true;
+    const sel = selectionDuringPatch || window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
-    return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
+    if (el.contains(sel.anchorNode) || el.contains(sel.focusNode)) return true;
+    for (let i = 0; i < sel.rangeCount; i++) if (sel.getRangeAt?.(i).intersectsNode(el)) return true;
+    return false;
+  }
+  function canPaintMessagePart(el, part) {
+    if (holdsSelection(el)) {
+      const pending = deferredMessageParts.get(el) || new Set();
+      pending.add(part); deferredMessageParts.set(el, pending);
+      return false;
+    }
+    const pending = deferredMessageParts.get(el);
+    pending?.delete(part);
+    if (!pending?.size) deferredMessageParts.delete(el);
+    return true;
+  }
+  function humanHoldsText() {
+    return heldTextSelection || !!textPress;
   }
   function renderText(room, text, images, quotes) {
     let html = md ? decorate(room, md.parse(String(text == null ? "" : text))) : renderTextLight(room, text);
@@ -578,8 +708,11 @@
     return orphans.length ? out + orphans.map(quoteCard).join("") : out;
   }
   function quoteCard(q) {
-    const head = `${ic("quote")}<b>${esc(q.fromName || "")}</b><span class="q-when">#${esc(String(q.seq))}${q.ts ? ` · ${esc(time(q.ts))}` : ""}</span>`;
-    return `<span class="quote" data-seq="${esc(String(q.seq))}" role="button" tabindex="0" title="Go to the message this comes from"><span class="q-head">${head}</span><span class="q-text">${esc(q.text || "")}</span></span>`;
+    const numbered = Number(q.seq) > 0;
+    const when = `${numbered ? `#${esc(String(q.seq))}` : ""}${q.ts ? `${numbered ? " · " : ""}${esc(time(q.ts))}` : ""}`;
+    const head = `${ic("quote")}<b>${esc(q.fromName || "")}</b><span class="q-when">${when}</span>`;
+    const ref = `${numbered ? ` data-seq="${esc(String(q.seq))}"` : ""}${q.id ? ` data-quoted-id="${esc(String(q.id))}"` : ""}`;
+    return `<span class="quote"${ref} role="button" tabindex="0" title="Go to the message this comes from"><span class="q-head">${head}</span><span class="q-text">${esc(q.text || "")}</span></span>`;
   }
   function imageRefs(html, images) {
     const numbers = new Set(images.map((image, i) => image.n || i + 1));
@@ -611,7 +744,7 @@
       window.Prism.manual = true;
       prismLoading = new Promise((resolve, reject) => {
         const s = document.createElement("script");
-        s.src = "/vendor/prism.js";
+        s.src = "vendor/prism.js";
         s.onload = () => resolve(window.Prism);
         s.onerror = () => reject(new Error("the code colouring script could not be loaded"));
         document.head.appendChild(s);
@@ -809,6 +942,18 @@
 
   function renderPreviews(textEl, m) {
     if (!textEl || m.streaming) return;
+    const current = currentRoom();
+    if (current?.filesDir && m.resourceRefs?.length) for (const link of textEl.querySelectorAll(".open-link[data-open]")) {
+      const original = link.dataset.resourceSource || link.dataset.open;
+      const spec = splitLine(original);
+      const source = spec?.path || original;
+      const ref = m.resourceRefs.find(r => r.source === source);
+      if (ref) {
+        link.dataset.resourceSource = original;
+        link.dataset.open = `${current.filesDir.replace(/[\\/]$/, "")}/${ref.file}${spec ? `:${spec.from}${spec.to ? `-${spec.to}` : ""}` : ""}`;
+        link.title = "Open the copy carried with this room";
+      }
+    }
     for (const link of textEl.querySelectorAll(".open-link[data-open]:not([data-previewed])")) {
       const target = link.dataset.open;
       if (/^(https?:|mailto:)/i.test(target) || NOT_VIEWABLE_RE.test(target)) continue;
@@ -986,7 +1131,7 @@
     row.classList.add("line-mark");
     const body = els.fvBody.querySelector(".code-body");
     if (body) {
-      const lineHeight = row.getBoundingClientRect().height || 18;
+      const lineHeight = Layout.rect(row).height || 18;
       els.fvBody.scrollTop = Math.max(0, index * lineHeight - els.fvBody.clientHeight / 2);
     }
   }
@@ -1161,11 +1306,19 @@
     });
     renderDiagrams(document);
   }
+  const timeFormatter = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit" });
+  const fullTimeFormatter = new Intl.DateTimeFormat([], { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const shortDateFormatter = new Intl.DateTimeFormat([], { day: "numeric", month: "short" });
+  const dayFormatter = new Intl.DateTimeFormat([], { weekday: "short", day: "numeric", month: "short" });
+  const dayLabels = new Map();
+  let dayLabelsFor = "";
   function time(ts) {
-    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? "Invalid Date" : timeFormatter.format(d);
   }
   function fullTime(ts) {
-    return new Date(ts).toLocaleString([], { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? "Invalid Date" : fullTimeFormatter.format(d);
   }
   function relTime(ts) {
     if (!ts) return "";
@@ -1173,15 +1326,19 @@
     if (d < 60000) return "just now";
     if (d < 3600000) return `${Math.floor(d / 60000)} min ago`;
     if (d < 86400000) return `${Math.floor(d / 3600000)} h ago`;
-    return new Date(ts).toLocaleDateString([], { day: "numeric", month: "short" });
+    return shortDateFormatter.format(new Date(ts));
   }
   function dayLabel(ts) {
     const d = new Date(ts);
     const today = new Date();
-    const yesterday = new Date(today.getTime() - 86400000);
-    if (d.toDateString() === today.toDateString()) return "Today";
-    if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
-    return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+    const now = today.toDateString(), key = d.toDateString();
+    if (now !== dayLabelsFor) { dayLabels.clear(); dayLabelsFor = now; }
+    if (dayLabels.has(key)) return dayLabels.get(key);
+    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+    const label = key === now ? "Today" : key === yesterday.toDateString() ? "Yesterday"
+      : Number.isNaN(d.getTime()) ? "Invalid Date" : dayFormatter.format(d);
+    dayLabels.set(key, label);
+    return label;
   }
   function fmtTokens(n) {
     if (n === undefined || n === null) return "";
@@ -1203,7 +1360,19 @@
     const el = els.messages;
     return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   }
+  function atEnd() {
+    const el = els.messages;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 12;
+  }
+  function replyStreaming() {
+    const room = currentRoom();
+    return !!room && room.messages.some((m) => m.streaming);
+  }
+  function deliberateReturn() {
+    return atEnd() && !replyStreaming();
+  }
   let stuck = true;
+  let readingAway = false;
   const CALM = (() => { const v = new URLSearchParams(location.search).get("calm"); return ["hold", "reserve", "reserve-cap"].includes(v) ? v : "off"; })();
   const calm = { held: false, reserve: 0, initial: 0, baseContent: 0 };
   if (CALM !== "off") document.documentElement.dataset.calm = CALM;
@@ -1233,7 +1402,7 @@
     els.jumpLatest.hidden = false;
   }
   function calmAfterGrowth() {
-    if (!calm.held || CALM === "hold") return;
+    if (!calm.held || CALM === "hold" || humanHoldsText()) return;
     const el = els.messages;
     const grown = el.scrollHeight - calm.reserve - calm.baseContent;
     const next = Math.max(0, calm.initial - grown);
@@ -1259,8 +1428,49 @@
   let settled = 0;
   const endJumps = [];
   function noteJump(why) {
-    endJumps.push({ at: Date.now(), why: why || "(unnamed)", following: stuck, from: Math.round(els.messages.scrollTop), fromEnd: Math.round(els.messages.scrollHeight - els.messages.scrollTop - els.messages.clientHeight) });
+    const el = els.messages;
+    const entry = { at: Date.now(), why: why || "(unnamed)", following: stuck, readingAway, streaming: replyStreaming(), from: Math.round(el.scrollTop), fromEnd: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight) };
+    endJumps.push(entry);
     if (endJumps.length > 30) endJumps.splice(0, endJumps.length - 20);
+    if (!stuck && entry.fromEnd > 12) reportJump(entry);
+  }
+  function noteHeldPlace(why) {
+    const el = els.messages;
+    endJumps.push({ at: Date.now(), why, held: true, following: stuck, readingAway, streaming: replyStreaming(), from: Math.round(el.scrollTop), fromEnd: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight) });
+    if (endJumps.length > 30) endJumps.splice(0, endJumps.length - 20);
+  }
+  let lastListChange = null;
+  let arrivalFromEnd = 0;
+  function noteArrival(byHand) {
+    const el = els.messages;
+    const fromEnd = Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
+    if (byHand) { arrivalFromEnd = fromEnd; return; }
+    const was = arrivalFromEnd;
+    if (stuck || fromEnd > 12 || was <= 40) return;
+    arrivalFromEnd = 0;
+    const last = lastListChange ? `${lastListChange.why}, ${Date.now() - lastListChange.at} ms ago` : "no change of the list noted";
+    const entry = { at: Date.now(), why: `arrived at the end by itself (last: ${last})`, following: false, readingAway, streaming: replyStreaming(), from: Math.round(el.scrollTop), fromEnd: was };
+    endJumps.push(entry);
+    if (endJumps.length > 30) endJumps.splice(0, endJumps.length - 20);
+    reportJump(entry);
+  }
+  function reportJump(entry) {
+    const room = currentRoom();
+    if (!room) return;
+    const anchor = readerAnchor();
+    void post("/api/window/finding", {
+      kind: "end-jump",
+      roomId: room.id,
+      why: entry.why,
+      fromEnd: entry.fromEnd,
+      scrollTop: entry.from,
+      readingAway: entry.readingAway,
+      streaming: entry.streaming,
+      holdsText: humanHoldsText(),
+      msgs: room.messages.length,
+      anchorId: anchor ? anchor.id : "",
+      into: anchor ? Math.round(anchor.into) : 0,
+    }).catch(() => {});
   }
   function scrollToBottom(why) {
     calmRelease();
@@ -1268,15 +1478,19 @@
     els.messages.scrollTop = els.messages.scrollHeight;
     els.jumpLatest.hidden = true;
     stuck = true;
+    readingAway = false;
     settled = 0;
     if (!settling) settleBottom(20);
+  }
+  function followEnd(why) {
+    if (stuck && !humanHoldsText()) scrollToBottom(why);
   }
   function settleBottom(frames) {
     settling = frames;
     requestAnimationFrame(() => {
       const el = els.messages;
       const short = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
-      if (stuck && short) el.scrollTop = el.scrollHeight;
+      if (stuck && short && !humanHoldsText()) el.scrollTop = el.scrollHeight;
       settled = short ? 0 : settled + 1;
       settling = settled >= 2 ? 0 : frames - 1;
       if (settling > 0) settleBottom(settling);
@@ -1289,15 +1503,20 @@
     const s = state.settings || {};
     return { name: s.humanName || "You", color: TOKENS.active().elements.face.humanInk, avatar: s.humanAvatar, kind: "human" };
   }
-  function copyableHtml(el) {
-    const clone = (el.querySelector(".text > .words") || el.querySelector(".text")).cloneNode(true);
+  function copyableHtml(el, m) {
+    const collapsed = m && el.querySelector(".text.clamped");
+    let clone;
+    if (collapsed) {
+      clone = document.createElement("div");
+      clone.innerHTML = renderText(currentRoom(), m.text, m.images, m.quotes);
+    } else clone = (el.querySelector(".text > .words") || el.querySelector(".text")).cloneNode(true);
     for (const node of clone.querySelectorAll('[data-ui="file-card"], [data-ui="icon-button"], .live-tail, .mermaid-block svg, .mm-bar')) node.remove();
     for (const link of clone.querySelectorAll("a.open-link, .img-ref")) link.replaceWith(document.createTextNode(link.textContent));
     clone.classList.remove("clamped");
     return clone.innerHTML.trim();
   }
   async function copyMessage(el, m) {
-    const html = copyableHtml(el);
+    const html = copyableHtml(el, m);
     const text = String(m.text || "");
     try {
       if (navigator.clipboard && window.ClipboardItem) {
@@ -1327,7 +1546,7 @@
     toast(error && error.message ? error.message : String(error), "error");
   }
   const TRANSCRIPT_LABEL = { off: "off", errors: "when something fails", full: "all activity" };
-  const DIAGNOSTIC_LOG_HELP = "Save details to help investigate problems with a vibemate. Choose All activity while checking a reply that gets stuck. These files can grow large, so turn logging off afterwards. Your conversations are saved with any option.";
+  const DIAGNOSTIC_LOG_HELP = "Save details to help investigate problems with a vibemate. Choose All activity while checking a reply that gets stuck. Diagnostic files keep up to 64 MB across rooms, 5 MB per file, for up to seven days. Older details are removed and unusually large entries are shortened. Conversations are saved separately and are not shortened.";
   function geekTip(text) {
     return `<button type="button" class="geek-tip" title="For geeks">${ic("geek")}for geeks</button><span class="geek-text" hidden>${text}</span>`;
   }
@@ -1377,12 +1596,12 @@
     const rows = [...endJumps]
       .reverse()
       .slice(0, 20)
-      .map((j) => `<tr><td>${esc(new Date(j.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</td><td title="${esc(j.why)}">${esc(j.why)}</td><td class="dim">${j.following ? "following the end" : `${j.fromEnd} px above the end`}</td></tr>`)
+      .map((j) => `<tr><td>${esc(new Date(j.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</td><td title="${esc(j.why)}">${j.held ? "held: " : ""}${esc(j.why)}</td><td class="dim">${j.following ? "following the end" : `${j.fromEnd} px above the end`}${j.streaming ? " · a reply was streaming" : ""}</td></tr>`)
       .join("");
     return `<div class="slow-scroll"><table class="slow-table">${rows}</table></div>`;
   }
   function endJumpsText() {
-    return [...endJumps].reverse().map((j) => `${new Date(j.at).toLocaleTimeString()} - ${j.why} - ${j.following ? "following the end" : `${j.fromEnd} px above the end`}`).join("\n");
+    return [...endJumps].reverse().map((j) => `${new Date(j.at).toLocaleTimeString()} - ${j.held ? "held: " : ""}${j.why} - ${j.following ? "following the end" : `${j.fromEnd} px above the end`}${j.streaming ? " - a reply was streaming" : ""}`).join("\n");
   }
   function slowTasksText() {
     return [...slowTasks].reverse().map((t) => `${new Date(t.at).toLocaleTimeString()} - ${t.ms ? `${t.ms} ms - ` : ""}${t.name}${t.busy ? ` - ${t.busy}` : ""}`).join("\n");
@@ -1390,8 +1609,45 @@
   function sectionTitle(iconName, text) {
     return `<h4>${ic(iconName)}${text}</h4>`;
   }
+  function settingsDisclosureOpen(id, initiallyOpen) {
+    const current = document.getElementById(id);
+    if (current?.matches('[data-ui="settings-group"], details[data-settings-disclosure]')) return current.open;
+    const saved = recall(`settings-group.${id}`);
+    return saved === null ? initiallyOpen : saved === "1";
+  }
+  function settingsGroup(id, title, body, tone = "plain") {
+    return UI.html("settings-group", { id, title, body: UI.raw(body), tone, open: settingsDisclosureOpen(id, true) });
+  }
+  function settingsFoldActions() {
+    return `<div class="settings-fold-actions" role="group" aria-label="Settings sections">${UI.html("icon-button", { icon: "chevrons-up", kind: "ghost", size: "sm", data: { settingsOpen: "false" }, title: "Collapse all settings sections" })}${UI.html("icon-button", { icon: "chevrons-down", kind: "ghost", size: "sm", data: { settingsOpen: "true" }, title: "Expand all settings sections" })}</div>`;
+  }
+  function foldSettingsGroups(e) {
+    const button = e.target.closest("button[data-settings-open]");
+    const scope = button?.closest("#details-inner, #page-inner");
+    if (!scope) return;
+    const open = button.dataset.settingsOpen === "true";
+    for (const group of scope.querySelectorAll('[data-ui="settings-group"], details[data-settings-disclosure]')) {
+      group.open = open;
+      remember(`settings-group.${group.id}`, open ? "1" : "0");
+    }
+  }
+  document.addEventListener("click", foldSettingsGroups);
+  function rememberSettingsDisclosure(e) {
+    const group = e.target;
+    if (!group.isConnected || !group.matches('[data-ui="settings-group"], details[data-settings-disclosure]')) return;
+    remember(`settings-group.${group.id}`, group.open ? "1" : "0");
+  }
+  document.addEventListener("toggle", rememberSettingsDisclosure, true);
+  function revealSettingsFor(field) {
+    for (let group = field?.closest("details"); group; group = group.parentElement?.closest("details")) {
+      group.open = true;
+      if (group.matches('[data-ui="settings-group"], details[data-settings-disclosure]')) remember(`settings-group.${group.id}`, "1");
+    }
+  }
+  document.addEventListener("invalid", (e) => revealSettingsFor(e.target), true);
   function geek(id, bodyHtml, hint) {
-    return `<details class="geek" id="${id}"><summary>${ic("geek")}for geeks${hint ? `<span class="g-hint">${hint}</span>` : ""}<span class="chev">${ic("down")}</span></summary><div class="geek-body">${bodyHtml}</div></details>`;
+    const settings = ["pp-geek", "rp-geek", "sp-geek", "me-memory-geek"].includes(id);
+    return `<details class="geek" id="${id}"${settings ? ` data-settings-disclosure${settingsDisclosureOpen(id, false) ? " open" : ""}` : ""}><summary>${ic("geek")}for geeks${hint ? `<span class="g-hint">${hint}</span>` : ""}<span class="chev">${ic("down")}</span></summary><div class="geek-body">${bodyHtml}</div></details>`;
   }
   const SAVED_MARK_MS = 2000;
   const recentlySaved = new Map();
@@ -1427,12 +1683,14 @@
       lastField = null;
       try {
         const outcome = await onSave();
+        if (outcome === false) revealSettingsFor(document.getElementById(field) || container);
         if (field && outcome !== false) {
           recentlySaved.set(field, Date.now());
           markSaved(field);
         }
       } catch (e) {
         dirty = true;
+        revealSettingsFor(document.getElementById(field) || container);
         showError(e);
       }
       saving = false;
@@ -1558,8 +1816,8 @@
     if (dialog.classList.contains("light-dismiss") && !dialog.lightDismissWired) {
       dialog.lightDismissWired = true;
       const outside = (e) => {
-        const r = dialog.getBoundingClientRect();
-        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+        const r = Layout.rect(dialog);
+        return Layout.length(e.clientX) < r.left || Layout.length(e.clientX) > r.right || Layout.length(e.clientY) < r.top || Layout.length(e.clientY) > r.bottom;
       };
       let fromBackdrop = false;
       dialog.addEventListener("pointerdown", (e) => {
@@ -1578,8 +1836,8 @@
   const DIALOG_MIN_H = 220;
   const dialogSizeKey = (dialog) => `dialog.${dialog.id || "unnamed"}.size`;
   const dialogFits = (w, h) => ({
-    w: Math.max(DIALOG_MIN_W, Math.min(w, Math.round(window.innerWidth * 0.94))),
-    h: Math.max(DIALOG_MIN_H, Math.min(h, Math.round(window.innerHeight * 0.92))),
+    w: Math.max(DIALOG_MIN_W, Math.min(w, Math.round(Layout.length(window.innerWidth) * 0.94))),
+    h: Math.max(DIALOG_MIN_H, Math.min(h, Math.round(Layout.length(window.innerHeight) * 0.92))),
   });
   function restoreDialogSize(dialog) {
     const saved = recall(dialogSizeKey(dialog));
@@ -1622,16 +1880,16 @@
     if (!dialog.dataset.sized) {
       dialog.dataset.sized = "1";
       dialog.addEventListener("pointerdown", (e) => {
-        const r = dialog.getBoundingClientRect();
-        if (e.clientX > r.right - 22 && e.clientY > r.bottom - 22 && !dialog.style.width) {
+        const r = Layout.rect(dialog);
+        if (Layout.length(e.clientX) > r.right - 22 && Layout.length(e.clientY) > r.bottom - 22 && !dialog.style.width) {
           dialog.style.width = `${Math.round(r.width)}px`;
           dialog.style.height = `${Math.round(r.height)}px`;
           dialog.classList.add("sized");
         }
       });
       dialog.addEventListener("dblclick", (e) => {
-        const r = dialog.getBoundingClientRect();
-        if (e.clientX > r.right - 22 && e.clientY > r.bottom - 22) resetDialogSize(dialog);
+        const r = Layout.rect(dialog);
+        if (Layout.length(e.clientX) > r.right - 22 && Layout.length(e.clientY) > r.bottom - 22) resetDialogSize(dialog);
       });
       dialogSizes.observe(dialog);
     }
@@ -1734,6 +1992,9 @@
 
 
   function setView(view) {
+    if (view !== "room") clearConversationSelection();
+    if (state.view === "room" && view !== "room") rememberReader();
+    if (view !== "room") toolDetailsCache.clear();
     if (state.view === "settings" && view !== "settings") dropPairLink(true);
     state.view = view;
     els.app.classList.remove("view-home", "view-rooms", "view-room", "view-skills", "view-settings");
@@ -1777,6 +2038,7 @@
   }
 
   function selectRoom(id, opts) {
+    if (id !== state.currentRoomId) clearConversationSelection();
     if (!state.rooms.has(id)) return;
     if (state.currentRoomId !== id) {
       clearShots();
@@ -2182,7 +2444,7 @@
       remember("view", "settings");
       requestAnimationFrame(() => {
         const section = $("#sp-appearance");
-        if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
+        if (section) { revealSettingsFor(section); section.scrollIntoView({ behavior: "smooth", block: "start" }); }
       });
     });
     const all = $("#home-all-rooms");
@@ -2223,8 +2485,8 @@
   }
 
 
-  function offlineAgents(room) {
-    return room ? room.participants.filter((p) => p.kind === "agent" && p.status === "offline") : [];
+  function offlineAgents(room, includeMuted = false) {
+    return room ? room.participants.filter((p) => p.kind === "agent" && p.status === "offline" && (includeMuted || !p.muted)) : [];
   }
 
   function renderSideRoom() {
@@ -2232,67 +2494,67 @@
     renderWedgeBanner(currentRoom());
     const room = currentRoom();
     if (!room) return;
-    const st = roomStats(room);
     els.sideRoomName.textContent = room.name;
     els.sideRoomEmoji.textContent = room.settings.emoji || "";
-    els.sideRoomSub.textContent = room.settings.topic || `${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}${st.agents.length ? ` · ${st.online} online` : ""}${st.waiting ? ` · ${st.waiting} waiting` : ""}`;
-    const ordered = [...room.participants].sort((a, b) => (a.kind === "human" ? -1 : b.kind === "human" ? 1 : 0));
-    const rows = new Map([...els.participants.children].map((li) => [li.dataset.id, li]));
-    for (const p of ordered) {
-      let li = rows.get(p.id);
-      const selected = state.detailsOpen && ((state.selection.kind === "participant" && state.selection.id === p.id) || (p.kind === "human" && state.selection.kind === "me"));
-      const asleep = p.kind === "agent" && (p.status === "offline" || p.status === "left");
-      const unstaffed = p.kind === "agent" && p.status === "unstaffed";
-      const shown = shownStatus(room, p);
-      const className = (p.kind === "human" ? "me" : "") + (selected ? " selected" : "") + (asleep ? " offline" : "") + (unstaffed ? " unstaffed" : "");
-      const sub = p.kind === "human" ? "you, the human" : [p.tagline ? `"${p.tagline}"` : "", p.agentVendor || p.agentLabel, p.model].filter(Boolean).join(" · ");
-      const working = p.kind === "agent" && (p.status === "thinking" || p.status === "queued");
-      const troubled = p.kind === "agent" && !working && p.trouble && (p.status === "error" || p.trouble.stage === "turn" || (p.trouble.actions && p.trouble.actions.length > 0));
-      const unplugged = vendorLoggedOut(p);
-      const loginRow = unplugged && p.status === "offline" && !troubled ? `<div class="p-fix">${UI.html("button", { label: "Log in", kind: "primary", size: "xs", act: "open-login-dialog", icon: "lock", title: `${p.agentVendor || "The vendor"} is not logged in: log in, and ${p.name} comes back`, data: { recipe: p.agentType, purpose: "login" } })}</div>` : "";
-      const warn = troubled ? troubleHtml(p) : working ? "" : p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>${loginRow}` : loginRow;
-      const status = unstaffed
-        ? UI.html("badge", { label: "summon", tone: "attention", title: "Click to summon this vibemate: pick the coding agent that runs it" })
-        : asleep
-        ? `<span class="zzz" title="${esc(STATUS_LABEL[p.status] || p.status)}">zzz</span>`
-        : p.kind === "agent" && p.status !== "idle" ? UI.html("badge", { label: STATUS_LABEL[shown] || shown, tone: STATUS_TONE[shown] || "plain", dot: p.status === "thinking" }) : "";
-      const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true, muted: p.muted, unplugged, me: p.kind === "human", alert: p.kind === "agent" && (p.status === "error" || (p.status === "offline" && !!(p.trouble && p.trouble.actions && p.trouble.actions.length))), dim: unstaffed ? "unstaffed" : asleep ? "asleep" : undefined });
-      const statusValue = p.kind === "agent" ? (shown === "working" ? "writing" : shown) || "idle" : "";
-      const bodyHtml = `<div class="p-body">
-          <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? UI.html("badge", { label: "muted", tone: "muted" }) : ""}${status}</div>
-          <div class="p-sub">${esc(sub)}</div>
-          ${warn}
-        </div>
-        <div class="p-actions">
-          ${p.kind === "agent" && p.status === "offline" && !unplugged ? UI.html("row-button", { icon: "refresh", title: `Wake ${p.name} up: reconnect it to the room`, act: "wake" }) : ""}
-        </div>`;
-      if (!li) {
-        li = document.createElement("li");
-        li.dataset.id = p.id;
-        li.innerHTML = avatarHtml + bodyHtml + (p.kind === "agent" ? UI.html("row-button", { icon: "settings", title: `Open ${p.name}'s panel`, act: "panel" }) + UI.html("row-button", { icon: "last-reply", title: `Go to ${p.name}'s last reply`, act: "last-reply" }) : "");
-        li.dataset.avatar = avatarHtml;
-        if (statusValue) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="status" data-status="${esc(statusValue)}"></span>`);
-        li.dataset.body = bodyHtml;
-      } else {
-        if (li.dataset.avatar !== avatarHtml) {
-          li.querySelector(".avatar").outerHTML = avatarHtml;
+    const st = roomStats(room);
+    els.sideRoomCount.textContent = `${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}${st.agents.length ? ` · ${st.online} online` : ""}${st.waiting ? ` · ${st.waiting} waiting` : ""}`;
+    const rowSpec = {
+      key: "id",
+      id: (p) => p.id,
+      make: () => document.createElement("li"),
+      fill: (li, p, _at, fresh) => {
+        const selected = state.detailsOpen && ((state.selection.kind === "participant" && state.selection.id === p.id) || (p.kind === "human" && state.selection.kind === "me"));
+        const asleep = p.kind === "agent" && (p.status === "offline" || p.status === "left");
+        const mutedStartup = p.status === "offline" && p.muted && p.startupSkipped === "muted";
+        const unstaffed = p.kind === "agent" && p.status === "unstaffed";
+        const shown = shownStatus(room, p);
+        const className = (p.kind === "human" ? "me" : "") + (selected ? " selected" : "") + (asleep ? " offline" : "") + (unstaffed ? " unstaffed" : "");
+        const sub = p.kind === "human" ? "you, the human" : [p.tagline ? `"${p.tagline}"` : "", p.agentVendor || p.agentLabel, p.model].filter(Boolean).join(" · ");
+        const working = p.kind === "agent" && (p.status === "thinking" || p.status === "queued");
+        const troubled = p.kind === "agent" && !working && p.trouble && (p.status === "error" || p.trouble.stage === "turn" || (p.trouble.actions && p.trouble.actions.length > 0));
+        const unplugged = vendorLoggedOut(p);
+        const loginRow = unplugged && p.status === "offline" && !troubled ? `<div class="p-fix">${UI.html("button", { label: "Log in", kind: "primary", size: "xs", act: "open-login-dialog", icon: "lock", title: `${p.agentVendor || "The vendor"} is not logged in: log in, and ${p.name} comes back`, data: { recipe: p.agentType, purpose: "login" } })}</div>` : "";
+        const warn = mutedStartup ? `<div class="p-warn muted-start" title="Unmute and reconnect when you want this vibemate to return">${esc(p.statusDetail || "Not summoned — muted")}</div>` : troubled ? troubleHtml(p) : working ? "" : p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>${loginRow}` : loginRow;
+        const status = unstaffed
+          ? UI.html("badge", { label: "summon", tone: "attention", title: "Click to summon this vibemate: pick the coding agent that runs it" })
+          : asleep
+          ? `<span class="zzz" title="${esc(STATUS_LABEL[p.status] || p.status)}">zzz</span>`
+          : p.kind === "agent" && p.status !== "idle" ? UI.html("badge", { label: STATUS_LABEL[shown] || shown, tone: STATUS_TONE[shown] || "plain", dot: p.status === "thinking" }) : "";
+        const avatarHtml = avatar(p.kind === "human" ? meAvatarData() : p, 44, { vendor: true, muted: p.muted, unplugged, me: p.kind === "human", alert: p.kind === "agent" && (p.status === "error" || (p.status === "offline" && !!(p.trouble && p.trouble.actions && p.trouble.actions.length))), dim: unstaffed ? "unstaffed" : asleep ? "asleep" : undefined });
+        const statusValue = p.kind === "agent" ? (shown === "working" ? "writing" : shown) || "idle" : "";
+        const bodyHtml = `<div class="p-body">
+            <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? UI.html("badge", { label: "muted", tone: "muted" }) : ""}${status}</div>
+            <div class="p-sub">${esc(sub)}</div>
+            ${warn}
+          </div>
+          <div class="p-actions">
+            ${p.kind === "agent" && p.status === "offline" && !unplugged ? UI.html("row-button", { icon: "refresh", title: `Wake ${p.name} up: reconnect it to the room`, act: "wake" }) : ""}
+          </div>`;
+        if (fresh) {
+          li.innerHTML = avatarHtml + bodyHtml + (p.kind === "agent" ? UI.html("row-button", { icon: "settings", title: `Open ${p.name}'s panel`, act: "panel" }) + UI.html("row-button", { icon: "last-reply", title: `Go to ${p.name}'s last reply`, act: "last-reply" }) : "");
           li.dataset.avatar = avatarHtml;
-        }
-        const dot = li.querySelector(".avatar .status");
-        if (statusValue && dot && dot.dataset.status !== statusValue) dot.dataset.status = statusValue;
-        else if (statusValue && !dot) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="status" data-status="${esc(statusValue)}"></span>`);
-        if (li.dataset.body !== bodyHtml) {
-          li.querySelectorAll(".p-body, .p-actions").forEach((el) => el.remove());
-          li.insertAdjacentHTML("beforeend", bodyHtml);
+          if (statusValue) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="status" data-status="${esc(statusValue)}"></span>`);
           li.dataset.body = bodyHtml;
+        } else {
+          if (li.dataset.avatar !== avatarHtml) {
+            li.querySelector(".avatar").outerHTML = avatarHtml;
+            li.dataset.avatar = avatarHtml;
+          }
+          const dot = li.querySelector(".avatar .status");
+          if (statusValue && dot && dot.dataset.status !== statusValue) dot.dataset.status = statusValue;
+          else if (statusValue && !dot) li.querySelector(".avatar").insertAdjacentHTML("beforeend", `<span class="status" data-status="${esc(statusValue)}"></span>`);
+          if (li.dataset.body !== bodyHtml) {
+            li.querySelectorAll(".p-body, .p-actions").forEach((el) => el.remove());
+            li.insertAdjacentHTML("beforeend", bodyHtml);
+            li.dataset.body = bodyHtml;
+          }
         }
-      }
-      if (li.className !== className) li.className = className;
-      if (p.kind === "agent" && !unstaffed) patchLifeRing(li, p);
-      if (li !== els.participants.children[ordered.indexOf(p)]) els.participants.appendChild(li);
-      rows.delete(p.id);
-    }
-    for (const li of rows.values()) li.remove();
+        if (li.className !== className) li.className = className;
+        if (p.kind === "agent" && !unstaffed) patchLifeRing(li, p);
+      },
+    };
+    KeyedList.patch(els.participantsMe, room.participants.filter((p) => p.kind === "human"), rowSpec);
+    KeyedList.patch(els.participants, room.participants.filter((p) => p.kind === "agent"), rowSpec);
     renderLifePop();
     renderHushButton(room);
     els.reconnectAllBtn.hidden = offlineAgents(room).length === 0;
@@ -2329,19 +2591,26 @@
 
 
   function renderChatHead() {
+    renderAutomationBadge();
     const room = currentRoom();
     renderWorkingNow();
     if (!room) {
-      els.chatRoomName.textContent = "No room";
       els.chatRoomSub.textContent = "";
       return;
     }
-    const st = roomStats(room);
-    els.chatRoomName.textContent = roomTitle(room);
+    const directory = room.dir.split(/[\\/]/).filter(Boolean).slice(-1)[0] || room.dir;
     els.chatRoomSub.innerHTML =
-      `<span>${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}${st.agents.length ? ` · ${st.online} online` : ""}${st.waiting ? ` · ${st.waiting} waiting` : ""}</span>` +
-      (room.settings.topic ? `<span>· ${esc(room.settings.topic)}</span>` : "") +
-      UI.html("chip", { label: room.dir.split(/[\\/]/).filter(Boolean).slice(-1)[0] || room.dir, icon: "folder", title: `working directory of the vibemates: ${room.dir}`, hook: "dir-chip" });
+      `<button type="button" data-ui="button" data-kind="ghost" data-size="sm" class="dir-chip open-link" data-open-kind="directory" data-open="${esc(room.dir)}" title="${esc(`Open folder: ${room.dir}`)}" aria-label="${esc(`Open folder: ${room.dir}`)}">${ic("folder-solid")}<span class="dir-label">${esc(directory)}</span></button>`;
+  }
+
+  function renderAutomationBadge() {
+    const count = state.automationPending?.[currentRoom()?.id] || 0;
+    const button = $("#automations-btn");
+    if (button) {
+      button.innerHTML = Icons.svg("clock-solid") + (count ? `<span class="automation-count" aria-hidden="true">${count}</span>` : "");
+      button.title = count ? `Automations: ${count} proposal${count === 1 ? "" : "s"} to review` : "Automations: scheduled tasks and reminders";
+      button.setAttribute("aria-label", button.title);
+    }
   }
 
 
@@ -2377,12 +2646,26 @@
       </details>`;
   }
 
+  function landing(el) {
+    el.classList.add("landing");
+    const done = () => el.classList.remove("landing");
+    el.addEventListener("animationend", done, { once: true });
+    setTimeout(done, 1200);
+    return el;
+  }
+
   function messageElement(room, m) {
+    const el = buildMessageElement(room, m);
+    noteDrawn(el, m);
+    return el;
+  }
+  function buildMessageElement(room, m) {
     const el = document.createElement("div");
     el.dataset.id = m.id;
     el.dataset.seq = m.seq;
     el.dataset.from = m.from;
     el.dataset.streaming = m.streaming ? "1" : "0";
+    if (m.bodyMissing) { fillBodyPlaceholder(el, room, m); return el; }
     if (state.watched.has(m.id)) watchedLeave.observe(el);
     if (m.kind === "hidden") {
       el.className = "msg hidden";
@@ -2425,55 +2708,62 @@
         </div>
         <div class="meta"></div>
       </div>`;
+    bindMessageActions(el, room.id);
+    updateMessageElement(el, room, m);
+    return el;
+  }
+
+  function bindMessageActions(el, roomId) {
+    const asItIsNow = () => {
+      const now = state.rooms.get(roomId);
+      if (!now) return null;
+      return now.messages.find((x) => x.id === el.dataset.id) || (now.pinnedOlder || []).find((x) => x.id === el.dataset.id) || null;
+    };
     el.querySelector('[data-act="more"]').addEventListener("click", () => {
-      if (state.expanded.has(m.id)) state.expanded.delete(m.id);
-      else state.expanded.add(m.id);
-      updateMessageElement(el, room, m);
+      const now = asItIsNow();
+      if (!now) return;
+      if (state.expanded.has(now.id)) state.expanded.delete(now.id);
+      else state.expanded.add(now.id);
+      updateMessageElement(el, state.rooms.get(roomId), now);
     });
     const editBtn = el.querySelector('[data-act="edit"]');
-    if (editBtn) editBtn.addEventListener("click", () => openInlineEditor(el, room, m));
-    el.querySelector('[data-act="quote"]').addEventListener("click", () => addQuote(m, ""));
-    el.querySelector('[data-act="copy"]').addEventListener("click", () => copyMessage(el, (currentRoom() || room).messages.find((x) => x.id === m.id) || m));
+    if (editBtn) editBtn.addEventListener("click", () => { const now = asItIsNow(); if (now) openInlineEditor(el, state.rooms.get(roomId), now); });
+    el.querySelector('[data-act="quote"]').addEventListener("click", () => { const now = asItIsNow(); if (now) addQuote(now, ""); });
+    el.querySelector('[data-act="copy"]').addEventListener("click", () => { const now = asItIsNow(); if (now) copyMessage(el, now); });
     el.querySelector('[data-act="pin"]').addEventListener("click", async () => {
-      if (m.pending) return;
-      const now = (currentRoom() || room).messages.find((x) => x.id === m.id) || m;
+      const now = asItIsNow();
+      if (!now || now.pending) return;
       try {
-        await post(`/api/rooms/${encodeURIComponent(room.id)}/messages/${encodeURIComponent(m.id)}/pin`, { pinned: !now.pinned });
+        await post(`/api/rooms/${encodeURIComponent(roomId)}/messages/${encodeURIComponent(now.id)}/pin`, { pinned: !now.pinned });
       } catch (error) {
         showError(error);
       }
     });
     el.addEventListener("pointerenter", () => refreshWalkArrows(el));
     for (const [act, back] of [["up", true], ["down", false]]) {
-      el.querySelector(`.head [data-act="${act}"]`).addEventListener("click", () => {
+      el.querySelector(`.head [data-act="${act}"]`).addEventListener("click", async () => {
         const target = walkFrom(el, back);
         if (!target) return;
-        jumpToMessage(target);
-        refreshWalkArrows(target);
-        const next = target.querySelector(`.head [data-act="${act}"]`);
+        if (!await jumpToId(target.id)) return;
+        const landed = drawnRow(target.id);
+        if (!landed) return;
+        refreshWalkArrows(landed);
+        const next = landed.querySelector(`.head [data-act="${act}"]`);
         if (next && !next.hidden) next.focus();
       });
     }
-    updateMessageElement(el, room, m);
-    return el;
   }
 
   function walkFrom(el, back) {
-    const step = (node) => {
-      const sibling = back ? node.previousElementSibling : node.nextElementSibling;
-      if (sibling) return sibling;
-      let page = node.parentElement;
-      while (page && page.classList.contains("msgs-page")) {
-        page = back ? page.previousElementSibling : page.nextElementSibling;
-        if (!page || !page.classList.contains("msgs-page")) return null;
-        const edge = back ? page.lastElementChild : page.firstElementChild;
-        if (edge) return edge;
-      }
-      return null;
-    };
-    let node = el;
-    while ((node = step(node))) {
-      if (node.classList.contains("msg") && !node.classList.contains("hidden-by-search") && node.dataset.from === el.dataset.from) return node;
+    const room = currentRoom();
+    if (!room) return null;
+    const parts = foldParts(room);
+    const rows = el.closest(".history-pins") ? parts.above : parts.drawn;
+    const at = rows.findIndex(m => m.id === el.dataset.id);
+    if (at < 0) return null;
+    for (let i = at + (back ? -1 : 1); i >= 0 && i < rows.length; i += back ? -1 : 1) {
+      const m = rows[i];
+      if (m.kind === "chat" && m.from === el.dataset.from && messageMatches(m)) return m;
     }
     return null;
   }
@@ -2487,7 +2777,8 @@
 
   function shotUrl(roomId, image) {
     if (image.url) return image.url;
-    return `/api/rooms/${encodeURIComponent(roomId)}/files/${encodeURIComponent(image.file)}`;
+    const version = state.rooms.get(roomId)?.resourceVersions?.[image.file];
+    return `/api/rooms/${encodeURIComponent(roomId)}/files/${encodeURIComponent(image.file)}${version ? `?v=${encodeURIComponent(version)}` : ""}`;
   }
 
   function renderShots(box, room, m) {
@@ -2526,9 +2817,9 @@
   function dvFit() {
     const svg = dv.stage.firstElementChild;
     if (!svg) return;
-    const box = dv.el.getBoundingClientRect();
-    const w = Number(svg.dataset.w) || svg.getBoundingClientRect().width || 1;
-    const h = Number(svg.dataset.h) || svg.getBoundingClientRect().height || 1;
+    const box = Layout.rect(dv.el);
+    const w = Number(svg.dataset.w) || Layout.rect(svg).width || 1;
+    const h = Number(svg.dataset.h) || Layout.rect(svg).height || 1;
     dv.fit = Math.max(DV_MIN, Math.min((box.width - 80) / w, (box.height - DV_BAR_SPACE - 32) / h, DV_FIT_MAX));
     dv.scale = dv.fit;
     dv.x = (box.width - w * dv.scale) / 2;
@@ -2537,7 +2828,7 @@
   }
   function dvZoom(factor, cx, cy) {
     const next = Math.min(DV_MAX, Math.max(DV_MIN, dv.scale * factor));
-    const box = dv.el.getBoundingClientRect();
+    const box = Layout.rect(dv.el);
     const px = (cx ?? box.left + box.width / 2) - box.left;
     const py = (cy ?? box.top + box.height / 2) - box.top;
     dv.x = px - ((px - dv.x) / dv.scale) * next;
@@ -2548,7 +2839,7 @@
   function openDiagram(block) {
     const svg = block && block.querySelector(".mm-out svg");
     if (!svg) return;
-    const rect = svg.getBoundingClientRect();
+    const rect = Layout.rect(svg);
     const clone = svg.cloneNode(true);
     clone.dataset.w = String(rect.width || 800);
     clone.dataset.h = String(rect.height || 600);
@@ -2575,7 +2866,7 @@
     (e) => {
       if (e.target.closest("#dv-bar")) return;
       e.preventDefault();
-      dvZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+      dvZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12, Layout.length(e.clientX), Layout.length(e.clientY));
     },
     { passive: false },
   );
@@ -2583,14 +2874,18 @@
     if (e.target.closest("#dv-bar")) return;
     dv.dragging = true;
     dv.moved = false;
+    dv.pointer = { x: Layout.length(e.clientX), y: Layout.length(e.clientY) };
     dv.el.setPointerCapture(e.pointerId);
     dv.el.classList.add("dragging");
   });
   dv.el.addEventListener("pointermove", (e) => {
     if (!dv.dragging) return;
-    if (e.movementX || e.movementY) dv.moved = true;
-    dv.x += e.movementX;
-    dv.y += e.movementY;
+    const x = Layout.length(e.clientX), y = Layout.length(e.clientY);
+    const dx = x - dv.pointer.x, dy = y - dv.pointer.y;
+    if (dx || dy) dv.moved = true;
+    dv.x += dx;
+    dv.y += dy;
+    dv.pointer = { x, y };
     dvApply();
   });
   for (const type of ["pointerup", "pointercancel"]) {
@@ -2613,11 +2908,11 @@
   });
   els.messages.addEventListener("click", (e) => {
     const hubRow = e.target.closest('[data-ui="hub-row"][data-ref]');
-    if (hubRow) return void jumpToMessage(els.messages.querySelector(`.msg[data-id="${hubRow.dataset.ref}"]`));
+    if (hubRow) return void jumpToId(hubRow.dataset.ref);
     const shot = e.target.closest(".shot");
     if (shot) return void openLightbox(shot.dataset.src, shot.title);
     const quote = e.target.closest(".quote");
-    if (quote) return void revealSeq(Number(quote.dataset.seq));
+    if (quote) return void revealQuote(quote.dataset);
     const ref = e.target.closest(".img-ref");
     if (!ref) return;
     const msg = ref.closest(".msg");
@@ -2686,6 +2981,32 @@
   }
 
   const openTools = new Set();
+  const toolDetailsCache = new Map();
+  const toolDetailsKey = (room, m, id) => `${room.id}/${m.id}/${id}`;
+  function toolDetailsFor(room, m, call) {
+    if (!call.detailsAvailable) return { state: "ready", value: call };
+    const key = toolDetailsKey(room, m, call.toolCallId);
+    let entry = toolDetailsCache.get(key);
+    if (entry?.revision === call.detailsRevision) return entry;
+    entry = { revision: call.detailsRevision, state: "loading", value: call };
+    toolDetailsCache.set(key, entry);
+    const part = encodeURIComponent;
+    get(`/api/rooms/${part(room.id)}/messages/${part(m.id)}/tools/${part(call.toolCallId)}`).then(value => {
+      entry.state = "ready"; entry.value = value;
+    }, () => { entry.state = "error"; }).finally(() => {
+      if (toolDetailsCache.get(key) !== entry) return;
+      if (!openTools.has(call.toolCallId)) { toolDetailsCache.delete(key); return; }
+      if (state.currentRoomId !== room.id || state.view !== "room") return;
+      const latestRoom = state.rooms.get(room.id);
+      if (!latestRoom) return;
+      const current = HistoryWindow.knownMessages(latestRoom).find(row => row.id === m.id);
+      const latest = current?.toolCalls?.find(c => c.toolCallId === call.toolCallId);
+      if (!latest || latest.detailsRevision !== entry.revision) return;
+      const el = els.messages.querySelector(`.msg[data-id="${CSS.escape(m.id)}"]`);
+      if (el) updateMessageElement(el, latestRoom, current, new Set(["tools"]), new Set([call.toolCallId]));
+    });
+    return entry;
+  }
   const openToolGroups = new Set();
   els.messages.addEventListener("click", (e) => {
     const stop = e.target.closest('.live-tail [data-act="stop"]');
@@ -2719,18 +3040,38 @@
       }
       return;
     }
-    const chip = e.target.closest('[data-ui="tool-call"] > [data-ui="chip"]');
+    const retry = e.target.closest("[data-tool-retry]");
+    const chip = retry ? retry.closest('[data-ui="tool-call"]').querySelector(':scope > [data-ui="chip"]') : e.target.closest('[data-ui="tool-call"] > [data-ui="chip"]');
     if (!chip) return;
     const msgEl = chip.closest(".msg");
     const room = currentRoom();
     const m = room && msgEl && HistoryWindow.knownMessages(room).find((x) => x.id === msgEl.dataset.id);
     if (!m) return;
-    if (openTools.has(chip.dataset.tool)) openTools.delete(chip.dataset.tool);
+    toolDetailsCache.delete(toolDetailsKey(room, m, chip.dataset.tool));
+    if (!retry && openTools.has(chip.dataset.tool)) openTools.delete(chip.dataset.tool);
     else openTools.add(chip.dataset.tool);
     updateMessageElement(msgEl, room, m);
   });
   function updateMessageElement(el, room, m, parts, toolIds) {
-    const want = (part) => !m.streaming || !parts || parts.has(part);
+    el.dataset.seq = String(m.seq);
+    el.dataset.from = m.from;
+    measuredRows.delete(m.id);
+    if (room.history?.indexed) (room.dirtyHeights ||= new Set()).add(m.id);
+    if (m.pinned) measuredRows.delete("pins");
+    if (m.bodyMissing) { fillBodyPlaceholder(el, room, m); noteDrawn(el, m); return; }
+    if (el.classList.contains("history-placeholder")) { el.replaceWith(messageElement(room, m)); return; }
+    applyMessageElement(el, room, m, parts, toolIds);
+    noteDrawn(el, m);
+  }
+  function applyMessageElement(el, room, m, parts, toolIds) {
+    let branch = el.querySelector(".carry-branch");
+    if (m.branch && el.querySelector(".head")) {
+      if (!branch) { branch = document.createElement("span"); branch.className = "carry-branch"; el.querySelector(".head .name")?.after(branch); }
+      const label = (room.sources || []).find(source => source.uuid === m.branch.source)?.label || "another copy";
+      branch.textContent = `branch · ${label}`;
+      branch.title = "This part of the conversation was kept from a parallel branch.";
+    } else branch?.remove();
+    const want = (part) => !m.streaming || !parts || parts.has(part) || deferredMessageParts.get(el)?.has(part);
     el.dataset.streaming = m.streaming ? "1" : "0";
     el.classList.toggle("hidden-by-search", !messageMatches(m));
     const wasPinned = el.classList.contains("pinned");
@@ -2763,13 +3104,13 @@
       words.className = "words";
       text.replaceChildren(words);
     }
-    if (want("text")) {
+    if (want("text") && canPaintMessagePart(el, "text")) {
       if (m.streaming && m.text && !(m.images && m.images.length) && !(m.quotes && m.quotes.length)) renderStreamingWords(room, words, m.text);
-      else words.innerHTML = renderText(room, m.text, m.images, m.quotes);
+      else words.innerHTML = renderText(room, long && !expanded ? clampedSource(m.text) : m.text, m.images, m.quotes);
       if (!m.streaming) {
         renderPreviews(words, m);
         linkRelativePaths(words, m);
-        const finish = () => { renderDiagrams(words); highlightBlocks(words); };
+        const finish = () => { if (canPaintMessagePart(el, "text")) { renderDiagrams(words); highlightBlocks(words); } };
         if (Date.now() - lastTypedAt < TYPING_WINDOW_MS) setTimeout(() => { if (words.isConnected) finish(); }, TYPING_WINDOW_MS);
         else finish();
       }
@@ -2791,24 +3132,33 @@
     more.hidden = !long;
     more.textContent = expanded ? "Show less" : "Show more";
     const stopNote = el.querySelector(".stop-note");
-    if (stopNote) stopNote.innerHTML = !m.streaming && m.stopReason === "cancelled" ? UI.html("reply-note", { text: stopNoteText(m, (state.settings || {}).humanName), tone: "attention", icon: "stop" }) : "";
+    if (stopNote) stopNote.innerHTML = m.streaming ? ""
+      : m.stopReason === "cancelled" ? UI.html("reply-note", { text: stopNoteText(m), tone: "attention", icon: "stop" })
+      : m.failed ? UI.html("reply-note", { text: failNoteText(m), tone: "error", icon: "alert" })
+      : "";
     renderShots(el.querySelector(".shots"), room, m);
     renderWaiting(el, room, m);
     const thought = el.querySelector(".thought");
-    if (m.thought && want("thought")) {
+    if (m.thought && want("thought") && canPaintMessagePart(el, "thought")) {
       thought.hidden = false;
       thought.querySelector(".thought-text").textContent = m.thought;
     }
     el.querySelector(".agent-notices").innerHTML = (m.notices || []).map((n) => UI.html("reply-note", { text: n, tone: "attention" })).join("");
     if (want("tools")) {
       const tools = el.querySelector(".tools");
+      const heldChips = !canPaintMessagePart(el, "tools");
+      if (heldChips) tools.dataset.held = "1";
       const calls = m.toolCalls || [];
       const chipFor = (call) => {
-        const input = call.rawInput === undefined ? "" : typeof call.rawInput === "string" ? call.rawInput : JSON.stringify(call.rawInput, null, 1);
-        return UI.el("tool-call", { id: call.toolCallId, title: call.title, kind: call.kind || undefined, variant: call.messageCheck ? "message-check" : call.historySearch ? "history-search" : "tool", status: TOOL_STATUSES.has(call.status) ? call.status : "pending", open: openTools.has(call.toolCallId), input: input || undefined, output: call.output || undefined });
+        const open = openTools.has(call.toolCallId);
+        const loaded = open ? toolDetailsFor(room, m, call) : { state: "ready", value: call };
+        const detail = loaded.value;
+        const input = !open || detail.rawInput === undefined ? "" : typeof detail.rawInput === "string" ? detail.rawInput : JSON.stringify(detail.rawInput, null, 1);
+        return UI.el("tool-call", { id: call.toolCallId, title: detail.title, kind: call.kind || undefined, variant: call.messageCheck ? "message-check" : call.historySearch ? "history-search" : "tool", status: TOOL_STATUSES.has(call.status) ? call.status : "pending", open, loadState: loaded.state, input: input || undefined, output: open ? detail.output || undefined : undefined });
       };
-      const some = m.streaming && parts && toolIds && !tools.querySelector(":scope > details");
-      if (some) {
+      const some = m.streaming && parts && toolIds && tools.dataset.held !== "1" && !tools.querySelector(":scope > details");
+      if (heldChips) {
+      } else if (some) {
         for (const id of toolIds) {
           const call = calls.find((c) => c.toolCallId === id);
           if (!call) continue;
@@ -2820,6 +3170,7 @@
           }
         }
       } else {
+        delete tools.dataset.held;
         tools.innerHTML = "";
         const folded = !m.streaming && calls.length > 0;
         let host = tools;
@@ -2829,11 +3180,14 @@
             if (group.open) openToolGroups.add(m.id);
             else openToolGroups.delete(m.id);
             group.querySelector("summary").title = group.open ? "Fold the tool calls away" : "Show every tool call";
+            const list = group.querySelector(".list");
+            if (group.open && !list.childElementCount) for (const call of calls) list.appendChild(chipFor(call));
+            else if (!group.open) list.replaceChildren();
           });
           tools.appendChild(group);
           host = group.querySelector(".list");
         }
-        for (const call of calls) host.appendChild(chipFor(call));
+        if (!folded || openToolGroups.has(m.id)) for (const call of calls) host.appendChild(chipFor(call));
       }
     }
     const plan = el.querySelector(".plan");
@@ -2850,27 +3204,46 @@
       meta.innerHTML = parts.length ? `<span class="stats">${parts.join('<span class="sep">·</span>')}</span>` : "";
       fillSeen(el, room, m);
     } else if (m.from === "human") fillSeen(el, room, m);
-    else meta.innerHTML = liveMetaHtml(m) ? `<span class="stats">${liveMetaHtml(m)}</span>` : "";
+    else meta.innerHTML = liveMetaHtml(room, m) ? `<span class="stats">${liveMetaHtml(room, m)}</span>` : "";
   }
 
-  function elapsedLabel(ms) {
-    const total = Math.max(0, Math.round(ms / 1000));
-    if (total < 60) return `${total} s`;
-    const seconds = String(total % 60).padStart(2, "0");
-    const minutes = Math.floor(total / 60) % 60;
-    const hours = Math.floor(total / 3600);
-    return hours ? `${hours}h ${String(minutes).padStart(2, "0")}m ${seconds}s` : `${minutes}m ${seconds}s`;
-  }
-  function liveMetaHtml(m) {
+  function liveMetaHtml(room, m) {
     if (!m.streaming || !m.ts) return "";
+    return `<span class="live" data-from="${esc(m.from)}" data-since="${m.ts}" title="what this reply is doing, and when it last showed a sign">${liveSignHtml(room, m)}</span>`;
+  }
+  function lastSignFor(room, m) {
+    const who = room && findById(room, m.from);
+    return (who && who.lastSignAt) || m.ts;
+  }
+  const DOING = { read: "reading", edit: "editing", delete: "deleting", move: "moving files", search: "searching", execute: "running a command", think: "thinking", fetch: "fetching" };
+  function whatIsHappening(m) {
+    const calls = m.toolCalls || [];
+    const running = [...calls].reverse().find((c) => c.status === "pending" || c.status === "in_progress");
+    if (running) return DOING[running.kind] || "working";
+    return m.text ? "writing" : "thinking";
+  }
+  function staleLabel(ms) {
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 20) return "";
+    if (seconds < 60) return `last sign ${Math.floor(seconds / 10) * 10}s ago`;
+    return `last sign ${Math.floor(seconds / 60)}m ago`;
+  }
+  function liveSignHtml(room, m) {
+    const stale = staleLabel(Date.now() - lastSignFor(room, m));
+    const doing = whatIsHappening(m);
     const calls = (m.toolCalls || []).length;
-    const tools = !m.text && calls ? `<span class="sep">·</span><span title="tool calls so far">${ic("tool")} ${calls}</span>` : "";
-    return `<span class="live" data-since="${m.ts}" title="how long this reply has been coming">${ic("clock")} ${elapsedLabel(Date.now() - m.ts)}</span>${tools}`;
+    const elapsed = fmtDuration(Math.max(0, Date.now() - (m.ts || Date.now()))) || "0 s";
+    const parts = [`<span title="Time spent on this reply">${ic("clock")} ${elapsed}</span>`, `<span>${esc(doing)}</span>`];
+    if (calls) parts.push(`<span title="Tool calls in this reply">${ic("tool")} ${calls} tool ${calls === 1 ? "call" : "calls"}</span>`);
+    if (stale) parts.push(`<span title="Time since the last sign of activity">${stale}</span>`);
+    return parts.join('<span class="sep">·</span>');
   }
   function tickLive() {
+    const room = currentRoom();
+    if (!room) return;
     for (const span of els.messages.querySelectorAll(".meta .live")) {
-      const since = Number(span.dataset.since);
-      if (since) span.innerHTML = `${ic("clock")} ${elapsedLabel(Date.now() - since)}`;
+      const m = drawnFrom.get(span.closest(".msg"));
+      if (m && m.streaming) span.innerHTML = liveSignHtml(room, m);
     }
   }
 
@@ -2969,6 +3342,7 @@
     if (!page || !page.classList.contains("msgs-page") || page.childElementCount >= PAGE_SIZE) {
       page = document.createElement("div");
       page.className = "msgs-page";
+      page.dataset.page = "";
       host.appendChild(page);
     }
     page.appendChild(el);
@@ -2976,7 +3350,13 @@
   function topInList(el) {
     const page = el.parentElement;
     if (!page || !page.classList.contains("msgs-page")) return el.offsetTop;
-    if (els.messages.classList.contains("searching") || page.firstElementChild.checkVisibility({ contentVisibilityAuto: true })) return page.offsetTop + el.offsetTop;
+    const first = page.firstElementChild;
+    const laidOut = !first || typeof first.checkVisibility !== "function" || first.checkVisibility({ contentVisibilityAuto: true });
+    if (els.messages.classList.contains("searching") || laidOut) {
+      let top = 0;
+      for (let node = el; node && node !== els.messages; node = node.offsetParent) top += node.offsetTop;
+      return top;
+    }
     let i = 0;
     for (let n = el.previousElementSibling; n; n = n.previousElementSibling) i++;
     return page.offsetTop + (page.offsetHeight * i) / page.childElementCount;
@@ -2985,11 +3365,18 @@
   function readerAnchor() {
     const m = els.messages;
     const top = m.scrollTop;
+    let previous = null;
     for (const el of m.querySelectorAll(".msg[data-id]")) {
       const y = topInList(el);
-      if (y + el.offsetHeight > top) return { id: el.dataset.id, into: y - top };
+      if (y > top) return previous ? { id: previous.el.dataset.id, into: previous.y - top } : { id: el.dataset.id, into: y - top };
+      previous = { el, y };
     }
-    return null;
+    return previous ? { id: previous.el.dataset.id, into: previous.y - top } : null;
+  }
+  let settledReader = null;
+  function rememberReader() {
+    if (state.view !== "room" || !currentRoom()) return;
+    settledReader = { roomId: state.currentRoomId, anchor: stuck ? null : readerAnchor(), stamp: pricesStamp(), following: stuck };
   }
   let readerRestoreCleanup = null;
   function restoreReader(anchor) {
@@ -2997,6 +3384,10 @@
     if (!anchor) return false;
     const el = els.messages.querySelector(`.msg[data-id="${CSS.escape(anchor.id)}"]`);
     if (!el) return false;
+    if (els.messages.classList.contains("windowed")) {
+      els.messages.scrollTop += Layout.rect(el).top - Layout.rect(els.messages).top - anchor.into;
+      return true;
+    }
     const page = el.closest(".msgs-page");
     const pageVisibility = page?.style.contentVisibility || "";
     if (page) page.style.contentVisibility = "visible";
@@ -3045,26 +3436,10 @@
   let listRoomId = null;
   function showRoomList(why) {
     const room = currentRoom();
+    if (room?.history?.bodyProtocol && !room.history.indexed && !room.historyRestoring) void refreshHeld(room.id);
     if (room?.restoreFrom && !room.historyRestoring) void refreshHeld(room.id, room.restoreFrom);
     if (room?.historyRestoring) return renderMessages(why);
-    if (!room || listRoomId !== room.id || !els.messages.firstElementChild) return renderMessages(why);
-    const t0 = performance.now();
-    const have = new Map();
-    for (const el of els.messages.querySelectorAll(".msg[data-id]")) have.set(el.dataset.id, el);
-    const live = new Set([...room.messages, ...(room.pinnedOlder || [])].map((m) => m.id));
-    let gone = 0;
-    for (const [id, el] of have) if (!live.has(id)) { el.remove(); have.delete(id); gone++; }
-    let added = 0;
-    const parts = foldParts(room);
-    for (const m of [...parts.above, ...parts.drawn]) {
-      const el = have.get(m.id);
-      if (!el) { upsertMessage(room.id, m); added++; }
-      else if (m.streaming || el.dataset.streaming === "1") updateMessageElement(el, room, m);
-    }
-    syncRecovery(room);
-    refreshSeen(room);
-    renderTimeline();
-    noteSlow(`the list caught up (${added} new, ${gone} gone)`, performance.now() - t0);
+    return renderMessages(why);
   }
   const { FOLD_SHOWN, FOLD_STEP } = Fold;
   const foldAnchor = new Map();
@@ -3088,6 +3463,7 @@
     else listRoomId = null;
   }
   function foldIndex(room) {
+    if (room.history?.indexed) return 0;
     let anchor = foldAnchor.get(room.id);
     const shown = foldShown(room);
     if (!anchor && room.messages.length >= shown) {
@@ -3098,17 +3474,16 @@
         : Fold.anchorAt(room.messages, index);
       foldAnchor.set(room.id, anchor);
     }
-    let index = Fold.foldIndexFor(room.messages, anchor, shown);
-    if (room.history?.handedFromSeq !== undefined) {
-      const handed = room.messages.findIndex(m => m.seq >= room.history.handedFromSeq);
-      if (handed >= 0) index = Math.min(index, handed);
-    }
-    return index;
+    return Fold.foldIndexFor(room.messages, anchor, shown);
   }
-  const remoteHidden = (room) => (room && room.history ? room.history.hidden : 0);
+  const remoteHidden = (room) => (room?.history?.indexed ? 0 : room && room.history ? room.history.hidden : 0);
   const foldHidden = (room) => foldIndex(room) + remoteHidden(room);
   function setFoldIndex(room, index) {
-    foldAnchor.set(room.id, Fold.anchorAt(room.messages, index));
+    if (room.history?.indexed) return;
+    const anchor = Fold.anchorAt(room.messages, index);
+    const first = room.messages[Math.max(0, index)];
+    foldAnchor.set(room.id, anchor.all && remoteHidden(room) && first
+      ? { id: first.id, order: first.displayOrder ?? first.seq } : anchor);
   }
   function foldParts(room) {
     const local = Fold.partsOf(room.messages, foldIndex(room));
@@ -3120,6 +3495,81 @@
   }
   const cursorOf = (m) => ({ order: m.displayOrder != null ? m.displayOrder : m.seq, seq: m.seq });
   const before = (a, b) => a.order < b.order || (a.order === b.order && a.seq < b.seq);
+  function trimBodyCache(room, extra = []) {
+    if (!room.history?.bodyProtocol) return;
+    if (!room.history.indexed) {
+      const keep = new Set(room.messages.slice(-80).map(m => m.id));
+      room.messages = room.messages.filter(m => keep.has(m.id) || m.streaming || m.pending);
+      syncHistoryCount(room);
+      return;
+    }
+    const protectedIds = new Set(extra);
+    if (currentRoom() === room && state.view === "room") {
+      for (const el of els.messages.querySelectorAll(".msg[data-id]")) protectedIds.add(el.dataset.id);
+    }
+    WindowBodies.trim(room, protectedIds);
+  }
+  function fillBodyPlaceholder(el, room, m) {
+    el.className = "msg history-placeholder";
+    const size = measuredRows.get(m.id) ?? (rowPrices.fallback ? priceItem({ kind: "msg", m }) : 100);
+    el.style.minHeight = `${Math.max(64, size)}px`;
+    el.setAttribute("aria-busy", m.bodyError ? "false" : "true");
+    const label = m.bodyError ? "This message could not be loaded." : "Loading message…";
+    if (el.dataset.loadLabel === label) return;
+    el.dataset.loadLabel = label;
+    el.innerHTML = `<span>${esc(m.fromName || "Room")} · ${esc(label)}</span>${m.bodyError ? '<button class="linklike">Try again</button>' : ""}`;
+    el.querySelector("button")?.addEventListener("click", () => {
+      const visible = [...els.messages.querySelectorAll(".msg[data-id]")].map(node => node.dataset.id);
+      void loadBodies(room, [...new Set([m.id, ...visible])], true);
+    });
+  }
+  async function loadBodies(room, ids, retry = false) {
+    if (!room.history?.indexed || state.rooms.get(room.id) !== room) return false;
+    while (room.bodyFlight) { await room.bodyFlight; if (state.rooms.get(room.id) !== room) return false; }
+    const wanted = new Set(ids);
+    const missing = room.messages.filter(m => wanted.has(m.id) && m.bodyMissing && (retry || !m.bodyError)).slice(0, 64);
+    if (!missing.length) return ids.every(id => room.messages.some(m => m.id === id && !m.bodyMissing));
+    for (const m of missing) delete m.bodyError;
+    const requested = missing.map(m => m.id);
+    const flight = (async () => {
+      try {
+        let races = 0;
+        for (let part = 0; part < requested.length + 2; part++) {
+          const known = new Map(room.messages.map(m => [m.id, m]));
+          const remaining = requested.filter(id => known.get(id)?.bodyMissing);
+          if (!remaining.length) return requested.every(id => known.has(id));
+          const generation = room.historyGeneration;
+          const q = new URLSearchParams({ version: room.history.version });
+          for (const id of remaining) q.append("id", id);
+          try {
+            const page = await get(`/api/rooms/${encodeURIComponent(room.id)}/history/bodies?${q}`);
+            if (state.rooms.get(room.id) !== room) return false;
+            if (!WindowBodies.merge(room, page, generation)) {
+              if (++races > 1) break;
+              continue;
+            }
+            const arrived = page.messages.filter(body => room.messages.some(m => m.id === body.id && !m.bodyMissing));
+            if (!arrived.length) { if (++races > 1) break; continue; }
+            trimBodyCache(room, requested);
+            if (currentRoom() === room && state.view === "room") renderMessagesSoon("message bodies arrived");
+            if (requested.every(id => room.messages.some(m => m.id === id && !m.bodyMissing))) return true;
+          } catch (error) {
+            if (error.code !== "history_changed" || ++races > 1) throw error;
+            if (!await refreshHeld(room.id)) throw error;
+          }
+        }
+        throw new Error("The conversation changed while these messages loaded. Try again.");
+      } catch (error) {
+        if (state.rooms.get(room.id) === room) {
+          for (const m of room.messages) if (wanted.has(m.id) && m.bodyMissing) m.bodyError = error.message;
+          if (currentRoom() === room && state.view === "room") renderMessagesSoon("message loading failed");
+        }
+        return false;
+      }
+    })();
+    room.bodyFlight = flight;
+    try { return await flight; } finally { if (room.bodyFlight === flight) room.bodyFlight = null; }
+  }
   function syncHistoryCount(room) {
     if (room.history?.total === undefined) return;
     room.history.hidden = Math.max(0, room.history.total - room.messages.filter(m => m.seq > 0 && !m.streaming).length);
@@ -3178,15 +3628,20 @@
         const ticket = HistoryWindow.capture(room);
         const q = new URLSearchParams();
         if (ticket.epoch) q.set("epoch", ticket.epoch);
-        if (wanted.all || foldAnchor.get(roomId)?.all) q.set("all", "1");
+        if (room.history?.bodyProtocol) q.set("index", "1");
+        else if (wanted.all || foldAnchor.get(roomId)?.all) q.set("all", "1");
         else if (from) q.set("from", `${from.order}:${from.seq}`);
         if (wanted.seq !== undefined) q.set("seq", wanted.seq);
+        if (wanted.messageId) q.set("message", wanted.messageId);
         const fresh = await get(`/api/rooms/${encodeURIComponent(roomId)}?${q}`);
         if (state.rooms.get(roomId) !== room || room.historyRequest !== request) return false;
         if (!HistoryWindow.acceptSnapshot(room, fresh, ticket)) continue;
+        if (fresh.history?.indexed) WindowBodies.retain(room, fresh);
         room.messages = (fresh.messages || []).sort(HistoryWindow.compareMessages);
         room.history = fresh.history;
         room.pinnedOlder = fresh.pinnedOlder || [];
+        room.bodyChanges = new Map();
+        room.indexError = null;
         const arrived = room.historyEvents;
         room.historyEvents = null;
         for (const event of arrived) if (event.streamSequence > (fresh.history?.streamSequence ?? Infinity)) onRoomEvent(roomId, event);
@@ -3194,11 +3649,18 @@
         room.historyRestoring = false;
         room.historyGeneration = (room.historyGeneration || 0) + 1;
         let anchor = reader;
+        const targetIndex = wanted.messageId ? room.messages.findIndex(m => m.id === wanted.messageId)
+          : wanted.seq !== undefined ? room.messages.findIndex(m => m.seq === wanted.seq) : -1;
+        if (targetIndex >= 0) {
+          setFoldIndex(room, Math.min(foldIndex(room), Math.max(0, targetIndex - Fold.FOLD_STEP)));
+          anchor = { id: room.messages[targetIndex].id, into: 12 };
+        }
         if (anchor && !HistoryWindow.knownMessages(room).some(m => m.id === anchor.id)) {
           const replacement = oldMessage && room.messages.find(m => !before(cursorOf(m), cursorOf(oldMessage)));
           anchor = replacement ? { ...anchor, id: replacement.id } : null;
         }
         if (roomId === state.currentRoomId && state.view === "room") {
+          if (targetIndex >= 0) leaveTheEnd();
           renderMessages("the loaded history was refreshed", anchor);
           renderSideRoom();
         }
@@ -3207,7 +3669,10 @@
       }
       throw new Error("The conversation is changing. Try loading its history again.");
     } catch (error) {
-      if (state.rooms.get(roomId) === room && room.historyRequest === request) showError(error);
+      if (state.rooms.get(roomId) === room && room.historyRequest === request) {
+        room.indexError = error.message;
+        showError(error);
+      }
       return false;
     } finally {
       if (room.historyRequest === request) {
@@ -3240,54 +3705,20 @@
     setFoldIndex(room, more === "all" ? 0 : oldIndex - more);
     if (roomId !== state.currentRoomId || state.view !== "room" || listRoomId !== room.id) return;
     const ceiling = els.messages.querySelector(".fold-ceiling");
-    if (more === "all" || !ceiling) return renderMessages(why, undefined, more !== "all");
+    if (more === "all" || !ceiling) return renderMessages(why);
     const t0 = performance.now();
-    const anchor = readerAnchor();
-    const parts = foldParts(room);
     const stretch = room.messages.slice(foldIndex(room), oldIndex);
-    const arrived = [];
-    let at = ceiling;
-    let lastDay = "";
-    const insert = (el) => { el.style.contentVisibility = "visible"; at.after(el); at = el; };
-    for (const m of stretch) {
-      const day = dayLabel(m.ts);
-      if (day !== lastDay) {
-        const d = document.createElement("div");
-        d.className = "day";
-        d.textContent = day;
-        d.title = new Date(m.ts).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-        insert(d);
-        lastDay = day;
-      }
-      const drawn = els.messages.querySelector(`.msg[data-id="${CSS.escape(m.id)}"]`);
-      if (drawn) {
-        drawn.classList.remove("above-fold");
-        at.after(drawn);
-        at = drawn;
-      } else {
-        const el = messageElement(room, m);
-        el.classList.add("history-static", "history-arriving");
-        insert(el);
-        arrived.push(el);
-      }
+    const standing = new Set([...els.messages.querySelectorAll(".msg[data-id]")].map((el) => el.dataset.id));
+    arriving = new Set(stretch.map((m) => m.id));
+    try {
+      renderMessages(why);
+    } finally {
+      arriving = null;
     }
-    const next = at.nextElementSibling;
-    if (next && next.classList.contains("day") && next.textContent === lastDay) next.remove();
-    const pins = els.messages.querySelector(".history-pins");
-    if (pins) {
-      for (const day of pins.querySelectorAll(".day")) {
-        let next = day.nextElementSibling;
-        if (!next) next = day.parentElement.nextElementSibling?.firstElementChild;
-        if (!next || next.classList.contains("day")) day.remove();
-      }
-      for (const page of pins.querySelectorAll(".msgs-page")) if (!page.childElementCount) page.remove();
-      if (!parts.above.length) pins.remove();
-      else pins.querySelector(".history-pins-label").lastChild.textContent = `${parts.above.length} pinned from earlier`;
-    }
-    updateHistoryBoundary(room, parts.hidden, parts.above.length);
-    restoreReader(anchor);
-    refreshSeen(room);
-    renderTimeline();
+    const arrived = stretch
+      .filter((m) => !standing.has(m.id))
+      .map((m) => els.messages.querySelector(`.msg[data-id="${CSS.escape(m.id)}"]`))
+      .filter(Boolean);
     noteSlow(`${stretch.length} older messages drawn (${why})`, performance.now() - t0);
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const animate = !document.hidden && currentRoom() === room && state.view === "room";
@@ -3296,6 +3727,15 @@
         if (animate && el.isConnected) el.classList.replace("history-static", "history-arrived");
       }
     }));
+  }
+
+  async function revealQuote(ref) {
+    const seq = Number(ref.seq);
+    if (seq > 0) return revealSeq(seq);
+    const live = ref.quotedId ? els.messages.querySelector(`.msg[data-id="${CSS.escape(ref.quotedId)}"]`) : null;
+    if (live) return jumpToMessage(live);
+    toast("That reply never finished, so there is no message to go to.", "warn");
+    return false;
   }
   async function revealSeq(seq) {
     const room = currentRoom();
@@ -3308,12 +3748,84 @@
       index = room.messages.findIndex((m) => m.seq === seq);
     }
     if (index < 0) return false;
+    if (room.messages[index].bodyMissing && !await loadBodies(room, [room.messages[index].id], true)) {
+      toast("This message could not be loaded. Try again when the connection is back.", "warn");
+      return false;
+    }
+    if (currentRoom() !== room) return false;
     if (loaded || index < foldIndex(room)) {
       setFoldIndex(room, Math.max(0, index - FOLD_STEP));
-      renderMessages("a message above the fold was asked for");
+    }
+    if (!els.messages.querySelector(`.msg[data-seq="${CSS.escape(String(seq))}"]`)) {
+      leaveTheEnd();
+      renderMessages("a message was asked for", { id: room.messages[index].id, into: 12 });
     }
     return jumpToMessage(els.messages.querySelector(`.msg[data-seq="${CSS.escape(String(seq))}"]`));
   }
+  function releaseFold(room) {
+    if (room?.history?.indexed) { trimBodyCache(room); return false; }
+    const anchor = room && foldAnchor.get(room.id);
+    if (!anchor || !Fold.anchorSurplus(room.messages, anchor, foldShown(room))) return false;
+    foldAnchor.delete(room.id);
+    if (room.id !== state.currentRoomId || state.view !== "room" || listRoomId !== room.id) return true;
+    const started = performance.now();
+    const before = els.messages.querySelectorAll(".msg[data-id]").length;
+    renderMessages("the list gave the fold back");
+    const removed = before - els.messages.querySelectorAll(".msg[data-id]").length;
+    noteSlow(`the list gave back ${removed} rows`, performance.now() - started);
+    return true;
+  }
+
+  els.messages.addEventListener("copy", (event) => {
+    const selection = getSelection();
+    const room = currentRoom();
+    if (!selection || selection.isCollapsed || !selection.rangeCount || !room) return;
+    const chosen = selection.getRangeAt(0);
+    if ([...els.messages.querySelectorAll(".history-placeholder")].some(node => chosen.intersectsNode(node))) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      toast("Some selected messages are still loading. Load or retry them before copying.", "warn");
+      return;
+    }
+    const parts = [];
+    const shaped = [];
+    let whole = false;
+    for (const msg of els.messages.querySelectorAll(".msg[data-id]")) {
+      const words = msg.querySelector(".text > .words");
+      if (!words || !selection.containsNode(words, true)) continue;
+      const m = room.messages.find((x) => x.id === msg.dataset.id);
+      if (m && msg.querySelector(".text.clamped") && selection.containsNode(words, false)) {
+        parts.push(m.text);
+        shaped.push(copyableHtml(msg, m));
+        whole = true;
+        continue;
+      }
+      const inside = document.createRange();
+      inside.selectNodeContents(words);
+      if (chosen.compareBoundaryPoints(Range.START_TO_START, inside) > 0) inside.setStart(chosen.startContainer, chosen.startOffset);
+      if (chosen.compareBoundaryPoints(Range.END_TO_END, inside) < 0) inside.setEnd(chosen.endContainer, chosen.endOffset);
+      parts.push(inside.toString());
+      const shape = document.createElement("div");
+      shape.appendChild(inside.cloneContents());
+      shaped.push(shape.innerHTML);
+    }
+    if (!whole || !event.clipboardData) return;
+    event.clipboardData.setData("text/plain", parts.filter((p) => p && p.trim()).join("\n\n"));
+    event.clipboardData.setData("text/html", shaped.filter((p) => p && p.trim()).join("<br><br>"));
+    event.preventDefault();
+  });
+
+  const FOLD_SETTLE_MS = 2000;
+  let foldSettleTimer = 0;
+  function foldSettleSoon() {
+    clearTimeout(foldSettleTimer);
+    if (!stuck) return;
+    const settling = state.currentRoomId;
+    foldSettleTimer = setTimeout(() => {
+      const room = currentRoom();
+      if (stuck && room && room.id === settling && state.view === "room" && !room.messages.some((m) => m.streaming)) releaseFold(room);
+    }, FOLD_SETTLE_MS);
+  }
+
   function ceilingElement(room, hidden, pinned) {
     const el = document.createElement("div");
     el.className = "fold-ceiling";
@@ -3391,18 +3903,30 @@
     }
   }
   let foldBusy = false;
-  function requestHistoryAtTop() {
-    if (foldBusy || els.messages.scrollTop > 4) return;
+  function historyBoundaryReached() {
+    const ceiling = els.messages.querySelector(".fold-ceiling");
+    if (!ceiling) return false;
+    const box = Layout.rect(els.messages), boundary = Layout.rect(ceiling);
+    return boundary.bottom >= box.top && boundary.top <= box.bottom;
+  }
+  function requestHistoryAtTop(intent = false) {
+    if (state.view !== "room" || foldBusy || !historyBoundaryReached()) return;
+    if (!intent && Date.now() - lastUserScrollAt > 700) return;
     const room = currentRoom();
     if (!room || !foldHidden(room)) return;
     foldBusy = true;
     setTimeout(async () => {
       try {
-        if (currentRoom() === room && state.view === "room" && els.messages.scrollTop <= 4) await requestOlder(room, FOLD_STEP, "the reader reached the ceiling");
+        if (currentRoom() === room && state.view === "room" && historyBoundaryReached()) await requestOlder(room, FOLD_STEP, "the reader reached the ceiling");
       } finally { foldBusy = false; }
     }, 180);
   }
-  els.messages.addEventListener("scroll", requestHistoryAtTop, { passive: true });
+  let historyScrollTop = 0;
+  els.messages.addEventListener("scroll", () => {
+    const top = els.messages.scrollTop, up = top < historyScrollTop;
+    historyScrollTop = top;
+    if (up) requestHistoryAtTop();
+  }, { passive: true });
   function canPullEarlier(event) {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false;
     if (els.messages.contains(event.target)) for (let node = event.target; node && node !== els.messages; node = node.parentElement) {
@@ -3410,100 +3934,660 @@
     }
     return true;
   }
-  els.messages.addEventListener("wheel", event => { if (event.deltaY < 0 && canPullEarlier(event)) requestHistoryAtTop(); }, { passive: true });
+  els.messages.addEventListener("wheel", event => { if (event.deltaY < 0 && canPullEarlier(event)) requestHistoryAtTop(true); }, { passive: true });
   document.addEventListener("keydown", event => {
     if (!["ArrowUp", "PageUp", "Home"].includes(event.key) || !canPullEarlier(event) || event.target.closest?.("input, textarea, select, [contenteditable]")) return;
-    if (event.target === document.body || els.messages.contains(event.target)) requestHistoryAtTop();
+    if (event.target === document.body || els.messages.contains(event.target)) requestHistoryAtTop(true);
   });
 
-  function renderMessages(why, savedAnchor, animate = true) {
-    const t0 = performance.now();
-    const room = currentRoom();
-    if (room?.historyRestoring) {
-      if (listRoomId !== room.id) {
-        const controls = els.messages.querySelector(".history-load");
-        if (controls) historyHintObserver.unobserve(controls);
-        els.messages.textContent = "Loading conversation…";
-      }
-      listRoomId = room.id;
-      return;
+  function dayElement(day, ts) {
+    const el = document.createElement("div");
+    el.className = "day";
+    el.textContent = day;
+    el.title = new Date(ts).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    return el;
+  }
+
+  const drawnFrom = new WeakMap();
+  let arriving = null;
+  let listGeneration = 0;
+  let listSearch = null;
+  function noteDrawn(el, m) {
+    drawnFrom.set(el, m);
+    el.dataset.gen = String(listGeneration);
+    el.dataset.w = String((m.text || "").length);
+  }
+
+  const itemLists = new WeakMap();
+  function listItems(room) {
+    const cacheKey = room.history?.indexed ? `${room.history.version}|${visibilityFingerprint(room)}|${new Date().toDateString()}` : null;
+    const cached = cacheKey && itemLists.get(room);
+    if (cached && cached.key === cacheKey && cached.messages === room.messages && cached.count === room.messages.length) return cached.items;
+    const items = [];
+    const { hidden, drawn, above } = foldParts(room);
+    if (hidden) {
+      if (above.length) items.push({ kind: "pins", name: "pins", above });
+      items.push({ kind: "ceiling", name: "ceiling", hidden, pinned: above.length });
     }
-    listRoomId = room ? room.id : null;
-    const anchor = savedAnchor !== undefined ? savedAnchor : stuck ? null : readerAnchor();
-    const oldControls = els.messages.querySelector(".history-load");
-    if (oldControls) historyHintObserver.unobserve(oldControls);
-    els.messages.innerHTML = "";
-    els.messages.classList.toggle("searching", !!state.search);
-    if (!room) return;
-    if (!room.messages.length) {
-      els.messages.innerHTML = `<div class="empty"><div class="art">${ic("chat")}</div><strong>${esc(room.name)}</strong> is quiet.<br>Summon a vibemate from the left, then say hello. Use @Name to address someone; without @ every vibemate hears you.</div>`;
-      return;
-    }
+    else if (!state.search) items.push({ kind: "beginning", name: "beginning" });
     const markers = visibilityMarkers(room);
     const placed = new Set();
     let lastDay = "";
-    const { hidden, drawn, above } = foldParts(room);
-    if (hidden) {
-      const pins = document.createElement("section");
-      pins.className = "history-pins";
-      pins.setAttribute("aria-label", "Pinned messages from earlier history");
-      pins.innerHTML = `<span class="history-rule" aria-hidden="true"></span><div class="history-pins-label">${ic("pin")}<span>${above.length} pinned from earlier</span></div>`;
-      if (above.length) els.messages.appendChild(pins);
-      for (const m of above) {
-        const day = dayLabel(m.ts);
-        if (day !== lastDay) {
-          const d = document.createElement("div");
-          d.className = "day";
-          d.textContent = day;
-          d.title = new Date(m.ts).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-          placeInList(d, pins);
-          lastDay = day;
-        }
-        const el = messageElement(room, m);
-        el.classList.add("above-fold");
-        if (!animate) el.classList.add("history-static");
-        placeInList(el, pins);
-      }
-      placeInList(ceilingElement(room, hidden, above.length));
-      lastDay = "";
-    }
     for (const m of drawn) {
       const day = dayLabel(m.ts);
       if (day !== lastDay) {
-        const d = document.createElement("div");
-        d.className = "day";
-        d.textContent = day;
-        d.title = new Date(m.ts).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-        placeInList(d);
+        items.push({ kind: "day", name: `day:${day}:${m.id}`, day, ts: m.ts });
         lastDay = day;
       }
       for (const [seq, agents] of markers) {
         if (placed.has(seq) || !(m.seq >= seq)) continue;
         if (m.seq > 0) {
           placed.add(seq);
-          placeInList(dividerElement(agents));
+          items.push({ kind: "mark", name: `mark:${seq}:${agents.map((p) => p.id).join(",")}`, agents });
         }
       }
-      const el = messageElement(room, m);
-      if (!animate) el.classList.add("history-static");
-      placeInList(el);
+      items.push({ kind: "msg", name: m.id, m });
     }
     for (const [seq, agents] of markers) {
-      if (!placed.has(seq)) placeInList(dividerElement(agents));
+      if (!placed.has(seq)) items.push({ kind: "mark", name: `mark:${seq}:${agents.map((p) => p.id).join(",")}`, agents });
     }
+    if (cacheKey) itemLists.set(room, { key: cacheKey, messages: room.messages, count: room.messages.length, items });
+    return items;
+  }
+
+  function listRow(room, item) {
+    switch (item.kind) {
+      case "space": {
+        const el = document.createElement("div");
+        el.className = "msgs-space";
+        el.setAttribute("aria-hidden", "true");
+        return el;
+      }
+      case "msg": {
+        const el = messageElement(room, item.m);
+        if (arriving && arriving.has(item.m.id)) el.classList.add("history-static", "history-arriving");
+        return el;
+      }
+      case "day": return dayElement(item.day, item.ts);
+      case "beginning": {
+        const el = document.createElement("div");
+        el.className = "conversation-start";
+        el.textContent = "The room starts here";
+        return el;
+      }
+      case "mark": return dividerElement(item.agents);
+      case "ceiling": return ceilingElement(room, item.hidden, item.pinned);
+      default: {
+        const pins = document.createElement("section");
+        pins.className = "history-pins";
+        pins.setAttribute("aria-label", "Pinned messages from earlier history");
+        pins.innerHTML = `<span class="history-rule" aria-hidden="true"></span><div class="history-pins-label">${ic("pin")}<span></span></div><div class="history-pins-rows"></div>`;
+        return pins;
+      }
+    }
+  }
+
+  function fillListRow(room, node, item, fresh) {
+    if (item.kind === "space") { node.style.height = `${Math.max(0, Math.round(item.px))}px`; return; }
+    if (item.kind === "pins") return fillPins(room, node, item.above);
+    if (fresh) return;
+    switch (item.kind) {
+      case "msg":
+        if (item.m.bodyMissing) { fillBodyPlaceholder(node, room, item.m); noteDrawn(node, item.m); return; }
+        if (!item.m.streaming && !deferredMessageParts.has(node) && drawnFrom.get(node) === item.m && listGeneration === Number(node.dataset.gen)) return;
+        updateMessageElement(node, room, item.m);
+        return;
+      case "ceiling":
+        updateHistoryBoundary(room, item.hidden, item.pinned);
+        return;
+      default:
+        return;
+    }
+  }
+
+  function fillPins(room, node, above) {
+    node.querySelector(".history-pins-label").lastElementChild.textContent = `${above.length} pinned from earlier`;
+    const rows = [];
+    let day = "";
+    for (const m of above) {
+      const label = dayLabel(m.ts);
+      if (label !== day) {
+        rows.push({ kind: "day", name: `day:${label}:${m.id}`, day: label, ts: m.ts });
+        day = label;
+      }
+      rows.push({ kind: "msg", name: m.id, m });
+    }
+    KeyedList.patch(node.querySelector(".history-pins-rows"), rows, {
+      key: "id",
+      id: (row) => row.name,
+      make: (row) => {
+        const el = listRow(room, row);
+        if (row.kind === "msg") el.classList.add("above-fold");
+        return el;
+      },
+      fill: (el, row, _at, born) => fillListRow(room, el, row, born),
+    });
+  }
+
+  const SAMPLE_ROWS = 40;
+  const rowPrices = { stamp: "", perKind: new Map(), fallback: null, middle: 0, gap: 0, chrome: 0, said: new Set() };
+  const rowInsets = new Map();
+  function rowFlowBox(node, borderSize) {
+    const style = getComputedStyle(node);
+    const top = parseFloat(style.marginTop) || 0, bottom = parseFloat(style.marginBottom) || 0;
+    let height = borderSize;
+    if (height === undefined) {
+      height = parseFloat(style.height);
+      if (!Number.isFinite(height)) height = node.offsetHeight;
+      else if (style.boxSizing !== "border-box") height += (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0)
+        + (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0);
+    }
+    return { height: Math.max(0, height + top + bottom), inset: top };
+  }
+  function itemKind(item) {
+    if (item.kind !== "msg") return item.kind;
+    const m = item.m;
+    const long = !m.streaming && (m.bodyChars ?? (m.text || "").length) > CLAMP_CHARS && !state.watched.has(m.id);
+    return long && !state.expanded.has(m.id) ? "clamped" : "open";
+  }
+  const itemWeight = (item) => (item.kind === "msg" ? item.m.bodyChars ?? (item.m.text || "").length : 0);
+  function priceItem(item) {
+    if (item.kind === "space") return item.px;
+    const kind = itemKind(item);
+    const price = rowPrices.perKind.get(kind);
+    if (price) return price.floor + price.rate * itemWeight(item);
+    if (!rowPrices.said.has(kind)) {
+      rowPrices.said.add(kind);
+      noteFinding(`the list has a row of a kind it has no price for (${kind}); its height is being guessed`);
+    }
+    return rowPrices.middle;
+  }
+  const pricesStamp = () =>
+    `${els.messages.clientWidth}|${document.documentElement.dataset.look || ""}|${document.documentElement.style.getPropertyValue("--chat-fs")}`;
+
+  function priceRows(room, items) {
+    const stamp = pricesStamp();
+    if (rowPrices.stamp === stamp) return !!rowPrices.fallback;
+    if (!room || !items?.length || !els.messages.clientWidth) return false;
+    items = items.filter(item => item.kind !== "msg" || !item.m.bodyMissing);
+    if (!items.length) return false;
+    const step = Math.max(1, Math.floor(items.length / SAMPLE_ROWS));
+    const sample = [];
+    const kinds = new Set();
+    for (let i = 0; i < items.length && sample.length < SAMPLE_ROWS; i += step) {
+      sample.push({ item: items[i] });
+      kinds.add(itemKind(items[i]));
+    }
+    for (let i = 0; i < items.length; i++) {
+      const kind = itemKind(items[i]);
+      if (kinds.has(kind)) continue;
+      kinds.add(kind);
+      sample.push({ item: items[i] });
+    }
+
+    const host = document.createElement("div");
+    host.style.cssText = "height:0;overflow:hidden;flex:0 0 0px";
+    const page = document.createElement("div");
+    page.className = "msgs-page";
+    page.style.contentVisibility = "visible";
+    host.appendChild(page);
+    const clones = sample.map(({ item }) => {
+      const row = listRow(room, item);
+      fillListRow(room, row, item, true);
+      row.style.contentVisibility = "visible";
+      page.appendChild(row);
+      return row;
+    });
+    els.messages.appendChild(host);
+    for (const inner of page.querySelectorAll(".msg, .msgs-page")) inner.style.contentVisibility = "visible";
+    const boxes = clones.map(clone => rowFlowBox(clone));
+    const heights = boxes.map(box => box.height);
+    sample.forEach(({ item }, at) => rowInsets.set(itemKind(item), boxes[at].inset));
+    const gap = parseFloat(getComputedStyle(page).rowGap) || 0;
+    const chrome = Math.max(0, rowFlowBox(page).height - heights.reduce((sum, h) => sum + h, 0) - gap * Math.max(0, heights.length - 1));
+    host.remove();
+
+    const byKind = new Map();
+    sample.forEach(({ item }, at) => {
+      const kind = itemKind(item);
+      const seen = byKind.get(kind) || { w: [], h: [] };
+      seen.w.push(itemWeight(item));
+      seen.h.push(heights[at]);
+      byKind.set(kind, seen);
+    });
+    rowPrices.perKind = new Map([...byKind].map(([kind, seen]) => [kind, fitHeight(seen.w, seen.h)]));
+    rowPrices.fallback = fitHeight(sample.map(({ item }) => itemWeight(item)), heights);
+    rowPrices.middle = heights.reduce((sum, h) => sum + h, 0) / heights.length;
+    rowPrices.said.clear();
+    rowPrices.gap = gap;
+    rowPrices.chrome = chrome;
+    rowPrices.stamp = stamp;
+    return true;
+  }
+
+  function fitHeight(weights, heights) {
+    const n = heights.length;
+    if (!n) return { floor: 0, rate: 0 };
+    const floor = Math.min(...heights);
+    const carried = weights.reduce((sum, w) => sum + w, 0);
+    const above = heights.reduce((sum, h) => sum + h, 0) - n * floor;
+    return { floor, rate: carried > 0 ? Math.max(0, above / carried) : 0 };
+  }
+
+  const MARGIN_SCREENS = 1;
+  let keepingScroll = null;
+  let followTimer = 0;
+  function followWindow() {
+    followTimer = 0;
+    const room = currentRoom();
+    if (!room || state.view !== "room" || !drawnWindow || room.historyRestoring) return;
+    if (rowPrices.stamp !== pricesStamp()) { repriceSoon(); return; }
+    const screen = els.messages.clientHeight;
+    const top = stuck ? Math.max(0, ListIndex.total(listAccount) - screen) : els.messages.scrollTop;
+    const needed = ListIndex.rangeFor(listAccount, Math.max(0, top - screen / 4), top + screen * 1.25);
+    if (needed.from >= drawnWindow.from && needed.to <= drawnWindow.to) return;
+    const next = drawnRange(listAccount.items);
+    if (!next || (next.from === drawnWindow.from && next.to === drawnWindow.to)) return;
+    keepingScroll = { top: els.messages.scrollTop, eye: eyeRow() };
+    try {
+      renderMessages("the window moved");
+    } finally {
+      keepingScroll = null;
+    }
+  }
+  function eyeRow() {
+    const box = Layout.rect(els.messages);
+    for (const row of els.messages.querySelectorAll(".msg[data-id]")) {
+      const r = Layout.rect(row);
+      if (r.bottom > box.top + 4 && r.top < box.bottom) return { id: row.dataset.id, at: r.top - box.top };
+    }
+    return null;
+  }
+  function holdTheEye(eye) {
+    if (!eye) return;
+    const row = els.messages.querySelector(`.msg[data-id="${CSS.escape(eye.id)}"]`);
+    if (!row) return;
+    const box = Layout.rect(els.messages);
+    const target = eye.part ? row.querySelector(eye.part) || row : row;
+    const moved = Layout.rect(target).top - box.top - eye.at;
+    if (Math.abs(moved) > 0.5) els.messages.scrollTop += moved;
+  }
+
+  function settleSpacers() {
+    if (!drawnWindow || !listAccount) return;
+    const above = els.messages.querySelector('.msgs-space[data-id="space:above"]');
+    const belowNode = els.messages.querySelector('.msgs-space[data-id="space:below"]');
+    const opening = listAccount.before ? listAccount.before(0) : 0;
+    const want = Math.max(0, ListIndex.topOf(listAccount, drawnWindow.from) - opening - listAccount.gap);
+    const below = Math.max(0, ListIndex.total(listAccount) - ListIndex.topOf(listAccount, drawnWindow.to));
+    if (belowNode) belowNode.style.height = `${Math.round(below)}px`;
+    if (above) above.style.height = `${Math.round(want)}px`;
+  }
+  function followWindowSoon() {
+    if (followTimer || !drawnWindow) return;
+    followTimer = requestAnimationFrame(followWindow);
+  }
+
+
+  function drawnRange(items, anchor = null) {
+    if (!listAccount || !rowPrices.fallback || listAccount.items.length !== items.length) return null;
+    const screen = els.messages.clientHeight || 0;
+    if (!screen) return null;
+    let top = stuck && !keepingScroll ? Math.max(0, ListIndex.total(listAccount) - screen) : els.messages.scrollTop;
+    if (anchor) {
+      const at = items.findIndex(item => item.name === anchor.id || (item.kind === "pins" && item.above.some(m => m.id === anchor.id)));
+      if (at >= 0) {
+        let inset = rowInsets.get(itemKind(items[at])) || 0;
+        if (items[at].kind === "pins") {
+          const child = drawnRow(anchor.id), block = child?.closest(".history-pins");
+          if (block) inset += Layout.rect(child).top - Layout.rect(block).top;
+        }
+        top = Math.max(0, ListIndex.topOf(listAccount, at) + inset - anchor.into);
+      }
+    }
+    return widenForSelection(ListIndex.rangeFor(listAccount, top - screen * MARGIN_SCREENS, top + screen * (1 + MARGIN_SCREENS)), items);
+  }
+  function widenForSelection(range, items) {
+    const selection = window.getSelection();
+    if (!range) return range;
+    const rowAt = node => {
+      const el = node?.nodeType === 3 ? node.parentElement : node;
+      const row = el?.closest?.(".msg[data-id]");
+      return row && els.messages.contains(row) ? items.findIndex(item => item.kind === "msg" && item.name === row.dataset.id) : -1;
+    };
+    const nodes = selection && !selection.isCollapsed && selection.rangeCount ? [selection.anchorNode, selection.focusNode] : [];
+    if (textPress) nodes.push(textPress);
+    const ends = nodes.map(rowAt).filter(at => at >= 0);
+    if (!ends.length) return range;
+    return { from: Math.min(range.from, ...ends), to: Math.max(range.to, ...ends.map(at => at + 1)) };
+  }
+  let heldTextSelection = false;
+  let heldTextElement = null, releasedTextEye = null;
+  function textPart(node) {
+    const el = node?.nodeType === 3 ? node.parentElement : node;
+    return el?.closest?.(".words, .thought, .tools") || el?.closest?.(".msg[data-id]") || null;
+  }
+  function rememberReleasedText() {
+    const part = heldTextElement, row = part?.closest(".msg[data-id]");
+    if (row && els.messages.contains(row)) releasedTextEye = {
+      roomId: state.currentRoomId, id: row.dataset.id,
+      part: ["words", "thought", "tools"].find(name => part.classList.contains(name)),
+      at: Layout.rect(part).top - Layout.rect(els.messages).top,
+    };
+    if (releasedTextEye?.part) releasedTextEye.part = `.${releasedTextEye.part}`;
+    heldTextElement = null;
+  }
+  document.addEventListener("selectionchange", () => {
+    const selection = window.getSelection();
+    const wasHeld = heldTextSelection;
+    const inside = !!selection && !selection.isCollapsed && (els.messages.contains(selection.anchorNode) || els.messages.contains(selection.focusNode));
+    heldTextSelection = inside;
+    if (inside) heldTextElement = textPart(els.messages.contains(selection.anchorNode) ? selection.anchorNode : selection.focusNode);
+    if (inside && !wasHeld) leaveTheEnd();
+    if (wasHeld && !inside && state.view === "room") {
+      rememberReleasedText();
+      renderMessagesSoon("the text selection was released");
+      resumeAfterText();
+    }
+  });
+  function leaveTheEnd() {
+    stuck = false;
+    readingAway = true;
+    calm.held = false;
+    els.jumpLatest.hidden = false;
+  }
+  function resumeAfterText() {
+    if (stuck || humanHoldsText()) return;
+    if (deliberateReturn()) scrollToBottom("the text selection was released at the end");
+  }
+  function windowedItems(items, range) {
+    if (!range) return items;
+    const opening = listAccount.before ? listAccount.before(0) : 0;
+    const above = Math.max(0, ListIndex.topOf(listAccount, range.from) - opening - listAccount.gap);
+    const below = Math.max(0, ListIndex.total(listAccount) - ListIndex.topOf(listAccount, range.to));
+    const shown = items.slice(range.from, range.to);
+    return [
+      ...(range.from ? [{ kind: "space", name: "space:above", px: above }] : []),
+      ...shown,
+      ...(range.to < items.length ? [{ kind: "space", name: "space:below", px: below }] : []),
+    ];
+  }
+
+  let listAccount = null;
+  let drawnWindow = null;
+  const measuredRows = new Map();
+  let measuredRoom = null;
+  let measuredStamp = "";
+  let measuredPins = "";
+  let measuredCeiling = "";
+  const observedRows = new Set();
+  let measuredIndexes = new Map();
+  const rowSizeObserver = new ResizeObserver((entries) => {
+    if (!drawnWindow || !listAccount || state.view !== "room") return;
+    if (rowPrices.stamp !== pricesStamp()) { repriceSoon(); return; }
+    const eye = stuck ? null : eyeRow();
+    let changed = false;
+    for (const entry of entries) {
+      const node = entry.target;
+      if (!node.isConnected || !els.messages.contains(node)) continue;
+      const at = measuredIndexes.get(node.dataset.id);
+      if (at === undefined) continue;
+      if (listAccount.items[at]?.m?.bodyMissing) continue;
+      const measured = rowFlowBox(node, entry.borderBoxSize?.[0]?.blockSize);
+      const px = measured.height;
+      rowInsets.set(itemKind(listAccount.items[at]), measured.inset);
+      if (!(px > 0)) continue;
+      if (ListIndex.heightAt(listAccount, at) !== px) changed = ListIndex.measured(listAccount, at, px) || changed;
+      measuredRows.set(node.dataset.id, px);
+    }
+    if (!changed) return;
+    settleSpacers();
+    if (stuck && !humanHoldsText()) scrollToBottom("visible message size changed");
+    else holdTheEye(eye);
+    followWindowSoon();
+    renderTimelineSoon(false);
+  });
+  function observeDrawnRows() {
+    const rows = new Set([...els.messages.querySelectorAll(":scope > .msgs-page > [data-id]")].filter(row => !row.classList.contains("msgs-space")));
+    for (const row of observedRows) if (!rows.has(row)) { rowSizeObserver.unobserve(row); observedRows.delete(row); }
+    for (const row of rows) if (!observedRows.has(row)) { observedRows.add(row); rowSizeObserver.observe(row); }
+  }
+  function refreshAccount(room, items) {
+    if (!priceRows(room, items)) return;
+    const stamp = pricesStamp();
+    const sameGeometry = measuredRoom === room.id && measuredStamp === stamp;
+    const changed = room.dirtyHeights || new Set();
+    for (const id of changed) measuredRows.delete(id);
+    if (sameGeometry && listAccount?.items === items) {
+      for (const id of changed) {
+        const at = measuredIndexes.get(id);
+        if (at !== undefined) ListIndex.repriceRow(listAccount, at, priceItem(items[at]));
+      }
+      changed.clear();
+      return;
+    }
+    changed.clear();
+    if (measuredRoom !== room.id || measuredStamp !== stamp) {
+      measuredRows.clear();
+      measuredRoom = room.id;
+      measuredStamp = stamp;
+    }
+    const pins = items.find(item => item.kind === "pins")?.above.map(m => m.id).join("|") || "";
+    const ceiling = items.find(item => item.kind === "ceiling");
+    const ceilingKey = ceiling ? `${ceiling.hidden}:${ceiling.pinned}` : "";
+    if (pins !== measuredPins) { measuredRows.delete("pins"); measuredPins = pins; }
+    if (ceilingKey !== measuredCeiling) { measuredRows.delete("ceiling"); measuredCeiling = ceilingKey; }
+    const opening = parseFloat(getComputedStyle(els.messages).paddingTop) || 0;
+    const before = (i) => (i === 0 ? opening : 0);
+    listAccount = ListIndex.build(items, priceItem, rowPrices.gap, before);
+    measuredIndexes = new Map(items.map((item, i) => [item.name, i]));
+    const kept = new Set();
+    items.forEach((item, i) => {
+      kept.add(item.name);
+      if (measuredRows.has(item.name)) ListIndex.measured(listAccount, i, measuredRows.get(item.name));
+    });
+    for (const id of measuredRows.keys()) if (!kept.has(id)) measuredRows.delete(id);
+    ListIndex.shown = listAccount;
+  }
+  function takeRealHeights(offset = 0) {
+    if (!listAccount) return;
+    const missed = [];
+    let at = offset;
+    for (const page of els.messages.children) {
+      if (!page.classList.contains("msgs-page")) continue;
+      const first = page.firstElementChild;
+      const drawn = !first || typeof first.checkVisibility !== "function" || first.checkVisibility({ contentVisibilityAuto: true });
+      if (!drawn) { at += page.childElementCount; continue; }
+      for (const row of page.children) {
+        if (row.classList.contains("msgs-space")) continue;
+        const itself = typeof row.checkVisibility !== "function" || row.checkVisibility({ contentVisibilityAuto: true });
+        if (!itself) { at++; continue; }
+        const measured = rowFlowBox(row);
+        const real = measured.height;
+        const item = listAccount.items[at];
+        if (item?.m?.bodyMissing) { at++; continue; }
+        if (item) rowInsets.set(itemKind(item), measured.inset);
+        if (item && real > 0) measuredRows.set(item.name, real);
+        missed.push(Math.abs(ListIndex.heightAt(listAccount, at) - real));
+        ListIndex.measured(listAccount, at++, real);
+      }
+    }
+    if (missed.length < 8) return;
+    missed.sort((a, b) => a - b);
+    const typical = missed[missed.length >> 1];
+    if (typical > 40 && !accountSaidItMisses) {
+      accountSaidItMisses = true;
+      noteFinding(`the list's account is out by about ${Math.round(typical)} px on a row it can see`);
+    }
+  }
+  let accountSaidItMisses = false;
+
+  function guessPages(room, items) {
+    if (!priceRows(room, items)) return;
+    let at = 0;
+    for (const page of els.messages.children) {
+      if (!page.classList.contains("msgs-page")) continue;
+      const rows = page.childElementCount;
+      if (!rows) continue;
+      let sum = rowPrices.chrome + rowPrices.gap * (rows - 1);
+      for (let i = 0; i < rows; i++) sum += priceItem(items[at + i]);
+      at += rows;
+      page.style.containIntrinsicSize = `auto ${Math.round(sum)}px`;
+    }
+  }
+
+  const REPRICE_AFTER_MS = 400;
+  let repriceTimer = 0;
+  function repriceSoon() {
+    clearTimeout(repriceTimer);
+    repriceTimer = setTimeout(() => {
+      if (state.view !== "room" || !currentRoom() || !els.messages.children.length) return;
+      renderMessages("the window changed shape");
+    }, REPRICE_AFTER_MS);
+  }
+
+  function measureBornAbove(born, anchorAt) {
+    if (anchorAt < 0) return;
+    const shown = [];
+    for (const { node, at } of born) {
+      if (at >= anchorAt) break;
+      for (const el of [node.parentElement, node]) {
+        if (!el || el === els.messages) continue;
+        shown.push([el, el.style.contentVisibility]);
+        el.style.contentVisibility = "visible";
+      }
+    }
+    if (!shown.length) return;
+    els.messages.offsetHeight;
+    for (const [el, was] of shown) el.style.contentVisibility = was;
+  }
+
+  let listPaintFrame = 0;
+  function renderMessagesSoon(why) {
+    if (listPaintFrame) return;
+    const roomId = state.currentRoomId;
+    listPaintFrame = requestAnimationFrame(() => {
+      listPaintFrame = 0;
+      if (state.view === "room" && state.currentRoomId === roomId) renderMessages(why);
+    });
+  }
+  function renderMessages(why, savedAnchor) {
+    lastListChange = { why, at: Date.now() };
+    if (listPaintFrame) { cancelAnimationFrame(listPaintFrame); listPaintFrame = 0; }
+    const t0 = performance.now();
+    const room = currentRoom();
+    if (room?.historyRestoring) {
+      if (listRoomId !== room.id) {
+        const controls = els.messages.querySelector(".history-load");
+        if (controls) historyHintObserver.unobserve(controls);
+        els.messages.innerHTML = '<div class="conversation-loading" role="status">Loading conversation…</div>';
+      }
+      listRoomId = room.id;
+      return;
+    }
+    const releasedEye = releasedTextEye?.roomId === room?.id ? releasedTextEye : null;
+    releasedTextEye = null;
+    listRoomId = room ? room.id : null;
+    const resized = settledReader?.roomId === room?.id && settledReader.stamp !== pricesStamp();
+    const anchor = savedAnchor !== undefined ? savedAnchor
+      : keepingScroll ? (keepingScroll.eye ? { id: keepingScroll.eye.id, into: keepingScroll.eye.at } : null)
+      : resized ? settledReader.anchor : stuck ? null : readerAnchor();
+    if (resized && !humanHoldsText()) { stuck = settledReader.following; if (!stuck) readingAway = true; }
+    const eyeBefore = stuck || humanHoldsText() ? null : eyeRow();
+    els.messages.classList.toggle("searching", !!state.search);
+    if (!room) { els.messages.innerHTML = ""; return; }
+    if (room.history?.bodyProtocol && !room.history.indexed && room.indexError) {
+      els.messages.innerHTML = `<div class="empty" role="status">The conversation could not be loaded. <button class="linklike">Try again</button></div>`;
+      els.messages.querySelector("button").onclick = () => void refreshHeld(room.id);
+      return;
+    }
+    if (!room.messages.length) {
+      els.messages.innerHTML = `<div class="empty"><div class="art">${ic("chat")}</div><strong>${esc(room.name)}</strong> is quiet.<br>Summon a vibemate from the left, then say hello. Use @Name to address someone; without @ every vibemate hears you.</div>`;
+      return;
+    }
+    if (listSearch !== (state.search || "")) {
+      listSearch = state.search || "";
+      listGeneration++;
+    }
+    const items = listItems(room);
+    const leaving = els.messages.querySelector(".history-load");
+    if (leaving && !items.some((item) => item.kind === "ceiling")) historyHintObserver.unobserve(leaving);
+    refreshAccount(room, items);
+    drawnWindow = drawnRange(items, anchor);
+    els.messages.classList.toggle("windowed", !!drawnWindow);
+    const shown = windowedItems(items, drawnWindow);
+    const loadedIds = new Set(shown.filter(item => item.kind === "msg" && !item.m.bodyMissing).map(item => item.name));
+    for (const node of els.messages.querySelectorAll(".history-placeholder")) if (loadedIds.has(node.dataset.id)) node.remove();
+    const born = [];
+    const selection = window.getSelection();
+    const savedSelection = selection && (!selection.isCollapsed || textPress) && selection.rangeCount
+      && els.messages.contains(selection.anchorNode) && els.messages.contains(selection.focusNode)
+      ? { anchorNode: selection.anchorNode, anchorOffset: selection.anchorOffset, focusNode: selection.focusNode, focusOffset: selection.focusOffset, isCollapsed: selection.isCollapsed, rangeCount: 1, range: selection.getRangeAt(0).cloneRange(), getRangeAt() { return this.range; } } : null;
+    selectionDuringPatch = savedSelection;
+    try {
+    KeyedList.patchPaged(els.messages, shown, {
+      key: "id",
+      pageSize: PAGE_SIZE,
+      makePage: () => {
+        const page = document.createElement("div");
+        page.className = "msgs-page";
+        return page;
+      },
+      id: (item) => item.name,
+      make: (item) => listRow(room, item),
+      fill: (node, item, at, fresh) => {
+        if (fresh) born.push({ node, at });
+        fillListRow(room, node, item, fresh);
+      },
+    });
+    } finally {
+      selectionDuringPatch = null;
+      if (savedSelection?.anchorNode.isConnected && savedSelection.focusNode.isConnected) {
+        const { anchorNode, anchorOffset, focusNode, focusOffset } = savedSelection;
+        const current = window.getSelection();
+        if (current && (current.anchorNode !== anchorNode || current.anchorOffset !== anchorOffset || current.focusNode !== focusNode || current.focusOffset !== focusOffset)) {
+          current.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+        }
+      }
+    }
+    if (anchor) measureBornAbove(born, shown.findIndex((item) => item.kind === "msg" && item.name === anchor.id));
+    if (!drawnWindow) guessPages(room, items);
+    takeRealHeights(drawnWindow ? drawnWindow.from : 0);
+    observeDrawnRows();
     for (const perm of room.permissions) renderPermission(room, perm);
     for (const prop of room.proposals || []) renderProposal(room, prop);
     for (const asked of room.newRooms || []) renderNewRoom(room, asked);
     syncRecovery(room);
     refreshSeen(room);
-    if (!restoreReader(anchor)) scrollToBottom("the list was rebuilt");
+    settleSpacers();
+    if (releasedEye) holdTheEye(releasedEye);
+    else if (keepingScroll) {
+      if (keepingScroll.eye) holdTheEye(keepingScroll.eye);
+      else els.messages.scrollTop = keepingScroll.top;
+    } else if (!restoreReader(anchor) && !humanHoldsText()) {
+      if (stuck) scrollToBottom("the list was rebuilt");
+      else {
+        if (eyeBefore && els.messages.querySelector(`.msg[data-id="${CSS.escape(eyeBefore.id)}"]`)) holdTheEye(eyeBefore);
+        noteHeldPlace(anchor ? "the list was rebuilt and the place was not found" : "the list was rebuilt without a place to return to");
+      }
+    }
     renderTimeline();
+    rememberReader();
+    if (room.history?.indexed) {
+      const visibleIds = shown.filter(item => item.kind === "msg").map(item => item.name);
+      WindowBodies.touch(room, visibleIds);
+      trimBodyCache(room, visibleIds);
+      void loadBodies(room, visibleIds);
+    }
+    followWindowSoon();
     noteSlow(`full render of the list (${why || "unnamed"})`, performance.now() - t0);
   }
 
   function upsertMessage(roomId, m) {
     const room = state.rooms.get(roomId);
     if (!room) return;
+    measuredRows.delete(m.id);
+    if (m.pinned) measuredRows.delete("pins");
     if (m.from === "human" && !m.pending && !room.messages.some((x) => x.id === m.id)) {
       const local = room.messages.find((x) => x.pending && x.from === "human" && x.text === m.text);
       if (local) adoptLocalMessage(roomId, local.id, m.id);
@@ -3522,7 +4606,14 @@
     const wasFinal = idx >= 0 && !room.messages[idx].streaming;
     if (idx >= 0) {
       if (!("pinned" in m)) delete room.messages[idx].pinned;
+      if (m.seq > 0 && !("displayOrder" in m)) delete room.messages[idx].displayOrder;
       Object.assign(room.messages[idx], m);
+      if (room.history?.bodyProtocol && !m.bodyMissing) {
+        delete room.messages[idx].bodyMissing;
+        delete room.messages[idx].bodyChars;
+        delete room.messages[idx].bodyError;
+        WindowBodies.invalidate(room.messages[idx]);
+      }
     } else room.messages.push(m);
     room.messages.sort(HistoryWindow.compareMessages);
     idx = room.messages.findIndex(x => x.id === m.id);
@@ -3550,16 +4641,25 @@
         if (mine.pinned && mine.kind === "chat") renderMessages("a folded message was pinned");
         return;
       }
+      if (drawnWindow) {
+        renderMessages("a message arrived in the virtual list");
+        const born = els.messages.querySelector(`.msg[data-id="${CSS.escape(m.id)}"]`);
+        if (born) landing(born);
+        if (m.streaming && m.from !== "human") renderSideRoom();
+        else if (!stick && m.kind === "chat") noteNew(room, m);
+        if (!wasFinal && !m.streaming && m.kind === "chat" && m.from !== "human") noteFinished(room, m);
+        return;
+      }
       const empty = els.messages.querySelector(".empty");
       if (empty) empty.remove();
-      placeInList(messageElement(room, m));
+      placeInList(landing(messageElement(room, m)));
       if (m.from === "human") refreshSeen(room);
       if (m.streaming && m.from !== "human") renderSideRoom();
       else if (!stick && m.kind === "chat") noteNew(room, m);
     }
     if (stick) {
-      if (CALM !== "off" && m.streaming && m.from !== "human" && !existing) calmStart(m.id);
-      else scrollToBottom("a message arrived");
+      if (CALM !== "off" && m.streaming && m.from !== "human" && !existing && !humanHoldsText()) calmStart(m.id);
+      else if (!humanHoldsText()) scrollToBottom("a message arrived");
     } else if (calm.held) calmAfterGrowth();
     if (m.streaming) updateWorkingNow();
     if (!wasFinal && !m.streaming && m.kind === "chat" && m.from !== "human") noteFinished(room, m);
@@ -3575,6 +4675,8 @@
     if (roomId !== state.currentRoomId) return;
     const el = els.messages.querySelector(`.msg[data-id="${id}"]`);
     if (el) el.remove();
+    measuredRows.delete(id);
+    if (state.view === "room") renderMessages("a message was removed");
   }
 
   const dirty = new Map();
@@ -3590,8 +4692,8 @@
       const el = entry.target;
       const id = el.dataset.id;
       if (!state.watched.has(id)) { watchedLeave.unobserve(el); continue; }
-      const box = els.messages.getBoundingClientRect();
-      const r = entry.boundingClientRect;
+      const box = Layout.rect(els.messages);
+      const r = Layout.fromRect(entry.boundingClientRect);
       const below = r.top >= box.bottom;
       const above = r.bottom <= box.top;
       if (!below && !(above && stuck)) continue;
@@ -3648,7 +4750,7 @@
     }
     if (touched) {
       if (calm.held) calmAfterGrowth();
-      else if (stuck) scrollToBottom("a reply grew");
+      else followEnd("a reply grew");
     }
     if (touched) updateWorkingNow();
     if (touched) noteSlow("streamed frame", performance.now() - t0);
@@ -3729,14 +4831,17 @@
 
 
   function placeCard(card, room, ts) {
-    let anchor = null;
-    for (const m of room.messages) {
-      if (m.ts > ts) break;
-      const el = els.messages.querySelector(`.msg[data-id="${CSS.escape(m.id)}"]`);
-      if (el) anchor = el;
+    let anchorId = null;
+    for (const m of room.messages) if (m.ts <= ts) anchorId = m.id;
+    if (anchorId) {
+      const anchor = els.messages.querySelector(`.msg[data-id="${CSS.escape(anchorId)}"]`);
+      if (anchor) { anchor.insertAdjacentElement("afterend", card); return true; }
+      return false;
     }
-    if (anchor) anchor.insertAdjacentElement("afterend", card);
-    else els.messages.appendChild(card);
+    const firstId = room.messages[0] && room.messages[0].id;
+    const first = firstId ? els.messages.querySelector(`.msg[data-id="${CSS.escape(firstId)}"]`) : null;
+    if (first) { first.insertAdjacentElement("beforebegin", card); return true; }
+    return false;
   }
   const OPTION_TONE = { allow_once: "ok", allow_always: "ok", reject_once: "no", reject_always: "no" };
   function renderPermission(room, perm) {
@@ -3749,7 +4854,7 @@
     const host = draft ? els.messages.querySelector(`.msg[data-id="${draft.id}"] .perms`) : null;
     if (host) host.appendChild(card);
     else placeCard(card, room, perm.ts || Date.now());
-    if (stuck) scrollToBottom("a permission card");
+    followEnd("a permission card");
   }
   function resolvePermissionCard(key, optionId) {
     const card = document.querySelector(`[data-ui="ask-card"][data-kind="permission"][data-key="${CSS.escape(key)}"]`);
@@ -3815,7 +4920,7 @@
     if (existing) existing.replaceWith(card);
     else {
       placeCard(card, room, p.ts || Date.now());
-      if (stuck) scrollToBottom("a new-room card");
+      followEnd("a new-room card");
     }
   }
 
@@ -3837,7 +4942,7 @@
     if (existing) existing.replaceWith(card);
     else {
       placeCard(card, room, p.ts || Date.now());
-      if (stuck) scrollToBottom("a proposal card");
+      followEnd("a proposal card");
     }
   }
   function renderRecovery(room, r) {
@@ -3880,20 +4985,20 @@
 
   const DETAILS_MIN = 320;
   const DETAILS_MAX = 760;
-  const DETAILS_DEFAULT = { room: 420, participant: 420, me: 400 };
 
   function detailsKey() {
     return state.selection.kind === "participant" ? "participant" : state.selection.kind;
   }
   function applyDetailsWidth(px, persist) {
     const w = Math.max(DETAILS_MIN, Math.min(DETAILS_MAX, Math.round(px)));
-    els.details.style.width = `${w}px`;
+    els.details.style.setProperty("--details-w", `${w}px`);
     if (persist) remember(`details.${detailsKey()}`, w);
   }
   function fitDetailsWidth() {
     const key = detailsKey();
     const saved = Number(recall(`details.${key}`));
-    applyDetailsWidth(saved || DETAILS_DEFAULT[key] || 400, false);
+    if (Number.isFinite(saved) && saved > 0) applyDetailsWidth(saved, false);
+    else els.details.style.removeProperty("--details-w");
   }
   function openDetails(selection) {
     state.selection = selection;
@@ -3945,7 +5050,7 @@
     if (header) header.innerHTML = profileHeader(p);
   }
   function panelTitle(title, sub) {
-    return `<div class="panel-title"><div><h3>${title}</h3>${sub ? `<div class="hint">${sub}</div>` : ""}</div>${UI.html("icon-button", { icon: "close", title: "Close", kind: "ghost", size: "sm", id: "details-close" })}</div>`;
+    return `<div class="panel-title"><div><h3>${title}</h3>${sub ? `<div class="hint">${sub}</div>` : ""}</div>${UI.html("icon-button", { icon: "close", title: "Close", kind: "ghost", size: "sm", id: "details-close" })}</div>${settingsFoldActions()}`;
   }
   function wireDetailsClose() {
     const b = $("#details-close");
@@ -3955,6 +5060,7 @@
   function renderAgentPanel(room, p) {
     const rec = state.recipes.find((r) => r.id === p.agentType);
     const offline = p.status === "offline";
+    const mutedStartup = offline && p.muted && p.startupSkipped === "muted";
     els.detailsInner.innerHTML = `
       ${panelTitle("Vibemate", esc(room.name))}
       <div class="profile">
@@ -3967,41 +5073,35 @@
         <button class="action danger" data-act="remove"><span class="ico">${ic("trash")}</span>Remove</button>
       </div>
       ${p.quiet ? wedgeCardHtml(p, Date.now()) : ""}
-      <div class="section" id="pp-persona">
-        ${sectionTitle("user", "Persona")}
+      ${settingsGroup("pp-persona", "Persona", `
         ${field("Vibename", `<input type="text" id="pp-name" maxlength="24" value="${esc(p.name)}">`)}
         ${field("Vibersona", `<input type="text" id="pp-tagline" maxlength="80" value="${esc(p.tagline || "")}" placeholder="a few words under the vibename">`, "Shown under the vibename.", "Everyone in the room sees it: you, and the other vibemates in their roster.")}
         ${field("Vibeface", `<div id="pp-avatar-picker"></div><input type="text" id="pp-avatar" maxlength="8" value="${esc(p.avatar || "")}" placeholder="custom emoji (optional)">`)}
-        ${field("Vibio", `<textarea id="pp-role" rows="5" placeholder="who it is, how it speaks, what it cares about">${esc(p.role || "")}</textarea>`, `Only this vibemate reads it.<span class="count" id="pp-role-count"></span>`, "Reaches the vibemate as refreshed instructions in its brief on its next turn; its memory is kept. The other participants never see it. A vibio and the room rules go into every brief, so the room has a limit for them (the room's settings, for geeks); text over it is never cut in silence.")}
-      </div>
+        ${field("Vibio", `<textarea id="pp-role" rows="5" placeholder="who it is, how it speaks, what it cares about">${esc(p.role || "")}</textarea>`, `Only this vibemate reads it.<span class="count" id="pp-role-count"></span>`, "Changes reach this vibemate as updated instructions on its next turn; its memory is kept. Other vibemates never receive this text. The room settings limit the length of a vibio and the room rules separately; text over the limit is refused, never silently cut.")}
+      `)}
       ${p.trouble && p.status !== "thinking" && p.status !== "queued" ? `<div class="trouble"><b>${esc(p.trouble.what)}</b><span>${esc(p.trouble.advice)}</span>${troubleActionsHtml(p)}</div>` : ""}
-      ${p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<p class="hint" style="color:var(--danger);margin:0 4px 10px">${esc(p.statusDetail)}</p>` : ""}
-      ${vendorLoggedOut(p) && p.trouble?.kind !== "login" ? `<div class="pp-login"><div class="row-btns">${UI.html("button", { label: `Log in to ${p.agentVendor || "the vendor"}`, icon: "lock", kind: "primary", size: "sm", act: "open-login-dialog", data: { recipe: p.agentType, purpose: "login" } })}</div><p class="hint">${esc(p.agentVendor || "The vendor")} is not logged in on this machine; log in, and ${esc(p.name)} comes back by itself.</p></div>` : ""}
-      <div class="section" id="pp-engine">
-        ${sectionTitle("spark", "Coding agent")}
+      ${p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<p class="hint" style="color:var(${mutedStartup ? "--warm-ink" : "--danger"});margin:0 4px 10px">${esc(p.statusDetail)}</p>` : ""}
+      ${!mutedStartup && vendorLoggedOut(p) && p.trouble?.kind !== "login" ? `<div class="pp-login"><div class="row-btns">${UI.html("button", { label: `Log in to ${p.agentVendor || "the vendor"}`, icon: "lock", kind: "primary", size: "sm", act: "open-login-dialog", data: { recipe: p.agentType, purpose: "login" } })}</div><p class="hint">${esc(p.agentVendor || "The vendor")} is not logged in on this machine; log in, and ${esc(p.name)} comes back by itself.</p></div>` : ""}
+      ${settingsGroup("pp-engine", "Coding agent", `
         <p class="hint">What runs ${esc(p.name)}${rec ? `: ${esc(rec.vendor)}` : ""}. Its model, how hard it thinks, what it may do without asking.${geekTip("These options come from the coding agent itself: the hub lists the ones it offers and sets your pick on its running session, so a change takes effect from the next turn, without restarting it or losing what it remembers.")}</p>
         <div id="pp-config"></div>
         ${field("Coding agent", `<div class="agent-grid" id="pp-recipe">${state.recipes.filter((r) => !r.unavailableReason || r.id === p.agentType).map((r) => `<button type="button" class="agent-tile${r.id === p.agentType ? " selected" : ""}" data-agent="${esc(r.id)}" title="${esc(r.label)}">${vendorLogo(r, "lg")}<span class="at-name">${esc(r.vendor)}</span></button>`).join("")}</div>`, "Another vendor: a new session with its notes and the last messages.", "A session cannot cross vendors, so the vibemate first writes its notes, then comes back on the new agent with those notes and the last messages of the room (like Fresh start with the last messages). Its name, vibio, colour and skills stay; model, effort and mode start from the new agent's defaults.")}
-      </div>
+      `)}
       ${geek(
         "pp-geek",
-        `<div class="section" id="pp-skills-section">
-        ${sectionTitle("skills", "Skills")}
+        `${settingsGroup("pp-skills-section", "Skills", `
         <div class="check-list" id="pp-skills"></div>
         <p class="hint" style="margin-top:8px">What this vibemate can load on request.${geekTip(`Listed in this vibemate's brief by name and description; the text arrives when you write /name or when the vibemate loads it. ${esc(skillChannelText(p))}`)}</p>
-      </div>
-      <div class="section" id="pp-timing">
-        ${sectionTitle("bolt", "Timing")}
+      `)}
+      ${settingsGroup("pp-timing", "Timing", `
         ${field("Reply delay override, seconds", `${UI.html("number-field", { id: "pp-delay", value: String(p.replyDelay ?? ""), min: 0, max: 120, step: 0.5, placeholder: `the room's: ${room.settings.replyDelay ?? 4} s` })}`, `Overrides the room's delay (${room.settings.replyDelay ?? 4} s, used only when two or more vibemates are in) for this vibemate only, even when it is alone. Empty: it follows the room.`, "Before each turn the vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive during the wait land in its backlog, so it can react to them or stay silent.")}
-      </div>
-      <div class="section danger">
-        ${sectionTitle("bolt", "Fresh start")}
+      `)}
+      ${settingsGroup("pp-fresh-start", "Fresh start", `
         <p class="hint">${esc(p.name)} comes back with an empty head: it forgets this conversation entirely. The room's history stays and you still see everything.${geekTip("A session's context cannot be erased, so the vibemate's process and session are closed and it starts a new one with no replay. Its stored session is dropped too, or a later reconnect would bring the old context back. Same thing as typing /fresh-start @Name in the composer (/respawn still works).")}</p>
         <div class="row-btns start">${UI.html("button", { label: `Fresh start for ${p.name}`, icon: "bolt", kind: "danger", size: "sm", act: "respawn" })}<label class="lp-with">${UI.html("button", { label: "With the last", size: "sm", act: "respawn-mem" })}${UI.html("number-field", { id: "pp-respawn-n", value: String(room.settings.replayAfterRestart ?? 10), min: 0, max: 500 })} messages</label></div>
         <p class="hint">With memory: a new session that gets only ${p.notes ? "its own notes and " : ""}the last N messages of this room; the rest is gone.</p>
-      </div>
-      <div class="section">
-        ${sectionTitle("info", "Stats")}
+      `, "danger")}
+      ${settingsGroup("pp-stats", "Stats", `
         <div class="kv">
           <span>Session</span><span>${p.sessionOrigin === "loaded" ? "restored (session/load)" : p.sessionOrigin === "replayed" ? "new, history replayed" : p.status === "offline" ? "offline" : "new"}${p.supportsLoad === false ? " · no session/load" : ""}</span>
           <span>Turns</span><span>${p.turns}</span>
@@ -4013,7 +5113,7 @@
           <span>Cost (estimate)</span><span>${fmtCost(p.cost) || "—"}</span>
           <span>Adapter</span><span>${esc(rec ? rec.label : p.agentLabel || "")}${p.agentInfo && p.agentInfo.version ? ` ${esc(p.agentInfo.version)}` : ""}</span>
         </div>
-      </div>`,
+      `)}`,
         "skills, timing, stats",
       )}`;
     wireDetailsClose();
@@ -4085,19 +5185,67 @@
     return out;
   }
 
+  const configChanging = new Map();
+  function acceptConfigReply(roomId, reply) {
+    const room = state.rooms.get(roomId), p = reply?.participant;
+    if (!room || !p) return null;
+    const order = room.participantOrder ||= new Map();
+    if (reply.history?.epoch === room.history?.epoch && Number.isFinite(reply.history?.streamSequence)
+      && reply.history.streamSequence >= (order.get(p.id) ?? -1)) {
+      const at = room.participants.findIndex(who => who.id === p.id);
+      if (at >= 0) {
+        const showing = state.currentRoomId === roomId && state.view === "room";
+        const before = showing ? visibilityFingerprint(room) : "";
+        room.participants[at] = p; order.set(p.id, reply.history.streamSequence);
+        if (showing) {
+          if (visibilityFingerprint(room) !== before) renderMessagesSoon("reported settings changed the participant");
+          renderSideRoom(); renderChatHead();
+        }
+      }
+    }
+    return findById(room, p.id);
+  }
   function renderConfig(panel, p, offline) {
     panel.innerHTML = "";
+    panel.dataset.configRoom = state.currentRoomId || "";
+    panel.dataset.configParticipant = p.id;
     if (offline) {
       panel.innerHTML = `<p class="hint">Offline. Reconnect to start a new session (${esc([p.launch && p.launch.model, p.launch && p.launch.effort, p.launch && p.launch.mode].filter(Boolean).join(" · ") || "vibemate defaults")}).</p>`;
       return;
     }
+    if (p.status === "starting") { panel.innerHTML = '<p class="hint">Starting. Settings will be available when this vibemate is ready.</p>'; return; }
+    const roomId = state.currentRoomId;
+    const key = `${roomId}:${p.id}`;
+    const change = async (control, onChange, value, id) => {
+      if (configChanging.has(key)) return;
+      const token = Symbol("settings change");
+      configChanging.set(key, token);
+      const focused = document.activeElement === control;
+      for (const node of panel.querySelectorAll("select,input")) node.disabled = true;
+      try {
+        const reply = await onChange(value);
+        const actual = acceptConfigReply(roomId, reply);
+        if (id && state.currentRoomId === roomId && !actual?.pendingSettings?.length) { recentlySaved.set(id, Date.now()); markSaved(id); }
+      } catch (error) { showError(error); }
+      finally {
+        if (configChanging.get(key) === token) configChanging.delete(key);
+        const now = state.rooms.get(roomId)?.participants.find(who => who.id === p.id) || p;
+        const shown = panel.isConnected ? panel : panel.id ? document.getElementById(panel.id) : null;
+        if (shown?.dataset.configParticipant === p.id && shown.dataset.configRoom === roomId && state.currentRoomId === roomId) {
+          renderConfig(shown, now, ["offline", "left"].includes(now.status));
+          if (focused && id) document.getElementById(id)?.focus({ preventScroll: true });
+        }
+      }
+    };
     const addSelect = (name, values, current, onChange, id) => {
       const label = document.createElement("label");
       label.className = "row";
       label.innerHTML = `<span>${esc(name)}</span>`;
       const select = document.createElement("select");
       if (id) select.id = id;
-      for (const v of values) {
+      const choices = current != null && !values.some(v => v.value === current)
+        ? [{ value: String(current), name: `${current} (reported)` }, ...values] : values;
+      for (const v of choices) {
         const opt = document.createElement("option");
         opt.value = v.value;
         opt.textContent = v.name || v.value;
@@ -4105,19 +5253,8 @@
         if (v.value === current) opt.selected = true;
         select.appendChild(opt);
       }
-      select.addEventListener("change", async () => {
-        select.disabled = true;
-        try {
-          await onChange(select.value);
-          if (id) {
-            recentlySaved.set(id, Date.now());
-            markSaved(id);
-          }
-        } catch (e) {
-          showError(e);
-        }
-        select.disabled = false;
-      });
+      select.disabled = configChanging.has(key);
+      select.addEventListener("change", () => void change(select, onChange, select.value, id));
       label.appendChild(select);
       panel.appendChild(label);
     };
@@ -4126,10 +5263,23 @@
       addSelect("Mode", p.modes.map((m) => ({ value: m.id, name: m.name || m.id, description: m.description })), p.mode, (value) => post(roomApi(`/participants/${encodeURIComponent(p.id)}/config`), { configId: "mode", value }), `cfg-${p.id}-mode`);
     }
     for (const option of p.configOptions || []) {
-      if (option.type !== "select") continue;
-      addSelect(option.name, flattenOptions(option.options), option.currentValue, (value) => post(roomApi(`/participants/${encodeURIComponent(p.id)}/config`), { configId: option.id, value }), `cfg-${p.id}-${String(option.id).replace(/[^\w-]/g, "_")}`);
+      const id = `cfg-${p.id}-${String(option.id).replace(/[^\w-]/g, "_")}`;
+      const apply = value => post(`/api/rooms/${encodeURIComponent(roomId)}/participants/${encodeURIComponent(p.id)}/config`, { configId: option.id, value });
+      if (option.type === "boolean") {
+        const label = document.createElement("label"); label.className = "switch";
+        const title = document.createElement("span"); title.textContent = option.name;
+        const input = document.createElement("input"); input.type = "checkbox"; input.id = id; input.checked = option.currentValue === true;
+        input.disabled = configChanging.has(key);
+        input.addEventListener("change", () => void change(input, apply, input.checked, id));
+        label.append(title, input); panel.appendChild(label);
+      } else if (option.type === "select") addSelect(option.name, flattenOptions(option.options), option.currentValue, apply, id);
     }
     if (!panel.children.length) panel.innerHTML = '<p class="hint">This vibemate exposes no session options.</p>';
+    if (p.pendingSettings?.length) {
+      const pending = document.createElement("p"); pending.className = "hint config-pending"; pending.setAttribute("role", "status");
+      pending.textContent = "Pending: " + p.pendingSettings.map(setting => `${setting.name} → ${setting.value}`).join("; ");
+      panel.appendChild(pending);
+    }
   }
 
   function renderMePanel(room) {
@@ -4142,26 +5292,24 @@
         <h3>${esc(s.humanName || "")}</h3>
         <div class="tagline">${esc(s.humanDescription || "no vibe line yet")}</div>
       </div>
-      <div class="section" id="me-vibe">
-        ${sectionTitle("spark", "Vibe")}
+      ${settingsGroup("me-vibe", "Vibe", `
         ${field("Vibename", `<input type="text" id="me-name" maxlength="24" value="${esc(s.humanName || "")}">`, "How you appear in every room.")}
         ${field("Vibeface", `<div id="me-avatar-picker"></div><input type="text" id="me-avatar" maxlength="8" value="${esc(s.humanAvatar || "")}" placeholder="custom emoji (optional)">`)}
         ${field("Your vibe line", `<textarea id="me-desc" rows="3" maxlength="200" placeholder="e.g. software engineer, enjoys learning; likes short answers">${esc(s.humanDescription || "")}</textarea>`, "A sentence or two about you.", "The vibemates get it in every room's brief, unless a room adds its own line or replaces it (below, when you are in a room).")}
-      </div>
+      `)}
       ${
         rs
-          ? `<div class="section" id="me-room">
-        ${sectionTitle("chat", "In this room")}
+          ? settingsGroup("me-room", "In this room", `
         ${field("What vibemates get about you here", `<select id="hp-mode"><option value="inherit"${rs.humanDescriptionMode === "inherit" ? " selected" : ""}>Your vibe line</option><option value="append"${rs.humanDescriptionMode === "append" ? " selected" : ""}>Your vibe line + this room's</option><option value="override"${rs.humanDescriptionMode === "override" ? " selected" : ""}>Only this room's line</option><option value="none"${rs.humanDescriptionMode === "none" ? " selected" : ""}>Nothing about me in this room</option></select>`)}
         ${field("This room's line about you", `<textarea id="hp-desc" rows="3" maxlength="200" placeholder="e.g. host of this session, product owner">${esc(rs.humanDescription || "")}</textarea>`)}
-      </div>`
+      `)
           : ""
       }
-      <div class="section danger">
-        ${sectionTitle("alert", "Danger zone")}
+      ${geek("me-memory-geek", `<div class="section"><button data-ui="button" data-kind="ghost" data-memory-open="user">Shared memory about you</button><p class="hint">Inspect, edit or remove the preferences learned across rooms.</p></div>`)}
+      ${settingsGroup("me-danger", "Danger zone", `
         <p class="field-note">Erases everything in this viberoom: your vibe, all rooms and their history, vibemate sessions, your skills. Not undoable.</p>
         <div class="row-btns start">${UI.html("button", { label: "Erase my vibe", icon: "bolt", kind: "danger", size: "sm", id: "me-erase" })}</div>
-      </div>`;
+      `, "danger")}`;
     wireDetailsClose();
     $("#me-avatar-picker").appendChild(
       window.Avatars.pickerElement(s.humanAvatar || "", (emoji) => {
@@ -4180,78 +5328,74 @@
     els.detailsInner.innerHTML = `
       ${panelTitle("Room settings", esc(room.name))}
       <div id="rp-form">
-      <div class="section">
-        ${sectionTitle("rooms", "Room")}
+      ${settingsGroup("rp-room", "Room", `
         ${field("Name", `<input type="text" id="rp-name" maxlength="60" value="${esc(room.name)}">`)}
         ${field("Emoji", `<div id="rp-emoji-picker"></div><input type="text" id="rp-emoji" maxlength="8" value="${esc(rs.emoji || "")}" placeholder="custom emoji (optional)">`, "A face for the room, next to its name.")}
         ${field("Topic", `<input type="text" id="rp-topic" maxlength="2000" value="${esc(rs.topic || "")}" placeholder="what this room is about (optional)">`)}
         ${field("Folder", `<span class="dir-row"><input type="text" id="rp-dir" maxlength="1000" value="${esc(room.dir)}" spellcheck="false">${UI.html("button", { label: "Browse", icon: "folder", kind: "ghost", id: "rp-dir-browse", title: "Choose a folder", hook: "browse-btn" })}</span>`, "Where the vibemates read and write. Changing it restarts them in the new folder; they replay the last messages.")}
-        <div class="field mention-host"><span class="label">Room rules${geekTip("References follow renames and note when a participant has left. Rules go into every vibemate's brief as instructions, not as routing.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">One rule per line; type @ to reference a participant.<span class="count" id="rp-rules-count"></span></span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></div>
+      `)}
+      ${settingsGroup("rp-rules-section", "Rules and language", `
+        <div class="field mention-host"><span class="label">Room rules${geekTip("References follow renames and note when a participant has left. Updated rules reach each vibemate on its next turn. Mentions here describe responsibilities; they do not send messages.")}</span><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><span class="hint">How the team works together. Vibemates can propose changes for your approval. One rule per line; type @ to reference a participant.<span class="count" id="rp-rules-count"></span></span><div class="mention-menu inline" id="rp-rules-menu" hidden></div></div>
         ${field("Language", `<input type="text" id="rp-lang" value="${esc(lang)}" placeholder="follow the human (default), or e.g. English">`)}
-      </div>
-      <div class="section">
-        ${sectionTitle("user", "Turn taking")}
+      `)}
+      ${settingsGroup("rp-turn-taking", "Turn taking", `
         ${field("Who may speak", `<select id="rp-turns"><option value="one-at-a-time"${rs.turnTaking !== "parallel" ? " selected" : ""}>One vibemate at a time</option><option value="parallel"${rs.turnTaking === "parallel" ? " selected" : ""}>All addressed vibemates at once</option></select>`, null, "One at a time: the others queue and see the earlier replies before they answer; the addressed vibemates go first. All at once: fastest, but replies may cross.")}
         ${field("Reply delay, seconds", `${UI.html("number-field", { id: "rp-delay", value: String(rs.replyDelay ?? 4), min: 0, max: 120, step: 0.5 })}`, "With two or more vibemates, each waits a random 0–N seconds before it answers, so replies cross less often. A vibemate alone answers at once. A vibemate's own delay (in its panel) always applies.")}
         <label class="switch"><span class="label">Vibemates wake each other<span class="hint">A reply without @ wakes every other vibemate, as yours does; each may answer or stay silent. Off: only @Name wakes a vibemate. The hop limit applies either way.</span></span><input type="checkbox" id="rp-wake" ${rs.agentsWakeEachOther !== false ? "checked" : ""}></label>
         <label class="switch"><span class="label">Wait while you are typing<span class="hint">A vibemate about to start holds back while you type (a few seconds after your last keystroke). A reply already under way is not interrupted.</span></span><input type="checkbox" id="rp-wait-typing" ${rs.waitWhileHumanTypes !== false ? "checked" : ""}></label>
-      </div>
-      <div class="section template">
-        ${sectionTitle("rooms", "Turn this room into a template")}
+      `)}
+      ${settingsGroup("rp-messengers", "Messengers", `
+        <label class="switch"><span class="label">Reachable from messengers<span class="hint">A phone paired to viberoom (Settings → Channels) can open this room, write to it and read its replies. Off: the phone neither sees nor reaches this room.</span></span><input type="checkbox" id="rp-reachable" ${rs.reachableFromMessengers !== false ? "checked" : ""}></label>
+      `)}
+      ${settingsGroup("rp-startup", "Start and restart", `
+        <label class="switch"><span class="label">Start this room with viberoom<span class="hint">Its vibemates are started when viberoom starts, one room after another. They pay nothing until the first turn; their processes and memory stay while they wait. With viberoom starting at sign-in, the phone reaches this room without a click.</span></span><input type="checkbox" id="rp-start-with-hub" ${rs.startWithHub ? "checked" : ""}></label>
+        ${field("…and they come back", `<select id="rp-reconnect"><option value="inherit"${(rs.reconnectMode || "inherit") === "inherit" ? " selected" : ""}>As Welcome back is set</option><option value="load"${rs.reconnectMode === "load" ? " selected" : ""}>Continuing their saved sessions</option><option value="replay"${rs.reconnectMode === "replay" ? " selected" : ""}>Fresh, with the last messages replayed</option></select>`, "Only for the start above: when this room brings its own vibemates back, it decides with how much memory.", "A room that decides whether it starts also decides with how much memory its vibemates come back; the app-wide Welcome back setting is what a room follows when it has not chosen. It is not asked again in a dialog, because by the time a window could ask, the room has already begun.")}
+        <label class="switch"><span class="label">Wake vibemates after a restart<span class="hint">Off by default. After Restart finishes restoring this room, send the message below once. Requires Start this room with viberoom. Muted, stopped or unavailable vibemates stay quiet. Ordinary launches and sign-in do not send it.</span></span><input type="checkbox" id="rp-wake-restart" ${rs.wakeAfterRestart ? "checked" : ""}></label>
+        ${field("Message after restart", `<textarea id="rp-restart-message" rows="3" maxlength="8000" placeholder="Continue your tasks, if you have any.">${esc(rs.restartMessage || "")}</textarea>`, "Your saved instruction appears as an automatic room event. Empty text starts no replies.")}
+      `)}
+      ${settingsGroup("rp-turn-this-room-into-a-template", "Turn this room into a template", `
         <p class="field-note">Its settings, rules, folder and vibemates (with the coding agent each runs on) become one of your templates, listed first under "Start from a template". You see everything it will contain, and can change any of it, before you create it.</p>
         <div class="row-btns start stp-row">${UI.html("button", { label: "Preview and create template", icon: "rooms", kind: "primary", size: "sm", id: "rp-template" })}</div>
-      </div>
+      `)}
       ${geek(
         "rp-geek",
-        `<div class="section">
-        ${sectionTitle("clock", "Right now")}
+        `${settingsGroup("rp-right-now", "Right now", `
         <div class="kv">
           <span>Vibemate-to-vibemate replies since your last message</span><span>${room.hops} / ${room.hopLimit}</span>
           <span>Hushed</span><span>${room.focused ? "yes" : "no"}</span>
           <span>Full brief every</span><span>${rs.fullBriefEveryTurns} turns</span>
         </div>
-      </div>
-      <div class="section">
-        ${sectionTitle("chat", "Conversation")}
+      `)}
+      ${settingsGroup("rp-conversation", "Conversation", `
         ${field("Vibemates' own tools (files, shell, web)", `<select id="rp-tools"><option value="on-request"${rs.tools === "on-request" ? " selected" : ""}>Only when someone explicitly asks</option><option value="never"${rs.tools === "never" ? " selected" : ""}>Never (chat only)</option></select>`, null, "An instruction in every vibemate's brief; the vibemate's mode is the real limit.")}
         <label class="switch"><span class="label">Share this room's history with the other rooms<span class="hint">Vibemates here may search the other rooms that also share theirs, and those rooms' vibemates may find messages written here. Hidden and deleted messages are never shared. Off: this room is searched only from inside it.</span></span><input type="checkbox" id="rp-share-history" ${rs.searchOtherRooms !== false ? "checked" : ""}></label>
-        <label class="switch"><span class="label">Reachable from messengers<span class="hint">A phone paired to viberoom (Settings → Channels) can open this room, write to it and read its replies. Off: the phone neither sees nor reaches this room.</span></span><input type="checkbox" id="rp-reachable" ${rs.reachableFromMessengers !== false ? "checked" : ""}></label>
-        <label class="switch"><span class="label">Start this room with viberoom<span class="hint">Its vibemates are started when viberoom starts, one room after another. They pay nothing until the first turn; their processes and memory stay while they wait. With viberoom starting at sign-in, the phone reaches this room without a click.</span></span><input type="checkbox" id="rp-start-with-hub" ${rs.startWithHub ? "checked" : ""}></label>
-        ${field("…and they come back", `<select id="rp-reconnect"><option value="inherit"${(rs.reconnectMode || "inherit") === "inherit" ? " selected" : ""}>As Welcome back is set</option><option value="load"${rs.reconnectMode === "load" ? " selected" : ""}>Continuing their saved sessions</option><option value="replay"${rs.reconnectMode === "replay" ? " selected" : ""}>Fresh, with the last messages replayed</option></select>`, "Only for the start above: when this room brings its own vibemates back, it decides with how much memory.", "A room that decides whether it starts also decides with how much memory its vibemates come back; the app-wide Welcome back setting is what a room follows when it has not chosen. It is not asked again in a dialog, because by the time a window could ask, the room has already begun.")}
         ${field("Max sentences per reply", `${UI.html("number-field", { id: "rp-maxlen", value: String(rs.maxSentences ?? ""), min: 1, max: 100, placeholder: "no limit" })}`)}
         ${field("Hop limit (vibemate-to-vibemate replies per human message)", `${UI.html("number-field", { id: "rp-hops", value: String(rs.hopLimit), min: 0, max: 10000 })}`)}
-      </div>
-      <div class="section">
-        ${sectionTitle("eye", "Referee")}
+      `)}
+      ${settingsGroup("rp-referee-section", "Referee", `
         ${field("When a reply breaks a mechanical rule (unknown @, self-@, length)", `<select id="rp-referee"><option value="next-header"${rs.refereeAction !== "retry-hidden" ? " selected" : ""}>Post it; remind the agent in its next header</option><option value="retry-hidden"${rs.refereeAction === "retry-hidden" ? " selected" : ""}>Hold it; ask for a corrected version in a hidden turn</option></select>`)}
-      </div>
-      <div class="section">
-        ${sectionTitle("save", "Instruction delivery")}
+      `)}
+      ${settingsGroup("rp-instruction-delivery", "Instruction delivery", `
+        <button data-ui="button" data-kind="ghost" data-memory-open="room">Shared memory for this room</button>
         ${field("Full brief every N vibemate turns", `${UI.html("number-field", { id: "rp-brief-turns", value: String(rs.fullBriefEveryTurns), min: 1, max: 10000 })}`)}
         ${field("…or every N new context tokens", `${UI.html("number-field", { id: "rp-brief-tokens", value: String(rs.fullBriefEveryTokens), min: 1000, max: 10000000, step: 1000 })}`)}
         <label class="switch"><span class="label">Repeat core rules in every header</span><input type="checkbox" id="rp-header-rules" ${rs.headerRules ? "checked" : ""}></label>
         <label class="switch"><span class="label">Show vendor and model to other vibemates</span><input type="checkbox" id="rp-vendor" ${rs.showVendorInRoster ? "checked" : ""}></label>
         ${field("Replay last N chat messages after a reconnect", `${UI.html("number-field", { id: "rp-replay", value: String(rs.replayAfterRestart), min: 0, max: 200 })}`)}
         ${field("Missed messages a vibemate reads at most on its next turn", `${UI.html("number-field", { id: "rp-backlog", value: String(rs.backlogCap), min: 1, max: 1000 })}`, "Everything posted since its last turn counts, including while it was muted; older messages are dropped with a note in its prompt.")}
-        ${field("Most characters in a vibio or in the room rules", `${UI.html("number-field", { id: "rp-text-limit", value: String(rs.briefTextLimit ?? 8000), min: 500, max: 32000, step: 500 })}`, "Both go into every brief. Text over the limit is refused with the numbers, never cut.")}
-      </div>
-      <div class="section">
-        ${sectionTitle("eye", "Long rooms")}
-        ${field("Messages drawn before the older ones fold away", `${UI.html("number-field", { id: "rp-fold-after", value: String(rs.foldAfter ?? ""), min: 100, max: 20000, step: 100, placeholder: `app setting (${(state.settings || {}).foldAfter || FOLD_SHOWN})` })}`, "A long room draws only its newest messages; the older ones wait above a ceiling and come in 25 at a time as you scroll up, and pinned ones are always shown. Fewer draws faster; more shows more at once. Empty uses the app setting.")}
-      </div>
-      <div class="section">
-        ${sectionTitle("save", "Troubleshooting")}
+        ${field("Most characters in a vibio or in the room rules", `${UI.html("number-field", { id: "rp-text-limit", value: String(rs.briefTextLimit ?? 8000), min: 500, max: 32000, step: 500 })}`, "The limit applies separately to each text. Text over it is refused with the numbers, never cut.")}
+      `)}
+      ${settingsGroup("rp-troubleshooting", "Troubleshooting", `
         ${field("Save diagnostic details", `<select id="rp-transcripts">${[["inherit", `Use the app setting (now: ${esc(TRANSCRIPT_LABEL[(state.settings || {}).transcripts || "off"])})`], ["off", "Off"], ["errors", "When something fails"], ["full", "All activity"]].map(([v, label]) => `<option value="${v}"${(rs.transcripts || "inherit") === v ? " selected" : ""}>${label}</option>`).join("")}</select>`, DIAGNOSTIC_LOG_HELP)}
-      </div>`,
+      `)}`,
         "tools, hops, referee, briefs",
       )}
       <div class="save-row" style="margin-top:10px"><span class="hint">The vibemates get the changes on their next turn.</span></div>
       </div>
-      <div class="section danger" style="margin-top:12px">
-        ${sectionTitle("alert", "Danger zone")}
+      ${settingsGroup("rp-danger-zone", "Danger zone", `
         <p class="field-note">Closes every vibemate in this room and removes it from the list. Its history and files move to the trash folder of your viberoom data; a new room with the same name starts empty.</p>
         <div class="row-btns start">${UI.html("button", { label: "Close this room for good", icon: "trash", kind: "danger", size: "sm", id: "rp-delete" })}</div>
-      </div>`;
+      `, "danger")}`;
     wireDetailsClose();
     rulesToNodes($("#rp-rules"), room.customRulesText != null ? room.customRulesText : rs.customRules || "", room);
     attachRichMentions($("#rp-rules"), $("#rp-rules-menu"));
@@ -4297,10 +5441,11 @@
           searchOtherRooms: $("#rp-share-history").checked,
           reachableFromMessengers: $("#rp-reachable").checked,
           startWithHub: $("#rp-start-with-hub").checked,
+          wakeAfterRestart: $("#rp-wake-restart").checked,
+          restartMessage: $("#rp-restart-message").value,
           reconnectMode: $("#rp-reconnect").value,
           replyDelay: Number($("#rp-delay").value),
           transcripts: $("#rp-transcripts").value,
-          foldAfter: $("#rp-fold-after").value === "" ? null : Number($("#rp-fold-after").value),
         });
     });
     $("#rp-delete").addEventListener("click", async () => {
@@ -4370,12 +5515,12 @@
         .join("") +
       missing.map((r) => `<div class="vendor-row" style="opacity:.75">${logo(r)}<span class="vc-name">${esc(r.vendor)}<span class="hint">${esc(r.installHint || r.unavailableReason || "")}</span></span>${UI.html("badge", { label: "not installed", tone: "asleep" })}</div>`).join("");
     els.pageInner.innerHTML = `
-      <div class="page-head"><div><h1>Settings</h1><div class="hint">${state.version ? `${esc(state.version.name)} ${esc(state.version.version)} · room built ${esc(new Date(state.version.build).toLocaleString())}` : "room build unknown (older room process; run viberoom again to replace it)"}</div></div></div>
+      <div class="page-head app-settings-head"><div class="app-settings-title"><span class="app-settings-heading-icon">${ic("settings-solid")}</span><div><h1>Settings</h1><div class="hint">${state.version ? `${esc(state.version.name)} ${esc(state.version.version)} · room built ${esc(new Date(state.version.build).toLocaleString())}` : "room build unknown (older room process; run viberoom again to replace it)"}</div></div></div>${settingsFoldActions()}</div>
       <div id="sp-form">
+      ${settingsGroup("sp-carrying", "Carry conversations", `<p class="hint">Save selected rooms for another computer, bring in a copy, or inspect removed versions.</p><button type="button" data-ui="button" data-kind="ghost" id="sp-carry">Export / Import rooms</button>`)}
       <div class="page-cols">
         <div>
-          <div class="section" id="sp-appearance">
-            ${sectionTitle("eye", "Appearance")}
+          ${settingsGroup("sp-appearance", "Appearance", `
             ${(() => {
               const a = s.appearance || {};
               const lookId = TOKENS.looks[a.look] ? a.look : TOKENS.current.id;
@@ -4398,18 +5543,15 @@
               <div class="field row"><span class="label">Code font<span class="hint">For code blocks, paths and tool output.</span></span><select id="sp-mono">${Object.entries(FONTS.mono).map(([id, f]) => `<option value="${id}"${((s.appearance || {}).mono || "jetbrains-mono") === id ? " selected" : ""}>${esc(f.label)}</option>`).join("")}</select></div>
               <div class="bubble" id="sp-chat-sample" style="display:inline-block;font-size:${(s.appearance || {}).chatFontSize || 14.5}px">Messages will read like this, with <code>code</code> a step smaller.</div>
             </div>
-          </div>
-          <div class="section">
-            ${sectionTitle("lock", "Permissions")}
+          `)}
+          ${settingsGroup("sp-permissions", "Permissions", `
             <label class="switch"><span class="label">Vibemates act without asking<span class="hint">Off: they ask you before editing files or running commands.</span>${geekTip('New vibemates start in their vendor\'s "act without asking" mode (Claude bypassPermissions, Codex agent-full-access, Gemini yolo, Cursor agent, OpenCode build, Copilot agent + allow_all). Change it per vibemate when summoning one, or later in its panel.')}</span><input type="checkbox" id="sp-bypass" ${s.bypassPermissionsByDefault !== false ? "checked" : ""}></label>
-          </div>
-          <div class="section">
-            ${sectionTitle("bolt", "Pace")}
+          `)}
+          ${settingsGroup("sp-pace", "Pace", `
             ${field("Turn taking in new rooms", `<select id="sp-turns"><option value="one-at-a-time"${d.turnTaking !== "parallel" ? " selected" : ""}>One vibemate at a time</option><option value="parallel"${d.turnTaking === "parallel" ? " selected" : ""}>All addressed vibemates at once</option></select>`)}
             ${field("Reply delay in new rooms, seconds", `${UI.html("number-field", { id: "sp-delay", value: String(d.replyDelay ?? 4), min: 0, max: 120, step: 0.5 })}`, "Used when two or more vibemates share a room; each room can change it; a vibemate can override it in its own panel.", "Before each turn a vibemate waits a random 0–N seconds, so replies cross less often. Messages that arrive meanwhile land in its backlog. A vibemate alone answers at once unless it has its own delay.")}
-          </div>
-          <div class="section" id="sp-editor">
-            ${sectionTitle("pencil", "Open files at a line")}
+          `)}
+          ${settingsGroup("sp-editor", "Open files at a line", `
             <label class="field"><span class="label">A click on a path like main.ts:375 opens the file in${geekTip("Only an editor can jump to a line; the OS default app just opens the file. Auto looks for VS Code, Cursor, Windsurf, Zed, Sublime Text, Notepad++ and the JetBrains IDEs, in that order, on PATH and in their usual folders. Custom: a command with {file}, {line} and {column} placeholders, e.g. code --goto {file}:{line}.")}</span>
               <div class="chips editor-modes">
                 ${UI.html("choice", { label: "Auto", on: !["custom", "default-app"].includes((s.editor || {}).mode), data: { mode: "auto" } })}
@@ -4419,9 +5561,8 @@
               <input type="hidden" id="sp-editor-mode" value="${esc((s.editor || {}).mode || "auto")}">
             </label>
             ${field("Command", `<input type="text" id="sp-editor-cmd" maxlength="500" value="${esc((s.editor || {}).command || "")}" placeholder="code --goto {file}:{line}">`, "{file}, {line} and {column} are filled in; quotes group arguments.")}
-          </div>
-          <div class="section" id="sp-diagrams">
-            ${sectionTitle("wand", "Diagrams")}
+          `)}
+          ${settingsGroup("sp-diagrams", "Diagrams", `
             <div class="field"><span class="label">Colours of the boxes${geekTip("Vibemates draw diagrams as Mermaid (a ```mermaid block in a message); the room renders them here, with these colours. Mermaid derives the shades of borders and text from the box colour.")}</span>
               <div class="chips diagram-presets">${Object.entries(DIAGRAM_PRESETS).map(([id, p]) => UI.html("choice", { label: p.label, on: dg.preset === id, data: { preset: id }, lead: UI.raw(`<span class="swatch" style="${p.palette ? `background:linear-gradient(90deg, ${p.palette.map((c) => c.fill).join(", ")});border-color:${p.palette[0].stroke}` : `background:${p.primaryColor};border-color:${p.primaryBorderColor}`}"></span>`) })).join("")}</div>
               <input type="hidden" id="sp-diagram-preset" value="${esc(dg.preset)}">
@@ -4429,64 +5570,56 @@
             <label class="switch"><span class="label">My own colour for the boxes</span><input type="checkbox" id="sp-diagram-custom" ${dg.primary ? "checked" : ""}></label>
             <div class="field row" id="sp-diagram-color-row" ${dg.primary ? "" : "hidden"}><span class="label">Box colour</span><input type="color" id="sp-diagram-color" value="${esc(dg.primary || TOKENS.diagrams.customBoxDefault)}" style="width:46px;height:30px;padding:2px"></div>
             ${mermaidBlock("graph LR\n  A[You] --> B(Vibemate)\n  B --> C{Agreed?}\n  C -->|yes| D[Done]\n  C -->|no| B").replace('class="mermaid-block"', 'class="mermaid-block preview"')}
-          </div>
+          `)}
         </div>
         <div>
-          <div class="section" id="sp-channels">
-            ${sectionTitle("chat", "Channels")}
+          ${settingsGroup("sp-channels", "Channels", `
             ${channelsSectionHtml()}
-          </div>
-          <div class="section" id="sp-update">
-            ${sectionTitle("refresh", "Updates")}
+          `)}
+          ${settingsGroup("sp-update", "Updates", `
             <label class="switch"><span class="label">Check for updates once a day<span class="hint">At start, one request to the npm registry for the latest viberoom version; nothing else leaves this machine. A newer version shows as a bubble over your avatar.</span></span><input type="checkbox" id="sp-updates" ${s.checkForUpdates !== false ? "checked" : ""}></label>
             <p class="hint" id="sp-update-status">${updateStatusText()}</p>
             ${UI.html("button", { label: "Check now", size: "sm", id: "sp-update-check" })}
-          </div>
-          <div class="section" id="sp-autostart">
-            ${sectionTitle("refresh", "Start with the computer")}
+            <hr>
+            <label class="switch"><span class="label">Check installed agents once a day<span class="hint">Checks the existing installations and their release channels. Updates run only when you choose them.</span></span><input type="checkbox" id="sp-agent-updates" ${s.checkAgentUpdates !== false ? "checked" : ""}></label>
+            <p class="hint" id="sp-agent-update-status">${esc(agentUpdates.status())}</p>
+            ${UI.html("button", { label: "Agent updates…", size: "sm", id: "sp-agent-update-open" })}
+          `)}
+          ${settingsGroup("sp-autostart", "Start with the computer", `
             <label class="switch"><span class="label">Start viberoom when you sign in to this computer<span class="hint">A quiet start, without a window: the icon opens the window when you want it. Rooms with "Start this room with viberoom" bring their vibemates back by themselves, so a paired phone reaches them without a click. A viberoom already running is left alone. Switch this off before you remove or move viberoom.</span></span><input type="checkbox" id="sp-autostart-on" ${state.autostart && state.autostart.enabled ? "checked" : ""}${state.autostart ? "" : " disabled"}></label>
             <p class="hint" id="sp-autostart-status">${autostartStatusText()}</p>
-          </div>
+          `)}
           ${dataFolderRow()}
-          <div class="section" id="sp-restart">
-            ${sectionTitle("refresh", "Restart")}
+          ${settingsGroup("sp-restart", "Restart", `
             <p class="hint" style="margin-bottom:10px">Starts the room again with what is on disk. The vibemates come back the way Welcome back is set to bring them, and this window reconnects on its own. Closing the window does not do this: the room keeps running in the background, which is why it can stay on an older build than the one you have.</p>
             ${state.version && state.version.staleBuild ? `<p class="hint warn" style="margin-bottom:10px">Older build running. There is a newer build on this machine — <code>${esc(state.version.staleBuild)}</code> was written after this room started — and the room keeps running the one it started with. Restart takes the new one.</p>` : ""}
             ${state.version && state.version.staleSource ? `<p class="hint warn" style="margin-bottom:10px">This room is older than the code on disk: <code>${esc(state.version.staleSource)}</code> changed after it was built. Restart takes what is built; in a source checkout run <code>node scripts/update.mjs</code>, which builds first.</p>` : ""}
             ${UI.html("button", { label: "Restart viberoom", size: "sm", id: "sp-restart-now" })}
-          </div>
-          <div class="section">
-            ${sectionTitle("spark", "Vibemates on this machine")}
+          `)}
+          ${settingsGroup("sp-vibemates-on-this-machine", "Vibemates on this machine", `
             ${machine || '<p class="hint">No supported vibemate is installed yet.</p>'}
-          </div>
+          `)}
         </div>
       </div>
       ${geek(
         "sp-geek",
-        `<div class="page-cols">
+        `${settingsGroup("sp-shared-memory", "Shared memory", `<button data-ui="button" data-kind="ghost" data-memory-open="user">Shared memory about you</button><p class="hint">Review learned preferences, protected notes and their revision history.</p>`)}<div class="page-cols">
         <div>
-          <div class="section">
-            ${sectionTitle("rooms", "Defaults for new rooms")}
+          ${settingsGroup("sp-defaults-for-new-rooms", "Defaults for new rooms", `
             <p class="field-note">Every new room starts with these; each room can change them in its own settings.</p>
             ${field("Hop limit", `${UI.html("number-field", { id: "sp-hops", value: String(d.hopLimit), min: 0, max: 10000 })}`, "How many vibemate-to-vibemate replies may follow one message of yours before the room waits for you again.")}
             ${field("Full brief every N turns", `${UI.html("number-field", { id: "sp-brief-turns", value: String(d.fullBriefEveryTurns), min: 1, max: 10000 })}`, "How often a vibemate gets the whole room brief again instead of the short header.")}
             ${field("Full brief every N tokens", `${UI.html("number-field", { id: "sp-brief-tokens", value: String(d.fullBriefEveryTokens), min: 1000, max: 10000000, step: 1000 })}`, "…or after this much new context since its last full brief, whichever comes first.")}
-            ${field("Most characters in a vibio or in the room rules", `${UI.html("number-field", { id: "sp-text-limit", value: String(d.briefTextLimit ?? 8000), min: 500, max: 32000, step: 500 })}`, "Both go into every brief. Over the limit, the text is refused with the numbers, never cut; each room can raise or lower its own.")}
+            ${field("Most characters in a vibio or in the room rules", `${UI.html("number-field", { id: "sp-text-limit", value: String(d.briefTextLimit ?? 8000), min: 500, max: 32000, step: 500 })}`, "The limit applies separately to each text. Text over it is refused with the numbers, never cut; each room can raise or lower its own limit.")}
             <label class="switch"><span class="label">Repeat core rules in every header<span class="hint">The short header before each turn repeats the room's core rules (who is here, how to address, how long to write).</span></span><input type="checkbox" id="sp-header-rules" ${d.headerRules ? "checked" : ""}></label>
             ${field("Tools", `<select id="sp-tools"><option value="on-request"${d.tools === "on-request" ? " selected" : ""}>Only when asked</option><option value="never"${d.tools === "never" ? " selected" : ""}>Never</option></select>`, "Whether vibemates may use their own tools (files, shell, web) without being asked to.")}
-          </div>
-          <div class="section">
-            ${sectionTitle("skills", "Skills from vibemates")}
+          `)}
+          ${settingsGroup("sp-skills-from-vibemates", "Skills from vibemates", `
             <label class="switch"><span class="label">Vibemate-created skills need my approval<span class="hint">Off: a skill a vibemate creates is usable at once and shows as "unreviewed" until you open it. On: it stays a draft (not delivered, not attachable) until you approve it under Skills.</span></span><input type="checkbox" id="sp-skill-approval" ${s.agentSkillsNeedApproval ? "checked" : ""}></label>
-          </div>
+          `)}
         </div>
         <div>
-          <div class="section" id="sp-fold">
-            ${sectionTitle("eye", "Long rooms")}
-            ${field("Messages drawn before the older ones fold away", `${UI.html("number-field", { id: "sp-fold-after", value: String(s.foldAfter || FOLD_SHOWN), min: 100, max: 20000, step: 100 })}`, "A long room draws only its newest messages; the older ones wait above a ceiling and come in 25 at a time as you scroll up, and pinned ones are always shown. Fewer draws faster; more shows more at once. You can choose a different value for each room.")}
-          </div>
-          <div class="section" id="sp-transcripts">
-            ${sectionTitle("save", "Troubleshooting")}
+          ${settingsGroup("sp-transcripts", "Troubleshooting", `
             ${field("Save diagnostic details", `<select id="sp-transcripts-mode">${[["off", "Off (default)"], ["errors", "When something fails"], ["full", "All activity"]].map(([v, label]) => `<option value="${v}"${(s.transcripts || "off") === v ? " selected" : ""}>${label}</option>`).join("")}</select>`, DIAGNOSTIC_LOG_HELP + " You can choose a different setting for each room.")}
             <p class="field-note" id="sp-log-size" role="status" aria-live="polite">Checking saved diagnostic details…</p>
             <p class="field-note">Includes current and removed rooms. Clearing these details keeps your conversations and shared files. Recording can create new details while vibemates work.</p>
@@ -4496,27 +5629,26 @@
             </div>
             <p class="field-note">Recent tool connection timings stay in memory. Copy them when reporting a connection problem; message text and access keys are not included.</p>
             ${UI.html("button", { label: "Copy tool connection details", size: "sm", id: "sp-connection-copy" })}
-          </div>
-          ${devBuild() ? `<div class="section" id="sp-slow">
-            ${sectionTitle("clock", "Rendering in this window")}
+          `)}
+          ${devBuild() ? `${settingsGroup("sp-slow", "Rendering in this window", `
             <p class="field-note">Only a viberoom started from its own sources shows this. It measures how long this window took to draw, so a slow moment can be reported with the place it happened in.</p>
             <p class="hint" style="margin-bottom:10px">Everything this window spent more than 8 ms on, newest first: the moment, the cost, what it was, and what the room was doing then. Anything over 50 ms the browser reports by itself, ours or not. When something feels slow, copy the list into the room: it says where to look, which a measurement from outside cannot.</p>
             ${slowTasksHtml()}
             ${UI.html("button", { label: "Copy the list", size: "sm", id: "sp-slow-copy" })}
             <p class="hint" style="margin:16px 0 10px">Every time the chat moved to the newest message by itself, and who asked for it. A move while you were reading higher up is the one to report.</p>
             ${endJumpsHtml()}
-          </div>` : ""}
-          <div class="section">
-            ${sectionTitle("settings", "Presets per vibemate")}
+          `)}` : ""}
+          ${settingsGroup("sp-presets-per-vibemate", "Presets per vibemate", `
             <p class="hint" style="margin-bottom:10px">Used when you summon one; leave a field empty for the built-in suggestion. The summon dialog always shows what the vibemate really offers. Bypass modes: Claude bypassPermissions, Codex agent-full-access, Gemini yolo, Cursor agent, OpenCode build, Copilot agent + allow_all.</p>
             ${presets || '<p class="hint">No supported vibemate is installed yet.</p>'}
-          </div>
+          `)}
         </div>
       </div>`,
         "room defaults, long rooms, diagnostics, presets per vibemate, rendering",
       )}
       </div>`;
     bindDiagnosticLogControls();
+    document.querySelector("#sp-carry").addEventListener("click", () => void openCarry(null));
     bindChannelControls();
     const editorSection = $("#sp-editor");
     const editorCmdRow = $("#sp-editor-cmd").closest(".field");
@@ -4736,11 +5868,13 @@
     $("#sp-autostart-on")?.addEventListener("change", async (e) => {
       e.stopPropagation();
       const box = e.target;
+      const wanted = box.checked;
       box.disabled = true;
       try {
-        const res = await post("/api/autostart", { enabled: box.checked });
+        const res = await post("/api/autostart", { enabled: wanted });
         state.autostart = res.autostart || state.autostart;
-        toast(res.autostart && res.autostart.enabled ? "viberoom starts when you sign in." : "viberoom no longer starts when you sign in.", "success");
+        if (res.autostart?.enabled !== wanted) toast(res.autostart?.note || "The operating system did not apply the startup setting.", "warn");
+        else toast(wanted ? "viberoom starts when you sign in." : "viberoom no longer starts when you sign in.", "success");
       } catch (error) {
         showError(error);
       }
@@ -4778,6 +5912,7 @@
       b.disabled = false;
       UI.setState(b, null);
     });
+    $("#sp-agent-update-open").addEventListener("click", () => agentUpdates.open());
     bindSave($("#sp-form"), async () => {
         const vendorPresets = {};
         els.pageInner.querySelectorAll("input[data-vendor]").forEach((inp) => {
@@ -4788,8 +5923,8 @@
           bypassPermissionsByDefault: $("#sp-bypass").checked,
           agentSkillsNeedApproval: $("#sp-skill-approval").checked,
           checkForUpdates: $("#sp-updates").checked,
+          checkAgentUpdates: $("#sp-agent-updates").checked,
           transcripts: $("#sp-transcripts-mode").value,
-          foldAfter: Number($("#sp-fold-after").value),
           diagrams: { preset: $("#sp-diagram-preset").value, primary: $("#sp-diagram-custom").checked ? $("#sp-diagram-color").value : null },
           editor: { mode: $("#sp-editor-mode").value, command: $("#sp-editor-cmd").value },
           appearance: { chatFontSize: Number($("#sp-chat-fs").value), font: $("#sp-font").value, mono: $("#sp-mono").value, look: $("#sp-look").value, custom: { [$("#sp-look").value]: Object.keys(pendingAdjust()).length ? pendingAdjust() : null } },
@@ -5458,13 +6593,13 @@
 
   function loginStatusWords(recipe) {
     const own = recipe.loginChecked && recipe.loginChecked.how === "command" && recipe.loginChecked.detail ? ` · ${recipe.loginChecked.detail}` : "";
-    return recipe.loginState === "ok" ? `logged in${own}` : recipe.loginState === "missing" ? `not logged in${own}` : "login not known";
+    return recipe.loginState === "ok" ? recipe.loginChecked?.how === "acp" ? "ready to connect" : `logged in${own}` : recipe.loginState === "configured" ? `sign-in configured${own}` : recipe.loginState === "missing" ? `not logged in${own}` : "login not known";
   }
   function loginDialogProps(recipe, purpose) {
     const known = flowOf(recipe, purpose);
     const flow = known && (known.state === "running" || (known.endedAt || 0) >= loginDialog.openedAt) ? known : null;
     const running = !!flow && flow.state === "running";
-    const checkedAfter = !!flow && (flow.kind === "terminal" || (!!recipe.loginChecked && recipe.loginChecked.at >= (flow.endedAt || 0) && !recipe.loginChecking));
+    const checkedAfter = !!flow && !!recipe.loginChecked && recipe.loginChecked.at >= (flow.endedAt || 0) && !recipe.loginChecking;
     const base = { vendor: recipe.vendor, icon: recipe.icon || "", purpose, flowId: flow ? flow.id : undefined, data: { recipe: recipe.id } };
     let confirmed = false;
     let props;
@@ -5472,9 +6607,14 @@
       const kind = recipe.installHow === "url" ? "url" : recipe.installHow === "terminal" ? "terminal" : "command";
       const idleScene = kind === "terminal" ? "terminal" : kind === "url" ? "browser" : "package";
       const geek = `${esc(recipe.installNote || "")}${recipe.installCommand ? ` It runs <code>${esc(recipe.installCommand)}</code>${kind === "terminal" ? " in a terminal window" : " hidden, the way you would in a terminal"}.` : ""} viberoom downloads nothing itself: it is the vendor's own installer.`;
-      if (!recipe.unavailableReason && !(running)) {
+      if (!recipe.unavailableReason && !running && (!flow || flow.state === "done")) {
         confirmed = checkedAfter && recipe.loginState === "ok";
-        props = { ...base, kind, state: "done", scene: "done", words: confirmed ? `${recipe.vendor} is installed and logged in. You can summon it now.` : `${recipe.vendor} is installed. Asking whether it is logged in…`, status: recipe.installedAt || undefined, lines: flow ? flow.lines : undefined };
+        const words = confirmed ? `${recipe.vendor} is installed and ready to join. You can summon it now.`
+          : recipe.loginChecking ? `${recipe.vendor} is installed. Checking its sign-in…`
+          : recipe.loginState === "missing" ? `${recipe.vendor} is installed. Log in to use it.`
+          : recipe.loginState === "configured" ? `${recipe.vendor} is installed and has sign-in details configured. You can summon it; the vendor will confirm access.`
+          : `${recipe.vendor} is installed. Its sign-in could not be confirmed. You can check again or open its sign-in.`;
+        props = { ...base, kind, state: "done", scene: "done", words, status: recipe.installedAt || undefined, lines: flow ? flow.lines : undefined };
       } else if (running) {
         props = { ...base, kind, state: "running", scene: idleScene, words: flow.detail, lines: flow.lines, geek };
       } else if (flow && flow.state === "failed") {
@@ -5483,32 +6623,34 @@
         const words = kind === "url" ? `${recipe.vendor} is installed from its website. Follow the steps there, come back, and press Check again.` : kind === "terminal" ? `A terminal window opens with ${recipe.vendor}'s installer. Finish there, then press I'm done.` : `${recipe.vendor} is fetched from npm; the tile turns live when it is done.`;
         props = { ...base, kind, state: "idle", scene: idleScene, words, status: "not installed on this machine", url: recipe.installUrl, geek };
       }
-      return { props, confirmed };
+      return { props: { ...props, confirmed, checking: !!recipe.loginChecking }, confirmed };
     }
     const kind = recipe.loginHow === "terminal" ? "terminal" : "command";
-    const geek = `${esc(recipe.loginHint || "")}${recipe.loginTerminalCommand ? ` In a terminal it is <code>${esc(recipe.loginTerminalCommand)}</code>.` : ""} viberoom never sees your password or keys: ${esc(recipe.vendor)} signs you in, this dialog only shows what it says.`;
+    const geek = `${esc(recipe.loginHint || "")}${recipe.loginTerminalCommand ? ` In a terminal it is <code>${esc(recipe.loginTerminalCommand)}</code>.` : ""} ${esc(recipe.vendor)} handles sign-in. This dialog displays its output and forwards any answers you enter here.`;
     const terminal = kind !== "terminal" && !!recipe.loginTerminalCommand;
     const said = loginStatusWords(recipe);
-    if (recipe.loginState === "ok" && flow && flow.state === "done" && checkedAfter) {
+    if (recipe.loginState === "ok" && flow && !running && checkedAfter) {
       confirmed = true;
-      props = { ...base, kind, state: "done", scene: "done", words: `${recipe.vendor} confirms it is logged in.`, status: said, lines: flow.lines };
+      props = { ...base, kind, state: "done", scene: "done", words: `${recipe.vendor} is ready to join the room.`, status: said, lines: flow.lines };
     } else if (running) {
       const scene = kind === "terminal" ? "terminal" : flow.wantsInput ? "question" : flow.code ? "code" : "browser";
       props = { ...base, kind, state: "running", scene, words: flow.detail, url: flow.url, code: flow.code, wantsInput: !!flow.wantsInput, lines: flow.lines, geek };
-    } else if (flow && flow.state === "done" && !checkedAfter) {
-      props = { ...base, kind, state: "done", scene: "done", words: `${recipe.vendor} says it is signed in. Asking it…`, lines: flow.lines };
+    } else if (flow && flow.state === "done" && !checkedAfter && recipe.loginChecking) {
+      props = { ...base, kind, state: "done", scene: "done", words: `The sign-in command finished. Checking ${recipe.vendor}…`, lines: flow.lines };
     } else if (flow && flow.state === "done" && recipe.loginState === "missing") {
-      props = { ...base, kind, state: "failed", scene: "failed", words: `${recipe.vendor} said it signed in, but asked again it says: ${said || "not logged in"}.`, lines: flow.lines, geek, terminal };
+      props = { ...base, kind, state: "failed", scene: "failed", words: `The sign-in command finished, but ${recipe.vendor} reports: ${said || "not logged in"}.`, lines: flow.lines, geek, terminal };
     } else if (flow && flow.state === "done") {
-      props = { ...base, kind, state: "done", scene: "done", words: `${recipe.vendor} says it is signed in; asked again, it could not say for sure. Summon it and see.`, status: said, lines: flow.lines };
+      props = { ...base, kind, state: "done", scene: "done", words: recipe.loginState === "configured"
+        ? `${recipe.vendor} has sign-in details configured. Access is confirmed when the vendor uses them.`
+        : `The sign-in command finished, but ${recipe.vendor}'s access could not be confirmed. Check again or reopen sign-in.`, status: said, lines: flow.lines };
     } else if (flow && flow.state === "failed") {
       props = { ...base, kind, state: "failed", scene: "failed", words: flow.detail, lines: flow.lines, geek, terminal };
     } else {
       const scene = recipe.loginScene || "browser";
-      const words = scene === "terminal" ? `A terminal window opens with ${recipe.vendor}'s own sign-in. Finish there, then press I'm done.` : scene === "code" ? `${recipe.vendor} shows a page and a code. Open the page, type the code, and it signs you in.` : `${recipe.vendor} opens your browser. Sign in there and come back; viberoom waits.`;
+      const words = scene === "terminal" ? `A terminal window opens with ${recipe.vendor}'s own sign-in. Complete its menu and exit the vendor's screen; viberoom then checks the result.` : scene === "code" ? `${recipe.vendor} shows a page and a code. Open the page, type the code, and it signs you in.` : `${recipe.vendor} opens your browser. Sign in there and come back; viberoom waits.`;
       props = { ...base, kind, state: "idle", scene, words: flow && flow.state === "cancelled" ? `Cancelled. ${words}` : words, status: said, geek };
     }
-    return { props, confirmed };
+    return { props: { ...props, confirmed, checking: !!recipe.loginChecking }, confirmed };
   }
 
   const SETUP_STEPS = ["what", "bot", "key", "name", "pair", "done"];
@@ -5925,7 +7067,7 @@
       const flowId = root && root.dataset.flow;
       try {
         if (act === "close-login") closeDialog(els.loginDialog);
-        else if (act === "start-login" || (act === "retry-login" && purpose === "login")) { btn.disabled = true; await startLoginFlow(recipeId, false); }
+        else if (act === "start-login" || (act === "retry-login" && purpose === "login")) { btn.disabled = true; loginDialog.purpose = "login"; await startLoginFlow(recipeId, false); }
         else if (act === "start-install" || (act === "retry-login" && purpose === "install")) { btn.disabled = true; await startInstallFlow(recipeId, false); }
         else if (act === "terminal-login") { btn.disabled = true; await (purpose === "install" ? startInstallFlow(recipeId, true) : startLoginFlow(recipeId, true)); }
         else if (act === "rescan" || (act === "recheck-login" && purpose === "install")) { btn.disabled = true; await post("/api/recipes/check", { id: recipeId, rescan: true }, { deadline: 3 * 60000 }); }
@@ -6041,7 +7183,8 @@
     if (r.unavailableReason) return { state: "off", text: "not installed" };
     if (r.loginChecking && !r.loginChecked) return { state: "checking", text: "checking…" };
     if (r.loginState === "missing") return { state: "missing", text: "not logged in" };
-    if (r.loginState === "ok") return { state: "ok", text: "logged in" };
+    if (r.loginState === "ok") return { state: "ok", text: r.loginChecked?.how === "acp" ? "ready" : "logged in" };
+    if (r.loginState === "configured") return { state: "unknown", text: "sign-in set up" };
     return { state: "unknown", text: "installed" };
   }
   function loginTitle(r) {
@@ -6068,9 +7211,9 @@
           : r.loginState === "missing"
           ? UI.html("button", { label: "Log in", kind: "primary", size: "xs", act: "open-login-dialog", icon: "lock", title: `${r.vendor} is not logged in here: log in from the room`, data: { recipe: r.id, purpose: "login" } })
           : "";
-        return `<div class="agent-cell">${tile}${under}</div>`;
+        return `<div class="agent-cell">${tile}${under}${agentUpdates.tileAction(r)}</div>`;
       })
-      .join("");
+      .join("") + agentUpdates.bulkAction();
     els.invAgents.querySelectorAll('[data-act="install-pick"]').forEach((b) => b.addEventListener("click", () => pickForInstall(b.dataset.agent)));
     els.invAgents.querySelectorAll(".agent-tile:not(.off)").forEach((b) =>
       b.addEventListener("click", () => {
@@ -6201,7 +7344,7 @@
     }
   });
   function openReconnectDialog(room, only) {
-    const offline = offlineAgents(room).filter((p) => !only || p.id === only.id);
+    const offline = offlineAgents(room, !!only).filter((p) => !only || p.id === only.id);
     if (!offline.length) return;
     if (!only) reconnectPrompted.add(room.id);
     els.rcError.hidden = true;
@@ -6211,12 +7354,13 @@
       ? `${only.name} is offline in "${room.name}" (its session ended with the previous room run). Choose how it comes back:`
       : `${offline.length} vibemate${offline.length > 1 ? "s are" : " is"} offline in "${room.name}" (their sessions ended with the previous room run). Choose how they come back:`;
     els.rcTable.dataset.ids = offline.map((p) => p.id).join(",");
+    els.rcTable.dataset.only = only?.id || "";
     els.rcTable.innerHTML = "";
     renderReconnectRows(room);
     openDialog(els.rcDialog);
   }
   function reconnectListed(room) {
-    return (els.rcTable.dataset.ids || "").split(",").filter(Boolean).map((id) => findById(room, id)).filter(Boolean);
+    return (els.rcTable.dataset.ids || "").split(",").filter(Boolean).map((id) => findById(room, id)).filter(p => p && (!p.muted || p.id === els.rcTable.dataset.only));
   }
   const reconnectStuck = (p) => p.trouble?.kind === "login" || state.recipes.find((r) => r.id === p.agentType)?.loginState === "missing";
   const reconnectBack = (p) => ["idle", "queued", "thinking", "writing"].includes(p.status);
@@ -6267,6 +7411,8 @@
     const failures = [];
     for (const row of rows) {
       if (row.choice === "skip") continue;
+      const participant = findById(room, row.id);
+      if (!participant || participant.muted && row.id !== els.rcTable.dataset.only) continue;
       try {
         await post(roomApi(`/participants/${encodeURIComponent(row.id)}/reconnect`), { mode: row.choice, replay });
       } catch (error) {
@@ -6449,6 +7595,8 @@
       ${stpSwitch("Share history with the other rooms", "stp-share-history", st.searchOtherRooms !== false)}
       ${stpSwitch("Reachable from messengers", "stp-reachable", st.reachableFromMessengers !== false)}
       ${stpSwitch("Start with viberoom", "stp-start-with-hub", st.startWithHub === true)}
+      ${stpSwitch("Wake vibemates after a requested restart", "stp-wake-restart", st.wakeAfterRestart === true)}
+      ${stpField("Message after restart", `<textarea id="stp-restart-message" rows="3" maxlength="8000">${esc(st.restartMessage || "")}</textarea>`)}
       ${stpField("…and they come back", stpSelect("stp-reconnect", st.reconnectMode || "inherit", [["inherit", "As Welcome back is set"], ["load", "Continuing their saved sessions"], ["replay", "Fresh, with the last messages replayed"]]))}
       ${stpField("Hop limit", `${UI.html("number-field", { id: "stp-hops", value: String(st.hopLimit ?? 100), min: 0, max: 10000 })}`)}
       ${stpField("Max sentences per reply", `${UI.html("number-field", { id: "stp-maxlen", value: String(st.maxSentences ?? ""), min: 1, max: 100, placeholder: "no limit" })}`)}
@@ -6498,6 +7646,8 @@
       searchOtherRooms: $("#stp-share-history").checked,
       reachableFromMessengers: $("#stp-reachable").checked,
       startWithHub: $("#stp-start-with-hub").checked,
+      wakeAfterRestart: $("#stp-wake-restart").checked,
+      restartMessage: $("#stp-restart-message").value,
       reconnectMode: $("#stp-reconnect").value,
       hopLimit: num("#stp-hops"),
       maxSentences: $("#stp-maxlen").value === "" ? null : num("#stp-maxlen"),
@@ -6770,6 +7920,7 @@
     const previousSettings = state.settings;
     const previousReader = previousRooms.get(state.currentRoomId)?.history && state.view === "room" && !stuck ? readerAnchor() : null;
     state.settings = snapshot.settings;
+    state.automationPending = snapshot.automationPending || {};
     state.looks = snapshot.looks || [];
     registerLooks(state.looks);
     applyAppearance();
@@ -6781,7 +7932,9 @@
     noteHubRun();
     state.skills = snapshot.skills || [];
     state.recipes = snapshot.recipes || [];
-    state.logins = new Map((snapshot.logins || []).filter((f) => f.purpose !== "install").map((f) => [f.recipeId, f]));
+    agentUpdates.setView(snapshot.agentUpdates || null);
+    for (const flow of snapshot.logins || []) agentUpdates.setFlow(flow);
+    state.logins = new Map((snapshot.logins || []).filter((f) => !f.purpose || f.purpose === "login").map((f) => [f.recipeId, f]));
     state.installs = new Map((snapshot.logins || []).filter((f) => f.purpose === "install").map((f) => [f.recipeId, f]));
     state.roomDefaults = snapshot.roomDefaults || null;
     state.channels = snapshot.channels || null;
@@ -6789,6 +7942,7 @@
     state.dataFolder = snapshot.dataFolder || null;
     state.rooms = new Map((snapshot.rooms || []).map((r) => [r.id, r]));
     for (const room of state.rooms.values()) {
+      room.participantOrder = new Map((room.participants || []).map(p => [p.id, room.history?.streamSequence ?? -1]));
       const previous = previousRooms.get(room.id);
       const before = previous && (previous.settings?.foldAfter ?? previousSettings?.foldAfter ?? FOLD_SHOWN);
       const after = room.settings?.foldAfter ?? state.settings?.foldAfter ?? FOLD_SHOWN;
@@ -6853,10 +8007,16 @@
   function onRoomEvent(roomId, event) {
     const room = state.rooms.get(roomId);
     if (!room) return;
+    if (room.history?.bodyProtocol) {
+      const affected = event.type === "message.delivery" ? (event.updates || []).map(update => update.id)
+        : [event.message?.id || event.messageId || event.id].filter(Boolean);
+      const changes = room.bodyChanges ||= new Map();
+      for (const id of affected) changes.set(id, event.streamSequence || 0);
+      if (room.history.indexed) for (const id of affected) (room.dirtyHeights ||= new Set()).add(id);
+    }
     const delta = ["chunk", "thought", "toolcall", "plan"].includes(event.type);
     if ((delta || event.type === "message" || event.type === "message.delivery") && event.streamSequence !== undefined && event.streamSequence <= (room.history?.streamSequence ?? -1)) return;
     if (room.historyEvents && delta) room.historyEvents.push(event);
-    const handedBefore = room.history?.handedFromSeq;
     if (event.history) {
       if (room.history?.epoch && room.history.epoch !== event.history.epoch) return;
       if (room.history?.revision > event.history.revision && event.type !== "participant") return;
@@ -6872,19 +8032,20 @@
     const showing = current && state.view === "room";
     switch (event.type) {
       case "participant": {
+        const order = room.participantOrder ||= new Map();
+        if (event.streamSequence !== undefined) {
+          if (event.streamSequence < (order.get(event.participant.id) ?? -1)) return;
+          order.set(event.participant.id, event.streamSequence);
+        }
         const before = showing ? visibilityFingerprint(room) : "";
         const i = room.participants.findIndex((p) => p.id === event.participant.id);
+        const previous = i >= 0 ? room.participants[i] : null;
         const channelChanged = i >= 0 && room.participants[i].skillChannel !== event.participant.skillChannel;
         if (i >= 0) room.participants[i] = event.participant;
         else room.participants.push(event.participant);
-        if (!showing && remoteHidden(room) && handedBefore !== room.history?.handedFromSeq) {
-          room.restoreFrom = {};
-          if (listRoomId === room.id) listRoomId = null;
-        }
         if (showing) {
-          if (visibilityFingerprint(room) !== before || handedBefore !== room.history?.handedFromSeq) {
-            if (remoteHidden(room) && room.history?.version) void refreshHeld(roomId);
-            else renderMessages(`what ${event.participant.name} has seen moved`);
+          if (visibilityFingerprint(room) !== before) {
+            renderMessagesSoon(`what ${event.participant.name} has seen moved`);
           }
           else refreshSeen(room);
           if (channelChanged) refreshStartingLines(room);
@@ -6893,7 +8054,14 @@
           if (els.rcDialog.open) refreshReconnectDialog(room);
           if (state.detailsOpen && state.selection.kind === "participant" && state.selection.id === event.participant.id) {
             if (!editingInDetails()) renderDetails();
-            else refreshDetailsHeader(event.participant);
+            else {
+              refreshDetailsHeader(event.participant);
+              const config = p => JSON.stringify([p?.mode, p?.configOptions, p?.pendingSettings, p?.status === "starting"]);
+              if (config(previous) !== config(event.participant)) {
+                const panel = $("#pp-config");
+                if (panel) renderConfig(panel, event.participant, ["offline", "left"].includes(event.participant.status));
+              }
+            }
           }
         } else if ((state.view === "rooms" || state.view === "home")) {
           renderSideRooms();
@@ -6903,6 +8071,7 @@
         return;
       }
       case "participant.removed":
+        if (event.streamSequence !== undefined) (room.participantOrder ||= new Map()).set(event.id, event.streamSequence);
         room.participants = room.participants.filter((p) => p.id !== event.id);
         if (state.selection.kind === "participant" && state.selection.id === event.id) closeDetails();
         if (showing) {
@@ -6913,6 +8082,7 @@
         return;
       case "message":
         upsertMessage(roomId, event.message);
+        trimBodyCache(room);
         return;
       case "message.delivery": {
         const known = new Map(HistoryWindow.knownMessages(room).map(m => [m.id, m]));
@@ -6928,6 +8098,11 @@
       }
       case "message.removed":
         removeMessage(roomId, event.id);
+        return;
+      case "record.replaced":
+        previewCache.clear();
+        room.historyGeneration = (room.historyGeneration || 0) + 1;
+        void refreshHeld(roomId);
         return;
       case "messages.truncated":
         room.historyGeneration = (room.historyGeneration || 0) + 1;
@@ -7025,6 +8200,11 @@
   }
 
   const HUB_EVENTS = {
+    autostart: m => {
+      state.autostart = m.autostart;
+      if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
+    },
+    automations: m => { state.automationPending = m.pending || {}; renderAutomationBadge(); void window.ViberoomAutomations.refresh(); },
     snapshot: (m) => {
       loadSnapshot(m.snapshot);
       loadSecretCards(m.snapshot.secrets);
@@ -7049,6 +8229,7 @@
       if (state.view === "room") renderSideRoom();
     },
     login: (m) => {
+      if (m.flow.purpose === "update") { agentUpdates.setFlow(m.flow); return; }
       (m.flow.purpose === "install" ? state.installs : state.logins).set(m.flow.recipeId, m.flow);
       renderLoginHosts();
       if (document.querySelector("#invite-dialog")?.open) renderInviteTiles();
@@ -7112,6 +8293,7 @@
       renderUpdatePop();
       if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
     },
+    "agent.updates": (m) => agentUpdates.setView(m.updates),
     channels: (m) => {
       state.channels = m.channels || null;
       if (state.pairLink && !(m.channels && m.channels.pairLinkUntil)) dropPairLink(false);
@@ -7192,19 +8374,26 @@
     ws.onopen = () => {
       if (stream !== ws) return;
       retryDelay = 1000;
+      downSince = 0;
       els.conn.classList.add("ok");
+      renderGonePop();
     };
     ws.onmessage = (e) => {
       if (stream !== ws) return;
       const m = JSON.parse(e.data);
       const handle = HUB_EVENTS[m.type];
-      if (handle) handle(m);
+      if (!handle) return;
+      const started = performance.now();
+      handle(m);
+      noteBurst(m.type, performance.now() - started);
     };
     ws.onerror = () => { if (stream === ws) els.conn.classList.remove("ok"); };
     ws.onclose = () => {
       if (stream !== ws) return;
       els.conn.classList.remove("ok");
       stream = null;
+      if (!downSince) downSince = Date.now();
+      renderGonePop();
       void askKey();
       retryTimer = setTimeout(connect, retryDelay);
       retryDelay = Math.min(retryDelay * 2, 10000);
@@ -7215,9 +8404,48 @@
     const ws = stream;
     stream = null;
     ws.close();
+    downSince = 0;
+    renderGonePop();
     els.conn.classList.remove("ok");
     els.conn.title = "Paused while this tab is in the background; resumes when you come back";
   }
+  const connLabel = $("#conn-label");
+  const COMING_BACK_MS = 3000;
+  const NOBODY_THERE_MS = 15000;
+  let downSince = 0;
+  let goneTimer = 0;
+  function renderGonePop() {
+    clearTimeout(goneTimer);
+    const old = $("#gone-pop");
+    const down = downSince ? Date.now() - downSince : 0;
+    if (!downSince || down < COMING_BACK_MS) {
+      if (old) old.remove();
+      if (downSince) goneTimer = setTimeout(renderGonePop, COMING_BACK_MS - down);
+      if (connLabel) connLabel.textContent = downSince ? "reconnecting…" : "connected";
+      return;
+    }
+    const gone = down >= NOBODY_THERE_MS;
+    if (connLabel) connLabel.textContent = gone ? "not running" : "reconnecting…";
+    const folder = state.dataFolder && state.dataFolder.known && state.dataFolder.path;
+    const where = folder ? ` What happened is written down in <code>${esc(folder)}${folder.includes("\\") ? "\\" : "/"}hub.log</code>.` : "";
+    const words = gone
+      ? `<b>viberoom is not answering.</b> Everything in your rooms is kept on this computer and is safe — what has stopped is the program that serves them. Start viberoom again, and this window comes back on its own.${where}`
+      : "<b>Reconnecting to viberoom.</b> The room comes back by itself in a few seconds.";
+    const acts = gone
+      ? `<div class="up-acts">${UI.html("button", { label: "Check again", kind: "secondary", size: "sm", hook: "gp-retry" })}</div>`
+      : "";
+    const pop = old || document.createElement("div");
+    if (!old) {
+      pop.id = "gone-pop";
+      pop.className = "update-pop restart-pop";
+      $("#rail-pops").appendChild(pop);
+    }
+    pop.innerHTML = `<div class="up-main"><div class="up-text">${words}</div>${acts}</div>`;
+    const retry = pop.querySelector(".gp-retry");
+    if (retry) retry.addEventListener("click", () => { retryDelay = 1000; resyncStream(); });
+    if (!gone) goneTimer = setTimeout(renderGonePop, Math.max(500, NOBODY_THERE_MS - down));
+  }
+
   function resyncStream() {
     releaseStream();
     els.conn.title = "Connection to the room";
@@ -7259,6 +8487,23 @@
     }
     els.input.style.height = "auto";
     els.input.style.height = Math.min(composerCeiling(), Math.max(min, Math.min(cap, els.input.scrollHeight))) + "px";
+    watchComposerShift();
+  }
+
+  let composerShiftQueued = false;
+  function watchComposerShift() {
+    const list = els.messages;
+    if (!list || composerShiftQueued) return;
+    const before = { top: list.scrollTop, view: list.clientHeight };
+    composerShiftQueued = true;
+    requestAnimationFrame(() => {
+      composerShiftQueued = false;
+      const moved = Math.round(list.scrollTop - before.top);
+      if (!moved) return;
+      const grew = Math.round(list.clientHeight - before.view);
+      const room = Math.round(list.scrollHeight - list.clientHeight);
+      noteFinding(`the field changed height: the list ${grew >= 0 ? "grew" : "shrank"} by ${Math.abs(grew)} px and the reader moved ${moved} px (${Math.round(before.top)} → ${Math.round(list.scrollTop)} of ${room}${before.top >= room - grew - 2 ? ", from the very bottom" : ""})`);
+    });
   }
   window.addEventListener("resize", autosize);
   autosize();
@@ -7267,14 +8512,14 @@
     let drag = null;
     grip.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
-      drag = { y: e.clientY, h: els.input.offsetHeight };
+      drag = { y: Layout.length(e.clientY), h: els.input.offsetHeight };
       grip.setPointerCapture(e.pointerId);
       els.composer.classList.add("resizing");
       e.preventDefault();
     });
     grip.addEventListener("pointermove", (e) => {
       if (!drag) return;
-      composerMin = Math.round(Math.min(composerCeiling(), Math.max(36, drag.h + drag.y - e.clientY)));
+      composerMin = Math.round(Math.min(composerCeiling(), Math.max(36, drag.h + drag.y - Layout.length(e.clientY))));
       autosize();
     });
     const stop = () => {
@@ -7378,6 +8623,68 @@
     if (!transfer) return [];
     return Array.from(transfer.files || []).filter((f) => f && f.type && f.type.startsWith("image/"));
   }
+  function filesFrom(transfer) {
+    return transfer ? Array.from(transfer.files || []).filter(Boolean) : [];
+  }
+
+  const FILE_MAX_BYTES = 20 * 1024 * 1024;
+  const attachBtn = $("#attach-btn");
+  const attachInput = $("#attach-input");
+  let uploads = 0;
+  function addFiles(files) {
+    const pictures = files.filter((f) => f.type && f.type.startsWith("image/"));
+    const documents = files.filter((f) => !(f.type && f.type.startsWith("image/")));
+    if (pictures.length) addShotFiles(pictures);
+    if (documents.length) attachDocuments(documents);
+  }
+  function insertLine(text) {
+    const el = els.input;
+    const value = el.value;
+    const start = el.selectionStart ?? value.length;
+    const end = el.selectionEnd ?? start;
+    const before = value.slice(0, start);
+    const after = value.slice(end);
+    const lead = before && !/\n$/.test(before) ? "\n" : "";
+    const tail = after && !/^\n/.test(after) ? "\n" : "";
+    const line = `${lead}${text}${tail}`;
+    el.value = before + line + after;
+    const caret = before.length + line.length;
+    el.setSelectionRange(caret, caret);
+    autosize();
+    updateComposerClear();
+  }
+  function attachDocuments(files) {
+    const room = currentRoom();
+    if (!room) return;
+    for (const file of files) {
+      if (file.size > FILE_MAX_BYTES) {
+        showError(new Error(`${file.name || "that file"} is ${Math.round(file.size / 1024 / 1024)} MB; the room takes files up to ${FILE_MAX_BYTES / 1024 / 1024} MB`));
+        continue;
+      }
+      const reader = new FileReader();
+      reader.onload = async () => {
+        uploads += 1;
+        els.composer.classList.add("uploading");
+        try {
+          const r = await post(roomApi("/files"), { name: file.name || "", data: String(reader.result) }, { deadline: 120000 });
+          insertLine(r.line);
+        } catch (error) {
+          showError(error);
+        } finally {
+          uploads -= 1;
+          if (!uploads) els.composer.classList.remove("uploading");
+          els.input.focus();
+        }
+      };
+      reader.onerror = () => showError(new Error(`could not read ${file.name || "the file"}`));
+      reader.readAsDataURL(file);
+    }
+  }
+  attachBtn.addEventListener("click", () => attachInput.click());
+  attachInput.addEventListener("change", () => {
+    addFiles(Array.from(attachInput.files || []));
+    attachInput.value = "";
+  });
 
   els.shotsTray.addEventListener("click", (e) => {
     const drop = e.target.closest(".shot-drop");
@@ -7448,7 +8755,7 @@
     const m = messageOfNode(range.startContainer);
     if (!m || m !== messageOfNode(range.endContainer)) return null;
     if (!range.startContainer.parentElement || !range.startContainer.parentElement.closest(".bubble .text")) return null;
-    return { m, text, rect: range.getBoundingClientRect() };
+    return { m, text, rect: Layout.rect(range) };
   }
 
   const quotePop = document.createElement("button");
@@ -7469,7 +8776,7 @@
     quotePop.hidden = false;
     const top = Math.max(8, found.rect.top - 36);
     quotePop.style.top = `${top}px`;
-    quotePop.style.left = `${Math.min(window.innerWidth - 96, Math.max(8, found.rect.left + found.rect.width / 2 - 40))}px`;
+    quotePop.style.left = `${Math.min(Layout.length(window.innerWidth) - 96, Math.max(8, found.rect.left + found.rect.width / 2 - 40))}px`;
   }
   els.messages.addEventListener("mouseup", () => setTimeout(placeQuotePop, 0));
   els.messages.addEventListener("keyup", (e) => {
@@ -7482,12 +8789,14 @@
     }
   });
   quotePop.addEventListener("mousedown", (e) => e.preventDefault());
-  quotePop.addEventListener("click", () => {
-    if (quotePopFor) addQuote(quotePopFor.m, quotePopFor.text);
+  function quoteTheSelection() {
+    const found = quotePopFor;
     quotePop.hidden = true;
     quotePopFor = null;
     window.getSelection().removeAllRanges();
-  });
+    if (found) addQuote(found.m, found.text);
+  }
+  quotePop.addEventListener("click", quoteTheSelection);
 
   els.messages.addEventListener("copy", (e) => {
     const found = bubbleSelection();
@@ -7513,10 +8822,10 @@
   }
 
   els.input.addEventListener("paste", (e) => {
-    const files = imageFilesFrom(e.clipboardData);
+    const files = filesFrom(e.clipboardData);
     if (files.length) {
       e.preventDefault();
-      addShotFiles(files);
+      addFiles(files);
       return;
     }
     const quotes = pastedQuotes(e.clipboardData);
@@ -7532,11 +8841,11 @@
     });
     target.addEventListener("dragleave", () => els.composer.classList.remove("drop-target"));
     target.addEventListener("drop", (e) => {
-      const files = imageFilesFrom(e.dataTransfer);
+      const files = filesFrom(e.dataTransfer);
       els.composer.classList.remove("drop-target");
       if (!files.length) return;
       e.preventDefault();
-      addShotFiles(files);
+      addFiles(files);
       els.input.focus();
     });
   }
@@ -7549,7 +8858,7 @@
     typingSentAt = now;
     post(roomApi("/typing"), {}).catch(() => undefined);
   });
-  els.participants.addEventListener("click", (e) => {
+  els.roster.addEventListener("click", (e) => {
     const li = e.target.closest("li[data-id]");
     const room = currentRoom();
     if (!li || !room) return;
@@ -7701,7 +9010,7 @@
         .finally(done);
     }
   });
-  els.participants.addEventListener("dblclick", (e) => {
+  els.roster.addEventListener("dblclick", (e) => {
     if (e.target.closest("button, [data-ui=\"row-button\"]")) return;
     const li = e.target.closest("li[data-id]");
     const p = li && findById(currentRoom(), li.dataset.id);
@@ -7709,12 +9018,15 @@
   });
   async function goToLastReply(room, p) {
     const draft = room.messages.find((m) => m.from === p.id && m.streaming);
-    if (draft && jumpToMessage(els.messages.querySelector(`.msg[data-id="${cssEscape(draft.id)}"]`))) return;
+    if (draft && await jumpToId(draft.id)) return;
     const latest = room.history?.latest?.[p.id];
     if (latest && await revealSeq(latest.seq)) return;
     if (jumpToMessage([...els.messages.querySelectorAll(`.msg.agent[data-from="${cssEscape(p.id)}"]`)].pop())) return;
     const spoke = latest || room.messages.some((m) => m.from === p.id && m.kind === "chat");
     toast(spoke ? `${p.name}'s last reply could not be reached` : `${p.name} has not replied in this room yet`);
+  }
+  function optimisticOrder(room) {
+    return room.messages.reduce((last, m) => Math.max(last, m.displayOrder ?? m.seq ?? 0), 0) + 1;
   }
   els.composer.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -7728,7 +9040,7 @@
     clearQuotes();
     typingSentAt = 0;
     autosize();
-    const local = { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, seq: 0, from: "human", fromName: (state.settings || {}).humanName || "You", to: [], toNames: [], text, ts: Date.now(), kind: "chat", pending: true };
+    const local = { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, seq: 0, displayOrder: optimisticOrder(room), from: "human", fromName: (state.settings || {}).humanName || "You", to: [], toNames: [], text, ts: Date.now(), kind: "chat", pending: true };
     if (shots.length) local.images = shots.map((shot) => ({ file: "", name: shot.name, mimeType: shot.mimeType, bytes: 0, n: shot.n, url: shot.data }));
     if (quotes.length) local.quotes = quotes.map((q) => ({ ...q }));
     const localId = local.id;
@@ -7755,6 +9067,11 @@
     if (!m) return;
     m.id = realId;
     delete m.pending;
+    if (room.history?.indexed) itemLists.delete(room);
+    for (const chosen of [state.expanded, state.watched]) if (chosen.delete(localId)) chosen.add(realId);
+    if (room.bodyUses?.has(localId)) { room.bodyUses.set(realId, room.bodyUses.get(localId)); room.bodyUses.delete(localId); }
+    if (measuredRoom === roomId && measuredRows.has(localId)) { measuredRows.set(realId, measuredRows.get(localId)); measuredRows.delete(localId); }
+    if (settledReader?.roomId === roomId && settledReader.anchor?.id === localId) settledReader.anchor.id = realId;
     const el = els.messages.querySelector(`.msg[data-id="${localId}"]`);
     if (el) el.dataset.id = realId;
     const note = doneNotes.find((n) => n.id === localId);
@@ -8010,13 +9327,13 @@
 
   els.detailsResizer.addEventListener("mousedown", (event) => {
     event.preventDefault();
-    const startX = event.clientX;
-    const startW = els.details.getBoundingClientRect().width;
+    const startX = Layout.length(event.clientX);
+    const startW = Layout.rect(els.details).width;
     els.app.classList.add("resizing");
-    const move = (e) => applyDetailsWidth(startW + (startX - e.clientX), false);
+    const move = (e) => applyDetailsWidth(startW + (startX - Layout.length(e.clientX)), false);
     const up = (e) => {
       els.app.classList.remove("resizing");
-      applyDetailsWidth(startW + (startX - e.clientX), true);
+      applyDetailsWidth(startW + (startX - Layout.length(e.clientX)), true);
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
     };
@@ -8026,7 +9343,7 @@
   els.detailsResizer.addEventListener("dblclick", () => {
     const key = detailsKey();
     remember(`details.${key}`, "");
-    applyDetailsWidth(DETAILS_DEFAULT[key] || 400, false);
+    fitDetailsWidth();
   });
 
 
@@ -8080,23 +9397,55 @@
   for (const type of ["wheel", "touchmove", "keydown", "mousedown"]) {
     els.messages.addEventListener(type, () => (lastUserScrollAt = Date.now()), { passive: true });
   }
+  function wheelPastEnd(e) {
+    if (e.deltaY > 0 && !stuck && atEnd() && !humanHoldsText()) scrollToBottom("the wheel pushed past the end");
+  }
+  els.messages.addEventListener("wheel", wheelPastEnd, { passive: true });
+  els.messages.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || (e.target.closest && e.target.closest("button, a, input, textarea, select, summary, [role=button]"))) return;
+    textPress = e.target.nodeType === 3 ? e.target.parentElement : e.target;
+    heldTextElement = textPart(textPress);
+  });
+  const releasePress = () => {
+    if (!textPress) return;
+    textPress = null;
+    if (state.view === "room" && !humanHoldsText()) {
+      rememberReleasedText();
+      renderMessagesSoon("the text press was released");
+      resumeAfterText();
+    }
+  };
+  for (const type of ["pointerup", "pointercancel"]) document.addEventListener(type, releasePress, { passive: true });
+  window.addEventListener("blur", releasePress);
   els.messages.addEventListener("scroll", () => {
+    if (state.view !== "room") return;
+    if (rowPrices.stamp !== pricesStamp()) { repriceSoon(); return; }
     const top = els.messages.scrollTop;
     const byHand = Date.now() - lastUserScrollAt < 700;
+    noteArrival(byHand);
     if (byHand && calm.reserve > 0) calmRelease();
     if (byHand) {
-      if (top < lastScrollTop) stuck = false;
-      else if (els.messages.scrollHeight - top - els.messages.clientHeight < 12) stuck = true;
-    } else if (calm.held) { }
-    else if (nearBottom()) stuck = true;
-    else if (top < lastScrollTop) stuck = false;
+      if (top < lastScrollTop) {
+        stuck = false;
+        readingAway = true;
+      } else if (top > lastScrollTop && !humanHoldsText() && deliberateReturn()) {
+        stuck = true;
+        readingAway = false;
+      }
+    } else if (!calm.held && top < lastScrollTop) {
+      stuck = false;
+      readingAway = true;
+    }
     if (stuck) calm.held = false;
     lastScrollTop = top;
+    rememberReader();
+    followWindowSoon();
     els.jumpLatest.hidden = stuck;
     updateTimelineView();
     updateWorkingNow();
     if (stuck) clearNotes();
     else pruneDoneNotes();
+    foldSettleSoon();
   });
   els.jumpLatest.addEventListener("click", scrollToBottom);
   document.addEventListener("mousedown", (e) => {
@@ -8107,8 +9456,7 @@
   setSideOpen(recall("sideOpen") !== "0");
   $("#rail-logo").addEventListener("click", () => setView("home"));
   $("#rail-new-room").addEventListener("click", openRoomDialog);
-  const connLabel = $("#conn-label");
-  new MutationObserver(() => (connLabel.textContent = els.conn.classList.contains("ok") ? "connected" : "reconnecting…")).observe(els.conn, { attributes: true, attributeFilter: ["class"] });
+  new MutationObserver(renderGonePop).observe(els.conn, { attributes: true, attributeFilter: ["class"] });
   if (recall("railOpen") === "1") els.app.classList.add("rail-open");
   els.backToRooms.addEventListener("click", () => {
     setView("rooms");
@@ -8124,25 +9472,82 @@
     searchTimer = setTimeout(applySearch, 120);
   });
   let storeSearchTimer = 0;
+  let allConversationSelection = null;
+  const conversationSelection = $("#conversation-selection");
+  function clearConversationSelection() {
+    allConversationSelection = null;
+    conversationSelection.hidden = true;
+  }
+  async function copyWholeConversation() {
+    const selected = allConversationSelection;
+    if (!selected || selected.busy) return;
+    selected.busy = true;
+    const button = conversationSelection.querySelector('[data-act="copy"]');
+    button.disabled = true; button.textContent = "Copying…";
+    try {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(selected.roomId)}/export?format=md&version=${encodeURIComponent(selected.version)}`, { signal: deadline(30000) });
+      if (!response.ok) {
+        const detail = await response.json();
+        throw new Error(detail.code === "history_changed" ? "The conversation changed. Select it again to copy the current record." : detail.error || "The conversation could not be loaded.");
+      }
+      const text = await response.text();
+      if (allConversationSelection !== selected || currentRoom()?.id !== selected.roomId) return;
+      await navigator.clipboard.writeText(text);
+      toast("Whole saved conversation copied as Markdown.", "ok");
+    } catch (error) { if (allConversationSelection === selected) showError(error); }
+    finally { selected.busy = false; button.disabled = false; button.textContent = "Copy"; }
+  }
+  conversationSelection.querySelector('[data-act="copy"]').addEventListener("click", () => void copyWholeConversation());
+  conversationSelection.querySelector('[data-act="clear"]').addEventListener("click", clearConversationSelection);
+  document.addEventListener("pointerdown", event => {
+    if (allConversationSelection && !conversationSelection.contains(event.target)) clearConversationSelection();
+  });
+  document.addEventListener("focusin", event => {
+    if (allConversationSelection && !conversationSelection.contains(event.target) && !els.messages.contains(event.target)) clearConversationSelection();
+  });
+  document.addEventListener("keydown", event => {
+    if (state.view !== "room" || document.querySelector("dialog[open]")) return;
+    if (event.key === "Escape" && allConversationSelection) {
+      clearConversationSelection(); event.preventDefault(); event.stopImmediatePropagation(); return;
+    }
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key === "f") {
+      event.preventDefault(); clearConversationSelection(); els.search.focus(); els.search.select(); return;
+    }
+    if (event.target.closest?.("input, textarea, select, [contenteditable]")) return;
+    if (key === "a") {
+      const room = currentRoom();
+      if (!room) return;
+      event.preventDefault(); window.getSelection()?.removeAllRanges();
+      allConversationSelection = { roomId: room.id, version: room.history?.version || "", busy: false };
+      conversationSelection.hidden = false;
+      els.messages.focus({ preventScroll: true });
+    } else if (key === "c" && allConversationSelection) {
+      event.preventDefault(); void copyWholeConversation();
+    }
+  });
   const searchPanel = $("#search-panel");
   const storeSearch = { scope: recall("searchScope") || "all", sort: "rank", seq: 0 };
   els.search.addEventListener("input", () => {
     clearTimeout(storeSearchTimer);
     const q = els.search.value.trim();
     if (q.length < 2) {
+      storeSearch.seq++;
       searchPanel.hidden = true;
       return;
     }
     storeSearchTimer = setTimeout(() => searchStore(q), 300);
   });
   els.search.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") searchPanel.hidden = true;
+    if (e.key === "Escape") { storeSearch.seq++; searchPanel.hidden = true; }
     if (e.key === "Enter" && els.search.value.trim().length >= 2) {
       clearTimeout(storeSearchTimer);
       searchStore(els.search.value.trim());
     }
   });
   async function searchStore(q) {
+    if (q.length < 2) { storeSearch.seq++; searchPanel.hidden = true; return; }
     const room = currentRoom();
     if (!room) return;
     const mine = ++storeSearch.seq;
@@ -8181,11 +9586,12 @@
     if (!row) return;
     const roomId = row.dataset.room;
     const seq = row.dataset.seq;
+    storeSearch.seq++;
     searchPanel.hidden = true;
     const jump = () => revealSeq(Number(seq));
-    if (roomId === state.currentRoomId) return void jump();
     els.search.value = "";
     applySearch();
+    if (roomId === state.currentRoomId) return void jump();
     selectRoom(roomId);
     requestAnimationFrame(() => requestAnimationFrame(jump));
   });
@@ -8193,16 +9599,13 @@
     if (!searchPanel.hidden && !e.target.closest("#search-panel, .chat-actions .search")) searchPanel.hidden = true;
   });
   function applySearch() {
-    state.search = els.search.value.trim();
+    const wasFiltered = !!state.search;
+    state.search = "";
     const room = currentRoom();
     if (!room) return;
-    els.messages.classList.toggle("searching", !!state.search);
-    const byId = new Map(HistoryWindow.knownMessages(room).map((m) => [m.id, m]));
-    for (const el of els.messages.querySelectorAll(".msg[data-id]")) {
-      const m = byId.get(el.dataset.id);
-      if (m) el.classList.toggle("hidden-by-search", !messageMatches(m));
-    }
-    renderTimeline();
+    els.messages.classList.remove("searching");
+    for (const el of els.messages.querySelectorAll(".hidden-by-search")) el.classList.remove("hidden-by-search");
+    if (wasFiltered) renderMessagesSoon("the local search filter was cleared");
   }
   els.inviteBtn.addEventListener("click", openInvite);
   els.invType.addEventListener("change", () => applyRecipe(false));
@@ -8276,11 +9679,12 @@
       e.preventDefault();
       try {
         const target = link.dataset.open;
-        if (IMAGE_RE.test(target) && !/^(https?:|mailto:)/i.test(target) && /[\\/]/.test(target)) {
+        const directory = link.dataset.openKind === "directory";
+        if (!directory && IMAGE_RE.test(target) && !/^(https?:|mailto:)/i.test(target) && /[\\/]/.test(target)) {
           openLightbox(imageUrl(target), target.split(/[\\/]/).pop());
           return;
         }
-        if (readableInRoom(target)) {
+        if (!directory && readableInRoom(target)) {
           const spec = splitLine(target);
           const file = spec ? spec.path : target;
           const room = currentRoom();
@@ -8309,6 +9713,19 @@
   });
   els.roomSettingsBtn.addEventListener("click", () => openDetails({ kind: "room" }));
   els.chatInfoBtn.addEventListener("click", () => openDetails({ kind: "room" }));
+  $("#automations-btn").addEventListener("click", () => {
+    const room = currentRoom();
+    if (room) void window.ViberoomAutomations.open(room.id, id => currentRoom()?.id === room.id ? jumpToId(id).catch(showError) : false, confirmDialog);
+  });
+
+  async function openCarry(room) {
+    await window.ViberoomCarry.open(room);
+  }
+
+  els.carryBtn.addEventListener("click", () => {
+    const room = currentRoom();
+    if (room) void openCarry(room);
+  });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.detailsOpen && !document.querySelector("dialog[open]") && !editingInDetails()) closeDetails();
   });
@@ -8334,19 +9751,22 @@
       const total = els.messages.scrollHeight || 1;
       const h = Math.max(0, t.ticks.clientHeight - tickH);
       const fits = els.messages.scrollHeight <= els.messages.clientHeight + 1;
-      const stripTop = fits ? t.ticks.getBoundingClientRect().top : 0;
-      const tops = fits ? nodes.map((el) => el.getBoundingClientRect().top - stripTop) : nodes.map(topInList);
+      const stripTop = fits ? Layout.rect(t.ticks).top : 0;
+      const tops = fits
+        ? nodes.map((row) => { const node = drawnRow(row.id); return node ? Layout.rect(node).top - stripTop : 0; })
+        : nodes.map((row) => row.top);
       t.pos = fits ? null : tops;
-      t.heights = fits ? null : nodes.map((el) => el.offsetHeight);
       if (!fits && globalThis.VIBEROOM_TIMELINE) {
+        t.heights = null;
         drawSlots(nodes, tops, total);
         settleLater();
         return;
       }
+      t.heights = fits ? null : nodes.map((row) => row.height);
       const frag = document.createDocumentFragment();
       nodes.forEach((el, i) => {
         const tick = document.createElement("div");
-        const pinned = el.classList.contains("pinned");
+        const pinned = el.pinned;
         tick.className = `tl-tick${pinned ? " pinned i i-pin-long" : ""}`;
         tick.dataset.i = i;
         if (opts.colorOf) tick.style.setProperty("--tick", opts.colorOf(room, el));
@@ -8383,55 +9803,48 @@
       const { slotsOf, pinGroups, INK_FLOOR } = globalThis.VIBEROOM_TIMELINE;
       const height = t.ticks.clientHeight;
       const places = Math.max(1, Math.floor(height / tickH));
-      const authors = opts.colorOf ? nodes.map((el) => el.dataset.from || "") : nodes.map(() => "me");
+      const authors = opts.colorOf ? nodes.map((row) => row.m.from || "") : nodes.map(() => "me");
       const slots = slotsOf({ pos: tops, authors, total, slots: places });
       t.slots = slots;
       t.total = total;
-      if (t.ticks.children.length !== slots.length) {
-        const frag = document.createDocumentFragment();
-        for (let at = 0; at < slots.length; at++) {
-          const fresh = document.createElement("div");
-          fresh.className = "tl-slot";
-          fresh.dataset.at = String(at);
-          frag.appendChild(fresh);
-        }
-        t.ticks.replaceChildren(frag);
-      }
       const held = [];
       for (let at = 0; at < slots.length; at++) {
         const slot = slots[at];
         let count = 0;
         for (let i = slot.first; i >= 0 && i < slot.first + slot.count && i < nodes.length; i++) {
-          if (nodes[i].classList.contains("pinned")) count++;
+          if (nodes[i].pinned) count++;
         }
         if (count) held.push({ at, count });
       }
       const drawnPins = new Map(pinGroups(held, tickH, PIN_GLYPH_H).map((group) => [group.at, group.count]));
-      slots.forEach((slot, at) => {
-        const el = t.ticks.children[at];
-        if (!el) return;
-        el.hidden = !slot.count;
-        if (!slot.count) return;
-        const held = nodes[firstBy(nodes, authors, slot, slot.author)];
-        if (opts.colorOf && held) el.style.setProperty("--tick", opts.colorOf(currentRoom(), held));
-        const ink = INK_FLOOR + (1 - INK_FLOOR) * slot.strength;
-        el.style.setProperty("--mix", `${Math.round(ink * DENSITY)}%`);
-        const before = slot.separator ? 1 : 0;
-        const after = slots[at + 1] && slots[at + 1].separator ? 1 : 0;
-        el.style.top = `${at * tickH + before}px`;
-        el.style.height = `${tickH - before - after}px`;
-        const pins = drawnPins.get(at) || 0;
-        if (pins) {
-          el.classList.add("pinned", "i", "i-pin-long");
-          const glyph = el.querySelector(".tl-pin-glyph") || el.appendChild(document.createElement("span"));
-          glyph.className = "tl-pin-glyph";
-          glyph.title = pins === 1 ? "Pinned · go to it" : `${pins} pinned · go to them`;
-          if (pins > 1) glyph.dataset.many = String(pins);
-          else delete glyph.dataset.many;
-        } else {
-          el.classList.remove("pinned", "i", "i-pin-long");
-          el.querySelector(".tl-pin-glyph")?.remove();
-        }
+      KeyedList.patch(t.ticks, slots, {
+        key: "at",
+        id: (_slot, at) => at,
+        make: () => Object.assign(document.createElement("div"), { className: "tl-slot" }),
+        fill: (el, slot, at) => {
+          el.hidden = !slot.count;
+          if (!slot.count) return;
+          const held = nodes[firstBy(nodes, authors, slot, slot.author)];
+          if (opts.colorOf && held) el.style.setProperty("--tick", opts.colorOf(currentRoom(), held));
+          const ink = INK_FLOOR + (1 - INK_FLOOR) * slot.strength;
+          el.style.setProperty("--mix", `${Math.round(ink * DENSITY)}%`);
+          const before = slot.separator ? 1 : 0;
+          const after = slots[at + 1] && slots[at + 1].separator ? 1 : 0;
+          el.style.top = `${at * tickH + before}px`;
+          el.style.height = `${tickH - before - after}px`;
+          const pins = drawnPins.get(at) || 0;
+          if (pins) {
+            el.classList.add("pinned", "i", "i-pin-long");
+            const glyph = el.querySelector(".tl-pin-glyph") || el.appendChild(document.createElement("span"));
+            glyph.className = "tl-pin-glyph";
+            glyph.title = pins === 1 ? "Pinned · go to it" : `${pins} pinned · go to them`;
+            if (pins > 1) glyph.dataset.many = String(pins);
+            else delete glyph.dataset.many;
+          } else {
+            el.classList.remove("pinned", "i", "i-pin-long");
+            el.querySelector(".tl-pin-glyph")?.remove();
+          }
+        },
       });
       t.inView = null;
       updateView();
@@ -8481,7 +9894,7 @@
     function rowHtml(k, cls) {
       const el = t.items[k];
       const av = opts.avatarOf ? `<span class="tl-av">${opts.avatarOf(currentRoom(), el)}</span>` : "";
-      const pinned = el.classList.contains("pinned");
+      const pinned = el.pinned;
       return `<div class="tl-row ${cls}${pinned ? " pinned" : ""}" data-i="${k}">${av}<span class="tl-text">${esc(timelineText(el))}</span>${pinned ? `<span class="tl-pin" title="Pinned">${ic("pin")}</span>` : ""}</div>`;
     }
     function showPop(i, keepPlace, overSlot) {
@@ -8505,10 +9918,11 @@
       if (t.mark) t.mark.hidden = true;
       aim(null);
     }
-    function aim(el) {
-      if (t.aimed === el) return;
+    function aim(row) {
+      const node = row ? drawnRow(row.id) : null;
+      if (t.aimed === node) return;
       if (t.aimed) t.aimed.classList.remove("aimed");
-      t.aimed = el || null;
+      t.aimed = node || null;
       if (t.aimed) t.aimed.classList.add("aimed");
     }
     function markMessage(i) {
@@ -8538,14 +9952,14 @@
     }
     function itemUnder(el, clientY) {
       const { itemAt } = globalThis.VIBEROOM_TIMELINE;
-      const box = el.getBoundingClientRect();
+      const box = Layout.rect(el);
       const within = box.height ? (clientY - box.top) / box.height : 0.5;
       return itemAt(t.pos || [], t.slots[Number(el.dataset.at)], within);
     }
     t.ticks.addEventListener("mouseover", (e) => {
       const slot = t.slots && e.target.closest(".tl-slot");
       if (slot) {
-        const i = itemUnder(slot, e.clientY);
+        const i = itemUnder(slot, Layout.length(e.clientY));
         if (i >= 0) showPop(i, false, slot);
         return;
       }
@@ -8561,16 +9975,16 @@
     t.ticks.addEventListener("click", (e) => {
       const slot = t.slots && e.target.closest(".tl-slot");
       if (slot) {
-        const i = itemUnder(slot, e.clientY);
-        if (i >= 0) jumpToMessage(t.items[i]);
+        const i = itemUnder(slot, Layout.length(e.clientY));
+        if (i >= 0) void jumpToId(t.items[i].id);
         return;
       }
       const tick = e.target.closest(".tl-tick");
-      if (tick) jumpToMessage(t.items[Number(tick.dataset.i)]);
+      if (tick) void jumpToId(t.items[Number(tick.dataset.i)]?.id);
     });
     t.pop.addEventListener("click", (e) => {
       const row = e.target.closest(".tl-row");
-      if (row) jumpToMessage(t.items[Number(row.dataset.i)]);
+      if (row) void jumpToId(t.items[Number(row.dataset.i)]?.id);
     });
     const WHEEL_STEP = 30;
     let wheelAcc = 0;
@@ -8597,17 +10011,16 @@
     }
     return { render, rescale, updateView, follow };
   }
-  function timelineText(el) {
-    const t = el.querySelector(".text");
-    return (t ? t.textContent : el.textContent).trim().replace(/\s+/g, " ").slice(0, 240);
+  function timelineText(row) {
+    return String(row.m.text || "").trim().replace(/\s+/g, " ").slice(0, 240);
   }
   const doneNotes = [];
   const NOTE_TTL_MS = 4000;
   function bubbleInView(id) {
     const head = els.messages.querySelector(`.msg[data-id="${id}"] .head`);
     if (!head) return false;
-    const box = els.messages.getBoundingClientRect();
-    const r = head.getBoundingClientRect();
+    const box = Layout.rect(els.messages);
+    const r = Layout.rect(head);
     return r.bottom > box.top && r.top < box.bottom;
   }
   function pushNote(note) {
@@ -8667,17 +10080,47 @@
     if (!note) return;
     const id = note.dataset.id;
     dropNote(id);
-    jumpToMessage(els.messages.querySelector(`.msg[data-id="${id}"]`));
+    void jumpToId(id);
   });
+  async function jumpToId(id) {
+    if (!id) return false;
+    const initial = currentRoom();
+    if (initial?.history?.indexed && initial.messages.find(m => m.id === id)?.bodyMissing) {
+      if (!await loadBodies(initial, [id], true)) {
+        toast("This message could not be loaded. Try again when the connection is back.", "warn");
+        return false;
+      }
+      if (currentRoom() !== initial) return false;
+    }
+    if (jumpToMessage(els.messages.querySelector(`.msg[data-id="${cssEscape(id)}"]`))) return true;
+    const room = currentRoom();
+    const held = room && HistoryWindow.knownMessages(room).find((m) => m.id === id);
+    if (held && held.seq > 0 && await revealSeq(held.seq)) return true;
+    if (room && await refreshHeld(room.id, { messageId: id, reader: { id, into: 12 } })) {
+      const ready = drawnRow(id);
+      if (ready) return jumpToMessage(ready);
+      const at = room.messages.findIndex(m => m.id === id);
+      if (at >= 0) {
+        setFoldIndex(room, Math.max(0, at - FOLD_STEP));
+        leaveTheEnd();
+        renderMessages("a message was asked for by id", { id, into: 12 });
+        return jumpToMessage(els.messages.querySelector(`.msg[data-id="${cssEscape(id)}"]`));
+      }
+    }
+    toast("That message could not be reached; it may be older than this room holds.");
+    return false;
+  }
+
   function jumpToMessage(el) {
-    if (!el) return false;
+    if (!el || !el.isConnected) return false;
+    leaveTheEnd();
     if (!onScreen(el)) {
       const from = els.messages.scrollTop;
       el.scrollIntoView({ block: "center" });
       requestAnimationFrame(() => {
         const m = els.messages;
-        const r = el.getBoundingClientRect();
-        const box = m.getBoundingClientRect();
+        const r = Layout.rect(el);
+        const box = Layout.rect(m);
         const centre = m.scrollTop + (r.top - box.top) - (box.height - r.height) / 2;
         m.scrollTop = centre + (centre < from ? 240 : -240);
         m.scrollTo({ top: centre, behavior: "smooth" });
@@ -8689,15 +10132,36 @@
     return true;
   }
   function onScreen(el) {
-    const r = el.getBoundingClientRect();
-    const box = els.messages.getBoundingClientRect();
+    const r = Layout.rect(el);
+    const box = Layout.rect(els.messages);
     const shown = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
     return shown >= Math.min(r.height, box.height) - 1;
   }
-  const authorOf = (room, el) => findById(room, el.dataset.from);
+  const drawnRow = (id) => els.messages.querySelector(`.msg[data-id="${CSS.escape(id)}"]`);
+  function stripRows(room, mine) {
+    const items = listItems(room);
+    const account = listAccount && listAccount.items.length === items.length ? listAccount : null;
+    const rows = [];
+    items.forEach((item, at) => {
+      if (item.kind !== "msg") return;
+      const m = item.m;
+      if ((m.from === "human") !== mine) return;
+      if (m.kind === "hidden" || !messageMatches(m)) return;
+      rows.push({
+        id: m.id,
+        m,
+        at,
+        pinned: !!m.pinned,
+        top: account ? ListIndex.topOf(account, at) : 0,
+        height: account ? ListIndex.heightAt(account, at) : 0,
+      });
+    });
+    return account ? rows : [];
+  }
+  const authorOf = (room, row) => findById(room, row.m.from);
   const timelines = [
-    createTimeline($("#timeline"), () => [...els.messages.querySelectorAll(".msg.mine:not(.hidden-by-search)")], { slotH: MINE_SLOT_H }),
-    createTimeline($("#timeline-left"), () => [...els.messages.querySelectorAll(".msg.agent:not(.hidden-by-search)")], {
+    createTimeline($("#timeline"), (room) => stripRows(room, true), { slotH: MINE_SLOT_H }),
+    createTimeline($("#timeline-left"), (room) => stripRows(room, false), {
       colorOf: (room, el) => { const p = authorOf(room, el); return p ? colourOf(p) : FALLBACK_COLOR(); },
       avatarOf: (room, el) => { const p = authorOf(room, el); return p ? avatar(p, 16, {}) : ""; },
     }),
@@ -8710,18 +10174,22 @@
   }
   function updateTimelineView() { for (const t of timelines) t.updateView(); }
   function rescaleTimeline() { for (const t of timelines) t.rescale(); }
-  function followComposer() { for (const t of timelines) t.follow(); }
+  function followConversation() { for (const t of timelines) t.follow(); }
   attachScrollHints(els.pageInner);
   attachScrollHints(els.detailsInner);
   document.querySelectorAll("dialog.dialog").forEach((d) => attachScrollHints(d));
-  const composerFollowers = [$("#timeline"), $("#timeline-left"), els.mentionMenu, els.emojiMenu, els.jumpLatest, els.doneNotes];
+  const composerFollowers = [els.mentionMenu, els.emojiMenu];
   new ResizeObserver(() => {
     const h = `${els.composer.offsetHeight}px`;
     for (const el of composerFollowers) el.style.setProperty("--composer-h", h);
-    followComposer();
+    followConversation();
     renderTimelineSoon(true);
   }).observe(els.composer);
-  new ResizeObserver(() => renderTimelineSoon(true)).observe(els.messages);
+  new ResizeObserver(() => {
+    followConversation();
+    renderTimelineSoon(true);
+    repriceSoon();
+  }).observe(els.messages);
   document.fonts.ready.then(() => renderTimeline());
   let timelineTimer = 0;
   let timelineFull = false;
@@ -8838,7 +10306,7 @@
     if (!room) return;
     const m = [...room.messages].reverse().find((x) => x.from === b.dataset.id && x.kind === "chat");
     const el = m && els.messages.querySelector(`.msg[data-id="${m.id}"]`);
-    if (el && m.streaming) jumpToMessage(el);
+    if (m?.streaming) void jumpToId(m.id);
     else scrollToBottom("the working figure was clicked");
   });
 
@@ -8927,7 +10395,7 @@
       if (lifePop && lifePop.hover && !lifePop.el.matches(":hover") && !lifePop.anchor.matches(":hover")) closeLifePop();
     }, 180);
   }
-  els.participants.addEventListener("mouseover", (e) => {
+  els.roster.addEventListener("mouseover", (e) => {
     const av = e.target.closest("li[data-id] .avatar");
     const li = av && av.closest("li[data-id]");
     if (!av || (e.relatedTarget && av.contains(e.relatedTarget))) return;
@@ -8940,7 +10408,7 @@
       if (!lifePop || lifePop.hover) openLifePop(p, li, true);
     }, 220);
   });
-  els.participants.addEventListener("mouseout", (e) => {
+  els.roster.addEventListener("mouseout", (e) => {
     const av = e.target.closest("li[data-id] .avatar");
     const li = av && av.closest("li[data-id]");
     if (!av || (e.relatedTarget && av.contains(e.relatedTarget))) return;
@@ -9022,9 +10490,9 @@
     if (save) save.addEventListener("click", () => saveNotes(el.querySelector(".lp-notes-area").value));
     const clear = el.querySelector(".lp-notes-clear");
     if (clear) clear.addEventListener("click", () => saveNotes(""));
-    const r = lifePop.anchor.getBoundingClientRect();
+    const r = Layout.rect(lifePop.anchor);
     el.style.left = `${Math.round(r.right + 12)}px`;
-    el.style.top = `${Math.round(Math.max(8, Math.min(r.top - 10, window.innerHeight - el.offsetHeight - 8)))}px`;
+    el.style.top = `${Math.round(Math.max(8, Math.min(r.top - 10, Layout.length(window.innerHeight) - el.offsetHeight - 8)))}px`;
   }
   async function respawnWith(p, n) {
     const text =
@@ -9058,7 +10526,9 @@
     const room = currentRoom();
     const pins = room && state.view === "room" ? pinnedMessages(room) : [];
     pinsBtn.hidden = pins.length === 0;
-    pinsBtn.innerHTML = `${ic("pin")} Pinned · ${pins.length}`;
+    pinsBtn.innerHTML = `${ic("pin-solid")}${pins.length}`;
+    pinsBtn.title = `${pins.length} pinned message${pins.length === 1 ? "" : "s"}`;
+    pinsBtn.setAttribute("aria-label", pinsBtn.title);
     if (!pins.length) pinsPanel.hidden = true;
     if (pinsPanel.hidden) return;
     pinsPanel.innerHTML = pins
@@ -9086,7 +10556,7 @@
       }
       return;
     }
-    jumpToMessage(els.messages.querySelector(`.msg[data-id="${row.dataset.id}"]`));
+    void jumpToId(row.dataset.id);
     pinsPanel.hidden = true;
   });
   document.addEventListener("click", (e) => {
@@ -9308,6 +10778,7 @@
 
   window.addEventListener("pagehide", rememberHeldTurns);
 
+  document.addEventListener("click", event => { const button = event.target.closest("[data-memory-open]"); if (button) void window.ViberoomMemory.open(currentRoom()?.id, button.dataset.memoryOpen); });
   connect();
   void askKey();
 })();

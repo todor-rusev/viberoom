@@ -23,6 +23,7 @@
   function retainUnchanged(previous, fresh) {
     if (!previous?.history?.version || previous.history.version !== fresh.history?.version) return false;
     fresh.messages = unique([...previous.messages.filter(m => m.seq > 0 && !m.streaming), ...fresh.messages]);
+    if (previous.history.indexed) fresh.history.indexed = true;
     const loaded = new Set(fresh.messages.map(m => m.id));
     fresh.pinnedOlder = (fresh.pinnedOlder || []).filter(m => !loaded.has(m.id));
     fresh.history.hidden = Math.max(0, fresh.history.total - fresh.messages.filter(m => m.seq > 0 && !m.streaming).length);
