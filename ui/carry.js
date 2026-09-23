@@ -7,7 +7,7 @@
   const names = list => list.length <= 1 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
   const icon = name => window.Icons?.svg?.(name) ?? "";
   const safeColor = value => /^#[0-9a-f]{3,8}$/i.test(String(value ?? "")) ? value : "var(--primary)";
-  const art = (name, cls = "") => `<div class="cx-art ${cls}" aria-hidden="true">${window.Icons?.scene?.(name) ?? ""}</div>`;
+  const art = (name, cls = "") => `<div class="cx-art scene-art ${cls}" aria-hidden="true">${window.Icons?.scene?.(name) ?? ""}</div>`;
   const button = (action, label, kind = "ghost", extra = "") => `<button type="button" data-ui="button" data-kind="${kind}" data-carry-act="${action}"${extra}>${label}</button>`;
   const PARTS = [
     { key: "conversation", icon: "chat", label: "Conversations", hint: "Every message, and the versions that were replaced" },

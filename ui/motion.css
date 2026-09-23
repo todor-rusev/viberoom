@@ -1,37 +1,55 @@
 /* viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE */
-:where(button, summary, a[href], [role="button"], label.check-row, .choice, .action, .agent-tile, .tn,
-  .card.hover, .card.cta, .room-card, .skill-list li, .side-list li, .tl-row, .done-note, .search-row,
+:where(button, summary, a[href], [role="button"], label.check-row, label.search, .choice, .action, .agent-tile,
+  .tn, .card.hover, .card.cta, .room-card, .skill-list li, .side-list li, .tl-row, .done-note, .search-row,
   .look-card, .menu button, .mention-menu button):not(:disabled, .quiet-glyphs, .quiet-glyphs *) .i {
   transition: transform var(--t-base) var(--ease-pop);
 }
-:where(button, summary, a[href], [role="button"], label.check-row, .choice, .action, .agent-tile, .tn,
-  .card.hover, .card.cta, .room-card, .skill-list li, .side-list li, .tl-row, .done-note, .search-row,
+:where(button, summary, a[href], [role="button"], label.check-row, label.search, .choice, .action, .agent-tile,
+  .tn, .card.hover, .card.cta, .room-card, .skill-list li, .side-list li, .tl-row, .done-note, .search-row,
   .look-card, .menu button, .mention-menu button):not(:disabled, .quiet-glyphs, .quiet-glyphs *):hover .i {
   transform: translateY(-1px) scale(1.12);
 }
 :where(button, summary, [role="button"], .action, .agent-tile, .tn, .menu button, .mention-menu button):not(:disabled, .quiet-glyphs, .quiet-glyphs *):active .i {
   transform: scale(0.88); animation: none; transition-duration: var(--t-fast);
 }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-settings, .i-at, .i-more), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-settings, .i-at, .i-more) { animation: g-turn 560ms var(--ease-pop); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-refresh, .i-transfer, .i-sun), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-refresh, .i-transfer, .i-sun) { animation: g-spin 640ms var(--ease-pop); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-plus, .i-close, .i-tool), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-plus, .i-close, .i-tool) { animation: g-quarter 480ms var(--ease-pop); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-trash, .i-alert, .i-failed, .i-hush, .i-mute, .i-unmute, .i-phone, .i-filter), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-trash, .i-alert, .i-failed, .i-hush, .i-mute, .i-unmute, .i-phone, .i-filter) { animation: g-shake 520ms var(--ease-out); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > .i-bell, :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > .i-bell { animation: g-swing 700ms var(--ease-out); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-spark, .i-wand, .i-bolt), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-spark, .i-wand, .i-bolt) { animation: g-twinkle 700ms var(--ease-pop); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-clock, .i-automation), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-clock, .i-automation) { animation: g-tick 560ms var(--ease-pop); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-check, .i-done, .i-save, .i-package, .i-database, .i-rooms, .i-chat, .i-skills, .i-puzzle, .i-browser, .i-code, .i-terminal, .i-unplugged), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-check, .i-done, .i-save, .i-package, .i-database, .i-rooms, .i-chat, .i-skills, .i-puzzle, .i-browser, .i-code, .i-terminal, .i-unplugged) { animation: g-pop 480ms var(--ease-pop); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-send, .i-forward, .i-play, .i-logout, .i-expand), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-send, .i-forward, .i-play, .i-logout, .i-expand) { animation: g-step-right 520ms var(--ease-pop); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-back, .i-collapse), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-back, .i-collapse) { animation: g-step-left 520ms var(--ease-pop); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-down, .i-inbox, .i-info, .i-question, .i-bot), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i, .chev) > :is(.i-down, .i-inbox, .i-info, .i-question, .i-bot) { animation: g-bob 560ms var(--ease-pop); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-pin, .i-quote, .i-pencil, .i-geek, .i-key, .i-lock, .i-folder, .i-files, .i-link, .i-copy), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-pin, .i-quote, .i-pencil, .i-geek, .i-key, .i-lock, .i-folder, .i-files, .i-link, .i-copy) { animation: g-tilt 520ms var(--ease-pop); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-search, .i-eye), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-search, .i-eye) { animation: g-lean 520ms var(--ease-pop); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-hand, .i-smile, .i-user, .i-name), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-hand, .i-smile, .i-user, .i-name) { animation: g-wave 640ms var(--ease-out); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > .i-maximize, :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > .i-maximize { animation: g-grow 480ms var(--ease-pop); }
-:where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :is(.i-minimize, .i-stop, .i-pause), :where(:hover:not(.quiet-glyphs, .quiet-glyphs *)) > :not(.i) > :is(.i-minimize, .i-stop, .i-pause) { animation: g-shrink 480ms var(--ease-pop); }
-:where(.rail, .rail-item, .rail-logo, .rail-toggle, .chat-toolbar, .side-head.room, .participants, .automations-dialog, .send-btn, .mm-expand, .head [data-act="pin"], .tn-tw, .dir-chip) .i { animation: none; }
+:where(.i-settings, .i-at, .i-more) { --word: g-turn 560ms var(--ease-pop); }
+:where(.i-refresh, .i-transfer, .i-sun) { --word: g-spin 640ms var(--ease-pop); }
+:where(.i-plus, .i-close) { --word: g-quarter 480ms var(--ease-pop); }
+:where(.i-trash, .i-alert, .i-failed, .i-hush, .i-mute, .i-unmute, .i-phone, .i-filter) { --word: g-shake 520ms var(--ease-out); }
+:where(.i-bell) { --word: g-swing 700ms var(--ease-out); }
+:where(.i-spark, .i-wand, .i-bolt) { --word: g-twinkle 700ms var(--ease-pop); }
+:where(.i-clock, .i-automation) { --word: g-tick 560ms var(--ease-pop); }
+:where(.i-check, .i-done, .i-save, .i-package, .i-database, .i-image, .i-rooms, .i-chat, .i-skills, .i-puzzle, .i-browser, .i-code, .i-terminal, .i-unplugged) { --word: g-pop 480ms var(--ease-pop); }
+:where(.i-send, .i-forward, .i-play, .i-logout, .i-expand) { --word: g-step-right 520ms var(--ease-pop); }
+:where(.i-back, .i-collapse) { --word: g-step-left 520ms var(--ease-pop); }
+:where(.i-down, .i-inbox, .i-info, .i-question, .i-bot) { --word: g-bob 560ms var(--ease-pop); }
+:where(.i-pin, .i-quote, .i-pencil, .i-geek, .i-key, .i-lock, .i-folder, .i-files, .i-link, .i-copy) { --word: g-tilt 520ms var(--ease-pop); }
+:where(.i-search, .i-eye) { --word: g-lean 520ms var(--ease-pop); }
+:where(.i-hand, .i-smile, .i-user, .i-name) { --word: g-wave 640ms var(--ease-out); }
+:where(.i-maximize) { --word: g-grow 480ms var(--ease-pop); }
+:where(.i-minimize, .i-stop, .i-pause) { --word: g-shrink 480ms var(--ease-pop); }
+:where(.i-tool) { --word: g-level 480ms var(--ease-pop) forwards; }
+:where(.chev) > .i { --word: none; }
+:where(:is(button, summary, a[href], [role="button"], label.check-row, label.search, .choice, .action, .agent-tile,
+  .tn, .card.hover, .card.cta, .room-card, .skill-list li, .side-list li, .tl-row, .done-note, .search-row,
+  .look-card, .menu button, .mention-menu button):not(:disabled, .quiet-glyphs, .quiet-glyphs *):hover)
+  .i:where(.i-settings, .i-at, .i-more, .i-refresh, .i-transfer, .i-sun, .i-plus, .i-close, .i-trash, .i-alert, .i-failed,
+  .i-hush, .i-mute, .i-unmute, .i-phone, .i-filter, .i-bell, .i-spark, .i-wand, .i-bolt, .i-clock,
+  .i-automation, .i-check, .i-done, .i-save, .i-package, .i-database, .i-image, .i-rooms, .i-chat, .i-skills,
+  .i-puzzle, .i-browser, .i-code, .i-terminal, .i-unplugged, .i-send, .i-forward, .i-play, .i-logout,
+  .i-expand, .i-back, .i-collapse, .i-down, .i-inbox, .i-info, .i-question, .i-bot, .i-pin, .i-quote,
+  .i-pencil, .i-geek, .i-key, .i-lock, .i-folder, .i-files, .i-link, .i-copy, .i-search, .i-eye, .i-hand,
+  .i-smile, .i-user, .i-name, .i-maximize, .i-minimize, .i-stop, .i-pause, .i-tool):not(:where(:is(
+  button, summary, a[href], [role="button"], label.check-row, label.search, .choice, .action, .agent-tile, .tn,
+  .card.hover, .card.cta, .room-card, .skill-list li, .side-list li, .tl-row, .done-note, .search-row, .look-card,
+  .menu button, .mention-menu button):is(:not(:hover), :disabled)) *) {
+  animation: var(--word);
+}
+:where(.side-head.room, .participants, .automations-dialog, .send-btn, .mm-expand, .head [data-act="pin"], .tn-tw) .i { animation: none; }
 @keyframes g-turn { to { transform: rotate(60deg) scale(1.1); } }
 @keyframes g-spin { to { transform: rotate(360deg) scale(1.08); } }
 @keyframes g-quarter { 50% { transform: rotate(90deg) scale(1.15); } 100% { transform: rotate(90deg) scale(1.1); } }
+@keyframes g-level { 55% { transform: rotate(52deg) scale(1.14); } 100% { transform: rotate(45deg) scale(1.1); } }
 @keyframes g-shake { 20% { transform: rotate(-12deg) scale(1.08); } 45% { transform: rotate(10deg) scale(1.08); } 70% { transform: rotate(-5deg) scale(1.08); } 100% { transform: scale(1.08); } }
 @keyframes g-swing { 20% { transform: rotate(16deg) scale(1.1); } 45% { transform: rotate(-12deg) scale(1.1); } 70% { transform: rotate(6deg) scale(1.1); } 100% { transform: scale(1.1); } }
 @keyframes g-twinkle { 35% { transform: scale(1.3) rotate(22deg); opacity: 0.7; } 100% { transform: scale(1.1); opacity: 1; } }
@@ -45,6 +63,95 @@
 @keyframes g-wave { 20% { transform: rotate(14deg) scale(1.1); } 45% { transform: rotate(-10deg) scale(1.1); } 70% { transform: rotate(8deg) scale(1.1); } 100% { transform: scale(1.1); } }
 @keyframes g-grow { 50% { transform: scale(1.35); } 100% { transform: scale(1.15); } }
 @keyframes g-shrink { 50% { transform: scale(0.8); } 100% { transform: scale(0.92); } }
+.rig-plus.play > .p-v { animation: rig-quarter-lead var(--t-gesture) var(--ease-soft); }
+.rig-plus.play > .p-h { animation: rig-quarter-follow var(--t-gesture) var(--ease-soft); }
+@keyframes rig-quarter-lead { 70%, to { transform: rotate(90deg); } }
+@keyframes rig-quarter-follow { 30% { transform: rotate(0deg); } to { transform: rotate(90deg); } }
+.rig-rooms > .p-tl { transform-origin: 31.25% 31.25%; }
+.rig-rooms > .p-tr { transform-origin: 68.75% 31.25%; }
+.rig-rooms > .p-br { transform-origin: 68.75% 68.75%; }
+.rig-rooms > .p-bl { transform-origin: 31.25% 68.75%; }
+.rig-rooms.play > .p-tl { animation: rig-slot-right var(--t-gesture) var(--ease-soft); }
+.rig-rooms.play > .p-tr { animation: rig-slot-down var(--t-gesture) var(--ease-soft); }
+.rig-rooms.play > .p-br { animation: rig-slot-left var(--t-gesture) var(--ease-soft); }
+.rig-rooms.play > .p-bl { animation: rig-slot-up var(--t-gesture) var(--ease-soft); }
+@keyframes rig-slot-right { 50% { transform: translate(18.75%, 0) scale(0.72); } to { transform: translate(37.5%, 0); } }
+@keyframes rig-slot-down { 50% { transform: translate(0, 18.75%) scale(0.72); } to { transform: translate(0, 37.5%); } }
+@keyframes rig-slot-left { 50% { transform: translate(-18.75%, 0) scale(0.72); } to { transform: translate(-37.5%, 0); } }
+@keyframes rig-slot-up { 50% { transform: translate(0, -18.75%) scale(0.72); } to { transform: translate(0, -37.5%); } }
+.rig-skills.play > :is(.p-leaf, .p-leaf-2) { animation: rig-leaf var(--t-gesture) var(--ease-soft); }
+.rig-skills.play > .p-leaf-2 { animation-delay: calc(var(--t-gesture) * 0.25); }
+@keyframes rig-leaf {
+  from { opacity: 0; transform: perspective(40px) rotateY(0deg); }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  to { opacity: 0; transform: perspective(40px) rotateY(-180deg); }
+}
+.rig-settings > .p-mate { transform-origin: 73.75% 73.75%; }
+.rig-settings-solid > .p-mate { transform-origin: 70% 70%; }
+.rig-settings.play > :is(.p-hub, .p-teeth), .rig-settings-solid.play > .p-gear { animation: rig-gear calc(var(--t-gesture) * 1.75) var(--ease-soft); }
+.rig-settings.play > .p-mate, .rig-settings-solid.play > .p-mate { animation: rig-mate calc(var(--t-gesture) * 1.75) var(--ease-soft); }
+@keyframes rig-gear {
+  18% { transform: translate(-10.4%, -10.4%) scale(0.76) rotate(0deg); }
+  82% { transform: translate(-10.4%, -10.4%) scale(0.76) rotate(360deg); }
+  to { transform: translate(0, 0) scale(1) rotate(360deg); }
+}
+@keyframes rig-mate {
+  from { opacity: 1; transform: scale(0) rotate(0deg); }
+  18% { opacity: 1; transform: scale(1) rotate(0deg); }
+  82% { opacity: 1; transform: scale(1) rotate(-595deg); }
+  to { opacity: 1; transform: scale(0) rotate(-595deg); }
+}
+.rig-expand.play > .p-trail { animation: rig-run calc(var(--t-gesture) * 0.8) var(--ease-soft); }
+.rig-expand.play > .p-lead { animation: rig-run-out calc(var(--t-gesture) * 0.8) var(--ease-soft); }
+.rig-expand.play > .p-next { animation: rig-run-in calc(var(--t-gesture) * 0.8) var(--ease-soft); }
+.rig-collapse.play > .p-trail { animation: rig-run-back calc(var(--t-gesture) * 0.8) var(--ease-soft); }
+.rig-collapse.play > .p-lead { animation: rig-run-back-out calc(var(--t-gesture) * 0.8) var(--ease-soft); }
+.rig-collapse.play > .p-next { animation: rig-run-back-in calc(var(--t-gesture) * 0.8) var(--ease-soft); }
+@keyframes rig-run { to { transform: translateX(29.17%); } }
+@keyframes rig-run-out { to { opacity: 0; transform: translateX(29.17%); } }
+@keyframes rig-run-in { from { opacity: 0; transform: translateX(-29.17%); } to { opacity: 1; transform: translateX(0); } }
+@keyframes rig-run-back { to { transform: translateX(-29.17%); } }
+@keyframes rig-run-back-out { to { opacity: 0; transform: translateX(-29.17%); } }
+@keyframes rig-run-back-in { from { opacity: 0; transform: translateX(29.17%); } to { opacity: 1; transform: translateX(0); } }
+.rig-search-solid.play > .p { animation: rig-look var(--t-gesture) var(--ease-soft); }
+@keyframes rig-look { 25% { transform: translate(-10%, -8%) rotate(-10deg); } 55% { transform: translate(8%, -10%) rotate(6deg); } 80% { transform: translate(6%, 4%) rotate(2deg); } }
+.rig-pin-solid > .p-needle { transform-origin: 50% 91.67%; }
+.rig-pin-solid.play > .p-head { animation: rig-press var(--t-gesture) var(--ease-soft); }
+.rig-pin-solid.play > .p-needle { animation: rig-press-needle var(--t-gesture) var(--ease-soft); }
+@keyframes rig-press { 30%, 45% { transform: translateY(12.5%); } 75% { transform: translateY(-4%); } }
+@keyframes rig-press-needle { 30%, 45% { transform: scaleY(0.571); } 75% { transform: scaleY(1.14); } }
+.rig-clock-solid.play > .p-minute { animation: rig-round calc(var(--t-gesture) * 1.25) var(--ease-soft); }
+@keyframes rig-round { to { transform: rotate(360deg); } }
+.rig-transfer-solid { overflow: clip; }
+.rig-transfer-solid.play > .p-down { animation: rig-out-down var(--t-gesture) var(--ease-soft); }
+.rig-transfer-solid.play > .p-down-next { animation: rig-in-down var(--t-gesture) var(--ease-soft); }
+.rig-transfer-solid.play > .p-up { animation: rig-out-up var(--t-gesture) var(--ease-soft) calc(var(--t-gesture) * 0.15); }
+.rig-transfer-solid.play > .p-up-next { animation: rig-in-up var(--t-gesture) var(--ease-soft) calc(var(--t-gesture) * 0.15); }
+@keyframes rig-out-down { to { transform: translateY(100%); } }
+@keyframes rig-in-down { from { opacity: 1; transform: translateY(-100%); } to { opacity: 1; transform: translateY(0); } }
+@keyframes rig-out-up { to { transform: translateY(-100%); } }
+@keyframes rig-in-up { from { opacity: 1; transform: translateY(100%); } to { opacity: 1; transform: translateY(0); } }
+.rig-folder-solid > .p-front { transform-origin: 50% 79.17%; }
+.rig-folder-solid.play > .p-front { animation: rig-open var(--t-gesture) var(--ease-soft); }
+@keyframes rig-open { from, to { transform: perspective(30px) rotateX(0deg); } 40%, 55% { transform: perspective(30px) rotateX(-62deg); } }
+:where(.stagger) > :nth-child(2) { --arrive: 1; }
+:where(.stagger) > :nth-child(3) { --arrive: 2; }
+:where(.stagger) > :nth-child(4) { --arrive: 3; }
+:where(.stagger) > :nth-child(5) { --arrive: 4; }
+:where(.stagger) > :nth-child(6) { --arrive: 5; }
+:where(.stagger) > :nth-child(7) { --arrive: 6; }
+:where(.stagger) > :nth-child(n + 8) { --arrive: 7; }
+.mention-menu:not([hidden]) { animation: menu-in var(--t-enter) var(--ease-spring); transform-origin: 24px 100%; }
+.mention-menu.inline:not([hidden]) { transform-origin: 24px 0; }
+@keyframes menu-in { from { opacity: 0; transform: translateY(6px) scale(0.97); } }
+.msg[data-streaming="1"] .bubble::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: 0 0 0 1.5px var(--breath-ring), 0 10px 26px -12px var(--breath-glow); opacity: 0; pointer-events: none; animation: breathe var(--t-breath) var(--ease-soft) infinite; }
+@keyframes breathe { 50% { opacity: 1; } }
+[data-ui="skeleton"]:not([data-shape="bubble"])::after, [data-ui="skeleton"][data-shape="bubble"] .card::after { animation: shimmer var(--t-shimmer) var(--ease-soft) infinite; }
+@keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) {
-  :where(.i) { animation: none !important; transition: none; transform: none; }
+  :where(.i, .rig > .p) { animation: none !important; transition: none; transform: none; }
+  .msg[data-streaming="1"] .bubble::after { animation: none !important; opacity: 0.6; }
+  [data-ui="skeleton"]::after, [data-ui="skeleton"] .card::after { animation: none !important; transform: translateX(-100%); }
+  .mention-menu:not([hidden]), .msg.landing, .room-card { animation: none !important; }
 }

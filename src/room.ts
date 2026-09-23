@@ -8,6 +8,8 @@ import { memoryBlock } from "./shared-memory.js";
 import { instructionBlock, planInstructionDelivery, type InstructionRevisions } from "./instruction-delivery.js";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { NameDirectory } from "./name-directory.js";
+import type { CardKind, StoredCard } from "./room-cards.js";
 import { HistoryStore, type DivertOp, type PendingOp, cursorOf, type Cursor } from "./history-store.js";
 import { foldIndex } from "./fold.js";
 import { NOTES_ONLY_PROMPT, NOTES_REQUEST, crossedThreshold, emptyUsageReport, extractNotes, isBareContextFullError, isContextFullError, looksCompacted, overThreshold, settledVisible } from "./context.js";
@@ -25,10 +27,13 @@ import { dirname, join, resolve } from "node:path";
 import { AcpAgent } from "./acp-client.js";
 import { errorCode, errorDetail, RemoteError } from "./jsonrpc.js";
 import { getRecipe, listRecipes, publicRecipes, type AgentRecipe } from "./recipes.js";
+import { recipeStamp } from "./install-stamp.js";
+import { OptionCatalog } from "./option-catalog.js";
 import { assertAgentAvailable, useAgent } from "./agent-maintenance.js";
 import { classifyStartFailure, classifyTurnFailure, type Trouble } from "./agent-health.js";
 import { legacyRowTone } from "./rows.js";
-import { composeSkillBlock, formatQuoteTime, skillPull, SKILL_TOOL_NAME, type SkillsForPrompt } from "./persona.js";
+import { DIAGRAM_REPAIR_WINDOW_MS, boundedError, diagramSourceProblem, fenceFor, giveUp, mermaidBlocks, recordFailure, recordFix, replaceDiagramSource, type DiagramRepair } from "./diagram-repair.js";
+import { composeSkillBlock, formatQuoteTime, skillPull, SKILL_TOOL_NAME, type BriefNotes, type NotesSource, type SkillsForPrompt } from "./persona.js";
 import {
   BUILTIN_AUTHOR,
   parseSkillInvocation,
@@ -120,6 +125,7 @@ export interface Participant {
   effort?: string;
   mode?: string;
   configOptions?: SessionConfigOption[];
+  installOutdated?: boolean;
   modes?: { id: string; name: string; description?: string | null }[];
   contextUsed?: number;
   contextSize?: number;
@@ -141,6 +147,8 @@ export interface Participant {
   notes?: string;
   notesAt?: number;
   notesSeq?: number;
+  notesWrittenAt?: number;
+  formerNames?: string[];
   notesTurn?: boolean;
   contextEvent?: { kind: "threshold" | "compacted" | "full"; at: number; used?: number; size?: number };
   autoRespawnAt?: number;
@@ -186,13 +194,20 @@ export interface StoredParticipant {
   notes?: string;
   notesAt?: number;
   notesSeq?: number;
+  notesWrittenAt?: number;
 }
 
 export interface ReconnectOptions {
   mode: "load" | "replay";
   replay?: number;
   reason?: string;
-  memory?: boolean;
+  notes?: boolean;
+}
+
+export function resumeNotesSource(loaded: boolean, options: ReconnectOptions | undefined, replayed: boolean): Exclude<NotesSource, "live"> | null {
+  if (loaded) return "load";
+  if (options?.notes === false) return null;
+  return replayed ? "replay" : "fresh";
 }
 
 export interface EditPreview {
@@ -274,6 +289,8 @@ export class RoomRefusal extends Error {
   }
 }
 
+export interface Renamed { id: string; from: string; to: string }
+
 export interface ChatMessage {
   id: string;
   seq: number;
@@ -285,13 +302,14 @@ export interface ChatMessage {
   ts: number;
   displayOrder?: number;
   kind: "chat" | "system" | "hidden";
-  details?: { original?: string; corrections?: string[]; outcome?: string; skill?: string; via?: "tool" | "marker"; refId?: string; agentId?: string; tone?: "attention" | "error" | "hush"; about?: "room" };
+  details?: { original?: string; corrections?: string[]; outcome?: string; skill?: string; via?: "tool" | "marker"; refId?: string; agentId?: string; tone?: "attention" | "error" | "hush"; about?: "room"; renamed?: Renamed };
   skill?: { name: string; args: string };
   edited?: { ts: number; previous: string };
   bodyDelivery?: BodyDelivery;
   bodyEdit?: BodyEdit;
   via?: MessageVia;
   pinned?: true;
+  diagramRepairs?: DiagramRepair[];
   images?: Attachment[];
   quotes?: Quote[];
   audience?: "agents" | "human";
@@ -319,6 +337,7 @@ export interface PendingPermission {
   toolCall: ToolCallUpdate;
   options: PermissionOption[];
   ts: number;
+  afterSeq?: number;
 }
 
 export interface NewRoomProposal {
@@ -326,6 +345,7 @@ export interface NewRoomProposal {
   participantId: string;
   participantName: string;
   ts: number;
+  afterSeq?: number;
   plan: NewRoomPlan;
   status: "pending" | "created" | "refused";
   roomId?: string;
@@ -336,6 +356,7 @@ export interface RoomProposal {
   participantId: string;
   participantName: string;
   ts: number;
+  afterSeq?: number;
   why: string;
   settings: SettingChange[];
   vibemates: VibemateChange[];
@@ -346,10 +367,13 @@ export interface RoomProposal {
   skipped?: string[];
 }
 
+interface ProposalPlan { settings: SettingChange[]; vibemates: TemplateVibemate[]; ops: VibemateChange[]; ids: Record<string, string>; appearance?: Record<string, unknown> }
+
 export interface RoomRecovery {
   rows: number;
   lastTs: number | null;
   ts: number;
+  afterSeq?: number;
   status: "pending" | "adopted";
 }
 
@@ -465,6 +489,7 @@ export interface DiscoveredOptions {
   modeAtLaunch: boolean;
   discoveredAt: number;
   durationMs: number;
+  installStamp: string | null;
 }
 
 export interface RoomOptions {
@@ -483,15 +508,17 @@ export interface RoomOptions {
   programFoldAfter?: number;
   settings?: Partial<Omit<RoomSettings, "name" | "humanName">>;
   log: Logger;
-  optionCache?: Map<string, DiscoveredOptions>;
+  optionCatalog?: OptionCatalog;
   skills?: SkillsBridge;
   history: HistoryStore;
   onHistoryFailure?: (roomId: string, error: unknown) => void;
+  heldParticipantIds?: () => Iterable<string>;
 }
 
 interface AgentRuntime {
   agent: AcpAgent;
   sessionId: string;
+  installStamp: string | null;
   transcript: Transcript;
   log: Logger;
   firstTurnDone: boolean;
@@ -503,7 +530,10 @@ interface AgentRuntime {
   notesPending?: boolean;
   workCancelled?: boolean;
   usageSeenThisTurn?: boolean;
+  fixedDiagramThisTurn?: boolean;
   pendingTurn: boolean;
+  missedNotice?: boolean;
+  promptedThisWork?: boolean;
   turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; lastSignAt?: number; lastWorkAt?: number; published: boolean; publishedAt?: number; hidden?: boolean; messagesFromSeq: number; shownLength?: number } | null;
   quiet?: { turnId: string; nudge?: "asking" | "answered" | "silent" };
   strayMessageId: string | null;
@@ -522,7 +552,7 @@ interface AgentRuntime {
   notesMisses: number;
   notesAskedThisTurn: boolean;
   lastBriefSeq: number;
-  notesForBrief: string | null;
+  resumeNotes: Exclude<NotesSource, "live"> | null;
   replayOwnUntilSeq: number;
   delayTimer: NodeJS.Timeout | null;
   addressed: boolean;
@@ -631,13 +661,14 @@ export class Room extends EventEmitter {
     run: AutomationRun; runtime: AgentRuntime; resolve: (outcome: AutomationOutcome) => void;
     cleanup: () => void; outcome: AutomationOutcome; continuing: boolean;
   }>();
+  private readonly repairTasks = new Map<string, { messageId: string; block: number; delivered: boolean }[]>();
   private readonly drafts = new Map<string, ChatMessage>();
   private readonly quotesAwaitingNumber = new Map<string, Set<string>>();
   private readonly permissions = new Map<string, PermissionEntry>();
   private readonly proposals = new Map<string, RoomProposal>();
   private readonly newRooms = new Map<string, NewRoomProposal>();
-  private readonly proposalPlans = new Map<string, { settings: SettingChange[]; vibemates: TemplateVibemate[]; ops: VibemateChange[]; ids: Record<string, string>; appearance?: Record<string, unknown> }>();
-  private readonly optionCache: Map<string, DiscoveredOptions>;
+  private readonly proposalPlans = new Map<string, ProposalPlan>();
+  private readonly optionCatalog: OptionCatalog;
   private readonly log: Logger;
   private colorIndex = 0;
   private nextColour(given?: string): { color: string; colorSlot: number } {
@@ -664,9 +695,10 @@ export class Room extends EventEmitter {
     this.skills = options.skills;
     this.history = options.history;
     this.onHistoryFailure = options.onHistoryFailure;
+    this.heldParticipantIds = options.heldParticipantIds;
     this.settings = { ...DEFAULT_ROOM_SETTINGS, ...(options.settings ?? {}), name: options.name, humanName: options.humanName };
     this.log = options.log;
-    this.optionCache = options.optionCache ?? new Map();
+    this.optionCatalog = options.optionCatalog ?? new OptionCatalog();
     mkdirSync(this.dataDir, { recursive: true });
     this.participants.set("human", {
       id: "human",
@@ -695,6 +727,7 @@ export class Room extends EventEmitter {
 
   private readonly history: HistoryStore;
   private readonly onHistoryFailure?: (roomId: string, error: unknown) => void;
+  private readonly heldParticipantIds?: () => Iterable<string>;
   private divertPending = false;
 
   private divertPath(): string {
@@ -729,7 +762,7 @@ export class Room extends EventEmitter {
     if (copyAwaits) {
       const chat = this.messages.filter((m) => m.kind === "chat");
       const last = chat.length ? chat[chat.length - 1].ts : null;
-      this.recovery = { rows: chat.length, lastTs: last, ts: Date.now(), status: "pending" };
+      this.recovery = { rows: chat.length, lastTs: last, ts: Date.now(), afterSeq: this.seq, status: "pending" };
       this.recordHold = `No history file was found for this room, only the room's own copy of the conversation (${chat.length} message${chat.length === 1 ? "" : "s"}${last ? `, the last from ${new Date(last).toLocaleString()}` : ""}). The copy may lack the newest changes, so until you decide on the card the room is read-only: what the copy holds is shown, nothing new is written and no vibemate answers. To use the original instead, put history.jsonl back in the room's folder and restart.`;
       this.loadNotices.push(this.recordHold);
     }
@@ -748,6 +781,31 @@ export class Room extends EventEmitter {
         }
       }
     }
+    this.readCards();
+  }
+
+  private readCards(): void {
+    let cards: StoredCard[];
+    try { cards = this.history.cards.list(this.id); }
+    catch (error) { this.log.warn(`the room's cards could not be read: ${describeError(error)}`); return; }
+    for (const card of cards) {
+      const body = card.body as { proposal?: { key?: unknown; status?: unknown }; plan?: unknown };
+      if (!body?.proposal || body.proposal.key !== card.key) { this.log.warn(`card ${card.key} is not readable; left out`); continue; }
+      if (card.kind === "proposal") {
+        const proposal = body.proposal as RoomProposal;
+        if (proposal.status === "pending" && !body.plan) { this.log.warn(`proposal ${card.key} lost its plan; shown as rejected`); proposal.status = "rejected"; }
+        this.proposals.set(card.key, proposal);
+        if (proposal.status === "pending") this.proposalPlans.set(card.key, body.plan as ProposalPlan);
+      } else if (card.kind === "new-room") this.newRooms.set(card.key, body.proposal as NewRoomProposal);
+    }
+  }
+
+  private keepCard(kind: CardKind, key: string): void {
+    const proposal = kind === "proposal" ? this.proposals.get(key) : this.newRooms.get(key);
+    if (!proposal) return;
+    const plan = kind === "proposal" && proposal.status === "pending" ? this.proposalPlans.get(key) : undefined;
+    try { this.history.cards.save(this.id, kind, key, proposal.ts, plan ? { proposal, plan } : { proposal }); }
+    catch (error) { this.log.warn(`the card ${key} could not be kept with the record (it is shown until the hub stops): ${describeError(error)}`); }
   }
 
   private journalOps(): { ops: DivertOp[]; unreadable: number } {
@@ -925,6 +983,7 @@ export class Room extends EventEmitter {
         notes: s.notes,
         notesAt: s.notesAt,
         notesSeq: s.notesSeq,
+        notesWrittenAt: s.notesWrittenAt,
         violations: 0,
         briefsSent: 0,
         failedTurns: 0,
@@ -932,6 +991,7 @@ export class Room extends EventEmitter {
       if (s.lastSeenSeq !== undefined) this.restoredSeen.set(s.id, s.lastSeenSeq);
       this.colorIndex++;
     }
+    this.readFormerNames();
     const furthest = Math.max(this.seq, ...this.restoredSeen.values());
     if (furthest > this.seq) {
       this.log.warn(`the record reaches #${this.seq} but a vibemate had read up to #${furthest}: the count continues from there`);
@@ -1001,6 +1061,7 @@ export class Room extends EventEmitter {
           notes: p.notes,
           notesAt: p.notesAt,
           notesSeq: p.notesSeq,
+          notesWrittenAt: p.notesWrittenAt,
         })),
     };
   }
@@ -1047,10 +1108,14 @@ export class Room extends EventEmitter {
         const tone = legacyRowTone(message.text);
         if (tone) message.details = { ...(message.details ?? {}), tone };
       }
+      for (const repair of message.diagramRepairs ?? []) {
+        if (repair.state === "repairing" && !this.repairTasks.get(message.from)?.some((t) => t.messageId === message.id && t.block === repair.block)) repair.state = "failed";
+      }
       this.messages.push(message);
       this.displayOrder = Math.max(this.displayOrder, message.displayOrder ?? message.seq);
     }
     this.seq = Math.max(this.seq, this.history.maxSeq(this.id));
+    this.readFormerNames();
   }
 
   absorbImported(arriving: ChatMessage[], buried: { id: string; at: number }[]): StoreOutcome {
@@ -1576,6 +1641,97 @@ export class Room extends EventEmitter {
     return message;
   }
 
+  reportDiagramFailure(messageId: string, block: number, source: string, error: string): { state: DiagramRepair["state"] | "ignored" } {
+    this.assertRecordOpen();
+    const message = this.messages.find((m) => m.id === messageId);
+    if (!message || message.kind !== "chat" || message.streaming || message.from === "human") return { state: "ignored" };
+    const found = mermaidBlocks(message.text).find((b) => b.block === block);
+    if (!found || found.source !== String(source).trim()) return { state: "ignored" };
+    const repairs = message.diagramRepairs ?? [];
+    const outcome = recordFailure(repairs, block, String(error), !!found.span && this.canRepairDiagram(message), Date.now());
+    if (outcome === "unchanged") return { state: repairs.find((r) => r.block === block)?.state ?? "failed" };
+    message.diagramRepairs = repairs;
+    this.persist({ kind: "upsert", message });
+    this.push({ type: "message", message });
+    if (outcome === "repairing") {
+      const tasks = this.repairTasks.get(message.from) ?? [];
+      tasks.push({ messageId: message.id, block, delivered: false });
+      this.repairTasks.set(message.from, tasks);
+      this.requestTurn(message.from, true);
+    }
+    return { state: outcome };
+  }
+
+  private canRepairDiagram(message: ChatMessage): boolean {
+    const participant = this.participants.get(message.from), runtime = this.runtimes.get(message.from);
+    if (participant?.kind !== "agent" || participant.muted || this.focused || this.closing) return false;
+    if (!runtime?.agent.alive || runtime.retiring || runtime.workCancelled) return false;
+    if (["unstaffed", "error", "offline", "left"].includes(participant.status)) return false;
+    return Date.now() - (message.ts + (message.durationMs ?? 0)) <= DIAGRAM_REPAIR_WINDOW_MS;
+  }
+
+  fixDiagramForAgent(participantId: string, seq: number, block: number, source: string): { ok: true; message: string } {
+    this.assertRecordOpenForAgents();
+    this.agentInRoom(participantId);
+    const message = this.messages.find((m) => m.seq === seq && m.kind === "chat");
+    if (!message) throw new Error(`no message #${seq} in this room`);
+    if (message.from !== participantId) throw new Error(`#${seq} is not yours: only its author can fix its diagrams`);
+    const repair = message.diagramRepairs?.find((r) => r.block === block);
+    if (!repair || repair.state !== "repairing") throw new Error(`diagram ${block} of #${seq} is not waiting for a fix${repair?.state === "failed" ? " any more" : ""}`);
+    const problem = diagramSourceProblem(source);
+    if (problem) throw new Error(problem);
+    const found = mermaidBlocks(message.text).find((b) => b.block === block);
+    if (!found) throw new Error(`#${seq} has no diagram ${block}`);
+    message.text = replaceDiagramSource(message.text, found, source);
+    recordFix(message.diagramRepairs!, block, found.source, Date.now());
+    this.persist({ kind: "upsert", message });
+    this.push({ type: "message", message });
+    this.dropRepairTask(participantId, message.id, block);
+    const runtime = this.runtimes.get(participantId);
+    if (runtime?.turnActive) runtime.fixedDiagramThisTurn = true;
+    return { ok: true, message: `Diagram ${block} of #${seq} replaced; the room draws it again in the same message. Nothing else is needed from you.` };
+  }
+
+  private dropRepairTask(agentId: string, messageId: string, block: number): void {
+    const tasks = this.repairTasks.get(agentId)?.filter((t) => t.messageId !== messageId || t.block !== block);
+    if (tasks?.length) this.repairTasks.set(agentId, tasks);
+    else this.repairTasks.delete(agentId);
+  }
+
+  private giveUpRepairs(agentId: string, which: "delivered" | "all"): void {
+    const tasks = this.repairTasks.get(agentId);
+    if (!tasks) return;
+    const over = which === "all" ? tasks : tasks.filter((t) => t.delivered);
+    for (const task of over) {
+      const message = this.messages.find((m) => m.id === task.messageId);
+      if (!message || !giveUp(message.diagramRepairs, task.block, Date.now())) continue;
+      if (!this.recordHold) this.persist({ kind: "upsert", message });
+      this.push({ type: "message", message });
+    }
+    const left = which === "all" ? [] : tasks.filter((t) => !t.delivered);
+    if (left.length) this.repairTasks.set(agentId, left);
+    else this.repairTasks.delete(agentId);
+  }
+
+  private repairTaskBlock(task: { messageId: string; block: number }): string | null {
+    const message = this.messages.find((m) => m.id === task.messageId);
+    const repair = message?.diagramRepairs?.find((r) => r.block === task.block);
+    const found = message && mermaidBlocks(message.text).find((b) => b.block === task.block);
+    if (!message || !found || repair?.state !== "repairing") return null;
+    const fence = fenceFor(found.source);
+    return [
+      "<diagram-repair>",
+      `The room could not draw diagram ${task.block} of your message #${message.seq}. Until it is fixed, ${this.humanName} sees that you are fixing it, in its place. Mermaid says:`,
+      boundedError(repair.error),
+      "",
+      "The diagram's code as it is now:",
+      `${fence}mermaid`, found.source, fence,
+      "",
+      `Send the corrected code with tool_call {"name": "fix_diagram", "arguments": {"message": ${message.seq}, "block": ${task.block}, "source": "<the code>"}}: the code alone, without the fence. The room puts it in place of this one, so ${this.humanName} sees one message with a working diagram. Do not post the diagram again; if the fix is all you have to do, reply [silent].`,
+      "</diagram-repair>",
+    ].join("\n");
+  }
+
   previewEdit(messageId: string): EditPreview {
     const message = this.editableMessage(messageId);
     const { removed } = partitionHistory(this.messages, message.seq);
@@ -1629,6 +1785,7 @@ export class Room extends EventEmitter {
     }
 
     const { kept, removed } = partitionHistory(this.messages, message.seq);
+    this.dropNotesAfter(message.seq);
     for (const a of restart) {
       const runtime = this.runtimes.get(a.id);
       if (!runtime) continue;
@@ -1683,8 +1840,8 @@ export class Room extends EventEmitter {
     this.push({ type: "participant", participant });
     if (!online) this.log.info(`respawn of ${participant.name} (offline): stored session dropped, starting it now`);
     await this.reconnect(id, memory
-      ? { mode: "replay", replay, memory: withNotes, reason: `${why}; it comes back with ${withNotes ? "its notes and " : ""}the last ${replay} messages` }
-      : { mode: "replay", replay: 0, reason: `${why}, it remembers nothing from before` });
+      ? { mode: "replay", replay, reason: `${why}; it comes back with ${withNotes ? "its notes and " : ""}the last ${replay} messages` }
+      : { mode: "replay", replay: 0, notes: false, reason: `${why}, it remembers nothing from before` });
     this.log.info(`respawn of ${participant.name}: fresh session, ${memory ? `${withNotes ? "notes + " : ""}replay ${replay}` : "no replay"}`);
     return participant;
   }
@@ -1706,6 +1863,15 @@ export class Room extends EventEmitter {
     return this.respawnAgent(id, { memory: true, reason: "its role changed" });
   }
 
+  private dropNotesAfter(seq: number): void {
+    for (const participant of this.participants.values()) {
+      if (!participant.notes || (participant.notesSeq ?? seq) < seq) continue;
+      participant.notes = participant.notesAt = participant.notesSeq = participant.notesWrittenAt = undefined;
+      this.push({ type: "participant", participant });
+      this.log.info(`${participant.name}: notes dropped, the conversation was rewritten from #${seq}`);
+    }
+  }
+
   updateNotes(id: string, notes: string): Participant {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
@@ -1713,6 +1879,7 @@ export class Room extends EventEmitter {
     participant.notes = text || undefined;
     participant.notesAt = text ? this.runtimes.get(id)?.lastUsed ?? participant.notesAt : undefined;
     participant.notesSeq = text ? this.seq : undefined;
+    participant.notesWrittenAt = text ? Date.now() : undefined;
     this.push({ type: "participant", participant });
     return participant;
   }
@@ -1753,12 +1920,38 @@ export class Room extends EventEmitter {
     participant.notes = notes.slice(0, 4000);
     participant.notesAt = runtime.lastUsed;
     participant.notesSeq = this.seq;
+    participant.notesWrittenAt = Date.now();
     runtime.notesDue = false;
     runtime.notesMisses = 0;
     runtime.notesPending = false;
     this.push({ type: "participant", participant });
     runtime.log.info(`notes: ${notes.split("\n").length} lines kept (${via}, context ${runtime.lastUsed})`);
     return true;
+  }
+
+  private askForNotes(runtime: AgentRuntime, how: "reply" | "hidden turn" = "reply"): boolean {
+    if (!this.settings.autoNotes) return false;
+    if (how === "reply") runtime.notesDue = true;
+    else runtime.notesPending = true;
+    return true;
+  }
+
+  private withdrawAutomaticNotes(): void {
+    for (const runtime of this.runtimes.values()) {
+      runtime.notesDue = false;
+      runtime.notesPending = false;
+      runtime.notesMisses = 0;
+    }
+  }
+
+  private notesForBrief(participant: Participant, runtime: AgentRuntime): BriefNotes | undefined {
+    if (!participant.notes) return undefined;
+    const source: NotesSource | null = runtime.resumeNotes ?? (runtime.lastBriefSeq >= 0 && (participant.notesSeq ?? -1) >= runtime.lastBriefSeq ? "live" : null);
+    if (!source) return undefined;
+    const after = participant.notesSeq;
+    const newerMessages = after === undefined ? undefined
+      : this.messages.reduce((count, m) => count + Number(m.seq > after && m.kind === "chat" && !m.streaming && visibleToAgents(m)), 0);
+    return { text: participant.notes, source, writtenAt: participant.notesWrittenAt, newerMessages };
   }
 
   private contextFull(participant: Participant, runtime: AgentRuntime, detail: string): void {
@@ -1871,6 +2064,7 @@ export class Room extends EventEmitter {
     }
     this.settings = next;
     if (changed.includes("transcripts")) this.updateTranscriptModes();
+    if (changed.includes("autoNotes") && !next.autoNotes) this.withdrawAutomaticNotes();
     this.push(this.roomEvent());
     const briefChanges = changed.filter((c) => BRIEF_AFFECTING_SETTINGS.includes(c as keyof RoomSettings));
     if (briefChanges.length) {
@@ -1899,7 +2093,10 @@ export class Room extends EventEmitter {
       const taken = this.findByName(name);
       if (taken && taken.id !== id) throw new Error(`name "${name}" is already taken`);
       if (name !== participant.name) {
-        this.postRoomEvent(`${participant.name} is now called ${name}.`);
+        const renamed: Renamed = { id, from: participant.name, to: name };
+        this.postRoomEvent(`${participant.name} is now called ${name}.`, undefined, undefined, { renamed });
+        participant.formerNames = [renamed.from, ...(participant.formerNames ?? [])]
+          .filter((n, i, all) => n.toLowerCase() !== name.toLowerCase() && all.findIndex((m) => m.toLowerCase() === n.toLowerCase()) === i);
         participant.name = name;
       }
     }
@@ -1980,14 +2177,14 @@ export class Room extends EventEmitter {
       runtime.retiring = true; this.dropScheduledTurn(id); this.restoredSeen.set(id, runtime.lastSeenSeq);
     }
     const resume = async () => {
-      this.optionCache.delete(recipeId);
+      this.optionCatalog.forget(recipeId);
       for (const [id] of paused) {
         const p = this.participants.get(id);
         if (!p || p.status === "left") continue;
         const remaining = this.runtimes.get(id);
         if (remaining) { remaining.retiring = false; this.requestTurn(id); continue; }
         try {
-          await this.reconnect(id, { mode: "load", memory: true, reason: "its installed agent was updated" });
+          await this.reconnect(id, { mode: "load", reason: "its installed agent was updated" });
           this.requestTurn(id);
         } catch (error) { this.notice(`${p.name}: could not reconnect after the update: ${describeError(error)}`, "error"); }
       }
@@ -2015,6 +2212,7 @@ export class Room extends EventEmitter {
       participant.statusDetail = "not summoned yet; reconnect when ready";
     }
     const runtime = this.runtimes.get(id);
+    if (muted) this.giveUpRepairs(id, "all");
     if (muted && runtime) {
       this.dropScheduledTurn(id);
       if (runtime.turnActive) {
@@ -2034,9 +2232,25 @@ export class Room extends EventEmitter {
     const recipe = getRecipe(recipeId);
     if (!recipe) throw new Error(`unknown agent type: ${recipeId}`);
     if (recipe.unavailableReason) throw new Error(`${recipe.label}: ${recipe.unavailableReason}`);
-    const cached = this.optionCache.get(recipeId);
-    if (cached && !refresh) return cached;
+    const stamp = recipeStamp(recipe);
+    this.noteInstallation(recipeId, stamp);
+    return this.optionCatalog.get(recipeId, stamp, refresh, () => this.probeOptions(recipe));
+  }
 
+  noteInstallation(recipeId: string, stamp: string | null): void {
+    if (!stamp) return;
+    for (const [id, runtime] of this.runtimes) {
+      const participant = this.participants.get(id);
+      if (!participant || participant.agentType !== recipeId || !runtime.installStamp) continue;
+      const outdated = runtime.installStamp !== stamp;
+      if (!!participant.installOutdated === outdated) continue;
+      participant.installOutdated = outdated || undefined;
+      this.push({ type: "participant", participant });
+    }
+  }
+
+  private async probeOptions(recipe: AgentRecipe): Promise<DiscoveredOptions> {
+    const recipeId = recipe.id;
     const cwd = ensureDir(join(this.dataDir, ".probe"));
     const log = this.log.child(`probe:${recipeId}`);
     const launch = recipe.build({ model: null, mode: null });
@@ -2067,6 +2281,7 @@ export class Room extends EventEmitter {
             modeAtLaunch: !!recipe.modeAtLaunch,
             discoveredAt: Date.now(),
             durationMs: 0,
+            installStamp: null,
           };
           try {
             await Promise.race([agent.closeSession(session.sessionId), delay(1500)]);
@@ -2079,7 +2294,6 @@ export class Room extends EventEmitter {
         }),
       ]);
       info.durationMs = Date.now() - started;
-      this.optionCache.set(recipeId, info);
       log.info(`options discovered in ${info.durationMs} ms: ${info.configOptions.map((o) => o.id).join(", ") || "none"}`);
       return info;
     } finally {
@@ -2097,7 +2311,8 @@ export class Room extends EventEmitter {
     const taken = this.findByName(name);
     if (taken && !(options.id && taken.id === options.id && taken.status === "unstaffed")) throw new Error(`name "${name}" is already taken`);
 
-    const id = options.id ?? `${recipe.id}-${name.toLowerCase()}`;
+    if (options.id && this.participants.get(options.id)?.status !== "unstaffed") throw new Error(`no vibemate awaiting a coding agent has the id "${options.id}"`);
+    const id = options.id ?? this.mintParticipantId(`${recipe.id}-${name.toLowerCase()}`);
     const launch: LaunchPrefs = {
       model: options.model ?? recipe.defaultModel,
       effort: options.effort ?? recipe.defaultEffort,
@@ -2133,7 +2348,8 @@ export class Room extends EventEmitter {
     const name = input.name.trim();
     if (!NAME_PATTERN.test(name)) throw new Error("name must be 1-24 letters, digits, _ or - (no spaces)");
     if (!input.restoring && this.findByName(name)) throw new Error(`name "${name}" is already taken`);
-    const id = input.id ?? `vm-${name.toLowerCase()}`;
+    if (input.id && !input.restoring) throw new Error("only a restored vibemate brings its own id");
+    const id = input.id ?? this.mintParticipantId(`vm-${name.toLowerCase()}`);
     const participant: Participant = {
       id,
       name,
@@ -2232,6 +2448,20 @@ export class Room extends EventEmitter {
     return participant;
   }
 
+  async restartOnInstalled(id: string): Promise<Participant> {
+    const participant = this.participants.get(id);
+    if (!participant || participant.kind !== "agent") throw new Error("no such agent");
+    const runtime = this.runtimes.get(id);
+    if (!runtime) return this.reconnect(id, { mode: "load" });
+    if (runtime.turnActive || runtime.retiring) throw new Error(`${participant.name} is busy; restart it when it has finished.`);
+    runtime.retiring = true; this.dropScheduledTurn(id); this.restoredSeen.set(id, runtime.lastSeenSeq);
+    await this.retireRuntime(id);
+    this.push({ type: "participant", participant });
+    await this.reconnect(id, { mode: "load", reason: "a newer version of its agent is installed" });
+    this.requestTurn(id);
+    return participant;
+  }
+
   private updateTranscriptModes(): void {
     const mode = this.settings.transcripts === "inherit" ? this.programTranscripts : this.settings.transcripts;
     for (const runtime of this.runtimes.values()) runtime.transcript?.setMode(mode);
@@ -2246,6 +2476,7 @@ export class Room extends EventEmitter {
     const log = this.log.child(name);
     const cwd = ensureDir(this.dir);
     const spec = recipe.build({ model: launch.model, mode: launch.mode });
+    const installStamp = recipeStamp(recipe);
     const mode = this.settings.transcripts === "inherit" ? this.programTranscripts : this.settings.transcripts;
     const transcript = new Transcript(join(this.dataDir, "transcripts"), name, mode,
       this.history.path === ":memory:" ? undefined : dirname(this.history.path));
@@ -2336,13 +2567,14 @@ export class Room extends EventEmitter {
         notesMisses: 0,
         notesAskedThisTurn: false,
         lastBriefSeq: -1,
-        notesForBrief: reconnectOptions?.memory && participant.notes ? participant.notes : null,
+        resumeNotes: null,
         replayOwnUntilSeq: fresh || origin === "loaded" ? -1 : this.seq,
         delayTimer: null,
         addressed: false,
         retiring: false,
         mcpToken,
         sessionStartedAt: Date.now(),
+        installStamp,
         skillChannel: mcp ? "pending" : "marker",
         skillReadyWaiters: [],
         pendingSkills: [],
@@ -2354,6 +2586,7 @@ export class Room extends EventEmitter {
       if (mcpToken && this.earlySkillReady.delete(mcpToken)) this.skillToolReady(id, mcpToken);
       this.restoredSeen.delete(id);
       participant.configOptions = session.configOptions ?? undefined;
+      participant.installOutdated = undefined;
       if (session.modes) {
         participant.mode = session.modes.currentModeId;
         participant.modes = session.modes.availableModes;
@@ -2395,6 +2628,7 @@ export class Room extends EventEmitter {
         runtime.lastSeenSeq = firstReplayed ? Math.max(0, firstReplayed.seq - 1) : this.seq;
         participant.sawFromSeq = runtime.lastSeenSeq + 1;
       }
+      if (participant.notes) runtime.resumeNotes = resumeNotesSource(origin === "loaded", reconnectOptions, runtime.lastSeenSeq < this.seq);
 
       const run = this.hubRun();
       if (run) {
@@ -2412,6 +2646,38 @@ export class Room extends EventEmitter {
       this.forgetRuntime(id);
       throw this.failStart(participant, error, fresh, stderrTail);
     }
+  }
+
+  private mintParticipantId(base: string): string {
+    const known = this.knownParticipantIds();
+    let id = base;
+    for (let n = 2; known.has(id); n++) id = `${base}-${n}`;
+    return id;
+  }
+
+  nameDirectory(): NameDirectory {
+    return new NameDirectory(this.history.nameUses([this.id]), [...this.participants.values()].map((p) => ({ roomId: this.id, id: p.id, name: p.name })));
+  }
+
+  private readFormerNames(): void {
+    const names = this.nameDirectory();
+    for (const p of this.participants.values()) {
+      const former = names.formerNames(this.id, p.id);
+      p.formerNames = former.length ? former : undefined;
+    }
+  }
+
+  private knownParticipantIds(): Set<string> {
+    const ids = this.history.participantIds(this.id);
+    for (const m of this.messages) {
+      ids.add(m.from);
+      for (const to of m.to) ids.add(to);
+    }
+    for (const id of this.participants.keys()) ids.add(id);
+    for (const id of this.departed.keys()) ids.add(id);
+    for (const [, id] of (this.settings.customRules ?? "").matchAll(RULE_REF_TOKEN)) ids.add(id);
+    for (const id of this.heldParticipantIds?.() ?? []) ids.add(id);
+    return ids;
   }
 
   async removeParticipant(id: string): Promise<void> {
@@ -2845,9 +3111,11 @@ export class Room extends EventEmitter {
 
   private agentMessageView(m: ChatMessage) {
     const files = this.carriedFilePaths(m);
+    const now = this.participants.get(m.from)?.name;
     return {
       seq: m.seq,
       from: m.fromName,
+      ...(now && now !== m.fromName ? { now } : {}),
       to: m.toNames,
       at: new Date(m.ts).toISOString(),
       text: m.text,
@@ -3111,11 +3379,14 @@ export class Room extends EventEmitter {
     const settingChanges = diffSettings(base, result.settings!);
     if (!settingChanges.length && !vibes.ops.length) throw new Error("not proposed: the change set leaves the room as it is");
     const touchesOwn = vibes.ops.some((op) => op.name.toLowerCase() === participant.name.toLowerCase()) || settingChanges.some((c) => c.key === "customRules");
+    const what = [...settingChanges.map((c) => c.key), ...vibes.ops.map((o) => `${o.op} ${o.name}`)].join(", ");
+    const line = this.postRoomEvent(`${participant.name} proposes changes to the room (${what}); apply or reject them on the card.`, "human", false, { tone: "attention" });
     const proposal: RoomProposal = {
       key: randomUUID(),
       participantId,
       participantName: participant.name,
       ts: Date.now(),
+      afterSeq: line.seq,
       why: String(why ?? "").trim().slice(0, 600),
       settings: settingChanges,
       vibemates: vibes.ops,
@@ -3130,9 +3401,8 @@ export class Room extends EventEmitter {
     }
     this.proposalPlans.set(proposal.key, { settings: settingChanges, vibemates: vibes.next, ops: vibes.ops, ids });
     this.proposals.set(proposal.key, proposal);
+    this.keepCard("proposal", proposal.key);
     this.push({ type: "proposal", proposal });
-    const what = [...settingChanges.map((c) => c.key), ...vibes.ops.map((o) => `${o.op} ${o.name}`)].join(", ");
-    this.postRoomEvent(`${participant.name} proposes changes to the room (${what}); apply or reject them on the card.`, "human", false, { tone: "attention" });
     this.log.info(`proposal ${proposal.key} from ${participant.name}: ${what}`);
     return {
       ok: true,
@@ -3150,8 +3420,9 @@ export class Room extends EventEmitter {
       openCard: [...this.newRooms.values()].some((waiting) => waiting.status === "pending"),
       proposerName: participant.name,
     });
-    const proposal: NewRoomProposal = { key: randomUUID(), participantId, participantName: participant.name, ts: Date.now(), plan, status: "pending" };
+    const proposal: NewRoomProposal = { key: randomUUID(), participantId, participantName: participant.name, ts: Date.now(), afterSeq: this.seq, plan, status: "pending" };
     this.newRooms.set(proposal.key, proposal);
+    this.keepCard("new-room", proposal.key);
     this.push({ type: "new-room", proposal });
     const cast = plan.vibemates.map((one) => one.name).join(", ");
     const price = plan.price.byModel.map((one) => `${one.sessions} on ${one.model}`).join(", ");
@@ -3178,6 +3449,7 @@ export class Room extends EventEmitter {
     if (proposal.status !== "pending") return proposal;
     proposal.status = status;
     if (madeAs) proposal.roomId = madeAs;
+    this.keepCard("new-room", key);
     this.push({ type: "new-room.resolved", key, status, ...(madeAs ? { roomId: madeAs } : {}) });
     this.postRoomEvent(status === "created"
       ? `${this.settings.humanName} created the room ${proposal.plan.name} that ${proposal.participantName} proposed.`
@@ -3259,11 +3531,14 @@ export class Room extends EventEmitter {
     }
     this.skills.appearance.preview(patch);
     if (!rows.length) throw new Error("not proposed: the change leaves the window as it is");
+    const what = rows.map((c) => c.key).join(", ");
+    const line = this.postRoomEvent(`${participant.name} proposes a change to how the window looks (${what}); apply or reject it on the card.`, "human", false, { tone: "attention" });
     const proposal: RoomProposal = {
       key: randomUUID(),
       participantId,
       participantName: participant.name,
       ts: Date.now(),
+      afterSeq: line.seq,
       why: String(why ?? "").trim().slice(0, 600),
       settings: [],
       vibemates: [],
@@ -3274,9 +3549,8 @@ export class Room extends EventEmitter {
     };
     this.proposalPlans.set(proposal.key, { settings: [], vibemates: [], ops: [], ids: {}, appearance: patch });
     this.proposals.set(proposal.key, proposal);
+    this.keepCard("proposal", proposal.key);
     this.push({ type: "proposal", proposal });
-    const what = rows.map((c) => c.key).join(", ");
-    this.postRoomEvent(`${participant.name} proposes a change to how the window looks (${what}); apply or reject it on the card.`, "human", false, { tone: "attention" });
     this.log.info(`look proposal ${proposal.key} from ${participant.name}: ${what}`);
     return {
       ok: true,
@@ -3295,6 +3569,7 @@ export class Room extends EventEmitter {
     if (!accept) {
       proposal.status = "rejected";
       this.proposalPlans.delete(key);
+      this.keepCard("proposal", key);
       this.push({ type: "proposal.resolved", key, status: "rejected" });
       this.postRoomEvent(`${this.settings.humanName} rejected ${proposal.participantName}'s proposal (${what}).`);
       return proposal;
@@ -3355,6 +3630,7 @@ export class Room extends EventEmitter {
     proposal.status = "applied";
     proposal.skipped = skipped;
     this.proposalPlans.delete(key);
+    this.keepCard("proposal", key);
     this.push({ type: "proposal.resolved", key, status: "applied", skipped });
     this.postRoomEvent(`${this.settings.humanName} applied ${proposal.participantName}'s proposal (${what}).${skipped.length ? ` Not applied: ${skipped.join("; ")}.` : ""}`);
     return proposal;
@@ -3544,23 +3820,26 @@ export class Room extends EventEmitter {
     const known = runtime.turn?.message.toolCalls?.find((t) => t.toolCallId === call.toolCallId);
     return canAutoApproveRoomTool(call, known, "tool_search", input => validArguments("tool_search", input)) || canAutoApproveMessageCheck(call, known) || canAutoApproveRoomTool(call, known, "memory",
       input => Object.keys(input).every(key => ["action", "scope", "ticket", "notes", "reason", "acknowledge"].includes(key)) && (input.action === "read" || input.action === "revise")) || canAutoApproveRoomTool(call, known, SKILL_TOOL_NAME,
-      input => Object.keys(input).every(key => key === "name") && typeof input.name === "string" && !!input.name.trim());
+      input => Object.keys(input).every(key => key === "name") && typeof input.name === "string" && !!input.name.trim())
+      || canAutoApproveRoomTool(call, known, "fix_diagram", () => true);
   }
 
   private forgetRuntime(id: string): void {
     this.finishAutomation(id, { status: "interrupted", detail: "The assigned session ended before the result was confirmed." });
+    this.giveUpRepairs(id, "all");
     const runtime = this.runtimes.get(id);
     if (runtime?.mcpToken) this.skills?.revokeToken(runtime.mcpToken);
     if (runtime?.delayTimer) clearTimeout(runtime.delayTimer);
     this.runtimes.delete(id);
   }
 
-  private requestTurn(id: string, addressed = false): void {
+  private requestTurn(id: string, addressed = false, missedNotice = false): void {
     if (this.recordHold) return;
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
     if (!runtime || !participant) return;
     runtime.pendingTurn = true;
+    runtime.missedNotice = missedNotice;
     if (runtime.retiring) return;
     if (participant.status === "error") {
       const trouble = participant.trouble;
@@ -3696,6 +3975,7 @@ export class Room extends EventEmitter {
       await this.runTurnInner(id, participant, runtime);
     } finally {
       if (automation && this.automationTasks.get(id) === automation && (!automation.continuing || runtime.workCancelled || this.closing)) this.finishAutomation(id);
+      this.giveUpRepairs(id, "delivered");
       if (this.speaking === id) this.speaking = null;
       try {
         if (participant.status === "queued") {
@@ -3718,12 +3998,30 @@ export class Room extends EventEmitter {
     runtime.workBusy = false;
     if (this.closing || runtime.retiring || this.runtimes.get(id) !== runtime || !runtime.agent.alive) return;
     const participant = this.participants.get(id);
-    if (runtime.notesPending && !runtime.workCancelled && participant && participant.status !== "error" && !participant.muted && !this.focused) {
+    if (runtime.notesPending && this.settings.autoNotes && !runtime.workCancelled && participant && participant.status !== "error" && !participant.muted && !this.focused) {
       runtime.notesPending = false;
       void this.takeNotes(id).catch(error => runtime.log.warn(`notes: hidden turn failed: ${describeError(error)}`));
     } else if (runtime.pendingTurn) {
       this.requestTurn(id);
+    } else if (this.missedWhileWorking(id, runtime)) {
+      this.requestTurn(id, false, true);
     }
+    runtime.promptedThisWork = false;
+  }
+
+  private missedWhileWorking(id: string, runtime: AgentRuntime): boolean {
+    if (!this.settings.missedMessagesNotice || !runtime.promptedThisWork || runtime.missedNotice || runtime.workCancelled) return false;
+    const participant = this.participants.get(id);
+    if (!participant || participant.muted || participant.status === "error" || this.focused || this.recordHold) return false;
+    if (!this.missedChat(id, runtime).length) return false;
+    if (this.hops >= this.hopLimit) return false;
+    this.hops += 1;
+    this.push(this.roomEvent());
+    return true;
+  }
+
+  private missedChat(id: string, runtime: AgentRuntime): ChatMessage[] {
+    return this.messages.filter(m => m.kind === "chat" && m.from !== id && m.audience !== "human" && !m.streaming && m.seq > runtime.lastSeenSeq);
   }
 
   private async runTurnInner(id: string, participant: Participant, runtime: AgentRuntime): Promise<void> {
@@ -3735,14 +4033,19 @@ export class Room extends EventEmitter {
     const unreadAll = this.messages.filter(
       (m) => m.kind !== "hidden" && m.audience !== "human" && m.seq > runtime.lastSeenSeq && (m.kind === "system" || m.from !== id || m.seq <= runtime.replayOwnUntilSeq),
     );
-    if (!unreadAll.some((m) => m.kind === "chat" || m.wakes) && !this.automationTasks.has(id)) return;
+    if (!unreadAll.some((m) => m.kind === "chat" || m.wakes) && !this.automationTasks.has(id) && !this.repairTasks.has(id)) return;
+    const missed = runtime.missedNotice && !this.automationTasks.has(id) && !this.repairTasks.has(id) ? this.missedChat(id, runtime).length : 0;
+    runtime.missedNotice = false;
+    runtime.promptedThisWork = !missed;
     const cap = this.settings.backlogCap;
-    const omitted = Math.max(0, unreadAll.length - cap);
-    const unread = omitted ? unreadAll.slice(omitted) : unreadAll;
-    this.registerPendingBodies(participant, unreadAll);
+    const omitted = missed ? 0 : Math.max(0, unreadAll.length - cap);
+    const unread = missed ? [] : omitted ? unreadAll.slice(omitted) : unreadAll;
+    if (!missed) this.registerPendingBodies(participant, unreadAll);
     const supplied = bodyRefs(unread);
-    runtime.turnStartSeq = runtime.lastSeenSeq;
-    runtime.lastSeenSeq = this.seq;
+    if (!missed) {
+      runtime.turnStartSeq = runtime.lastSeenSeq;
+      runtime.lastSeenSeq = this.seq;
+    }
 
     const persona = this.personaOf(participant);
     const roster = this.roster();
@@ -3763,7 +4066,8 @@ export class Room extends EventEmitter {
 
     const notes = [...runtime.headerNotes];
     runtime.headerNotes = [];
-    if (briefReason && overThreshold(runtime.lastUsed, participant.contextSize ?? 0)) runtime.notesDue = true;
+    if (missed) notes.push(`${missed} message${missed === 1 ? "" : "s"} arrived while you were working; none was addressed to you. Read ${missed === 1 ? "it" : "them"} with check_room if the conversation may concern you, then answer or reply [silent]. Either way ${missed === 1 ? "it arrives" : "they arrive"} again with your next turn.`);
+    if (briefReason && overThreshold(runtime.lastUsed, participant.contextSize ?? 0)) this.askForNotes(runtime);
     runtime.notesAskedThisTurn = runtime.notesDue;
     if (runtime.notesDue) notes.push(NOTES_REQUEST);
     if (briefReason && runtime.firstTurnDone) {
@@ -3781,7 +4085,7 @@ export class Room extends EventEmitter {
     for (const s of attached) {
       notes.push(s.invokedBy ? `${s.invokedBy} invoked your skill "${s.name}"; its instructions are attached below, follow them` : `skill "${s.name}" attached below as you asked; the same messages follow`);
     }
-    const offerHistoryNotice = runtime.historyNoticePending && skillsForPrompt?.channel === "tool" && !this.readOnly;
+    const offerHistoryNotice = !missed && runtime.historyNoticePending && skillsForPrompt?.channel === "tool" && !this.readOnly;
     if (offerHistoryNotice) {
       const firstShownSeq = Math.min(...unread.map(m => m.seq));
       const earlier = this.messages.reduce((count, m) => count + Number(
@@ -3798,7 +4102,7 @@ export class Room extends EventEmitter {
     const backlogQuotes = (m: ChatMessage): BacklogQuote[] | undefined =>
       m.quotes && m.quotes.length ? m.quotes.map((q) => ({ n: q.n, seq: q.seq, fromName: q.fromName, ts: q.ts, text: q.text })) : undefined;
     const prompt = composePrompt({
-      brief: delivery.brief ? buildBrief(settings, persona, roster, runtime.notesForBrief ?? (participant.notes && (participant.notesSeq ?? -1) >= runtime.lastBriefSeq ? participant.notes : undefined), skillsForPrompt) : undefined,
+      brief: delivery.brief ? buildBrief(settings, persona, roster, this.notesForBrief(participant, runtime), skillsForPrompt) : undefined,
       roomRules: delivery.roomRules ? instructionBlock("room-rules", contents.roomRules) : undefined,
       vibio: delivery.vibio ? instructionBlock("vibio", contents.vibio) : undefined,
       header: buildHeader(settings, persona, roster, this.hops, notes, skillsForPrompt),
@@ -3829,7 +4133,7 @@ export class Room extends EventEmitter {
     }
     if (delivery.brief) {
       runtime.lastBriefSeq = this.seq;
-      runtime.notesForBrief = null;
+      runtime.resumeNotes = null;
       participant.briefsSent = (participant.briefsSent ?? 0) + 1;
     }
     runtime.firstTurnDone = true;
@@ -3838,6 +4142,12 @@ export class Room extends EventEmitter {
 
     const blocks = this.promptBlocks(prompt, runtime);
     const automation = this.automationTasks.get(id);
+    for (const task of this.repairTasks.get(id) ?? []) {
+      if (task.delivered) continue;
+      const text = this.repairTaskBlock(task);
+      task.delivered = true;
+      if (text) blocks.push({ type: "text", text });
+    }
     if (automation) blocks.unshift({ type: "text", text: `<automation-task>\nSaved by ${this.humanName}: ${automation.run.job.name}\n${automation.run.job.text}\n\nThis task is assigned to you using this room's context and existing permissions. Your final reply will be shown in the room without waking other participants. Finish with the result, or [silent] if there is nothing to report.\n</automation-task>` });
     const retry = await this.executeTurn(participant, runtime, blocks, null, false, offerHistoryNotice, supplied);
     if (retry) {
@@ -3867,6 +4177,7 @@ export class Room extends EventEmitter {
     const id = participant.id;
     runtime.turnActive = true;
     runtime.usageSeenThisTurn = false;
+    runtime.fixedDiagramThisTurn = false;
     this.watchForSilence();
     participant.status = "thinking";
     participant.statusDetail = undefined;
@@ -4040,7 +4351,7 @@ export class Room extends EventEmitter {
       runtime.notesMisses += 1;
       if (runtime.notesMisses >= 2) {
         runtime.notesMisses = 0;
-        if (!cancelled) runtime.notesPending = true;
+        if (!cancelled) this.askForNotes(runtime, "hidden turn");
       }
     }
 
@@ -4087,7 +4398,7 @@ export class Room extends EventEmitter {
         this.postRoomEvent(stoppedByHuman
           ? `${participant.name} was stopped by ${this.humanName}${stoppedWork(draft)}.`
           : `${participant.name}'s agent ended the turn${stoppedWork(draft)}.`, undefined, false, { tone: "attention" });
-      } else {
+      } else if (!runtime.fixedDiagramThisTurn) {
         this.postSystem(`${participant.name} read the room and has nothing to add.`);
       }
       return null;
@@ -4264,7 +4575,8 @@ export class Room extends EventEmitter {
     runtime.briefPending = `context shrank from ${runtime.lastUsed} to ${used} tokens (compaction?)`;
     runtime.log.info(`usage dropped ${runtime.lastUsed} -> ${used}; full instructions scheduled`);
     participant.contextEvent = { kind: "compacted", at: Date.now(), used, size };
-    runtime.notesDue = overThreshold(used, size);
+    runtime.notesDue = false;
+    if (overThreshold(used, size)) this.askForNotes(runtime);
     this.postSystem(`${participant.name} compacted its context (${Math.round(runtime.lastUsed / 1000)}k → ${Math.round(used / 1000)}k tokens); the room instructions are re-sent with its next turn${participant.notes ? ", with its notes" : ""}.`, "human", false, { tone: "attention" });
   }
 
@@ -4358,10 +4670,13 @@ export class Room extends EventEmitter {
         if (u.cost) participant.cost = { amount: u.cost.amount, currency: u.cost.currency };
         this.checkForCompaction(participant, runtime, u.used, u.size);
         if (crossedThreshold(runtime.lastUsed, u.used, u.size)) {
-          runtime.notesDue = true;
+          const asked = this.askForNotes(runtime);
           participant.contextEvent = { kind: "threshold", at: Date.now(), used: u.used, size: u.size };
-          this.postSystem(`${participant.name} is at ${Math.round((100 * u.used) / u.size)}% of its context; it will leave notes with its next reply. You can respawn it with memory from its panel.`, "human", false, { tone: "attention" });
-          runtime.log.info(`context at ${u.used}/${u.size}: notes due`);
+          const percent = Math.round((100 * u.used) / u.size);
+          this.postSystem(asked
+            ? `${participant.name} is at ${percent}% of its context; it will leave notes with its next reply. You can respawn it with memory from its panel.`
+            : `${participant.name} is at ${percent}% of its context. You can take its notes or respawn it with memory from its panel.`, "human", false, { tone: "attention" });
+          runtime.log.info(`context at ${u.used}/${u.size}: ${asked ? "notes due" : "automatic notes are off"}`);
         }
         runtime.lastUsed = u.used;
         this.push({ type: "participant", participant });
@@ -4413,6 +4728,7 @@ export class Room extends EventEmitter {
         options: isWrappedRoomCall(params.toolCall, runtime?.turn?.message.toolCalls?.find(t => t.toolCallId === params.toolCall.toolCallId))
           ? params.options.filter(option => option.kind !== "allow_always") : params.options,
         ts: Date.now(),
+        afterSeq: this.seq,
         resolve,
       };
       this.permissions.set(entry.key, entry);
@@ -4590,7 +4906,7 @@ export class Room extends EventEmitter {
     const activity = new Map(this.whoIsBusy().map(p => [p.name, p.line]));
     return [...this.participants.values()]
       .filter((p) => p.status !== "left" && p.status !== "unstaffed")
-      .map((p) => ({ name: p.name, kind: p.kind, vendor: p.agentVendor ?? p.agentLabel, tagline: p.tagline || undefined, muted: p.muted || undefined, activity: activity.get(p.name) }));
+      .map((p) => ({ name: p.name, kind: p.kind, vendor: p.agentVendor ?? p.agentLabel, tagline: p.tagline || undefined, muted: p.muted || undefined, activity: activity.get(p.name), formerNames: p.formerNames?.length ? p.formerNames : undefined }));
   }
 
   private parseMentions(text: string): { ids: string[]; names: string[] } {
@@ -4620,11 +4936,11 @@ export class Room extends EventEmitter {
     return undefined;
   }
 
-  private postRoomEvent(text: string, audience?: "agents" | "human", wakes?: boolean, details?: ChatMessage["details"], bodyEdit?: BodyEdit): void {
-    this.postSystem(text, audience, wakes, { ...(details ?? {}), about: "room" }, bodyEdit);
+  private postRoomEvent(text: string, audience?: "agents" | "human", wakes?: boolean, details?: ChatMessage["details"], bodyEdit?: BodyEdit): ChatMessage {
+    return this.postSystem(text, audience, wakes, { ...(details ?? {}), about: "room" }, bodyEdit);
   }
 
-  private postSystem(text: string, audience?: "agents" | "human", wakes?: boolean, details?: ChatMessage["details"], bodyEdit?: BodyEdit): void {
+  private postSystem(text: string, audience?: "agents" | "human", wakes?: boolean, details?: ChatMessage["details"], bodyEdit?: BodyEdit): ChatMessage {
     const message: ChatMessage = {
       id: randomUUID(),
       seq: ++this.seq,
@@ -4641,6 +4957,7 @@ export class Room extends EventEmitter {
     if (details) message.details = details;
     if (bodyEdit) message.bodyEdit = bodyEdit;
     this.commit(message);
+    return message;
   }
 
   async setDir(dir: string): Promise<{ dir: string; restarted: string[] }> {

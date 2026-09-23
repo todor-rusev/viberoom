@@ -102,7 +102,7 @@
     build: ({ hue, letter, emoji, icon, size, title }, ui) => {
       const kind = icon ? "accent" : emoji ? "emoji" : "letter";
       const style = icon ? null : `--room-hue:${Number(hue) || 0};--room-hue-2:${((Number(hue) || 0) + 30) % 360}`;
-      return ui.h("span", { "data-kind": kind, "data-size": size !== "md" ? size : null, style, title }, icon ? ui.icon(icon) : emoji ? emoji : (letter || "?").slice(0, 1).toUpperCase());
+      return ui.h("span", { "data-kind": kind, "data-size": size !== "md" ? size : null, style, title }, icon ? ui.icon(icon) : ui.h("span", { class: "rm-glyph" }, emoji || (letter || "?").slice(0, 1).toUpperCase()));
     },
     states: ["rest"],
     samples: [
@@ -126,6 +126,24 @@
     samples: [
       { label: "one vibemate", props: { label: "Maken started from here", detail: "but it can still read the earlier messages." } },
       { label: "two", props: { label: "Maken and Sam started from here", detail: "Earlier messages remain in the room history." } },
+    ],
+  });
+
+  UI.define("skeleton", {
+    group: "skeleton",
+    describe: "Grey bones in the shape of the content that is on its way (a message body, the conversation), with one soft band of light sweeping over them. Decorative: the words that say what loads stay beside it for screen readers.",
+    props: {
+      lines: { type: "number", default: 3, note: "how many bones, 1–6; each is a little shorter than the one before" },
+      shape: { type: "enum", values: ["lines", "bubble"], default: "lines", note: "bubble: the bones sit on a message-shaped card with a face beside it" },
+    },
+    build: ({ lines, shape }, ui) => {
+      const bones = Array.from({ length: Math.max(1, Math.min(6, Math.round(Number(lines) || 3))) }, () => ui.h("i", {}));
+      return ui.h("span", { "aria-hidden": "true", "data-shape": shape }, shape === "bubble" ? [ui.h("b", { class: "face" }), ui.h("span", { class: "card" }, bones)] : bones);
+    },
+    states: ["rest"],
+    samples: [
+      { label: "three lines", props: { lines: 3 } },
+      { label: "a message on its way", props: { lines: 2, shape: "bubble" } },
     ],
   });
 

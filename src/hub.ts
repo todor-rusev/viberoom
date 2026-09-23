@@ -18,14 +18,17 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Logger, type TranscriptMode } from "./log.js";
 import { HISTORY_DB_FILE, HistoryStore, type SearchHit, type SearchQuery } from "./history-store.js";
+import { NameDirectory, namesInQuery } from "./name-directory.js";
 
 const TRANSCRIPT_MODES: readonly TranscriptMode[] = ["off", "errors", "full"];
 import { DEFAULT_EDITOR_SETTINGS, type EditorSettings } from "./open.js";
-import { listRecipes, publicRecipes, type AgentTypeId } from "./recipes.js";
+import { getRecipe, listRecipes, publicRecipes, type AgentTypeId } from "./recipes.js";
 import { AgentManager, type AgentUpdatesView } from "./agent-manager.js";
 import type { LoginFlows, LoginFlow } from "./login-flow.js";
 import { DEFAULT_ROOM_SETTINGS, type RoomSettings } from "./persona.js";
 import { CREATED_MODE, type NewRoomPlan } from "./new-room.js";
+import { OptionCatalog } from "./option-catalog.js";
+import { recipeStamp } from "./install-stamp.js";
 import { Room, type ChatMessage, type DiscoveredOptions, type RoomEvent, type SkillsBridge, type StoredParticipant, type RoomRecovery } from "./room.js";
 import { SkillLibrary, type SkillDraft, type SkillMeta } from "./skills.js";
 import { TemplateLibrary, roomSettingsFromTemplate, type RoomTemplate } from "./templates.js";
@@ -224,7 +227,7 @@ export class Hub extends EventEmitter {
   private readonly staleHistoryRooms = new Set<string>();
   settings: ProgramSettings;
   private readonly log: Logger;
-  private readonly optionCache = new Map<string, DiscoveredOptions>();
+  private readonly optionCatalog = new OptionCatalog();
   private readonly mcpTokens = new Map<string, McpTokenEntry>();
   private hubUrl: string | null = null;
   private run: { id: string; build: string } | null = null;
@@ -752,7 +755,7 @@ export class Hub extends EventEmitter {
     const room = this.getRoom(roomId), store = this.automations?.store;
     if (room.readOnly) throw new Error("Resolve the room's history decision before accessing automations.");
     if (!store) return { available: false, error: this.automationsUnavailable, jobs: [], runs: [], proposals: [] };
-    return { available: true, error: this.automations!.error, participants: [...room.participants.values()].filter(p => p.kind === "agent" && p.status !== "left").map(p => ({ id: p.id, name: p.name, status: p.status, muted: !!p.muted })), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, now: Date.now(), jobs: store.jobs(room.uuid),
+    return { available: true, error: this.automations!.error, participants: [...room.participants.values()].filter(p => p.kind === "agent" && p.status !== "left").map(p => ({ id: p.id, name: p.name, status: p.status, muted: !!p.muted, avatar: p.avatar, color: p.color, colorSlot: p.colorSlot })), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, now: Date.now(), jobs: store.jobs(room.uuid),
       runs: store.runs(room.uuid).map(run => ({ ...run, stopping: this.automations!.stopping(run.id) })),
       proposals: store.proposals(room.uuid).filter(proposal => proposal.status === "pending") };
   }
@@ -766,6 +769,12 @@ export class Hub extends EventEmitter {
     this.validateAutomationTarget(room, parsed.targetId);
     const job = this.automationStore().save(room.uuid, parsed, id, revision, Date.now());
     this.automationsChanged(); return job;
+  }
+  private automationTargets(roomUuid: string): string[] {
+    const store = this.automations?.store;
+    if (!store) return [];
+    const definitions = [...store.jobs(roomUuid), ...store.proposals(roomUuid).filter((p) => p.status === "pending").map((p) => p.definition)];
+    return definitions.flatMap((d) => (d.targetId ? [d.targetId] : []));
   }
   private validateAutomationTarget(room: Room, targetId: string | null): void {
     if (room.readOnly) throw new Error("Resolve the room's history decision before changing automations.");
@@ -1155,11 +1164,13 @@ export class Hub extends EventEmitter {
     const kinds = (params.kinds ?? "chat").split(",").map((k) => k.trim()).filter((k): k is "chat" | "system" => k === "chat" || k === "system");
     const rooms = params.rooms && params.rooms !== "all" ? params.rooms.split(",").map((r) => r.trim()).filter((r) => this.rooms.has(r)) : undefined;
     const sort = params.sort === "newest" || params.sort === "oldest" ? params.sort : "rank";
+    const people = this.nameDirectory(rooms ?? [...this.rooms.keys()]);
+    const author = params.author?.trim();
     const query: SearchQuery = {
       text: params.q ?? "",
       rooms,
       kinds: kinds.length ? kinds : ["chat"],
-      author: params.author?.trim() || undefined,
+      authors: author ? people.holders(author).map((h) => ({ roomId: h.roomId, id: h.id })) : undefined,
       sort,
       limit: clampInt(params.limit, 40, 1, 200),
       offset: clampInt(params.offset, 0, 0, 100_000),
@@ -1168,9 +1179,14 @@ export class Hub extends EventEmitter {
     };
     const stale = this.staleHistoryRoomsAfterRetry(rooms ?? this.rooms.keys()).map((id) => this.rooms.get(id)?.name ?? id);
     const result = this.history.search(query);
+    const names = namesInQuery(params.q ?? "", people).map(({ term, holder, others }) => ({ term, roomId: holder.roomId, now: holder.now ?? null, others }));
     return {
       ...result,
-      hits: result.hits.map((h) => ({ ...h, roomName: this.rooms.get(h.roomId)?.name ?? h.roomId })),
+      hits: result.hits.map((h) => {
+        const now = people.now(h.roomId, h.from);
+        return { ...h, roomName: this.rooms.get(h.roomId)?.name ?? h.roomId, ...(now && now !== h.fromName ? { fromNow: now } : {}) };
+      }),
+      ...(names.length ? { names } : {}),
       roomsSearched: rooms ? rooms.length : this.rooms.size,
       ...(stale.length ? { stale } : {}),
     };
@@ -1238,6 +1254,11 @@ export class Hub extends EventEmitter {
       if (this.staleHistoryRooms.has(id)) stale.push(id);
     }
     return stale;
+  }
+
+  nameDirectory(roomIds: string[]): NameDirectory {
+    const current = roomIds.flatMap((id) => [...(this.rooms.get(id)?.participants.values() ?? [])].map((p) => ({ roomId: id, id: p.id, name: p.name })));
+    return new NameDirectory(this.history?.nameUses(roomIds) ?? [], current);
   }
 
   roomsForAgentSearch(roomId: string): { id: string; name: string }[] {
@@ -1311,10 +1332,11 @@ export class Hub extends EventEmitter {
       programFoldAfter: this.settings.foldAfter,
       settings: { ...this.settings.roomDefaults, ...settings },
       log: this.log.child(`room:${id}`),
-      optionCache: this.optionCache,
+      optionCatalog: this.optionCatalog,
       skills: this.skillsBridge,
       history: this.history,
       onHistoryFailure: (roomId) => this.staleHistoryRooms.add(roomId),
+      heldParticipantIds: () => this.automationTargets(uuid),
     });
     room.on("event", (event: RoomEvent) => {
       this.emit("event", { type: "room.event", roomId: id, event } satisfies HubEvent);
@@ -1462,6 +1484,19 @@ export class Hub extends EventEmitter {
     });
     this.emit("event", { type: "templates" } satisfies HubEvent);
     return saved;
+  }
+
+  async agentOptions(recipeId: string, refresh: boolean): Promise<DiscoveredOptions> {
+    const rooms = [...this.rooms.values()];
+    if (!rooms.length) throw new Error("create a room first");
+    this.noteInstallation(recipeId);
+    return rooms[0].discoverOptions(recipeId, refresh);
+  }
+
+  noteInstallation(recipeId: string): void {
+    const recipe = getRecipe(recipeId);
+    const stamp = recipe && !recipe.unavailableReason ? recipeStamp(recipe) : null;
+    for (const room of this.rooms.values()) room.noteInstallation(recipeId, stamp);
   }
 
   getRoom(id: string): Room {
@@ -1650,7 +1685,8 @@ function writeJson(path: string, value: unknown): void {
 }
 
 export interface HistorySearchResponse {
-  hits: Array<SearchHit & { roomName: string }>;
+  hits: Array<SearchHit & { roomName: string; fromNow?: string }>;
+  names?: { term: string; roomId: string; now: string | null; others: string[] }[];
   query: string;
   usedTrigram: boolean;
   roomsSearched?: number;

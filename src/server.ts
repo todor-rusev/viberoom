@@ -548,7 +548,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       delete params.token;
       const args = parseAgentSearchArgs(params, true);
       sendJson(res, 200, target.room.searchHistoryForAgent(target.participantId, args,
-        () => searchAgentHistory(hub.historyForAgent(target.room.id), target.room, params, () => hub.roomsForAgentSearch(target.room.id))));
+        () => searchAgentHistory(hub.historyForAgent(target.room.id), target.room, params, () => hub.roomsForAgentSearch(target.room.id), (ids) => hub.nameDirectory(ids))));
       return;
     }
 
@@ -618,11 +618,15 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    const recipeInstallation = req.method === "POST" && path.match(/^\/api\/recipes\/([^/]+)\/installation-check$/);
+    if (recipeInstallation) {
+      hub.noteInstallation(decodeURIComponent(recipeInstallation[1]));
+      sendJson(res, 200, { ok: true });
+      return;
+    }
     const recipeOptions = req.method === "GET" && path.match(/^\/api\/recipes\/([^/]+)\/options$/);
     if (recipeOptions) {
-      const anyRoom = [...hub.rooms.values()][0];
-      if (!anyRoom) throw new Error("create a room first");
-      const info = await anyRoom.discoverOptions(decodeURIComponent(recipeOptions[1]), url.searchParams.get("refresh") === "1");
+      const info = await hub.agentOptions(decodeURIComponent(recipeOptions[1]), url.searchParams.get("refresh") === "1");
       sendJson(res, 200, info);
       return;
     }
@@ -1186,6 +1190,16 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (path === "/api/mcp/diagram") {
+      const target = hub.resolveMcpToken(String(body.token ?? ""));
+      if (!target) {
+        sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+        return;
+      }
+      sendJson(res, 200, target.room.fixDiagramForAgent(target.participantId, Number(body.message), Number(body.block), String(body.source ?? "")));
+      return;
+    }
+
     if (path === "/api/mcp/skills" || path === "/api/mcp/attach") {
       const target = hub.resolveMcpToken(String(body.token ?? ""));
       if (!target) {
@@ -1409,6 +1423,13 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    const diagramFailure = path.match(/^\/api\/rooms\/([^/]+)\/messages\/([^/]+)\/diagram$/);
+    if (diagramFailure) {
+      const room = hub.getRoom(decodeURIComponent(diagramFailure[1]));
+      sendJson(res, 200, room.reportDiagramFailure(decodeURIComponent(diagramFailure[2]), Number(body.block), String(body.source ?? ""), String(body.error ?? "")));
+      return;
+    }
+
     const messageEdit = path.match(/^\/api\/rooms\/([^/]+)\/messages\/([^/]+)\/edit$/);
     if (messageEdit) {
       const room = hub.getRoom(decodeURIComponent(messageEdit[1]));
@@ -1419,7 +1440,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
-    const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|nudge|remove|config|persona|reconnect|mute|unmute|respawn|retry|staff|restaff|notes|take-notes)$/);
+    const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|nudge|remove|config|persona|reconnect|mute|unmute|respawn|retry|staff|restaff|notes|take-notes|restart-installed)$/);
     if (participantAction) {
       const room = hub.getRoom(decodeURIComponent(participantAction[1]));
       const id = decodeURIComponent(participantAction[2]);
@@ -1478,6 +1499,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         const replay = body.replay === undefined || body.replay === null || body.replay === "" ? undefined : Number(body.replay);
         await room.reconnect(id, { mode, replay: replay !== undefined && Number.isFinite(replay) ? Math.max(0, Math.min(500, Math.round(replay))) : undefined });
       }
+      else if (action === "restart-installed") await room.restartOnInstalled(id);
       else if (action === "mute") room.setMuted(id, true);
       else if (action === "unmute") room.setMuted(id, false);
       else if (action === "persona") {

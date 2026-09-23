@@ -2,6 +2,8 @@
 
 export const TOOL_NAME = "load_skill";
 
+export const DIAGRAM_SOURCE_MAX = 32 * 1024;
+
 export const SKILL_FIELDS = {
   name: { type: "string", description: "short lowercase hyphenated name; it becomes the /command (1-32 letters, digits, _ or -)" },
   description: { type: "string", description: "what the skill does and when to use it (one or two sentences; agents decide from this alone; max 300 characters)" },
@@ -318,7 +320,7 @@ export const OPERATIONS: OperationSpec[] = [
         query: { type: "string", minLength: 1, pattern: "\\S", description: "words, quoted phrase or prefix* to find" },
         rooms: { type: "string", enum: ["this", "all"], description: "optional: this room only (default), or all the rooms open to you" },
         kinds: { type: "string", enum: ["chat", "chat,system"], description: "optional: chat by default; include room events explicitly" },
-        author: { type: "string", description: "optional: the writer's name" },
+        author: { type: "string", description: "optional: the writer's name, current or earlier: finds what that participant wrote under every name it has borne" },
         limit: { type: "integer", minimum: 1, maximum: 10, default: 3 },
       },
       required: ["query"],
@@ -345,6 +347,23 @@ export const OPERATIONS: OperationSpec[] = [
       },
     },
     annotations: { readOnlyHint: true },
+  },
+  {
+    name: "fix_diagram",
+    exposure: "deferred",
+    summary: "Replace the code of a broken mermaid diagram in your own message when the room asks you to repair it.",
+    description:
+      "When the room could not draw a ```mermaid diagram of your message, it asks you in a <diagram-repair> block with the message number, the diagram's number and Mermaid's error. Send the corrected code here: the room puts it in place of the broken one in the same message, and the human sees one message with a working diagram. Only the author can fix a diagram, and only one the room is waiting on. source is the diagram's code alone, without the ``` fence.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        message: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "the message number, the N of #N" },
+        block: { type: "integer", minimum: 1, maximum: 1000, description: "the diagram's number in that message, from 1" },
+        source: { type: "string", minLength: 1, maxLength: DIAGRAM_SOURCE_MAX, description: "the corrected diagram code, without the ``` fence" },
+      },
+      required: ["message", "block", "source"],
+    },
+    annotations: { idempotentHint: false },
   },
   {
     name: "read_message",

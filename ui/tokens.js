@@ -335,9 +335,11 @@
     fs2xl: "calc(22px * var(--fs-scale))",
   };
   const motion = {
-    tFast: "120ms", tBase: "200ms", tSlow: "320ms",
+    tFast: "120ms", tBase: "200ms", tSlow: "320ms", tEnter: "380ms", tBreath: "2800ms", tShimmer: "1600ms", tGesture: "640ms", stagger: "32ms",
     easeOut: "cubic-bezier(0.2, 0.8, 0.2, 1)",
     easePop: "cubic-bezier(0.34, 1.56, 0.64, 1)",
+    easeSpring: "linear(0, 0.009, 0.035 2.1%, 0.141 4.4%, 0.281 6.7%, 0.723 12.9%, 0.938 16.7%, 1.017 19.4%, 1.077 22%, 1.121 24.8%, 1.138 27.6%, 1.132 30.4%, 1.089 36.1%, 1.027 43.7%, 1.003 49.9%, 0.992 57.7%, 1.001 84.4%, 1)",
+    easeSoft: "cubic-bezier(0.45, 0, 0.55, 1)",
   };
 
   const elementsOf = (p) => {
@@ -798,6 +800,17 @@
       labelTracking: "0px",
       labelShadow: "none",
     },
+    skeleton: {
+      bone: p.lav,
+      sweep: `linear-gradient(90deg, transparent, ${alpha(p.lav2, 0.9)} 50%, transparent)`,
+      radius: "calc(6px * var(--r-scale))",
+      gap: "8px",
+      lineH: "0.72em",
+    },
+    breath: {
+      ring: alpha(p.primary, 0.22),
+      glow: alpha(p.primary, 0.3),
+    },
     numberField: {
       stepW: "22px",
       stepInk: p.muted,
@@ -970,7 +983,7 @@
   const plainWants = {
     shape: { rScale: "0.85", rCtlMin: "99px" },
     type: { font: '"Manrope", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif', mono: '"IBM Plex Mono", ui-monospace, Consolas, "Courier New", monospace', lineHeight: "1.6" },
-    motion: { tFast: "100ms", tBase: "160ms", tSlow: "240ms" },
+    motion: { tFast: "100ms", tBase: "160ms", tSlow: "240ms", tEnter: "300ms", tGesture: "520ms" },
     elevation: (p) => ({
       ...flat,
       edge: `0 0 0 1px ${alpha(p.ink, 0.07)}`,
@@ -1110,7 +1123,7 @@
     terminal: look("terminal", "Terminal", "dark", terminal, {
       shape: { rScale: "0" },
       type: { font: type.mono },
-      motion: { tFast: "0ms", tBase: "0ms", tSlow: "0ms" },
+      motion: { tFast: "0ms", tBase: "0ms", tSlow: "0ms", tEnter: "0ms", tBreath: "0ms", tShimmer: "0ms", tGesture: "0ms", stagger: "0ms" },
       elevation: flat,
       canvas: (p) => ({ gradCanvas: p.bg, canvasPattern: "none", canvasPatternSize: "0 0" }),
       elements: (p) => ({
@@ -1337,7 +1350,7 @@
       palette: "the hues of the look, named after what they look like, never after what they are for; every element is derived from them, so a hue changed here reaches every place that wears it",
       shape: "corners: rScale multiplies every radius in the window (0 square, 1 as designed, 1.6 very round); rCtlMin is the least radius of a button, an icon button or a chip (0px keeps each one's own, 99px makes every control a pill); rXs…rPill are the named radii, each ONE length or calc() (they are used inside calc() and max(), so a multi-corner value breaks every corner)",
       type: "text: font and mono are the family stacks (in a spec: an id from fonts, or a stack), lineHeight the running text's, fsScale multiplies every text size, fsXs…fs2xl are the named sizes",
-      motion: "the durations (tFast, tBase, tSlow; 0ms for none) and easings of the transitions",
+      motion: "the durations (tFast, tBase, tSlow, tEnter for an arrival, tBreath and tShimmer for the few loops, tGesture for the one gesture a glyph plays when the pointer arrives at its control, stagger between rows arriving together; 0ms for none) and easings (easeOut, easePop, easeSpring, easeSoft) of the transitions",
       elevation: "the shadows and the light: edge (a hair under a panel), shadowTile (a raised tile), shadowPop (a floating balloon), shadowPrimary (the glow under the accent), shadowDialog, shadowCard, shadowCtl and shadowCtlHover (a control at rest and under the pointer), shadowInset (a sunken thing), shadowSoft (a small raised thing), shadow / shadow1 / shadow2 (older names), bevel (a light laid over a raised surface: a gradient, or none), bevelPressed (the same when pressed), shadowRoom (room around a message for its shadow, 0px unless the shadows reach out)",
       canvas: "the chat's paper: gradCanvas (the paint behind the messages: a colour, or gradients), canvasPattern and canvasPatternSize (a pattern over it, or none / 0 0), gradPage (the paper behind the panels), sbW / sbThumb / sbThumbHover (the scrollbar)",
       elements: "every UI element and what it wears: the group is the element, the key the part (bg, ink, hoverBg, border, shadow, radius…); a key ending in Ink is written on the key of the same stem ending in Bg (or on bg), and the pair must read at 3:1 or better; a key whose value is none / 0px / transparent is structure a look may switch on (a border, a shadow, a lift, capitals)",
@@ -1457,6 +1470,8 @@
       logoTile: "logo-tile: a vendor's mark on a tile (bg, ink, the badge in a face's corner, the unplugged mark, shadow, radius / radiusSm / radiusLg / radiusBadge)",
       unseenLine: "unseen-line: a vibemate's starting position and access to earlier history (ink, bg, the line's drawing, the label's border / case / tracking / shadow)",
       numberField: "number-field: a number with its own steps",
+      skeleton: "skeleton: the shape of content still loading (the bones' paper, the sweeping band of light, the bones' radius, gap and height)",
+      breath: "the calm pulse around a reply being written (ring, glow)",
       adjustRow: "adjust-row: one thing the human may adjust in a look, in Settings",
       rowButton: "row-button: a small action on a vibemate's row",
       hubRow: "hub-row: a line the room writes (ink, tones, the one that leads somewhere: actionBg / actionShadow; prefix / prefixGap: what stands before the line, none or a prompt)",

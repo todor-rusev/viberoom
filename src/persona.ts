@@ -59,6 +59,8 @@ export interface RoomSettings {
   restartMessage: string;
   reconnectMode: "inherit" | "load" | "replay";
   replyDelay: number;
+  autoNotes: boolean;
+  missedMessagesNotice: boolean;
 }
 
 export type SettingSpec = { doc: string; brief: boolean; agent: boolean } & (
@@ -103,6 +105,8 @@ export const ROOM_SETTINGS_SPEC: Record<keyof RoomSettings, SettingSpec> = {
   agentsWakeEachOther: { kind: "boolean", default: true, brief: true, agent: true, doc: "A vibemate's message without @ wakes the others, as the human's does; off: only @Name wakes a vibemate." },
   replyDelay: { kind: "number", min: 0, max: 120, default: 4, brief: false, agent: true, doc: "Seconds (a random 0..N) every vibemate waits before a turn, so replies cross less; a vibemate's own delay overrides it." },
   transcripts: { kind: "enum", values: ["inherit", "off", "errors", "full"], default: "inherit", brief: false, agent: false, doc: "Save diagnostic details to investigate problems with a vibemate: use the app setting, turn logging off, save details when something fails, or record all activity. Conversations are saved with any option." },
+  missedMessagesNotice: { kind: "boolean", default: false, brief: false, agent: false, doc: "After a vibemate's turn, if messages arrived meanwhile and none woke it, it is told how many and may read them with check_room; they still arrive with its next turn. Each notice counts as one hop." },
+  autoNotes: { kind: "boolean", default: true, brief: false, agent: true, doc: "The hub asks a vibemate for notes on its own work when its context fills past 80% or is compacted, so a restart can carry them. Off: notes are written only when the human asks (Take notes now, a change of role or of coding agent)." },
   foldAfter: { kind: "integer-or-null", min: 100, max: 20_000, default: null, brief: false, agent: false, doc: "How many of the newest messages the window draws at once; older ones wait above a ceiling and come in as you scroll up, pinned ones always shown. Empty means the app setting." },
 };
 
@@ -194,6 +198,14 @@ export interface RosterEntry {
   tagline?: string;
   muted?: boolean;
   activity?: string;
+  formerNames?: string[];
+}
+
+export const ROSTER_FORMER_NAMES = 2;
+
+function formerly(entry: RosterEntry): string {
+  const names = (entry.formerNames ?? []).slice(0, ROSTER_FORMER_NAMES);
+  return names.length ? `formerly ${names.join(", ")}` : "";
 }
 
 export const IMAGE_MARKER_PATTERN = /\[img\s+(\d+)\]/gi;
@@ -324,12 +336,15 @@ export function ensureDir(dir: string): string {
 
 function describeEntry(entry: RosterEntry, settings: RoomSettings): string {
   if (entry.kind === "human") {
-    return settings.humanDescription ? `${entry.name} (human, ${settings.humanDescription})` : `${entry.name} (human)`;
+    const human = ["human", settings.humanDescription, formerly(entry)].filter(Boolean);
+    return `${entry.name} (${human.join(", ")})`;
   }
   const parts = ["agent"];
   if (settings.showVendorInRoster && entry.vendor) parts.push(entry.vendor);
   if (entry.tagline) parts.push(`"${entry.tagline}"`);
   if (entry.muted) parts.push("muted");
+  const earlier = formerly(entry);
+  if (earlier) parts.push(earlier);
   return `${entry.name} (${parts.join(" · ")})`;
 }
 
@@ -366,7 +381,47 @@ function skillsSection(skills: SkillsForPrompt): string[] {
   return lines;
 }
 
-export function buildBrief(settings: RoomSettings, persona: Persona, roster: RosterEntry[], previousNotes?: string, skills?: SkillsForPrompt): string {
+export type NotesSource = "replay" | "fresh" | "load" | "live";
+
+export interface BriefNotes {
+  text: string;
+  source: NotesSource;
+  writtenAt?: number;
+  newerMessages?: number;
+}
+
+export function formatAge(ms: number): string {
+  const minutes = Math.floor(Math.max(0, ms) / 60_000);
+  const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  if (minutes < 1) return "less than a minute";
+  if (minutes < 60) return unit(minutes, "minute");
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return unit(hours, "hour");
+  return unit(Math.floor(hours / 24), "day");
+}
+
+export function renderBriefNotes(notes: BriefNotes, now = Date.now()): string[] {
+  const text = notes.text.trim();
+  const age = notes.writtenAt !== undefined ? formatAge(now - notes.writtenAt) : null;
+  if (notes.source === "load") {
+    return [`Notes you wrote${age ? ` ${age} ago` : " earlier"}; your loaded session is the source of truth.`, text];
+  }
+  if (notes.source === "live") {
+    return [`Your own notes, written${age ? ` ${age} ago` : ""} in this session (they may record what a compaction removed from your context):`, text];
+  }
+  const since = notes.newerMessages === undefined ? null
+    : notes.newerMessages === 0 ? "no room messages have arrived since"
+    : `${notes.newerMessages} room message${notes.newerMessages === 1 ? " has" : "s have"} arrived since`;
+  const written = `written by you${age ? ` ${age} ago` : ""}`;
+  const against = notes.source === "replay" ? "the replayed messages and, where it matters, the room's history" : "the room's history";
+  return [
+    `Notes from your previous session (${[written, since].filter(Boolean).join("; ")}):`,
+    text,
+    `They may be out of date. Before acting on them, check them against ${against}: a task listed there may be finished, taken over or cancelled. An open item in your notes is not a current request until the room confirms it.`,
+  ];
+}
+
+export function buildBrief(settings: RoomSettings, persona: Persona, roster: RosterEntry[], notes?: BriefNotes, skills?: SkillsForPrompt): string {
   const others = roster.filter((r) => r.name !== persona.name);
   const human = settings.humanName;
   const language =
@@ -409,6 +464,8 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
   lines.push("- Format: plain chat text; Markdown is rendered (lists, tables, code, bold), so use it lightly and skip headings. For a diagram, write a ```mermaid block; for tabular data, a Markdown table or a ```csv block: the room renders both. Name files by their absolute path: the human can click them, and .md / .csv files open right in the room.");
   lines.push("");
   lines.push(`Participants: ${others.length ? others.map((r) => describeEntry(r, settings)).join("; ") : "nobody else yet"}.`);
+  const self = roster.find((r) => r.name === persona.name);
+  if (self && formerly(self)) lines.push(`Older messages of this room call you by an earlier name: ${(self.formerNames ?? []).slice(0, ROSTER_FORMER_NAMES).join(", ")}.`);
   if (skills && (skills.items.length || skills.canCreate)) lines.push(...skillsSection(skills));
   lines.push("");
   lines.push(
@@ -422,9 +479,9 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
     }`,
   );
   if (skills?.channel === "tool") lines.push('Use search_history for earlier conversation (rooms: "all" includes shared rooms), then read_message with the result\'s room and seq for the full text; recent messages are searchable too.');
-  if (previousNotes && previousNotes.trim()) {
+  if (notes && notes.text.trim()) {
     lines.push("");
-    lines.push(`Notes from your previous session (written by you): ${previousNotes.trim()}`);
+    lines.push(...renderBriefNotes(notes));
   }
   lines.push("New room messages arrive automatically on your next turn, not while you work.");
   if (skills?.channel === "tool") lines.push("During long tasks, use check_room at meaningful checkpoints and before finishing; do not poll in a waiting loop. Other agents' unfinished replies are not delivered in <messages>; check_room with draft.name reads their visible draft, not a final reply.");

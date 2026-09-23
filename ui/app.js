@@ -66,7 +66,6 @@
     roomList: $("#room-list"),
     backToRooms: $("#back-to-rooms"),
     sideRoomName: $("#side-room-name"),
-    roomSettingsBtn: $("#room-settings-btn"),
     inviteBtn: $("#invite-btn"),
     roster: $("#roster"),
     participantsMe: $("#participants-me"),
@@ -161,6 +160,13 @@
     eraseError: $("#erase-error"),
     eraseSubmit: $("#erase-submit"),
   };
+  const composer = Composer.attach(els.input, {
+    resolveToken: (kind, n) => composerToken(kind, n),
+    resolveMention: (name) => composerMention(name),
+    onText: (text) => reconcileAttachments(text),
+    onChange: () => composerChanged(),
+    onPaste: (e) => pasteIntoComposer(e),
+  });
 
   const slowTasks = [];
   function busyLabel() {
@@ -422,8 +428,11 @@
   }
 
   window.Icons.install();
+  window.Icons.playOnHover(document);
   const ic = (name, cls) => window.Icons.svg(name, cls);
+  const rig = (name, cls) => window.Icons.rig(name, cls);
   document.querySelectorAll("[data-icon]").forEach((el) => (el.innerHTML = ic(el.dataset.icon)));
+  document.querySelectorAll("[data-rig]").forEach((el) => (el.innerHTML = rig(el.dataset.rig)));
 
 
   let stallNoticeAt = 0;
@@ -562,10 +571,12 @@
   function mermaidBlock(code) {
     return `<div class="mermaid-block" data-src="${code}"><div class="mm-out"><pre>${code}</pre></div><pre class="mm-code" hidden>${code}</pre><div class="mm-bar"><button type="button" class="mm-src">source</button><button type="button" class="mm-expand" title="See it big (zoom and drag)">${ic("maximize")}</button></div></div>`;
   }
-  function mentions(room, html) {
+  function mentions(room, html, addressed = []) {
     return html.replace(/(?<![\w.\/:])@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu, (m, name) => {
       if (name.toLowerCase() === "all") return `<span class="mention all">@${esc(name)}</span>`;
-      const p = findByName(room, name);
+      const lower = name.toLowerCase();
+      const meant = addressed.length ? room.participants.find((x) => addressed.includes(x.id) && [x.name, ...(x.formerNames || [])].some((n) => n.toLowerCase() === lower)) : null;
+      const p = meant || findByName(room, name);
       return p ? `<span class="mention" style="color:${colourOf(p)}">@${esc(name)}</span>` : m;
     });
   }
@@ -626,7 +637,7 @@
       },
     });
   }
-  function decorate(room, html) {
+  function decorate(room, html, addressed) {
     let inside = 0;
     let out = "";
     for (const part of html.split(/(<[^>]*>)/)) {
@@ -635,11 +646,11 @@
         const m = /^<(\/?)(pre|a)\b/i.exec(part);
         if (m) inside += m[1] ? -1 : 1;
         out += part;
-      } else out += inside > 0 ? part : mentions(room, linkify(part));
+      } else out += inside > 0 ? part : mentions(room, linkify(part), addressed);
     }
     return out;
   }
-  function renderStreamingWords(room, words, text) {
+  function renderStreamingWords(room, words, text, addressed) {
     if (holdsSelection(words)) return;
     let head = words.querySelector(":scope > .words-head");
     let tail = words.querySelector(":scope > .words-tail");
@@ -656,13 +667,13 @@
       const part = text.slice(done, cut + 2);
       const fences = (part.match(/```/g) || []).length;
       if ((words.streamFences + fences) % 2 === 0) {
-        head.insertAdjacentHTML("beforeend", renderText(room, part));
+        head.insertAdjacentHTML("beforeend", renderText(room, part, null, null, addressed));
         words.streamHeadText = text.slice(0, cut + 2);
         words.streamFences += fences;
         done = cut + 2;
       }
     }
-    tail.innerHTML = renderText(room, text.slice(done));
+    tail.innerHTML = renderText(room, text.slice(done), null, null, addressed);
   }
   let selectionDuringPatch = null;
   let textPress = null;
@@ -689,8 +700,8 @@
   function humanHoldsText() {
     return heldTextSelection || !!textPress;
   }
-  function renderText(room, text, images, quotes) {
-    let html = md ? decorate(room, md.parse(String(text == null ? "" : text))) : renderTextLight(room, text);
+  function renderText(room, text, images, quotes, addressed) {
+    let html = md ? decorate(room, md.parse(String(text == null ? "" : text)), addressed) : renderTextLight(room, text, addressed);
     if (images && images.length) html = imageRefs(html, images);
     if (quotes && quotes.length) html = quoteRefs(html, quotes);
     return html;
@@ -721,7 +732,7 @@
     );
   }
   const IMG_GLYPH = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="5.6" cy="6.4" r="1.4" fill="currentColor"/><path d="M2.6 12.2l3.4-3.4 2.6 2.6 2.2-2.2 3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
-  function renderTextLight(room, text) {
+  function renderTextLight(room, text, addressed) {
     let html = esc(text);
     const blocks = [];
     html = html.replace(/```([^\n]*)\n([\s\S]*?)```/g, (m, lang, code) => {
@@ -731,7 +742,7 @@
     html = linkify(html);
     html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
     html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-    html = mentions(room, html);
+    html = mentions(room, html, addressed);
     html = html.replace(/\u0000(\d+)\u0000/g, (m, i) => blocks[Number(i)]);
     return html;
   }
@@ -1309,19 +1320,54 @@
     for (const block of blocks) {
       const out = block.querySelector(".mm-out");
       const src = block.dataset.src || "";
+      const owner = diagramOwner(block);
+      if (owner && owner.repair && owner.repair.state === "repairing") {
+        showDiagramRepairing(block, owner.message);
+        continue;
+      }
       try {
         const t0 = performance.now();
         const { svg } = await mermaid.render(`mm-${++mermaidSeq}`, src, diagramStage());
         out.innerHTML = svg;
         if (palette) paintDiagram(out, palette);
         block.classList.add("ok");
-        block.classList.remove("failed");
+        block.classList.remove("failed", "repairing");
         noteSlow("diagram drawn", performance.now() - t0);
       } catch (e) {
-        block.classList.add("failed");
-        out.innerHTML = `<pre>${esc(src)}</pre><div class="hint error">Mermaid: ${esc(String((e && e.message) || e).split("\n")[0])}</div>`;
+        const error = String((e && e.message) || e);
+        if (owner && !(owner.repair && owner.repair.state === "failed")) void reportDiagramFailure(block, owner, src, error);
+        else showDiagramError(block, src, error);
       }
     }
+  }
+  function diagramOwner(block) {
+    if (block.classList.contains("preview") || block.closest('[data-ui="file-card"]')) return null;
+    const el = block.closest(".msg[data-id]"), words = block.closest(".words"), room = currentRoom();
+    if (!el || !words || !room || !els.messages.contains(el)) return null;
+    const message = room.messages.find((m) => m.id === el.dataset.id);
+    if (!message || message.kind !== "chat" || message.from === "human" || message.streaming) return null;
+    const index = [...words.querySelectorAll(".mermaid-block")].filter((b) => !b.closest('[data-ui="file-card"]')).indexOf(block) + 1;
+    return { roomId: room.id, message, index, repair: (message.diagramRepairs || []).find((r) => r.block === index) };
+  }
+  async function reportDiagramFailure(block, owner, src, error) {
+    let answer = null;
+    try {
+      answer = await post(`/api/rooms/${encodeURIComponent(owner.roomId)}/messages/${encodeURIComponent(owner.message.id)}/diagram`, { block: owner.index, source: src, error });
+    } catch {
+    }
+    if (answer && answer.state === "repairing") showDiagramRepairing(block, owner.message);
+    else showDiagramError(block, src, error);
+  }
+  function showDiagramRepairing(block, message) {
+    block.classList.add("repairing");
+    block.classList.remove("ok", "failed");
+    block.querySelector(".mm-out").innerHTML = `<div class="mm-repairing">${ic("tool")}<span>${esc(message.fromName)} is fixing this diagram…</span></div>`;
+  }
+  function showDiagramError(block, src, error) {
+    const [head, ...rest] = error.replace(/\s+$/, "").split("\n");
+    block.classList.add("failed");
+    block.classList.remove("ok", "repairing");
+    block.querySelector(".mm-out").innerHTML = `<pre>${esc(src)}</pre><div class="hint error">Mermaid: ${esc(head)}</div>${rest.length ? `<pre class="mm-error">${esc(rest.join("\n"))}</pre>` : ""}`;
   }
   function rerenderDiagrams() {
     document.querySelectorAll(".mermaid-block[data-rendered]:not(.preview)").forEach((b) => {
@@ -1451,12 +1497,12 @@
   let settling = 0;
   let settled = 0;
   const endJumps = [];
-  function noteJump(why) {
+  function noteJump(why, byHand) {
     const el = els.messages;
-    const entry = { at: Date.now(), why: why || "(unnamed)", following: stuck, readingAway, streaming: replyStreaming(), from: Math.round(el.scrollTop), fromEnd: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight) };
+    const entry = { at: Date.now(), why: why || "(unnamed)", byHand, following: stuck, readingAway, streaming: replyStreaming(), from: Math.round(el.scrollTop), fromEnd: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight) };
     endJumps.push(entry);
     if (endJumps.length > 30) endJumps.splice(0, endJumps.length - 20);
-    if (!stuck && entry.fromEnd > 12) reportJump(entry);
+    if (!byHand && !stuck && entry.fromEnd > 12) reportJump(entry);
   }
   function noteHeldPlace(why) {
     const el = els.messages;
@@ -1496,9 +1542,9 @@
       into: anchor ? Math.round(anchor.into) : 0,
     }).catch(() => {});
   }
-  function scrollToBottom(why) {
+  function scrollToBottom(why, { byHand = false } = {}) {
     calmRelease();
-    noteJump(why);
+    noteJump(why, byHand);
     els.messages.scrollTop = els.messages.scrollHeight;
     els.jumpLatest.hidden = true;
     stuck = true;
@@ -1532,7 +1578,7 @@
     let clone;
     if (collapsed) {
       clone = document.createElement("div");
-      clone.innerHTML = renderText(currentRoom(), m.text, m.images, m.quotes);
+      clone.innerHTML = renderText(currentRoom(), m.text, m.images, m.quotes, m.to);
     } else clone = (el.querySelector(".text > .words") || el.querySelector(".text")).cloneNode(true);
     for (const node of clone.querySelectorAll('[data-ui="file-card"], [data-ui="icon-button"], .live-tail, .mermaid-block svg, .mm-bar')) node.remove();
     clone.classList.remove("clamped");
@@ -2152,6 +2198,7 @@
     if (state.view === "room" && view !== "room") rememberReader();
     if (view !== "room") toolDetailsCache.clear();
     if (state.view === "settings" && view !== "settings") dropPairLink(true);
+    const arriving = view !== state.view;
     state.view = view;
     els.app.classList.remove("view-home", "view-rooms", "view-room", "view-skills", "view-settings");
     els.app.classList.add(`view-${view}`);
@@ -2181,6 +2228,7 @@
       renderSettingsPage();
       void refreshBuildAge();
     }
+    if (arriving && view !== "room") arriveAll(view);
   }
 
   async function refreshBuildAge() {
@@ -2376,12 +2424,12 @@
     renderRailRooms();
     const s = state.settings;
     if (s) {
-      els.railMeAvatar.innerHTML = avatar(meAvatarData(), 44, { kind: "bare" });
-      els.railMeLabel.textContent = s.humanName;
+      setHtml(els.railMeAvatar, avatar(meAvatarData(), 44, { kind: "bare" }));
+      setText(els.railMeLabel, s.humanName);
     }
     const open = els.app.classList.contains("rail-open");
     els.railToggle.title = open ? "Collapse the menu" : "Expand the menu";
-    els.railToggle.innerHTML = ic(open ? "collapse" : "expand");
+    setHtml(els.railToggle, rig(open ? "collapse" : "expand"));
   }
 
   function activeRooms() {
@@ -2439,6 +2487,51 @@
   }
 
 
+  function setText(el, text) {
+    if (el.textContent !== text) el.textContent = text;
+  }
+
+  const drawnHtml = new WeakMap();
+  function setHtml(el, html) {
+    if (drawnHtml.get(el) === html) return;
+    el.innerHTML = html;
+    drawnHtml.set(el, html);
+  }
+
+  function arrival(el) {
+    el.classList.add("arrive");
+    const done = (event) => {
+      if (event && event.target !== el) return;
+      el.classList.remove("arrive");
+      el.removeEventListener("animationend", done);
+    };
+    el.addEventListener("animationend", done);
+    setTimeout(done, 1200);
+  }
+
+  function arriveAll(view) {
+    for (const list of view === "rooms" ? [els.roomList, els.roomsGrid] : [els.roomList]) {
+      for (const node of list.children) if (!node.classList.contains("arrive")) arrival(node);
+    }
+  }
+
+  let overviewFrame = 0;
+  function renderOverviewSoon() {
+    if (overviewFrame) return;
+    overviewFrame = requestAnimationFrame(() => {
+      overviewFrame = 0;
+      renderRail();
+      if (state.view === "rooms" || state.view === "home") {
+        renderSideRooms();
+        renderRoomsGrid();
+      }
+    });
+  }
+  setInterval(() => {
+    if (state.view === "rooms" || state.view === "home") renderOverviewSoon();
+  }, 60000);
+
+
   function roomStats(room) {
     const agents = room.participants.filter((p) => p.kind === "agent");
     const online = agents.filter((p) => p.status !== "offline" && p.status !== "left" && p.status !== "unstaffed").length;
@@ -2451,63 +2544,81 @@
   }
 
   function sortedRooms() {
-    return [...state.rooms.values()].sort((a, b) => roomStats(b).last - roomStats(a).last);
+    const last = new Map([...state.rooms.values()].map((room) => [room, roomStats(room).last]));
+    return [...state.rooms.values()].sort((a, b) => last.get(b) - last.get(a));
   }
 
+
   function renderSideSkills() {
-    els.sideRoomsTitle.textContent = "Skills by room";
-    els.roomList.innerHTML = "";
+    setText(els.sideRoomsTitle, "Skills by room");
     const q = state.roomSearch.toLowerCase();
-    const all = document.createElement("li");
-    all.className = state.skillsRoom ? "" : "selected";
-    all.innerHTML = `${UI.html("room-mark", { icon: "skills", title: "All skills" })}<div class="p-body"><div class="p-name"><span>All skills</span></div><div class="p-preview">${(state.skills || []).length} in the library</div></div>`;
-    all.addEventListener("click", () => {
-      state.skillsRoom = null;
-      renderSideSkills();
-      renderSkillsPage();
+    const rooms = sortedRooms().filter((room) => !q || room.name.toLowerCase().includes(q));
+    KeyedList.patch(els.roomList, [null, ...rooms], {
+      key: "entry",
+      id: (room) => (room ? `skills:${room.id}` : "skills:all"),
+      make: (room) => {
+        const li = document.createElement("li");
+        const roomId = room ? room.id : null;
+        li.addEventListener("click", (e) => {
+          if (roomId && e.target.closest(".goto-room")) return selectRoom(roomId);
+          state.skillsRoom = roomId;
+          renderSideSkills();
+          renderSkillsPage();
+        });
+        return li;
+      },
+      fill: (li, room, _index, fresh) => {
+        const selected = (room ? room.id : null) === (state.skillsRoom || null);
+        li.classList.toggle("selected", selected);
+        if (!room) {
+          setHtml(li, `${UI.html("room-mark", { icon: "skills", title: "All skills" })}<div class="p-body"><div class="p-name"><span>All skills</span></div><div class="p-preview">${(state.skills || []).length} in the library</div></div>`);
+        } else {
+          const held = new Set();
+          for (const p of room.participants) for (const s of p.skills || []) held.add(s.toLowerCase());
+          setHtml(li, `${roomMark(room)}<div class="p-body"><div class="p-name"><span>${esc(room.name)}</span></div><div class="p-preview">${held.size ? `${held.size} skill${held.size === 1 ? "" : "s"} in use` : "no skills attached"}</div></div>${selected ? `<div class="p-actions">${UI.html("icon-button", { icon: "forward", title: "Go to the room", size: "sm", hook: "goto-room" })}</div>` : ""}`);
+        }
+        if (fresh) arrival(li);
+      },
     });
-    els.roomList.appendChild(all);
-    for (const room of sortedRooms()) {
-      if (q && !room.name.toLowerCase().includes(q)) continue;
-      const held = new Set();
-      for (const p of room.participants) for (const s of p.skills || []) held.add(s.toLowerCase());
-      const li = document.createElement("li");
-      li.className = state.skillsRoom === room.id ? "selected" : "";
-      const selected = state.skillsRoom === room.id;
-      li.innerHTML = `${roomMark(room)}<div class="p-body"><div class="p-name"><span>${esc(room.name)}</span></div><div class="p-preview">${held.size ? `${held.size} skill${held.size === 1 ? "" : "s"} in use` : "no skills attached"}</div></div>${selected ? `<div class="p-actions">${UI.html("icon-button", { icon: "forward", title: "Go to the room", size: "sm", hook: "goto-room" })}</div>` : ""}`;
-      li.addEventListener("click", (e) => {
-        if (e.target.closest(".goto-room")) return selectRoom(room.id);
-        state.skillsRoom = room.id;
-        renderSideSkills();
-        renderSkillsPage();
-      });
-      els.roomList.appendChild(li);
-    }
   }
 
   function renderSideRooms() {
     if (state.view === "skills") return renderSideSkills();
-    els.sideRoomsTitle.textContent = "Rooms";
-    els.roomList.innerHTML = "";
+    setText(els.sideRoomsTitle, "Rooms");
     const q = state.roomSearch.toLowerCase();
-    for (const room of sortedRooms()) {
-      if (q && !room.name.toLowerCase().includes(q) && !(room.settings.topic || "").toLowerCase().includes(q)) continue;
-      const st = roomStats(room);
-      const li = document.createElement("li");
-      li.className = room.id === state.currentRoomId ? "selected" : "";
-      const lastChat = st.chats[st.chats.length - 1];
-      const preview = lastChat ? `${lastChat.fromName}: ${String(lastChat.text).replace(/\s+/g, " ")}` : room.settings.topic || `${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}`;
-      li.innerHTML = `
-        ${roomMark(room)}
+    const rooms = sortedRooms().filter((room) => !q || room.name.toLowerCase().includes(q) || (room.settings.topic || "").toLowerCase().includes(q));
+    KeyedList.patch(els.roomList, rooms.length ? rooms : [null], {
+      key: "entry",
+      id: (room) => (room ? `room:${room.id}` : "rooms:none"),
+      make: (room) => {
+        const li = document.createElement("li");
+        if (room) {
+          const roomId = room.id;
+          li.addEventListener("click", () => selectRoom(roomId));
+        } else {
+          li.className = "hint";
+          li.style.cursor = "default";
+        }
+        return li;
+      },
+      fill: (li, room, _index, fresh) => {
+        if (!room) {
+          setText(li, q ? "No room matches." : "No rooms yet.");
+          return;
+        }
+        const st = roomStats(room);
+        li.classList.toggle("selected", room.id === state.currentRoomId);
+        const lastChat = st.chats[st.chats.length - 1];
+        const preview = lastChat ? `${lastChat.fromName}: ${String(lastChat.text).replace(/\s+/g, " ")}` : room.settings.topic || `${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}`;
+        setHtml(li, `${roomMark(room)}
         <div class="p-body">
           <div class="p-name"><span>${esc(room.name)}</span>${st.thinking ? '<span class="live-dot" title="a vibemate is replying"></span>' : ""}</div>
           <div class="p-preview">${esc(preview)}</div>
         </div>
-        <div class="p-right"><span>${esc(relTime(st.last))}</span>${st.unread ? `<span class="count-pill">${st.unread}</span>` : ""}</div>`;
-      li.addEventListener("click", () => selectRoom(room.id));
-      els.roomList.appendChild(li);
-    }
-    if (!els.roomList.children.length) els.roomList.innerHTML = `<li class="hint" style="cursor:default">${q ? "No room matches." : "No rooms yet."}</li>`;
+        <div class="p-right"><span>${esc(relTime(st.last))}</span>${st.unread ? `<span class="count-pill">${st.unread}</span>` : ""}</div>`);
+        if (fresh) arrival(li);
+      },
+    });
   }
 
 
@@ -2527,18 +2638,14 @@
     { n: 2, title: "Summon a vibemate", text: "Pick Claude, Codex, Gemini, Cursor, OpenCode or Copilot; name it, give it a face." },
     { n: 3, title: "Say hello", text: "Enter sends. @Name addresses one vibemate, /skill invokes a skill. Watch them talk." },
   ];
-  function renderHome() {
-    const s = state.settings || {};
-    const name = s.humanName || "there";
-    const rooms = sortedRooms().slice(0, 4);
-    const vendors = state.recipes.filter((r) => !r.unavailableReason);
-    const vendorLogos = (vendors.length ? vendors : state.recipes).map((r) => `<span class="home-vendor" title="${esc(r.vendor)}${r.unavailableReason ? " (not installed)" : ""}"${r.unavailableReason ? ' style="opacity:.45"' : ""}>${vendorLogo(r, "sm")}</span>`).join("");
+  let homeParts = null;
+  function buildHome() {
     els.homeView.innerHTML = `
       <div class="home-inner">
         <section class="hero">
           <div class="hero-text">
             <div class="hero-eyebrow">viberoom</div>
-            <h1>${state.freshVibe ? "Welcome" : "Welcome back"}, ${esc(name)} 👋</h1>
+            <h1></h1>
             <p>One chat, many coding agents. Summon your vibemates into a room, talk to all of them at once, and let them talk to each other.</p>
             <div class="hero-actions">
               ${UI.html("button", { label: "Open room", icon: "rooms", size: "cta", id: "home-open-room", hook: "hero-cta" })}
@@ -2553,22 +2660,13 @@
           </div>
         </section>
         <section class="home-section">
-          <div class="home-head"><h2>${rooms.length ? "Jump back in" : "Your first room"}</h2>${rooms.length ? `<button class="linklike" id="home-all-rooms">All rooms ${ic("forward")}</button>` : ""}</div>
-          <div class="home-rooms">
-            ${rooms
-              .map((room) => {
-                const st = roomStats(room);
-                const last = st.chats[st.chats.length - 1];
-                return `<button class="home-room" data-room="${esc(room.id)}">${roomMark(room)}<span class="hr-body"><span class="hr-name">${esc(room.name)}</span><span class="hr-sub">${esc(last ? `${last.fromName}: ${String(last.text).replace(/\s+/g, " ").slice(0, 70)}` : room.settings.topic || `${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}`)}</span></span>${st.unread ? `<span class="count-pill">${st.unread}</span>` : `<span class="hr-time">${esc(relTime(st.last))}</span>`}</button>`;
-              })
-              .join("")}
-            ${rooms.length ? "" : `<div class="home-room empty-room">${UI.html("room-mark", { icon: "plus" })}<span class="hr-body"><span class="hr-name">No rooms yet</span><span class="hr-sub">Open one, summon a vibemate, say hello.</span></span></div>`}
-          </div>
+          <div class="home-head"><h2></h2><button class="linklike" id="home-all-rooms" hidden>All rooms ${ic("forward")}</button></div>
+          <div class="home-rooms"></div>
         </section>
         <section class="home-section">
           <div class="home-head"><h2>What you can do here</h2></div>
           <div class="feature-grid">
-            ${FEATURES.map((f) => `<div class="feature ${f.tone}"><div class="f-emoji">${f.emoji}</div><h3>${esc(f.title)}</h3><p>${esc(f.text)}</p>${f.vendors ? `<div class="home-vendors">${vendorLogos}</div>` : ""}</div>`).join("")}
+            ${FEATURES.map((f) => `<div class="feature ${f.tone}"><div class="f-emoji">${f.emoji}</div><h3>${esc(f.title)}</h3><p>${esc(f.text)}</p>${f.vendors ? '<div class="home-vendors"></div>' : ""}</div>`).join("")}
           </div>
         </section>
         <section class="home-section">
@@ -2594,8 +2692,7 @@
       setView("rooms");
       remember("view", "rooms");
     });
-    const changeLook = $("#home-change-look");
-    if (changeLook) changeLook.addEventListener("click", () => {
+    $("#home-change-look").addEventListener("click", () => {
       setView("settings");
       remember("view", "settings");
       requestAnimationFrame(() => {
@@ -2603,41 +2700,96 @@
         if (section) { revealSettingsFor(section); section.scrollIntoView({ behavior: "smooth", block: "start" }); }
       });
     });
-    const all = $("#home-all-rooms");
-    if (all) all.addEventListener("click", () => setView("rooms"));
-    els.homeView.querySelectorAll(".home-room[data-room]").forEach((b) => b.addEventListener("click", () => selectRoom(b.dataset.room)));
+    const allRooms = $("#home-all-rooms");
+    allRooms.addEventListener("click", () => setView("rooms"));
+    const rooms = els.homeView.querySelector(".home-rooms");
+    return {
+      greeting: els.homeView.querySelector(".hero h1"),
+      roomsTitle: rooms.previousElementSibling.querySelector("h2"),
+      allRooms,
+      rooms,
+      vendors: els.homeView.querySelector(".home-vendors"),
+    };
+  }
+
+  function renderHome() {
+    homeParts ||= buildHome();
+    const s = state.settings || {};
+    setText(homeParts.greeting, `${state.freshVibe ? "Welcome" : "Welcome back"}, ${s.humanName || "there"} 👋`);
+    const rooms = sortedRooms().slice(0, 4);
+    setText(homeParts.roomsTitle, rooms.length ? "Jump back in" : "Your first room");
+    if (homeParts.allRooms.hidden !== !rooms.length) homeParts.allRooms.hidden = !rooms.length;
+    KeyedList.patch(homeParts.rooms, rooms.length ? rooms : [null], {
+      key: "entry",
+      id: (room) => (room ? `room:${room.id}` : "rooms:none"),
+      make: (room) => {
+        if (!room) {
+          const empty = document.createElement("div");
+          empty.className = "home-room empty-room";
+          empty.innerHTML = `${UI.html("room-mark", { icon: "plus" })}<span class="hr-body"><span class="hr-name">No rooms yet</span><span class="hr-sub">Open one, summon a vibemate, say hello.</span></span>`;
+          return empty;
+        }
+        const tile = document.createElement("button");
+        tile.className = "home-room";
+        const roomId = room.id;
+        tile.addEventListener("click", () => selectRoom(roomId));
+        return tile;
+      },
+      fill: (tile, room) => {
+        if (!room) return;
+        const st = roomStats(room);
+        const last = st.chats[st.chats.length - 1];
+        const sub = last ? `${last.fromName}: ${String(last.text).replace(/\s+/g, " ").slice(0, 70)}` : room.settings.topic || `${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"}`;
+        setHtml(tile, `${roomMark(room)}<span class="hr-body"><span class="hr-name">${esc(room.name)}</span><span class="hr-sub">${esc(sub)}</span></span>${st.unread ? `<span class="count-pill">${st.unread}</span>` : `<span class="hr-time">${esc(relTime(st.last))}</span>`}`);
+      },
+    });
+    const vendors = state.recipes.filter((r) => !r.unavailableReason);
+    setHtml(homeParts.vendors, (vendors.length ? vendors : state.recipes).map((r) => `<span class="home-vendor" title="${esc(r.vendor)}${r.unavailableReason ? " (not installed)" : ""}"${r.unavailableReason ? ' style="opacity:.45"' : ""}>${vendorLogo(r, "sm")}</span>`).join(""));
   }
 
 
+  const GRID_DOORS = [
+    { entry: "door:open", icon: "plus", title: "Open a room", hint: "a space for you and some vibemates", open: () => openRoomDialog() },
+    { entry: "door:template", icon: "rooms", title: "Start from a template", hint: "rules and vibemates, ready to summon", open: () => openTemplateDialog() },
+  ];
+
   function renderRoomsGrid() {
     if (state.view === "home") return renderHome();
-    const grid = els.roomsGrid;
-    grid.innerHTML = "";
-    const cta = document.createElement("div");
-    cta.className = "card cta hover room-card";
-    cta.innerHTML = `<div class="plus">${ic("plus")}</div><div>Open a room</div><div class="hint">a space for you and some vibemates</div>`;
-    cta.addEventListener("click", openRoomDialog);
-    grid.appendChild(cta);
-    const tpl = document.createElement("div");
-    tpl.className = "card cta hover room-card";
-    tpl.innerHTML = `<div class="plus">${ic("rooms")}</div><div>Start from a template</div><div class="hint">rules and vibemates, ready to summon</div>`;
-    tpl.addEventListener("click", openTemplateDialog);
-    grid.appendChild(tpl);
     const rooms = sortedRooms();
-    els.roomsSub.textContent = rooms.length ? `${rooms.length} room${rooms.length === 1 ? "" : "s"}. Pick one, or open a new one.` : "No rooms yet. Open one and summon some vibemates.";
-    for (const room of rooms) {
-      const st = roomStats(room);
-      const card = document.createElement("div");
-      card.className = `card hover room-card${room.id === state.currentRoomId ? " current" : ""}`;
-      const faces = st.agents.slice(0, 5).map((p) => avatar(p, 26, { vendor: true, ring: true })).join("");
-      card.innerHTML = `
-        <div class="rc-head"><div class="rc-title">${roomMark(room)}<h3>${esc(room.name)}</h3></div>${st.unread ? `<span class="count-pill">${st.unread}</span>` : st.thinking ? '<span class="live-dot" title="a vibemate is replying"></span>' : ""}</div>
-        <div class="rc-topic">${esc(room.settings.topic || (st.chats.length ? String(st.chats[st.chats.length - 1].text).slice(0, 140) : "Nothing said yet."))}</div>
-        <div class="avatar-stack">${faces || '<span class="hint">no vibemates yet</span>'}</div>
-        <div class="rc-foot"><span>${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"} · ${HistoryWindow.count(room, true)} message${HistoryWindow.count(room, true) === 1 ? "" : "s"}</span><span>${esc(relTime(st.last))}</span></div>`;
-      card.addEventListener("click", () => selectRoom(room.id));
-      grid.appendChild(card);
-    }
+    setText(els.roomsSub, rooms.length ? `${rooms.length} room${rooms.length === 1 ? "" : "s"}. Pick one, or open a new one.` : "No rooms yet. Open one and summon some vibemates.");
+    KeyedList.patch(els.roomsGrid, [...GRID_DOORS.map((door) => ({ door })), ...rooms.map((room) => ({ room }))], {
+      key: "entry",
+      id: (item) => (item.door ? item.door.entry : `room:${item.room.id}`),
+      make: (item) => {
+        const card = document.createElement("div");
+        if (item.door) {
+          card.className = "card cta hover room-card";
+          card.innerHTML = `<div class="plus">${ic(item.door.icon)}</div><div>${item.door.title}</div><div class="hint">${item.door.hint}</div>`;
+          card.addEventListener("click", item.door.open);
+        } else {
+          card.className = "card hover room-card";
+          card.innerHTML = `<div class="rc-head"></div><div class="rc-topic"></div><div class="avatar-stack"></div><div class="rc-foot"></div>`;
+          const roomId = item.room.id;
+          card.addEventListener("click", () => selectRoom(roomId));
+        }
+        return card;
+      },
+      fill: (card, item, _index, fresh) => {
+        if (item.room) fillRoomCard(card, item.room);
+        if (fresh) arrival(card);
+      },
+    });
+  }
+
+  function fillRoomCard(card, room) {
+    const st = roomStats(room);
+    card.classList.toggle("current", room.id === state.currentRoomId);
+    const [head, topic, faces, foot] = card.children;
+    setHtml(head, `<div class="rc-title">${roomMark(room)}<h3>${esc(room.name)}</h3></div>${st.unread ? `<span class="count-pill">${st.unread}</span>` : st.thinking ? '<span class="live-dot" title="a vibemate is replying"></span>' : ""}`);
+    setText(topic, room.settings.topic || (st.chats.length ? String(st.chats[st.chats.length - 1].text).slice(0, 140) : "Nothing said yet."));
+    setHtml(faces, st.agents.slice(0, 5).map((p) => avatar(p, 26, { vendor: true, ring: true })).join("") || '<span class="hint">no vibemates yet</span>');
+    const messages = HistoryWindow.count(room, true);
+    setHtml(foot, `<span>${st.agents.length} vibemate${st.agents.length === 1 ? "" : "s"} · ${messages} message${messages === 1 ? "" : "s"}</span><span>${esc(relTime(st.last))}</span>`);
   }
 
 
@@ -2735,35 +2887,33 @@
   }
 
   function insertMention(name) {
-    const input = els.input;
-    const start = input.selectionStart || input.value.length;
-    const before = input.value.slice(0, start);
-    const after = input.value.slice(start);
+    const start = composer.selectionStart || composer.value.length;
+    const before = composer.value.slice(0, start);
     const prefix = before && !/\s$/.test(before) ? " " : "";
-    input.value = `${before}${prefix}@${name} ${after}`;
-    input.focus();
-    autosize();
+    composer.setRangeText(`${prefix}@${name} `, start, start, "end");
+    composer.focus();
   }
 
 
   function renderChatHead() {
     renderAutomationBadge();
+    composer.refresh();
     const room = currentRoom();
     renderWorkingNow();
-    if (!room) {
-      els.chatRoomSub.textContent = "";
-      return;
-    }
+    if (!room) return void setHtml(els.chatRoomSub, "");
     const directory = room.dir.split(/[\\/]/).filter(Boolean).slice(-1)[0] || room.dir;
-    els.chatRoomSub.innerHTML =
-      `<button type="button" data-ui="button" data-kind="ghost" data-size="sm" class="dir-chip open-link" data-open-kind="directory" data-open="${esc(room.dir)}" title="${esc(`Open folder: ${room.dir}`)}" aria-label="${esc(`Open folder: ${room.dir}`)}">${ic("folder-solid")}<span class="dir-label">${esc(directory)}</span></button>`;
+    setHtml(els.chatRoomSub,
+      `<button type="button" data-ui="button" data-kind="ghost" data-size="sm" class="dir-chip open-link" data-open-kind="directory" data-open="${esc(room.dir)}" title="${esc(`Open folder: ${room.dir}`)}" aria-label="${esc(`Open folder: ${room.dir}`)}"><span class="pad" aria-hidden="true"></span>${rig("folder-solid")}<span class="dir-label">${esc(directory)}</span></button>`);
   }
 
   function renderAutomationBadge() {
     const count = state.automationPending?.[currentRoom()?.id] || 0;
     const button = $("#automations-btn");
     if (button) {
-      button.innerHTML = Icons.svg("clock-solid") + (count ? `<span class="automation-count" aria-hidden="true">${count}</span>` : "");
+      setHtml(button, `<span class="pad" aria-hidden="true"></span>${rig("clock-solid")}<span class="automation-count" aria-hidden="true" hidden></span>`);
+      const badge = button.querySelector(".automation-count");
+      setText(badge, count ? String(count) : "");
+      badge.hidden = !count;
       button.title = count ? `Automations: ${count} proposal${count === 1 ? "" : "s"} to review` : "Automations: scheduled tasks and reminders";
       button.setAttribute("aria-label", button.title);
     }
@@ -2774,6 +2924,20 @@
     if (!state.search) return true;
     const q = state.search.toLowerCase();
     return m.text.toLowerCase().includes(q) || (m.fromName || "").toLowerCase().includes(q) || (m.quotes || []).some((x) => (x.text || "").toLowerCase().includes(q));
+  }
+
+  function nowNameHtml(m, p) {
+    return p && p.name && m.fromName && p.name !== m.fromName ? `<span class="now-name" title="${esc(m.fromName)} is called ${esc(p.name)} now">Now: ${esc(p.name)}</span>` : "";
+  }
+
+  function refreshNowNames(room, p) {
+    for (const el of els.messages.querySelectorAll(`.msg.agent[data-from="${cssEscape(p.id)}"]`)) {
+      const name = el.querySelector(".head .name");
+      if (!name) continue;
+      el.querySelector(".head .now-name")?.remove();
+      const html = nowNameHtml({ fromName: name.textContent }, p);
+      if (html) name.insertAdjacentHTML("afterend", html);
+    }
   }
 
   function renderHidden(el, m) {
@@ -2804,8 +2968,9 @@
 
   function landing(el) {
     el.classList.add("landing");
-    const done = () => el.classList.remove("landing");
-    el.addEventListener("animationend", done, { once: true });
+    const own = (e) => { if (e.target === el) done(); };
+    const done = () => { el.classList.remove("landing"); el.removeEventListener("animationend", own); };
+    el.addEventListener("animationend", own);
     setTimeout(done, 1200);
     return el;
   }
@@ -2847,7 +3012,7 @@
     el.className = "msg " + (mine ? "mine" : "agent");
     el.innerHTML = `
       <div class="bubble-col">
-        <div class="head"><span class="head-av">${avatar(mine ? Object.assign(meAvatarData(), { color: colourOf(p) }) : p, 32, { vendor: true, me: mine })}</span><span class="name" style="color:${p.color}">${esc(m.fromName)}</span><span class="edited" hidden></span>${mine ? UI.html("icon-button", { icon: "pencil", title: "Edit this message", kind: "ghost", size: "xs", act: "edit" }) : ""}${UI.html("icon-button", { icon: "quote", title: "Quote this message in your next one", kind: "ghost", size: "xs", act: "quote" })}${UI.html("icon-button", { icon: "pin", title: "Pin this message", kind: "ghost", size: "xs", act: "pin" })}${UI.html("icon-button", { icon: "copy", title: "Copy this message, formatted; the tool calls stay here", kind: "ghost", size: "xs", act: "copy" })}${UI.html("icon-button", { icon: "arrow-up", title: "Go to their previous message", kind: "ghost", size: "xs", act: "up" })}${UI.html("icon-button", { icon: "arrow-down", title: "Go to their next message", kind: "ghost", size: "xs", act: "down" })}<span class="time" title="${esc(fullTime(m.ts))}">${time(m.ts)}</span></div>
+        <div class="head"><span class="head-av">${avatar(mine ? Object.assign(meAvatarData(), { color: colourOf(p) }) : p, 32, { vendor: true, me: mine })}</span><span class="name" style="color:${p.color}">${esc(m.fromName)}</span>${nowNameHtml(m, p)}<span class="edited" hidden></span>${mine ? UI.html("icon-button", { icon: "pencil", title: "Edit this message", kind: "ghost", size: "xs", act: "edit" }) : ""}${UI.html("icon-button", { icon: "quote", title: "Quote this message in your next one", kind: "ghost", size: "xs", act: "quote" })}${UI.html("icon-button", { icon: "pin", title: "Pin this message", kind: "ghost", size: "xs", act: "pin" })}${UI.html("icon-button", { icon: "copy", title: "Copy this message, formatted; the tool calls stay here", kind: "ghost", size: "xs", act: "copy" })}${UI.html("icon-button", { icon: "arrow-up", title: "Go to their previous message", kind: "ghost", size: "xs", act: "up" })}${UI.html("icon-button", { icon: "arrow-down", title: "Go to their next message", kind: "ghost", size: "xs", act: "down" })}<span class="time" title="${esc(fullTime(m.ts))}">${time(m.ts)}</span></div>
         <div class="bubble">
           ${m.skill ? `<div class="skill-invoke" title="skill invocation: the vibemates that have this skill got its instructions with this message">${ic("skills")} skill <b>${esc(m.skill.name)}</b></div>` : ""}
           <div class="edit-box" hidden></div>
@@ -3261,8 +3426,8 @@
       text.replaceChildren(words);
     }
     if (want("text") && canPaintMessagePart(el, "text")) {
-      if (m.streaming && m.text && !(m.images && m.images.length) && !(m.quotes && m.quotes.length)) renderStreamingWords(room, words, m.text);
-      else words.innerHTML = renderText(room, long && !expanded ? clampedSource(m.text) : m.text, m.images, m.quotes);
+      if (m.streaming && m.text && !(m.images && m.images.length) && !(m.quotes && m.quotes.length)) renderStreamingWords(room, words, m.text, m.to);
+      else words.innerHTML = renderText(room, long && !expanded ? clampedSource(m.text) : m.text, m.images, m.quotes, m.to);
       if (!m.streaming) {
         renderPreviews(words, m);
         linkRelativePaths(words, m);
@@ -3673,7 +3838,7 @@
     const label = m.bodyError ? "This message could not be loaded." : "Loading message…";
     if (el.dataset.loadLabel === label) return;
     el.dataset.loadLabel = label;
-    el.innerHTML = `<span>${esc(m.fromName || "Room")} · ${esc(label)}</span>${m.bodyError ? '<button class="linklike">Try again</button>' : ""}`;
+    el.innerHTML = `${m.bodyError ? "" : UI.html("skeleton", { lines: 2, shape: "bubble" })}<span class="placeholder-label">${esc(m.fromName || "Room")} · ${esc(label)}</span>${m.bodyError ? '<button class="linklike">Try again</button>' : ""}`;
     el.querySelector("button")?.addEventListener("click", () => {
       const visible = [...els.messages.querySelectorAll(".msg[data-id]")].map(node => node.dataset.id);
       void loadBodies(room, [...new Set([m.id, ...visible])], true);
@@ -3844,6 +4009,7 @@
       }
     }
   }
+  const ARRIVE_STAGGER_CAP = 8;
   async function growFold(more, why, roomId) {
     const room = state.rooms.get(roomId);
     if (!room || !foldHidden(room) || room.loadingOlder || room.historyRestoring) return;
@@ -3878,10 +4044,14 @@
     noteSlow(`${stretch.length} older messages drawn (${why})`, performance.now() - t0);
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const animate = !document.hidden && currentRoom() === room && state.view === "room";
-      for (const el of arrived) {
+      arrived.forEach((el, i) => {
         el.classList.remove("history-arriving");
-        if (animate && el.isConnected) el.classList.replace("history-static", "history-arrived");
-      }
+        if (!animate || !el.isConnected) return;
+        el.style.setProperty("--arrive", String(Math.min(ARRIVE_STAGGER_CAP, arrived.length - 1 - i)));
+        el.classList.replace("history-static", "history-arrived");
+        const own = (e) => { if (e.target !== el) return; el.style.removeProperty("--arrive"); el.removeEventListener("animationend", own); };
+        el.addEventListener("animationend", own);
+      });
     }));
   }
 
@@ -4636,7 +4806,7 @@
       if (listRoomId !== room.id) {
         const controls = els.messages.querySelector(".history-load");
         if (controls) historyHintObserver.unobserve(controls);
-        els.messages.innerHTML = '<div class="conversation-loading" role="status">Loading conversation…</div>';
+        els.messages.innerHTML = `<div class="conversation-loading" role="status">${UI.html("skeleton", { lines: 3, shape: "bubble" })}${UI.html("skeleton", { lines: 2, shape: "bubble" })}<span class="placeholder-label">Loading conversation…</span></div>`;
       }
       listRoomId = room.id;
       return;
@@ -4780,11 +4950,7 @@
     if (!showing) {
       if (listRoomId === room.id) listRoomId = null;
       if (!wasFinal && m.kind === "chat" && !m.streaming && m.from !== "human" && roomId !== state.currentRoomId) state.unread.set(roomId, (state.unread.get(roomId) || 0) + 1);
-      if ((state.view === "rooms" || state.view === "home")) {
-        renderSideRooms();
-        renderRoomsGrid();
-      }
-      renderRail();
+      renderOverviewSoon();
       return;
     }
     const stick = stuck;
@@ -4986,9 +5152,8 @@
   editEls.rewrite.addEventListener("click", () => editRequest && submitEdit(editRequest.room, editRequest.m, editRequest.next, "rewrite"));
 
 
-  function placeCard(card, room, ts) {
-    let anchorId = null;
-    for (const m of room.messages) if (m.ts <= ts) anchorId = m.id;
+  function placeCard(card, room, at) {
+    const anchorId = cardAnchor(room, at);
     if (anchorId) {
       const anchor = els.messages.querySelector(`.msg[data-id="${CSS.escape(anchorId)}"]`);
       if (anchor) { anchor.insertAdjacentElement("afterend", card); return true; }
@@ -4998,6 +5163,17 @@
     const first = firstId ? els.messages.querySelector(`.msg[data-id="${CSS.escape(firstId)}"]`) : null;
     if (first) { first.insertAdjacentElement("beforebegin", card); return true; }
     return false;
+  }
+  function cardAnchor(room, at) {
+    if (Number.isFinite(at.afterSeq)) {
+      let best = null;
+      for (const m of room.messages) if (m.seq > 0 && m.seq <= at.afterSeq && (!best || m.seq > best.seq)) best = m;
+      return best ? best.id : null;
+    }
+    const ts = at.ts || Date.now();
+    let anchorId = null;
+    for (const m of room.messages) if (m.ts <= ts) anchorId = m.id;
+    return anchorId;
   }
   const OPTION_TONE = { allow_once: "ok", allow_always: "ok", reject_once: "no", reject_always: "no" };
   function renderPermission(room, perm) {
@@ -5009,7 +5185,7 @@
     const draft = [...room.messages].reverse().find((m) => m.streaming && m.from === perm.participantId);
     const host = draft ? els.messages.querySelector(`.msg[data-id="${draft.id}"] .perms`) : null;
     if (host) host.appendChild(card);
-    else placeCard(card, room, perm.ts || Date.now());
+    else placeCard(card, room, perm);
     followEnd("a permission card");
   }
   function resolvePermissionCard(key, optionId) {
@@ -5075,7 +5251,7 @@
     });
     if (existing) existing.replaceWith(card);
     else {
-      placeCard(card, room, p.ts || Date.now());
+      placeCard(card, room, p);
       followEnd("a new-room card");
     }
   }
@@ -5097,7 +5273,7 @@
     const card = UI.el("ask-card", { kind: "proposal", who: p.participantName, body, outcome, choices: [{ label: "Apply", tone: "ok", act: "decide", data: { answer: "apply" } }, { label: "Reject", tone: "no", act: "decide", data: { answer: "reject" } }], data: { key: p.key } });
     if (existing) existing.replaceWith(card);
     else {
-      placeCard(card, room, p.ts || Date.now());
+      placeCard(card, room, p);
       followEnd("a proposal card");
     }
   }
@@ -5107,7 +5283,7 @@
     const body = `<div class="prop-why">${r.rows} message${r.rows === 1 ? "" : "s"}${when ? `, the last from ${esc(when)}` : ""}. The copy may lack the newest changes. Until you decide, the room is read-only: nothing new is written and no vibemate answers. To use the original instead, put history.jsonl back in the room's folder and restart.</div>`;
     const card = UI.el("ask-card", { kind: "recovery", who: "The room", lead: "has no history file, only its own copy of the conversation", body, outcome: r.status === "adopted" ? "the copy is the record now; the room is open" : undefined, choices: [{ label: "Use the copy the room has", tone: "ok", act: "adopt-copy" }], data: { key: "recovery" } });
     if (existing) existing.replaceWith(card);
-    else placeCard(card, room, r.ts || Date.now());
+    else placeCard(card, room, r);
   }
   function syncRecovery(room) {
     if (room.recovery) renderRecovery(room, room.recovery);
@@ -5124,11 +5300,11 @@
     if (r.status === "adopted") target.readOnly = false;
     if (roomId === state.currentRoomId && state.view === "room") syncRecovery(target);
   }
-  const COMPOSER_PLACEHOLDER = els.input.placeholder;
+  const COMPOSER_PLACEHOLDER = composer.placeholder;
   function applyReadOnly(room) {
     const held = !!(room && room.readOnly);
-    els.input.disabled = held;
-    els.input.placeholder = held ? "Read-only until the room's record is settled (see the room line and the card)" : COMPOSER_PLACEHOLDER;
+    composer.disabled = held;
+    composer.placeholder = held ? "Read-only until the room's record is settled (see the room line and the card)" : COMPOSER_PLACEHOLDER;
   }
   function resolveProposalCard(room, key, status) {
     const p = (room.proposals || []).find((x) => x.key === key);
@@ -5361,6 +5537,14 @@
     }
     return findById(room, p.id);
   }
+  const installationChecked = new Map();
+  function checkInstallation(agentType) {
+    if (!agentType) return;
+    const last = installationChecked.get(agentType) || 0;
+    if (Date.now() - last < 5000) return;
+    installationChecked.set(agentType, Date.now());
+    post(`/api/recipes/${encodeURIComponent(agentType)}/installation-check`, {}).catch(() => { });
+  }
   function renderConfig(panel, p, offline) {
     panel.innerHTML = "";
     panel.dataset.configRoom = state.currentRoomId || "";
@@ -5370,6 +5554,7 @@
       return;
     }
     if (p.status === "starting") { panel.innerHTML = '<p class="hint">Starting. Settings will be available when this vibemate is ready.</p>'; return; }
+    checkInstallation(p.agentType);
     const roomId = state.currentRoomId;
     const key = `${roomId}:${p.id}`;
     const change = async (control, onChange, value, id) => {
@@ -5431,6 +5616,21 @@
       } else if (option.type === "select") addSelect(option.name, flattenOptions(option.options), option.currentValue, apply, id);
     }
     if (!panel.children.length) panel.innerHTML = '<p class="hint">This vibemate exposes no session options.</p>';
+    if (p.installOutdated) {
+      const note = document.createElement("div"); note.className = "hint config-outdated"; note.setAttribute("role", "status");
+      note.innerHTML = `<p>A newer ${esc(p.agentVendor || "agent")} is installed. ${esc(p.name)} still runs the old one, so new models are not in this list yet.</p>`;
+      const restart = document.createElement("button");
+      restart.setAttribute("data-ui", "button"); restart.dataset.kind = "ghost"; restart.dataset.size = "sm";
+      restart.textContent = "Restart on the new version";
+      restart.title = `${p.name} keeps its conversation. Only when it is not writing.`;
+      restart.disabled = p.status === "thinking";
+      restart.addEventListener("click", async () => {
+        restart.disabled = true;
+        try { await post(roomApi(`/participants/${encodeURIComponent(p.id)}/restart-installed`), {}); }
+        catch (error) { showError(error); restart.disabled = false; }
+      });
+      note.appendChild(restart); panel.prepend(note);
+    }
     if (p.pendingSettings?.length) {
       const pending = document.createElement("p"); pending.className = "hint config-pending"; pending.setAttribute("role", "status");
       pending.textContent = "Pending: " + p.pendingSettings.map(setting => `${setting.name} → ${setting.value}`).join("; ");
@@ -5537,6 +5737,8 @@
         ${field("…or every N new context tokens", `${UI.html("number-field", { id: "rp-brief-tokens", value: String(rs.fullBriefEveryTokens), min: 1000, max: 10000000, step: 1000 })}`)}
         <label class="switch"><span class="label">Repeat core rules in every header</span><input type="checkbox" id="rp-header-rules" ${rs.headerRules ? "checked" : ""}></label>
         <label class="switch"><span class="label">Show vendor and model to other vibemates</span><input type="checkbox" id="rp-vendor" ${rs.showVendorInRoster ? "checked" : ""}></label>
+        <label class="switch"><span class="label">Ask vibemates for notes automatically<span class="hint">When a vibemate's context fills past 80% or is compacted, it writes short notes on its work, so a restart can carry them. Off: notes are written only when you ask (Take notes now in its panel, a change of role or of coding agent).</span></span><input type="checkbox" id="rp-auto-notes" ${rs.autoNotes !== false ? "checked" : ""}></label>
+        <label class="switch"><span class="label">Tell vibemates what they missed while working<span class="hint">When a vibemate finishes and messages arrived meanwhile that did not wake it, it is told how many and may read them or stay silent. They still arrive with its next turn. Each notice counts as one vibemate-to-vibemate reply.</span></span><input type="checkbox" id="rp-missed-notice" ${rs.missedMessagesNotice ? "checked" : ""}></label>
         ${field("Replay last N chat messages after a reconnect", `${UI.html("number-field", { id: "rp-replay", value: String(rs.replayAfterRestart), min: 0, max: 200 })}`)}
         ${field("Missed messages a vibemate reads at most on its next turn", `${UI.html("number-field", { id: "rp-backlog", value: String(rs.backlogCap), min: 1, max: 1000 })}`, "Everything posted since its last turn counts, including while it was muted; older messages are dropped with a note in its prompt.")}
         ${field("Most characters in a vibio or in the room rules", `${UI.html("number-field", { id: "rp-text-limit", value: String(rs.briefTextLimit ?? 8000), min: 500, max: 32000, step: 500 })}`, "The limit applies separately to each text. Text over it is refused with the numbers, never cut.")}
@@ -5589,6 +5791,8 @@
           headerRules: $("#rp-header-rules").checked,
           showVendorInRoster: $("#rp-vendor").checked,
           replayAfterRestart: Number($("#rp-replay").value),
+          autoNotes: $("#rp-auto-notes").checked,
+          missedMessagesNotice: $("#rp-missed-notice").checked,
           backlogCap: Number($("#rp-backlog").value),
           refereeAction: $("#rp-referee").value,
           turnTaking: $("#rp-turns").value,
@@ -5653,9 +5857,9 @@
         return `<div class="vendor-card">
           <div class="vc-head">${vendorLogo(r)}<span class="vc-name">${esc(r.vendor)}</span>${UI.html("badge", { label: "installed", tone: "ready", dot: true })}</div>
           <div class="vc-fields">
-            ${field("Model", `<input type="text" data-vendor="${r.id}" data-key="model" value="${esc(v.model || "")}" placeholder="${esc(r.defaultModel || "vibemate default")}">`)}
-            ${field("Effort", `<input type="text" data-vendor="${r.id}" data-key="effort" value="${esc(v.effort || "")}" placeholder="${esc(r.defaultEffort || "vibemate default")}">`)}
-            ${field("Mode", `<input type="text" data-vendor="${r.id}" data-key="mode" value="${esc(v.mode || "")}" placeholder="${esc(r.defaultMode || "vibemate default")}">`)}
+            ${field("Model", `<input type="text" data-vendor="${r.id}" data-key="model" list="sp-list-${r.id}-model" autocomplete="off" value="${esc(v.model || "")}" placeholder="${esc(r.defaultModel || "vibemate default")}">`)}
+            ${field("Effort", `<input type="text" data-vendor="${r.id}" data-key="effort" list="sp-list-${r.id}-effort" autocomplete="off" value="${esc(v.effort || "")}" placeholder="${esc(r.defaultEffort || "vibemate default")}">`)}
+            ${field("Mode", `<input type="text" data-vendor="${r.id}" data-key="mode" list="sp-list-${r.id}-mode" autocomplete="off" value="${esc(v.mode || "")}" placeholder="${esc(r.defaultMode || "vibemate default")}">`)}
           </div>
         </div>`;
       })
@@ -6069,6 +6273,10 @@
       UI.setState(b, null);
     });
     $("#sp-agent-update-open").addEventListener("click", () => agentUpdates.open());
+    els.pageInner.querySelectorAll("input[data-vendor]").forEach((inp) => {
+      const list = document.createElement("datalist"); list.id = inp.getAttribute("list"); inp.after(list);
+      inp.addEventListener("focus", () => void fillVendorChoices(inp.dataset.vendor));
+    });
     bindSave($("#sp-form"), async () => {
         const vendorPresets = {};
         els.pageInner.querySelectorAll("input[data-vendor]").forEach((inp) => {
@@ -6546,11 +6754,8 @@
     function pick(i) {
       const s = m.items[i];
       if (!s) return close();
-      const value = textarea.value;
-      const caret = textarea.selectionStart ?? value.length;
-      textarea.value = `${value.slice(0, m.start)}/${s.name} ${value.slice(caret)}`;
-      const pos = m.start + s.name.length + 2;
-      textarea.setSelectionRange(pos, pos);
+      const caret = textarea.selectionStart ?? textarea.value.length;
+      textarea.setRangeText(`/${s.name} `, m.start, caret, "end");
       close();
       textarea.focus();
       autosize();
@@ -6624,6 +6829,24 @@
     const bypass = s.bypassPermissionsByDefault !== false;
     const defaultMode = bypass ? recipe.bypassMode || recipe.defaultMode : recipe.defaultMode;
     return { model: v.model || recipe.defaultModel, effort: v.effort || recipe.defaultEffort, mode: v.mode || defaultMode };
+  }
+  const vendorChoicesAsked = new Map();
+  async function fillVendorChoices(vendor) {
+    const asked = vendorChoicesAsked.get(vendor);
+    if (asked && Date.now() - asked < 5000) return;
+    vendorChoicesAsked.set(vendor, Date.now());
+    let info;
+    try { info = await get(`/api/recipes/${encodeURIComponent(vendor)}/options`); }
+    catch { vendorChoicesAsked.delete(vendor); return; }
+    const categories = { model: "model", effort: "thought_level", mode: "mode" };
+    for (const [key, category] of Object.entries(categories)) {
+      const list = document.getElementById(`sp-list-${vendor}-${key}`);
+      if (!list) continue;
+      const option = info.configOptions.find((o) => o.category === category && o.type === "select");
+      const values = option ? flattenOptions(option.options)
+        : key === "mode" && info.modes?.availableModes ? info.modes.availableModes.map((m) => ({ value: m.id, name: m.name })) : [];
+      list.replaceChildren(...values.map((v) => { const o = document.createElement("option"); o.value = v.value; if (v.name && v.name !== v.value) o.label = v.name; return o; }));
+    }
   }
   let optionsRequest = 0;
   async function loadAgentOptions(recipe, refresh) {
@@ -7765,6 +7988,8 @@
       ${stpField("Most characters in a vibio or the rules", `${UI.html("number-field", { id: "stp-text-limit", value: String(st.briefTextLimit ?? 8000), min: 500, max: 32000, step: 500 })}`)}
       ${stpSwitch("Core rules in every header", "stp-header-rules", st.headerRules !== false)}
       ${stpSwitch("Show vendor and model to other vibemates", "stp-vendor", !!st.showVendorInRoster)}
+      ${stpSwitch("Ask vibemates for notes automatically", "stp-auto-notes", st.autoNotes !== false)}
+      ${stpSwitch("Tell vibemates what they missed while working", "stp-missed-notice", !!st.missedMessagesNotice)}
     </div>`;
     const agentOptions = [["", "none yet: cast when the room opens"], ...state.recipes.map((r) => [r.id, r.vendor + (r.unavailableReason ? " (not installed here)" : "")])];
     const vms = (t.vibemates || []).map((v, i) => `<div class="stp-vm" data-i="${i}">${avatar({ name: v.name, avatar: v.avatar, color: FALLBACK_COLOR() }, 36, {})}<div>
@@ -7815,6 +8040,8 @@
       backlogCap: num("#stp-backlog"),
       headerRules: $("#stp-header-rules").checked,
       showVendorInRoster: $("#stp-vendor").checked,
+      autoNotes: $("#stp-auto-notes").checked,
+      missedMessagesNotice: $("#stp-missed-notice").checked,
       customRules: $("#stp-rules").value,
       briefTextLimit: num("#stp-text-limit"),
     };
@@ -8199,6 +8426,7 @@
         const channelChanged = i >= 0 && room.participants[i].skillChannel !== event.participant.skillChannel;
         if (i >= 0) room.participants[i] = event.participant;
         else room.participants.push(event.participant);
+        if (showing && previous && previous.name !== event.participant.name) refreshNowNames(room, event.participant);
         if (showing) {
           if (visibilityFingerprint(room) !== before) {
             renderMessagesSoon(`what ${event.participant.name} has seen moved`);
@@ -8212,18 +8440,15 @@
             if (!editingInDetails()) renderDetails();
             else {
               refreshDetailsHeader(event.participant);
-              const config = p => JSON.stringify([p?.mode, p?.configOptions, p?.pendingSettings, p?.status === "starting"]);
+              const config = p => JSON.stringify([p?.mode, p?.configOptions, p?.pendingSettings, p?.status === "starting", !!p?.installOutdated, p?.status === "thinking" && !!p?.installOutdated]);
               if (config(previous) !== config(event.participant)) {
                 const panel = $("#pp-config");
                 if (panel) renderConfig(panel, event.participant, ["offline", "left"].includes(event.participant.status));
               }
             }
           }
-        } else if ((state.view === "rooms" || state.view === "home")) {
-          renderSideRooms();
-          renderRoomsGrid();
         }
-        renderRail();
+        renderOverviewSoon();
         return;
       }
       case "participant.removed":
@@ -8234,7 +8459,8 @@
           renderMessages("a vibemate left");
           renderSideRoom();
           renderChatHead();
-        } else if ((state.view === "rooms" || state.view === "home")) renderRoomsGrid();
+        }
+        renderOverviewSoon();
         return;
       case "message":
         upsertMessage(roomId, event.message);
@@ -8340,11 +8566,8 @@
           renderSideRoom();
           renderChatHead();
           if (state.detailsOpen && state.selection.kind === "room" && !editingInDetails()) renderDetails();
-        } else if ((state.view === "rooms" || state.view === "home")) {
-          renderSideRooms();
-          renderRoomsGrid();
         }
-        renderRail();
+        renderOverviewSoon();
         return;
       }
       case "notice":
@@ -8396,11 +8619,7 @@
     },
     "room.created": (m) => {
       state.rooms.set(m.room.id, m.room);
-      if ((state.view === "rooms" || state.view === "home")) {
-        renderSideRooms();
-        renderRoomsGrid();
-      }
-      renderRail();
+      renderOverviewSoon();
     },
     "rooms.opened": (m) => {
       state.openRooms = m.roomIds || [];
@@ -8415,11 +8634,8 @@
         state.selection = { kind: "room" };
         closeDetails();
         setView("rooms");
-      } else if ((state.view === "rooms" || state.view === "home")) {
-        renderSideRooms();
-        renderRoomsGrid();
       }
-      renderRail();
+      renderOverviewSoon();
     },
     skills: (m) => {
       state.skills = m.skills || [];
@@ -8619,31 +8835,17 @@
 
   let composerMin = Number(recall("composerH")) || 0;
   const composerCeiling = () => Math.max(120, els.app.clientHeight - 260);
-  const fieldSizing = CSS.supports("field-sizing", "content");
-  let autosizeQueued = false;
   function autosizeSoon() {
-    if (fieldSizing || autosizeQueued) return;
-    autosizeQueued = true;
-    requestAnimationFrame(() => {
-      autosizeQueued = false;
-      autosize();
-    });
+    autosize();
   }
   let composerBounds = "";
   function autosize() {
     const min = Math.max(36, composerMin);
-    const cap = Math.max(180, min);
-    if (fieldSizing) {
-      const max = Math.min(composerCeiling(), cap);
-      if (composerBounds === `${min}/${max}`) return;
-      composerBounds = `${min}/${max}`;
-      els.input.style.minHeight = `${min}px`;
-      els.input.style.maxHeight = `${max}px`;
-      return;
-    }
-    els.input.style.height = "auto";
-    els.input.style.height = Math.min(composerCeiling(), Math.max(min, Math.min(cap, els.input.scrollHeight))) + "px";
-    watchComposerShift();
+    const max = Math.min(composerCeiling(), Math.max(180, min));
+    if (composerBounds === `${min}/${max}`) return;
+    composerBounds = `${min}/${max}`;
+    els.input.style.minHeight = `${min}px`;
+    els.input.style.maxHeight = `${max}px`;
   }
 
   let composerShiftQueued = false;
@@ -8701,17 +8903,17 @@
 
   const composerClear = $("#composer-clear");
   function updateComposerClear() {
-    composerClear.hidden = !(els.input.value.trim() || pendingShots.length || pendingQuotes.length);
+    composerClear.hidden = !(composer.value.trim() || pendingShots.length || pendingQuotes.length);
+  }
+  function composerChanged() {
+    updateComposerClear();
+    autosize();
+    watchComposerShift();
   }
   composerClear.addEventListener("click", () => {
-    els.input.value = "";
-    clearShots();
-    clearQuotes();
-    autosize();
-    updateComposerClear();
-    els.input.focus();
+    composer.value = "";
+    composer.focus();
   });
-  els.input.addEventListener("input", updateComposerClear);
   function renderShotsTray() {
     updateComposerClear();
     els.shotsTray.hidden = !pendingShots.length;
@@ -8722,34 +8924,68 @@
 
   function clearShots() {
     pendingShots = [];
+    detachedShots = [];
     shotSeq = 0;
     renderShotsTray();
   }
 
+  let detachedShots = [];
+  let detachedQuotes = [];
+  function reconcileAttachments(text) {
+    const named = new Set(Composer.markersIn(text).map((m) => `${m.kind} ${m.n}`));
+    const split = (live, waiting, kind) => {
+      const all = [...live, ...waiting].sort((a, b) => a.n - b.n);
+      return [all.filter((x) => named.has(`${kind} ${x.n}`)), all.filter((x) => !named.has(`${kind} ${x.n}`))];
+    };
+    const [shots, shotsAway] = split(pendingShots, detachedShots, "img");
+    const [quotes, quotesAway] = split(pendingQuotes, detachedQuotes, "quote");
+    const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+    const shotsMoved = !same(shots, pendingShots), quotesMoved = !same(quotes, pendingQuotes);
+    pendingShots = shots; detachedShots = shotsAway;
+    pendingQuotes = quotes; detachedQuotes = quotesAway;
+    if (shotsMoved) renderShotsTray();
+    if (quotesMoved) renderQuotesTray();
+  }
+  function composerToken(kind, n) {
+    if (kind === "img") {
+      const shot = pendingShots.find((x) => x.n === n);
+      return shot ? { icon: ic("image"), title: `Picture ${n}${shot.name ? `: ${shot.name}` : ""}` } : null;
+    }
+    const quote = pendingQuotes.find((x) => x.n === n);
+    return quote ? { icon: ic("quote"), title: `Quote ${n}: ${quote.fromName} — ${quote.text.replace(/\s+/g, " ").slice(0, CHIP_CHARS)}${quote.text.length > CHIP_CHARS ? "…" : ""}` } : null;
+  }
+  function composerMention(name) {
+    const room = currentRoom();
+    if (!room) return null;
+    if (name.toLowerCase() === "all") return { color: "" };
+    const p = findByName(room, name);
+    return p && p.kind === "agent" ? { color: colourOf(p) } : null;
+  }
+
   function insertMarker(text) {
-    const el = els.input;
-    const value = el.value;
-    const start = el.selectionStart ?? value.length;
-    const end = el.selectionEnd ?? start;
+    const value = composer.value;
+    const start = composer.selectionStart ?? value.length;
+    const end = composer.selectionEnd ?? start;
     const before = value.slice(0, start);
     const after = value.slice(end);
     const lead = before && !/\s$/.test(before) ? " " : "";
-    const tail = after && !/^\s/.test(after) ? " " : "";
+    const tail = /^\s/.test(after) ? "" : " ";
     const marker = `${lead}${text}${tail}`;
-    el.value = before + marker + after;
-    const caret = before.length + marker.length;
-    el.setSelectionRange(caret, caret);
-    autosize();
+    const caret = start + marker.length + (tail ? 0 : 1);
+    composer.setRangeText(marker, start, end, "end");
+    composer.setSelectionRange(caret, caret);
   }
 
-  function removeMarker(pattern) {
-    const el = els.input;
-    const caret = el.selectionStart ?? el.value.length;
-    const removedBefore = (el.value.slice(0, caret).match(pattern) || []).join("").length;
-    el.value = el.value.replace(pattern, "");
+  function removeMarker(marker) {
+    const pattern = new RegExp(` ?${marker.replace(/[[\]]/g, "\\$&")}`, "gi");
+    const value = composer.value;
+    const caret = composer.selectionStart ?? value.length;
+    const removedBefore = (value.slice(0, caret).match(pattern) || []).join("").length;
+    const next = value.replace(pattern, "");
+    if (next === value) return;
+    composer.value = next;
     const at = Math.max(0, caret - removedBefore);
-    el.setSelectionRange(at, at);
-    autosize();
+    composer.setSelectionRange(at, at);
   }
 
   function addShotFiles(files) {
@@ -8794,20 +9030,14 @@
     if (documents.length) attachDocuments(documents);
   }
   function insertLine(text) {
-    const el = els.input;
-    const value = el.value;
-    const start = el.selectionStart ?? value.length;
-    const end = el.selectionEnd ?? start;
+    const value = composer.value;
+    const start = composer.selectionStart ?? value.length;
+    const end = composer.selectionEnd ?? start;
     const before = value.slice(0, start);
     const after = value.slice(end);
     const lead = before && !/\n$/.test(before) ? "\n" : "";
     const tail = after && !/^\n/.test(after) ? "\n" : "";
-    const line = `${lead}${text}${tail}`;
-    el.value = before + line + after;
-    const caret = before.length + line.length;
-    el.setSelectionRange(caret, caret);
-    autosize();
-    updateComposerClear();
+    composer.setRangeText(`${lead}${text}${tail}`, start, end, "end");
   }
   function attachDocuments(files) {
     const room = currentRoom();
@@ -8829,7 +9059,7 @@
         } finally {
           uploads -= 1;
           if (!uploads) els.composer.classList.remove("uploading");
-          els.input.focus();
+          composer.focus();
         }
       };
       reader.onerror = () => showError(new Error(`could not read ${file.name || "the file"}`));
@@ -8845,9 +9075,8 @@
   els.shotsTray.addEventListener("click", (e) => {
     const drop = e.target.closest(".shot-drop");
     if (!drop) return;
-    const [shot] = pendingShots.splice(Number(drop.dataset.i), 1);
-    if (shot) removeMarker(new RegExp(` ?\\[img ${shot.n}\\]`, "gi"));
-    renderShotsTray();
+    const shot = pendingShots[Number(drop.dataset.i)];
+    if (shot) removeMarker(shotMarker(shot.n));
   });
 
   const QUOTES_MAX = 6;
@@ -8869,6 +9098,7 @@
 
   function clearQuotes() {
     pendingQuotes = [];
+    detachedQuotes = [];
     quoteSeq = 0;
     renderQuotesTray();
   }
@@ -8882,15 +9112,14 @@
     pendingQuotes.push({ n, id: m.id, seq: m.seq, from: m.from, fromName: m.fromName, ts: m.ts, text: fragment });
     renderQuotesTray();
     insertMarker(quoteMarker(n));
-    els.input.focus();
+    composer.focus();
   }
 
   els.quotesTray.addEventListener("click", (e) => {
     const drop = e.target.closest(".qc-drop");
     if (!drop) return;
-    const [quote] = pendingQuotes.splice(Number(drop.dataset.i), 1);
-    if (quote) removeMarker(new RegExp(` ?\\[quote ${quote.n}\\]`, "gi"));
-    renderQuotesTray();
+    const quote = pendingQuotes[Number(drop.dataset.i)];
+    if (quote) removeMarker(quoteMarker(quote.n));
   });
 
   function messageOfNode(node) {
@@ -8977,7 +9206,7 @@
       .filter((q) => q.m);
   }
 
-  els.input.addEventListener("paste", (e) => {
+  function pasteIntoComposer(e) {
     const files = filesFrom(e.clipboardData);
     if (files.length) {
       e.preventDefault();
@@ -8988,7 +9217,7 @@
     if (!quotes.length) return;
     e.preventDefault();
     for (const q of quotes) addQuote(q.m, q.text);
-  });
+  }
   for (const target of [els.composer, els.messages]) {
     target.addEventListener("dragover", (e) => {
       if (!imageFilesFrom(e.dataTransfer).length && !(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files"))) return;
@@ -9002,13 +9231,13 @@
       if (!files.length) return;
       e.preventDefault();
       addFiles(files);
-      els.input.focus();
+      composer.focus();
     });
   }
   let typingSentAt = 0;
   els.input.addEventListener("input", () => {
     lastTypedAt = Date.now();
-    if (!currentRoom() || !els.input.value.trim()) return;
+    if (!currentRoom() || !composer.value.trim()) return;
     const now = Date.now();
     if (now - typingSentAt < 2000) return;
     typingSentAt = now;
@@ -9057,8 +9286,8 @@
     castBanner.innerHTML = waiting.length
       ? `<div class="cast-lead"><strong>Summon ${waiting.map((p) => esc(p.name)).join(" and ")} to begin.</strong> ${waiting.length === 1 ? "It comes" : "They come"} from the template with the character set; pick the coding agent that runs ${waiting.length === 1 ? "it" : "each"}.</div><div class="cast-list">${waiting.map((p) => `<button type="button" class="cast-card" data-id="${esc(p.id)}">${avatar(p, 44, { dim: "unstaffed" })}<b>${esc(p.name)}</b>${p.tagline ? `<span>"${esc(p.tagline)}"</span>` : ""}<em>Summon ${esc(p.name)}</em></button>`).join("")}</div>`
       : "";
-    els.input.disabled = waiting.length > 0;
-    els.input.placeholder = waiting.length ? `Summon ${waiting.map((p) => p.name).join(" and ")} to start the conversation` : "Message the room… @Name or /skill";
+    composer.disabled = waiting.length > 0;
+    composer.placeholder = waiting.length ? `Summon ${waiting.map((p) => p.name).join(" and ")} to start the conversation` : "Message the room… @Name or /skill";
     els.composer.classList.toggle("gated", waiting.length > 0);
   }
 
@@ -9186,16 +9415,15 @@
   }
   els.composer.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const text = els.input.value.trim();
+    const text = composer.value.trim();
     const room = currentRoom();
     if ((!text && !pendingShots.length && !pendingQuotes.length) || !room) return;
     const shots = pendingShots;
     const quotes = pendingQuotes;
-    els.input.value = "";
+    composer.reset("");
     clearShots();
     clearQuotes();
     typingSentAt = 0;
-    autosize();
     const local = { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, seq: 0, displayOrder: optimisticOrder(room), from: "human", fromName: (state.settings || {}).humanName || "You", to: [], toNames: [], text, ts: Date.now(), kind: "chat", pending: true };
     if (shots.length) local.images = shots.map((shot) => ({ file: "", name: shot.name, mimeType: shot.mimeType, bytes: 0, n: shot.n, url: shot.data }));
     if (quotes.length) local.quotes = quotes.map((q) => ({ ...q }));
@@ -9208,9 +9436,9 @@
     } catch (error) {
       removeMessage(room.id, localId);
       showError(error);
-      els.input.value = text;
       pendingShots = shots;
       pendingQuotes = quotes;
+      composer.reset(text);
       renderShotsTray();
       renderQuotesTray();
     }
@@ -9440,11 +9668,8 @@
     function pick(i) {
       const p = m.items[i];
       if (!p) return close();
-      const value = textarea.value;
-      const caret = textarea.selectionStart ?? value.length;
-      textarea.value = `${value.slice(0, m.start)}@${p.name} ${value.slice(caret)}`;
-      const pos = m.start + p.name.length + 2;
-      textarea.setSelectionRange(pos, pos);
+      const caret = textarea.selectionStart ?? textarea.value.length;
+      textarea.setRangeText(`@${p.name} `, m.start, caret, "end");
       close();
       textarea.focus();
       if (opts.onChange) opts.onChange();
@@ -9470,8 +9695,8 @@
       }
     });
   }
-  attachMentions(els.input, els.mentionMenu, { onChange: autosizeSoon });
-  attachSlashMenu(els.input, els.mentionMenu);
+  attachMentions(composer, els.mentionMenu, { onChange: autosizeSoon });
+  attachSlashMenu(composer, els.mentionMenu);
   els.input.addEventListener("keydown", (event) => {
     if (event.defaultPrevented) return;
     if (event.key === "Enter" && !event.shiftKey) {
@@ -9549,12 +9774,21 @@
   }
   els.sideToggle.addEventListener("click", () => setSideOpen(els.app.classList.contains("side-collapsed")));
   let lastScrollTop = 0;
+  let lastMovedAt = 0;
   let lastUserScrollAt = 0;
   for (const type of ["wheel", "touchmove", "keydown", "mousedown"]) {
     els.messages.addEventListener(type, () => (lastUserScrollAt = Date.now()), { passive: true });
   }
+  const WHEEL_GESTURE_GAP_MS = 300;
+  const wheelGesture = { lastAt: 0, beganAtEnd: false };
+  function restedAtEnd(now) {
+    return atEnd() && els.messages.scrollTop === lastScrollTop && now - lastMovedAt > WHEEL_GESTURE_GAP_MS;
+  }
   function wheelPastEnd(e) {
-    if (e.deltaY > 0 && !stuck && atEnd() && !humanHoldsText()) scrollToBottom("the wheel pushed past the end");
+    const now = Date.now();
+    if (now - wheelGesture.lastAt > WHEEL_GESTURE_GAP_MS) wheelGesture.beganAtEnd = restedAtEnd(now);
+    wheelGesture.lastAt = now;
+    if (e.deltaY > 0 && wheelGesture.beganAtEnd && !stuck && atEnd() && !humanHoldsText()) scrollToBottom("the wheel pushed past the end", { byHand: true });
   }
   els.messages.addEventListener("wheel", wheelPastEnd, { passive: true });
   els.messages.addEventListener("pointerdown", (e) => {
@@ -9575,6 +9809,7 @@
   window.addEventListener("blur", releasePress);
   els.messages.addEventListener("scroll", () => {
     if (state.view !== "room") return;
+    if (els.messages.scrollTop !== lastScrollTop) lastMovedAt = Date.now();
     if (rowPrices.stamp !== pricesStamp()) { repriceSoon(); return; }
     const top = els.messages.scrollTop;
     const byHand = Date.now() - lastUserScrollAt < 700;
@@ -9603,7 +9838,7 @@
     else pruneDoneNotes();
     foldSettleSoon();
   });
-  els.jumpLatest.addEventListener("click", scrollToBottom);
+  els.jumpLatest.addEventListener("click", () => scrollToBottom("Latest was pressed", { byHand: true }));
   document.addEventListener("mousedown", (e) => {
     if (!state.detailsOpen) return;
     if (e.target.closest("#details, #side, .rail, .chat-actions, dialog, .mention-menu, .lightbox, .tl-pop, #pins-panel")) return;
@@ -9661,25 +9896,45 @@
   document.addEventListener("focusin", event => {
     if (allConversationSelection && !conversationSelection.contains(event.target) && !els.messages.contains(event.target)) clearConversationSelection();
   });
+  function shortcutLetter(event) {
+    if (/^[a-z]$/i.test(event.key || "")) return event.key.toLowerCase();
+    const place = /^Key([A-Z])$/.exec(event.code || "");
+    return place ? place[1].toLowerCase() : "";
+  }
+  function isShortcut(event, letter) {
+    return Boolean(event.ctrlKey || event.metaKey) && !event.altKey && shortcutLetter(event) === letter;
+  }
+  function findFieldOnScreen() {
+    if (els.fileDialog.open) return els.fvTools.hidden ? null : els.fvSearch;
+    if (document.querySelector("dialog[open]")) return null;
+    if (state.view === "room") return els.search;
+    if (state.view === "home" || state.view === "rooms") return els.roomSearch;
+    return null;
+  }
+  function openFindOnScreen(event) {
+    if (!isShortcut(event, "f")) return;
+    const field = findFieldOnScreen();
+    if (!field) return;
+    event.preventDefault();
+    if (field === els.search) clearConversationSelection();
+    field.focus();
+    field.select();
+  }
+  document.addEventListener("keydown", openFindOnScreen);
   document.addEventListener("keydown", event => {
     if (state.view !== "room" || document.querySelector("dialog[open]")) return;
     if (event.key === "Escape" && allConversationSelection) {
       clearConversationSelection(); event.preventDefault(); event.stopImmediatePropagation(); return;
     }
-    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-    const key = event.key.toLowerCase();
-    if (key === "f") {
-      event.preventDefault(); clearConversationSelection(); els.search.focus(); els.search.select(); return;
-    }
     if (event.target.closest?.("input, textarea, select, [contenteditable]")) return;
-    if (key === "a") {
+    if (isShortcut(event, "a")) {
       const room = currentRoom();
       if (!room) return;
       event.preventDefault(); window.getSelection()?.removeAllRanges();
       allConversationSelection = { roomId: room.id, version: room.history?.version || "", busy: false };
       conversationSelection.hidden = false;
       els.messages.focus({ preventScroll: true });
-    } else if (key === "c" && allConversationSelection) {
+    } else if (isShortcut(event, "c") && allConversationSelection) {
       event.preventDefault(); void copyWholeConversation();
     }
   });
@@ -9725,12 +9980,34 @@
     const rows = data.hits.map((h) => {
       const p = room ? findById(room, h.from) : null;
       const snippet = esc(h.snippet).replace(/\[([^\]]{1,80})\]/g, "<mark>$1</mark>");
-      return `<div class="tl-row search-row" data-room="${esc(h.roomId)}" data-seq="${h.seq}"><span class="search-meta"><span class="search-room">${esc(h.roomName)}</span><b style="${p ? `color:${esc(p.color)}` : ""}">${esc(h.fromName)}</b><span>${esc(fullTime(h.ts))}</span><span>#${h.seq}</span>${h.deleted ? "<span>· removed</span>" : ""}</span><span class="search-snippet">${snippet}</span></div>`;
+      return `<div class="tl-row search-row" data-room="${esc(h.roomId)}" data-seq="${h.seq}"><span class="search-meta"><span class="search-room">${esc(h.roomName)}</span><b style="${p ? `color:${esc(p.color)}` : ""}">${esc(h.fromName)}</b>${h.fromNow ? `<span class="now-name">Now: ${esc(h.fromNow)}</span>` : ""}<span>${esc(fullTime(h.ts))}</span><span>#${h.seq}</span>${h.deleted ? "<span>· removed</span>" : ""}</span><span class="search-snippet">${snippet}</span></div>`;
     });
-    searchPanel.innerHTML = head + (rows.length ? rows.join("") : data.unavailable ? "" : `<div class="search-empty">Nothing matches "${esc(q)}". Words are ANDed: try fewer, a phrase in quotes, or word*.</div>`);
+    searchPanel.innerHTML = head + searchNamesHtml(data.names || []) + (rows.length ? rows.join("") : data.unavailable ? "" : `<div class="search-empty">Nothing matches "${esc(q)}". Words are ANDed: try fewer, a phrase in quotes, or word*.</div>`);
     searchPanel.hidden = false;
   }
+  function searchNamesHtml(names) {
+    const seen = new Set();
+    const lines = [];
+    for (const n of names) {
+      for (const other of n.others) {
+        const key = `${n.term.toLowerCase()}\u0000${other.toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const who = n.now && n.now.toLowerCase() !== n.term.toLowerCase() ? `${esc(n.term)} is called ${esc(n.now)} now` : `${esc(n.term)} was called ${esc(other)} before`;
+        const label = n.now && n.now.toLowerCase() !== n.term.toLowerCase() && n.now === other ? `Search ${esc(other)}` : `Search ${esc(other)} too`;
+        lines.push(`<div class="search-name">${ic("info")}<span>${who}: older messages may name them so.</span><button type="button" class="linklike search-name-swap" data-term="${esc(n.term)}" data-other="${esc(other)}">${label}</button></div>`);
+      }
+    }
+    return lines.join("");
+  }
   searchPanel.addEventListener("click", (e) => {
+    const swap = e.target.closest(".search-name-swap");
+    if (swap) {
+      const words = els.search.value.trim().split(/\s+/);
+      els.search.value = words.map((w) => (w.replace(/^@/, "").replace(/\*$/, "").toLowerCase() === swap.dataset.term.toLowerCase() ? swap.dataset.other : w)).join(" ");
+      searchStore(els.search.value.trim());
+      return;
+    }
     const toggleBtn = e.target.closest(".search-toggle");
     if (toggleBtn) {
       storeSearch[toggleBtn.dataset.key] = toggleBtn.dataset.value;
@@ -9793,13 +10070,7 @@
     }
   });
   function insertAtCaret(text) {
-    const input = els.input;
-    const start = input.selectionStart ?? input.value.length;
-    const end = input.selectionEnd ?? start;
-    input.value = input.value.slice(0, start) + text + input.value.slice(end);
-    const pos = start + text.length;
-    input.setSelectionRange(pos, pos);
-    autosize();
+    composer.setRangeText(text, composer.selectionStart, composer.selectionEnd, "end");
   }
   function toggleEmojiMenu(open) {
     const menu = els.emojiMenu;
@@ -9813,7 +10084,7 @@
         emojiGrid(CHAT_EMOJI, null, (emoji) => {
           insertAtCaret(emoji);
           toggleEmojiMenu(false);
-          els.input.focus();
+          composer.focus();
         }),
       );
     }
@@ -9867,7 +10138,6 @@
     const expand = e.target.closest && e.target.closest(".mm-expand");
     if (expand) openDiagram(expand.closest(".mermaid-block"));
   });
-  els.roomSettingsBtn.addEventListener("click", () => openDetails({ kind: "room" }));
   els.chatInfoBtn.addEventListener("click", () => openDetails({ kind: "room" }));
   $("#automations-btn").addEventListener("click", () => {
     const room = currentRoom();
@@ -10463,7 +10733,7 @@
     const m = [...room.messages].reverse().find((x) => x.from === b.dataset.id && x.kind === "chat");
     const el = m && els.messages.querySelector(`.msg[data-id="${m.id}"]`);
     if (m?.streaming) void jumpToId(m.id);
-    else scrollToBottom("the working figure was clicked");
+    else scrollToBottom("the working figure was clicked", { byHand: true });
   });
 
   function lifeOf(p) {
@@ -10596,7 +10866,7 @@
           <span>Last reply</span><span>${last ? `<span title="tokens in">${ic("arrow-down")} ${fmtTokens(last.usage.inputTokens)}</span> <span title="tokens out">${ic("arrow-up")} ${fmtTokens(last.usage.outputTokens)}</span>` : "—"}</span>
           <span>Cost (estimate)</span><span>${fmtCost(p.cost) || "—"}</span>
           <span>Briefs sent</span><span>${p.briefsSent ?? 0}</span>
-          <span>Notes</span><span>${p.notes ? `taken at ${fmtTokens(p.notesAt || 0)} tokens` : "none yet"}${p.notesTurn ? ` · <span class="taking" title="The hidden turn is running; nothing is posted">taking notes<i></i><i></i><i></i></span>` : `${p.status === "offline" || p.status === "unstaffed" ? "" : ` · <button type="button" class="link-btn lp-take" title="A hidden turn: the vibemate writes 10 lines for a future restart; nothing is posted">${p.notes ? "refresh" : "take now"}</button>`}${p.notes ? ` · <button type="button" class="link-btn lp-edit">edit</button>` : ""}`}</span>
+          <span>Notes</span><span>${p.notes ? `taken ${p.notesWrittenAt ? `${relTime(p.notesWrittenAt)}, ` : ""}at ${fmtTokens(p.notesAt || 0)} tokens` : "none yet"}${p.notesTurn ? ` · <span class="taking" title="The hidden turn is running; nothing is posted">taking notes<i></i><i></i><i></i></span>` : `${p.status === "offline" || p.status === "unstaffed" ? "" : ` · <button type="button" class="link-btn lp-take" title="A hidden turn: the vibemate writes 10 lines for a future restart; nothing is posted">${p.notes ? "refresh" : "take now"}</button>`}${p.notes ? ` · <button type="button" class="link-btn lp-edit">edit</button>` : ""}`}</span>
         </div>
         ${p.notes ? `<pre class="lp-notes">${esc(p.notes)}</pre><div class="lp-editor" hidden><textarea class="lp-notes-area" rows="6" maxlength="4000">${esc(p.notes)}</textarea><div class="row-btns">${UI.html("button", { label: "Clear", kind: "ghost", size: "sm", hook: "lp-notes-clear" })}${UI.html("button", { label: "Save", kind: "primary", size: "sm", hook: "lp-notes-save" })}</div></div>` : ""}
         ${vendorLoggedOut(p) ? `<div class="lp-respawn lp-login">${UI.html("button", { label: `Log in to ${p.agentVendor || "the vendor"}`, icon: "lock", kind: "primary", size: "sm", act: "open-login-dialog", data: { recipe: p.agentType, purpose: "login" } })}<span class="lp-sub">${esc(p.agentVendor || "The vendor")} is not logged in; a respawn would fail the same way.</span></div>` : `<div class="lp-respawn">
@@ -10682,19 +10952,20 @@
     const room = currentRoom();
     const pins = room && state.view === "room" ? pinnedMessages(room) : [];
     pinsBtn.hidden = pins.length === 0;
-    pinsBtn.innerHTML = `${ic("pin-solid")}${pins.length}`;
+    setHtml(pinsBtn, `<span class="pad" aria-hidden="true"></span>${rig("pin-solid")}<span class="pin-count"></span>`);
+    setText(pinsBtn.querySelector(".pin-count"), String(pins.length));
     pinsBtn.title = `${pins.length} pinned message${pins.length === 1 ? "" : "s"}`;
     pinsBtn.setAttribute("aria-label", pinsBtn.title);
     if (!pins.length) pinsPanel.hidden = true;
     if (pinsPanel.hidden) return;
-    pinsPanel.innerHTML = pins
+    setHtml(pinsPanel, pins
       .map((m) => {
         const p = findById(room, m.from);
         const who = m.from === "human" ? Object.assign(meAvatarData(), { color: (p || {}).color }) : p;
         const text = String(m.text || "").replace(/\s+/g, " ").trim().slice(0, 160) || (m.images && m.images.length ? `[${m.images.length} image${m.images.length === 1 ? "" : "s"}]` : "");
         return `<div class="tl-row pin-row${m.from === "human" ? " mine" : ""}" data-id="${esc(m.id)}"><span class="tl-av">${who ? avatar(who, 16, {}) : ""}</span><span class="tl-text">${esc(text)}</span><span class="pin-time">${time(m.ts)}</span><button type="button" class="pin-x" title="Unpin">×</button></div>`;
       })
-      .join("");
+      .join(""));
   }
   pinsBtn.addEventListener("click", () => {
     pinsPanel.hidden = !pinsPanel.hidden;

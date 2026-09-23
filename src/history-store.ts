@@ -3,9 +3,11 @@
 import { DatabaseSync, backup as sqliteBackup } from "node:sqlite";
 import { CarryHistory } from "./carry-history.js";
 import { SharedMemory } from "./shared-memory.js";
+import { RoomCards } from "./room-cards.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import type { ChatMessage } from "./room.js";
 import { Logger } from "./log.js";
+import type { NameUse } from "./name-directory.js";
 
 export const HISTORY_DB_FILE = "history.db";
 export const SCHEMA_VERSION = 2;
@@ -18,7 +20,7 @@ export interface SearchQuery {
   text: string;
   rooms?: string[];
   kinds?: Array<"chat" | "system">;
-  author?: string;
+  authors?: { roomId: string; id: string }[];
   limit?: number;
   offset?: number;
   sort?: "rank" | "newest" | "oldest";
@@ -160,6 +162,7 @@ create table if not exists messages(
   unique(room, id)
 );
 create index if not exists idx_messages_room_seq on messages(room, seq);
+create index if not exists idx_messages_room_author on messages(room, author, author_name);
 create virtual table if not exists messages_fts using fts5(
   text, author_name, content='messages', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2');
 create virtual table if not exists messages_trigram using fts5(
@@ -233,6 +236,7 @@ export class HistoryStore {
   private readonly log: Logger;
   readonly carry: CarryHistory;
   readonly memory: SharedMemory;
+  readonly cards: RoomCards;
 
   constructor(readonly path: string, log?: Logger) {
     this.log = log ?? new Logger("history");
@@ -247,6 +251,7 @@ export class HistoryStore {
     this.db.exec("create table if not exists file_transactions(id text primary key)");
     this.carry = new CarryHistory(this.db);
     this.memory = new SharedMemory(this.db);
+    this.cards = new RoomCards(this.db);
     this.reconcileColumns();
     const version = this.meta("schema_version");
     if (version === null || Number(version) < SCHEMA_VERSION) this.setMeta("schema_version", String(SCHEMA_VERSION));
@@ -427,6 +432,7 @@ export class HistoryStore {
     this.transaction(() => {
       this.db.prepare("delete from messages where room = ?").run(roomId);
       this.carry.drop(roomId);
+      this.cards.drop(roomId);
     });
   }
 
@@ -446,6 +452,35 @@ export class HistoryStore {
 
   indexedCount(): number {
     return Number((this.db.prepare("select count(*) as n from messages_fts_docsize").get() as Row).n);
+  }
+
+  participantIds(roomId: string): Set<string> {
+    const rows = this.db.prepare(
+      `select author as id from messages where room = ? and author is not null
+       union select t.value as id from messages m, json_each(m.body, '$.to') t where m.room = ?`,
+    ).all(roomId, roomId) as Row[];
+    return new Set(rows.map((r) => String(r.id)));
+  }
+
+  nameUses(roomIds: string[]): NameUse[] {
+    if (!roomIds.length) return [];
+    const inRooms = `room in (${placeholders(roomIds.length)})`;
+    const written = this.db.prepare(
+      `select room, author, author_name, min(ts) as first, max(ts) as last from messages
+        where ${inRooms} and kind = 'chat' and author is not null and author_name is not null and author_name != ''
+        group by room, author, author_name`,
+    ).all(...roomIds) as Row[];
+    const renamed = this.db.prepare(
+      `select room, ts, json_extract(body, '$.details.renamed') as renamed from messages
+        where ${inRooms} and kind = 'system' and json_extract(body, '$.details.renamed.id') is not null`,
+    ).all(...roomIds) as Row[];
+    const uses: NameUse[] = written.map((r) => ({ roomId: String(r.room), id: String(r.author), name: String(r.author_name), first: Number(r.first), last: Number(r.last) }));
+    for (const r of renamed) {
+      const { id, from, to } = JSON.parse(String(r.renamed)) as { id: string; from: string; to: string };
+      const at = Number(r.ts);
+      uses.push({ roomId: String(r.room), id, name: from, first: at, last: at }, { roomId: String(r.room), id, name: to, first: at, last: at });
+    }
+    return uses;
   }
 
   rooms(): string[] {
@@ -738,9 +773,10 @@ export class HistoryStore {
       where.push(`m.room in (${placeholders(query.rooms.length)})`);
       params.push(...query.rooms);
     }
-    if (query.author) {
-      where.push("unicode_lower(m.author_name) = ?");
-      params.push(query.author.toLowerCase());
+    if (query.authors) {
+      if (!query.authors.length) return [];
+      where.push(`(m.room, m.author) in (values ${query.authors.map(() => "(?, ?)").join(", ")})`);
+      for (const a of query.authors) params.push(a.roomId, a.id);
     }
     const rankExpr = withAuthor ? `bm25(${table}, 1.0, 0.4)` : `bm25(${table})`;
     const order = query.sort === "newest" ? "m.ts desc, rank" : query.sort === "oldest" ? "m.ts asc, rank" : "rank";

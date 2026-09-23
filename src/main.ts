@@ -545,7 +545,7 @@ async function launchHiddenHub(options: CliOptions, log: Logger, info: BuildInfo
   if (options.name) args.push("--name", options.name);
   if (options.reconnectOnce) args.push("--reconnect-once", options.reconnectOnce);
   if (options.afterRestart) args.push("--after-restart");
-  const child = spawn(process.execPath, args, { cwd: options.dataDir, detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
+  const child = spawn(process.execPath, args, { cwd: options.dataDir, detached: true, stdio: ["ignore", fd, fd], windowsHide: true, env: withRunAsNode() });
   child.unref();
   closeSync(fd);
   log.info(`the room started in the background (pid ${child.pid}); log: ${logPath}`);

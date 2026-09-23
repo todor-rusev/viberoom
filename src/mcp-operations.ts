@@ -162,5 +162,10 @@ export async function executeOperation(name: string, args: Record<string, unknow
     if (!res.ok) return errorResult("the message could not be read", res);
     return { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] };
   }
+  if (name === "fix_diagram") {
+    const res = await hub("/api/mcp/diagram", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN, message: args.message, block: args.block, source: args.source }) });
+    if (!res.ok) return errorResult("the diagram could not be replaced", res);
+    return { content: [{ type: "text", text: String(res.body.message ?? "replaced") }] };
+  }
   throw new Error("Unimplemented registered operation");
 }

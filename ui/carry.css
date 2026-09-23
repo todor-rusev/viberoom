@@ -18,20 +18,8 @@
 .carry-dialog .cx-link:hover { text-decoration: underline; }
 .carry-dialog .cx-center { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; padding: 8px 0; }
 .carry-dialog .cx-foot { margin: 18px 0 2px; text-align: center; }
-.carry-dialog .cx-art { width: 100%; max-width: 190px; margin: 0 auto; color: var(--login-dialog-scene-ink); }
+.carry-dialog .cx-art { width: 100%; max-width: 190px; margin: 0 auto; }
 .carry-dialog .cx-art.is-small { max-width: 120px; }
-.carry-dialog .cx-art svg { display: block; width: 100%; height: auto; overflow: visible; }
-.carry-dialog .cx-art .paper { fill: var(--login-dialog-scene-paper); stroke: var(--login-dialog-scene-ink); }
-.carry-dialog .cx-art .paper-fill { fill: var(--login-dialog-scene-paper); stroke: none; }
-.carry-dialog .cx-art .outline { fill: none; stroke: var(--login-dialog-scene-ink); }
-.carry-dialog .cx-art .chrome { stroke: var(--login-dialog-scene-muted); fill: var(--login-dialog-scene-muted); }
-.carry-dialog .cx-art .stroke { stroke: var(--login-dialog-scene-ink); fill: none; }
-.carry-dialog .cx-art .accent { stroke: var(--login-dialog-scene-accent); fill: none; }
-.carry-dialog .cx-art .accent-fill { fill: var(--login-dialog-scene-accent); stroke: none; }
-.carry-dialog .cx-art .ok-fill { fill: var(--login-dialog-ok-bg); stroke: none; }
-.carry-dialog .cx-art .on-ok { stroke: var(--login-dialog-ok-ink); }
-.carry-dialog .cx-art .bad-fill { fill: var(--login-dialog-bad-bg); stroke: none; }
-.carry-dialog .cx-art .on-bad { stroke: var(--login-dialog-bad-ink); }
 .carry-dialog .cx-art .cx-pkg, .carry-dialog .cx-art .ok-fill { transform-box: fill-box; transform-origin: center; }
 .carry-dialog .cx-art.is-busy .cx-pkg { animation: cx-bob 1.4s ease-in-out infinite; }
 .carry-dialog .cx-art.is-busy .cx-trail, .carry-dialog .cx-art.is-float .cx-trail { animation: cx-march 900ms linear infinite; }

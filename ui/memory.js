@@ -4,7 +4,7 @@
   const esc = x => String(x ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   async function open(roomId, initialScope = "user") {
     const dialog = document.createElement("dialog"); dialog.className = "dialog wide memory-dialog";
-    dialog.innerHTML = '<div class="carry-heading"><h3>Shared memory</h3><button data-ui="button" data-kind="ghost" data-memory-close>Close</button></div><p role="status">Loading memory…</p>';
+    dialog.innerHTML = '<div class="memory-heading"><h3>Shared memory</h3><button data-ui="button" data-kind="ghost" data-memory-close>Close</button></div><p role="status">Loading memory…</p>';
     document.body.appendChild(dialog); dialog.showModal();
     let state, scope = initialScope, dirty = false, busy = false, warningRequest;
     const controller = new AbortController();
@@ -21,7 +21,7 @@
     }
     function row(note = { text: "", locked: true }) {
       const item = document.createElement("section"); item.className = "memory-note"; item.dataset.memoryNote = note.id || "";
-      item.innerHTML = `<textarea rows="2" maxlength="480" aria-label="Memory note">${esc(note.text)}</textarea><div class="memory-note-tools"><label><input type="checkbox"${note.locked ? " checked" : ""}>Protect from agent edits</label><button data-ui="button" data-kind="ghost" data-memory-remove>Remove</button></div>${note.author ? `<small>Last changed by ${esc(note.author)} · ${esc(new Date(note.updatedAt).toLocaleString())} · ${esc(note.basis)}${note.sources?.length ? ` · Source: ${note.sources.map(s => `${esc(s.room)} #${s.seq}`).join(", ")}` : ""}</small>` : ""}`;
+      item.innerHTML = `<textarea rows="2" maxlength="480" aria-label="Memory note">${esc(note.text)}</textarea><div class="memory-note-tools"><label class="check-row"><input type="checkbox"${note.locked ? " checked" : ""}>Protect from agent edits</label><button data-ui="button" data-kind="ghost" data-memory-remove>Remove</button></div>${note.author ? `<small>Last changed by ${esc(note.author)} · ${esc(new Date(note.updatedAt).toLocaleString())} · ${esc(note.basis)}${note.sources?.length ? ` · Source: ${note.sources.map(s => `${esc(s.room)} #${s.seq}`).join(", ")}` : ""}</small>` : ""}`;
       return item;
     }
     function counts() {
@@ -31,10 +31,10 @@
     }
     function render() {
       const current = state[scope]; dirty = false; warningRequest = null;
-      dialog.innerHTML = `<div class="carry-heading"><h3>Shared memory</h3><button data-ui="button" data-kind="ghost" data-memory-close>Close</button></div>
-        <nav class="carry-modes"><button data-ui="button" data-kind="${scope === "user" ? "primary" : "ghost"}" data-memory-scope="user">About you · all rooms</button>${roomId ? `<button data-ui="button" data-kind="${scope === "room" ? "primary" : "ghost"}" data-memory-scope="room">This room</button>` : ""}</nav>
+      dialog.innerHTML = `<div class="memory-heading"><h3>Shared memory</h3><button data-ui="button" data-kind="ghost" data-memory-close>Close</button></div>
+        <nav class="memory-scopes" aria-label="Whose memory"><button data-ui="button" data-kind="${scope === "user" ? "primary" : "ghost"}" data-memory-scope="user">About you · all rooms</button>${roomId ? `<button data-ui="button" data-kind="${scope === "room" ? "primary" : "ghost"}" data-memory-scope="room">This room</button>` : ""}</nav>
         <p>${scope === "user" ? "Durable preferences shared with every room, independently of history-sharing settings." : "Durable conventions shared by the vibemates in this room."} Current instructions take precedence. Private agent session notes are separate.</p>
-        <label class="carry-check"><input type="checkbox" data-memory-enabled${current.enabled ? " checked" : ""}>Allow vibemates to maintain these notes</label><p class="hint">Turning this off stops agent edits; existing notes are still supplied. Your new and edited notes are protected by default.</p>
+        <label class="check-row"><input type="checkbox" data-memory-enabled${current.enabled ? " checked" : ""}>Allow vibemates to maintain these notes</label><p class="hint">Turning this off stops agent edits; existing notes are still supplied. Your new and edited notes are protected by default.</p>
         <p class="memory-count hint"></p><div class="memory-notes"></div><button data-ui="button" data-kind="ghost" data-memory-add>Add a note</button>
         <p class="memory-feedback error" role="status" hidden></p><button data-ui="button" data-kind="secondary" data-memory-ack hidden>Save with these warnings</button>
         <div class="actions"><button data-ui="button" data-kind="ghost" data-memory-reload>Reload</button><button data-ui="button" data-kind="primary" data-memory-save>Save memory</button></div>

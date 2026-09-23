@@ -21,22 +21,22 @@
 </head>
 <body>
   <div id="app" class="shell view-rooms">
-    <nav class="rail" id="rail" aria-label="Main menu">
+    <nav class="rail quiet-glyphs" id="rail" aria-label="Main menu">
       <div class="rail-head">
         <button class="rail-logo" id="rail-logo" title="viberoom"><img class="mark" src="/icon-256.png?v=7" alt=""><span class="word">viberoom</span></button>
       </div>
       <div class="rail-items">
-        <button class="rail-item new" id="rail-new-room" title="Open a room"><span class="ico" data-icon="plus"></span><span class="label">Open a room</span></button>
-        <button class="rail-item" data-nav="rooms" title="Rooms"><span class="ico" data-icon="rooms"></span><span class="label">Rooms</span></button>
+        <button class="rail-item new" id="rail-new-room" title="Open a room"><span class="ico" data-rig="plus"></span><span class="label">Open a room</span></button>
+        <button class="rail-item" data-nav="rooms" title="Rooms"><span class="ico" data-rig="rooms"></span><span class="label">Rooms</span></button>
         <div class="rail-rooms-wrap" id="rail-rooms-wrap" hidden><span class="rail-hr"></span><div class="rail-rooms" id="rail-rooms" aria-label="Open rooms"></div><span class="rail-hr"></span></div>
-        <button class="rail-item" data-nav="skills" title="Skills"><span class="ico" data-icon="skills"></span><span class="label">Skills</span></button>
-        <button class="rail-item" data-nav="settings" title="Settings"><span class="ico" data-icon="settings"></span><span class="label">Settings</span></button>
+        <button class="rail-item" data-nav="skills" title="Skills"><span class="ico" data-rig="skills"></span><span class="label">Skills</span></button>
+        <button class="rail-item" data-nav="settings" title="Settings"><span class="ico" data-rig="settings"></span><span class="label">Settings</span></button>
       </div>
       <div class="rail-foot">
         <div class="rail-pops" id="rail-pops"></div>
         <button class="rail-item me" data-nav="me" title="Your vibe" id="rail-me"><span class="ico" id="rail-me-avatar"></span><span class="label" id="rail-me-label">You</span></button>
         <div class="rail-status"><span class="conn" id="conn" title="Connection to the room"></span><span class="label conn-label" id="conn-label">connected</span></div>
-        <button class="rail-toggle" id="rail-toggle" title="Expand the menu"><span data-icon="expand"></span></button>
+        <button class="rail-toggle" id="rail-toggle" title="Expand the menu"><span data-rig="expand"></span></button>
       </div>
     </nav>
     <aside class="side" id="side">
@@ -51,7 +51,6 @@
         <div class="side-head room">
           <button data-ui="icon-button" data-kind="ghost" data-size="sm" id="back-to-rooms" title="All rooms"><span data-icon="back"></span></button>
           <div class="side-room-title"><h2><span id="side-room-name">Room</span> <span id="side-room-emoji"></span></h2></div>
-          <button data-ui="icon-button" data-kind="ghost" data-size="sm" id="room-settings-btn" title="Room settings"><span data-icon="settings"></span></button>
           <button data-ui="icon-button" data-kind="ghost" data-size="sm" id="side-toggle" title="Fold this column"><span data-icon="collapse"></span></button>
         </div>
         <div class="side-actions">
@@ -74,18 +73,18 @@
         <header class="main-head">
           <div><h1>Your rooms</h1><div class="hint" id="rooms-sub">Pick a room or open a new one.</div></div>
         </header>
-        <div class="rooms-grid" id="rooms-grid"></div>
+        <div class="rooms-grid stagger" id="rooms-grid"></div>
       </section>
       <section class="chat" id="chat-view" aria-labelledby="side-room-name" hidden>
         <header class="main-head chat-head">
-          <div class="chat-toolbar">
+          <div class="chat-toolbar quiet-glyphs">
             <div class="chat-sub" id="chat-room-sub"></div>
             <div class="chat-actions">
-              <label class="search" title="Search full history"><span class="search-icon" data-icon="search-solid"></span><input id="search" type="search" placeholder="Search…" aria-label="Search full history" autocomplete="off"></label>
+              <label class="search" title="Search full history"><span class="pad" aria-hidden="true"></span><span class="search-icon" data-rig="search-solid"></span><input id="search" type="search" placeholder="Search…" aria-label="Search full history" autocomplete="off"></label>
               <button id="pins-btn" data-ui="chip" data-button type="button" hidden title="Pinned messages"></button>
-              <button id="automations-btn" data-ui="icon-button" data-kind="ghost" data-size="sm" title="Automations: scheduled tasks and reminders" aria-label="Automations: scheduled tasks and reminders"><span data-icon="clock-solid"></span></button>
-              <button id="carry-btn" data-ui="icon-button" data-kind="ghost" data-size="sm" title="Export / Import" aria-label="Export or import rooms and conversations"><span data-icon="transfer-solid"></span></button>
-              <button id="chat-info-btn" data-ui="icon-button" data-size="sm" title="Room settings" aria-label="Room settings"><span data-icon="settings-solid"></span></button>
+              <button id="automations-btn" data-ui="icon-button" data-kind="ghost" data-size="sm" title="Automations: scheduled tasks and reminders" aria-label="Automations: scheduled tasks and reminders"><span data-rig="clock-solid"></span></button>
+              <button id="carry-btn" data-ui="icon-button" data-kind="ghost" data-size="sm" title="Export / Import" aria-label="Export or import rooms and conversations"><span class="pad" aria-hidden="true"></span><span data-rig="transfer-solid"></span></button>
+              <button id="chat-info-btn" data-ui="icon-button" data-size="sm" title="Room settings" aria-label="Room settings"><span class="pad" aria-hidden="true"></span><span data-rig="settings-solid"></span></button>
             </div>
           </div>
           <div id="working-now" class="working-now" hidden></div>
@@ -124,7 +123,7 @@
           <div class="composer-box">
             <div class="quotes-tray" id="quotes-tray" hidden></div>
             <div class="shots-tray" id="shots-tray" hidden></div>
-            <textarea id="input" rows="1" placeholder="Message the room… @Name or /skill" title="Enter sends, Shift+Enter is a new line; paste or drop a picture or a file"></textarea>
+            <div id="input" class="composer-input" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Message" spellcheck="true" data-placeholder="Message the room… @Name or /skill" aria-placeholder="Message the room… @Name or /skill" title="Enter sends, Shift+Enter is a new line; paste or drop a picture or a file"></div>
           </div>
           <button type="button" id="composer-clear" class="composer-clear" title="Clear the message" hidden>×</button>
           <button type="submit" class="send-btn" title="Send"><span data-icon="send"></span></button>
@@ -374,6 +373,7 @@
   <script src="/automations.js"></script>
   <script src="/layout.js"></script>
   <script src="/agent-updates.js"></script>
+  <script src="/composer.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

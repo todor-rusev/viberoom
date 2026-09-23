@@ -4,7 +4,7 @@ export const TRACE_SINCE_HEADER = "x-viberoom-diagnostics-since";
 export const TRACE_REPORT_PATH = "/api/mcp/diagnostics";
 export const TRACE_CLIENT_LIMIT = 128;
 export const TRACE_HUB_LIMIT = 512;
-const OPERATIONS = ["memory", "ready", "skill", "skills", "attach", "room", "looks", "search", "check-messages", "message", "design/lint", "templates", "propose", "looks/lint", "looks/create", "looks/propose"] as const;
+const OPERATIONS = ["memory", "ready", "skill", "skills", "attach", "room", "looks", "search", "check-messages", "message", "design/lint", "templates", "propose", "looks/lint", "looks/create", "looks/propose", "diagram"] as const;
 export type TraceOperation = typeof OPERATIONS[number];
 export type TraceOutcome = "pending" | "ok" | "http_error" | "network_error" | "timeout" | "invalid_json" | "aborted";
 export interface RequestTrace {

@@ -1,5 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { andedTerms, type HistoryStore } from "./history-store.js";
+import { NameDirectory, namesInQuery, type NameHolder } from "./name-directory.js";
 
 export const AGENT_SEARCH_RESPONSE_BYTES = 16 * 1024;
 const SNIPPET_BYTES = 800;
@@ -45,11 +46,29 @@ function emptyAdvice(hits: number, query: string): string {
     : "Nothing matched. Try other wording, or match the start of a word with word*. ";
 }
 
+function describeHolder(holder: NameHolder, roomName: (id: string) => string, manyRooms: boolean) {
+  return {
+    ...(manyRooms ? { room: holder.roomId, roomName: roomName(holder.roomId) } : {}),
+    now: holder.now ?? null,
+    names: holder.names.map((n) => ({ name: n.name, ...(n.first !== undefined ? { from: new Date(n.first).toISOString() } : {}), ...(n.last !== undefined ? { until: new Date(n.last).toISOString() } : {}) })),
+  };
+}
+
+function nameHints(query: string, names: NameDirectory) {
+  return namesInQuery(query, names).map(({ term, holder, others }) => ({
+    term, participant: holder.now ?? null, formerly: others,
+    hint: holder.now && holder.now.toLowerCase() !== term.toLowerCase()
+      ? `${term} is now called ${holder.now}; other messages name this participant ${others.join(" or ")}: search that too, or use author for what they wrote.`
+      : `Older messages name this participant ${others.join(" or ")}: search that too, or use author for what they wrote.`,
+  }));
+}
+
 export function searchAgentHistory(
   store: HistoryStore | null,
   room: { id: string; name: string },
   params: Record<string, unknown>,
   reachable: () => { id: string; name: string }[] = () => [room],
+  directory: (roomIds: string[]) => NameDirectory = (roomIds) => new NameDirectory(store?.nameUses(roomIds) ?? [], []),
 ) {
   const args = parseAgentSearchArgs(params, true), { limit } = args;
   if (!store) throw new Error("the conversation store is unavailable; history could not be searched");
@@ -57,26 +76,37 @@ export function searchAgentHistory(
   const shared = args.rooms === "all" ? reachable() : [];
   const searched = shared.length ? shared : [room];
   const names = new Map(searched.map((r) => [r.id, r.name]));
+  const people = directory(searched.map((r) => r.id));
+  const holders = args.author ? people.holders(args.author) : undefined;
+  const hints = nameHints(args.query, people);
+  const now = (roomId: string, id: string, then: string) => {
+    const today = people.now(roomId, id);
+    return today && today !== then ? { now: today } : {};
+  };
   const found = store.search({
-    text: args.query, rooms: searched.map((r) => r.id), kinds, author: args.author, limit, agentVisible: true,
+    text: args.query, rooms: searched.map((r) => r.id), kinds, authors: holders?.map((h) => ({ roomId: h.roomId, id: h.id })), limit, agentVisible: true,
     ...(searched.length > 1 ? { perRoom: Math.max(1, Math.ceil(limit / 2)) } : {}),
   });
   const context = found.hits.length ? store.agentSearchContext(found.hits[0].roomId, found.hits[0].seq, kinds) : [];
   const response = {
     truncated: false,
     results: found.hits.map((hit, index) => ({
-      room: hit.roomId, roomName: names.get(hit.roomId) ?? hit.roomId, seq: hit.seq, from: hit.fromName, to: hit.toNames,
+      room: hit.roomId, roomName: names.get(hit.roomId) ?? hit.roomId, seq: hit.seq, from: hit.fromName, ...now(hit.roomId, hit.from, hit.fromName), to: hit.toNames,
       when: new Date(hit.ts).toISOString(), snippet: "", snippetTruncated: false,
       ...(hit.kind === "system" ? { kind: "system" } : {}),
       ...(index === 0 ? { context: context.map((m) => ({
-        seq: m.seq, from: m.fromName, to: m.toNames, when: new Date(m.ts).toISOString(), text: "", truncated: false,
+        seq: m.seq, from: m.fromName, ...now(hit.roomId, m.from, m.fromName), to: m.toNames, when: new Date(m.ts).toISOString(), text: "", truncated: false,
         ...(m.kind === "system" ? { kind: "system" } : {}),
       })) } : {}),
     })),
     searched: { rooms: searched.length, messages: searched.reduce((sum, r) => sum + store.agentSearchCount(r.id, kinds), 0) },
+    ...(holders ? { author: { name: args.author!, matched: holders.map((h) => describeHolder(h, (id) => names.get(id) ?? id, searched.length > 1)) } } : {}),
+    ...(hints.length ? { names: hints } : {}),
     usedTrigram: found.usedTrigram,
     hint:
       emptyAdvice(found.hits.length, found.query) +
+      (holders && !holders.length ? `Nobody here has been called ${args.author}; the author filter takes a participant's name, current or earlier. ` : "") +
+      (holders?.some((h) => h.names.length > 1) ? "author finds what a participant wrote under every name it has borne; from is the name a message was written under, now the name its writer has today. " : "") +
       "Use read_message with seq, room (the result's room ID) and optional around (0–5) for full text; omit room for this room. " +
       (searched.length > 1
         ? `Searched ${searched.length} rooms: ${searched.map((r) => r.name).join(", ")}; each result names its room.`

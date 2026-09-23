@@ -2,33 +2,60 @@
 (() => {
   "use strict";
 
-  const GEAR = `<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>`;
+  const GEAR_HUB = `<circle cx="12" cy="12" r="3"/>`;
+  const GEAR_TEETH = `<path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>`;
+  const GEAR = GEAR_HUB + GEAR_TEETH;
   const BELL_OFF = `<path d="M6 8a6 6 0 0 1 10.5-4M18 8v5l2 3H4l2-3V8"/><path d="M10 20a2 2 0 0 0 4 0M3 3l18 18"/>`;
   const SOLID_GEAR = `<path fill="#000" fill-rule="evenodd" stroke-width=".8" d="M10 2h4l.7 3 1.6.9 2.9-.9 2 3.5-2.2 2.1v1.8l2.2 2.1-2 3.5-2.9-.9-1.6.9-.7 3h-4l-.7-3-1.6-.9-2.9.9-2-3.5L5 12.9v-1.8L2.8 9l2-3.5 2.9.9L9.3 5z M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"/>`;
 
+  const PARTS = {
+    plus: { v: `<path d="M12 5v14"/>`, h: `<path d="M5 12h14"/>` },
+    rooms: { tl: `<rect x="4" y="4" width="7" height="7" rx="2"/>`, tr: `<rect x="13" y="4" width="7" height="7" rx="2"/>`, bl: `<rect x="4" y="13" width="7" height="7" rx="2"/>`, br: `<rect x="13" y="13" width="7" height="7" rx="2"/>` },
+    skills: { left: `<path d="M2 4.5h5.5a4 4 0 0 1 4 4V20a3 3 0 0 0-3-3H2z"/>`, right: `<path d="M22 4.5h-5.5a4 4 0 0 0-4 4V20a3 3 0 0 1 3-3H22z"/>` },
+    settings: { hub: GEAR_HUB, teeth: GEAR_TEETH },
+    "settings-solid": { gear: SOLID_GEAR },
+    "transfer-solid": { down: `<path fill="#000" stroke-width="1.2" d="M5.5 3h3v11H12l-5 6-5-6h3.5z"/>`, up: `<path fill="#000" fill-opacity=".4" stroke-width="1.2" d="M15.5 21h3V10H22l-5-6-5 6h3.5z"/>` },
+    "pin-solid": { head: `<path fill="#000" fill-opacity=".35" stroke-width="1.8" d="M8 3h8l-1 7 3 3v2H6v-2l3-3z"/>`, needle: `<path stroke-width="2.4" d="M12 15v7"/>` },
+    "folder-solid": { back: `<path fill="#000" fill-opacity=".2" stroke-width="1.7" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>`, front: `<path fill="#000" fill-opacity=".35" stroke-width="1.7" d="M3 11h18l-2 8H5z"/>` },
+    "search-solid": { lens: `<circle cx="10.5" cy="10.5" r="6.5" fill="#000" fill-opacity=".18" stroke-width="2"/>`, handle: `<path d="M16 16l5 5" stroke-width="3.2"/>` },
+    "clock-solid": { face: `<circle cx="12" cy="12" r="8.5" fill="#000" fill-opacity=".18" stroke-width="2.2"/>`, minute: `<path d="M12 7.5V12" stroke-width="2.4"/>`, hour: `<path d="M12 12l3.2 2.2" stroke-width="2.4"/>` },
+    collapse: { lead: `<path d="M11 7l-5 5 5 5"/>`, trail: `<path d="M18 7l-5 5 5 5"/>` },
+    expand: { trail: `<path d="M6 7l5 5-5 5"/>`, lead: `<path d="M13 7l5 5-5 5"/>` },
+  };
+  const whole = (name) => Object.values(PARTS[name]).join("");
+
+  const TRAVELLERS = {
+    skills: { leaf: PARTS.skills.right, "leaf-2": PARTS.skills.right },
+    settings: { mate: `<g transform="translate(17.7 17.7) scale(.46) rotate(22.5) translate(-12 -12)" stroke-width="3">${GEAR}</g>` },
+    "settings-solid": { mate: `<g transform="translate(16.8 16.8) scale(.46) rotate(30) translate(-12 -12)">${SOLID_GEAR}</g>` },
+    "transfer-solid": { "down-next": PARTS["transfer-solid"].down, "up-next": PARTS["transfer-solid"].up },
+    collapse: { next: PARTS.collapse.trail },
+    expand: { next: PARTS.expand.trail },
+  };
+
   const ICONS = {
-    rooms: `<rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/>`,
+    rooms: whole("rooms"),
     chat: `<path d="M20 12a8 8 0 0 1-8 8H5l-1.5 1.5V12a8 8 0 1 1 16 0z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01" stroke-width="2.6"/>`,
-    skills: `<path d="M2 4.5h5.5a4 4 0 0 1 4 4V20a3 3 0 0 0-3-3H2z"/><path d="M22 4.5h-5.5a4 4 0 0 0-4 4V20a3 3 0 0 1 3-3H22z"/>`,
+    skills: whole("skills"),
     puzzle: `<path d="M10 4a2 2 0 1 1 4 0h3a1 1 0 0 1 1 1v3a2 2 0 1 1 0 4v3a1 1 0 0 1-1 1h-3a2 2 0 1 1-4 0H7a1 1 0 0 1-1-1v-3a2 2 0 1 1 0-4V5a1 1 0 0 1 1-1h3z"/>`,
-    settings: GEAR,
+    settings: whole("settings"),
     automation: `<path d="M2 11a10 10 0 0 1 17-6M19 1v4h-4M22 13a10 10 0 0 1-17 6M5 23v-4h4"/><g transform="translate(6 6) scale(.5)" stroke-width="3.4">${GEAR}</g>`,
     transfer: `<path d="M7 4v15M3 15l4 4 4-4M17 20V5M13 9l4-4 4 4"/>`,
-    "settings-solid": SOLID_GEAR,
-    "transfer-solid": `<path fill="#000" stroke-width="1.2" d="M5.5 3h3v11H12l-5 6-5-6h3.5z"/><path fill="#000" fill-opacity=".4" stroke-width="1.2" d="M15.5 21h3V10H22l-5-6-5 6h3.5z"/>`,
-    "pin-solid": `<path fill="#000" fill-opacity=".35" stroke-width="1.8" d="M8 3h8l-1 7 3 3v2H6v-2l3-3z"/><path stroke-width="2.4" d="M12 15v7"/>`,
-    "folder-solid": `<path fill="#000" fill-opacity=".2" stroke-width="1.7" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path fill="#000" fill-opacity=".35" stroke-width="1.7" d="M3 11h18l-2 8H5z"/>`,
-    "search-solid": `<circle cx="10.5" cy="10.5" r="6.5" fill="#000" fill-opacity=".18" stroke-width="2"/><path d="M16 16l5 5" stroke-width="3.2"/>`,
-    "clock-solid": `<circle cx="12" cy="12" r="8.5" fill="#000" fill-opacity=".18" stroke-width="2.2"/><path d="M12 7.5V12l3.2 2.2" stroke-width="2.4"/>`,
+    "settings-solid": whole("settings-solid"),
+    "transfer-solid": whole("transfer-solid"),
+    "pin-solid": whole("pin-solid"),
+    "folder-solid": whole("folder-solid"),
+    "search-solid": whole("search-solid"),
+    "clock-solid": whole("clock-solid"),
     user: `<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`,
-    plus: `<path d="M12 5v14M5 12h14"/>`,
+    plus: whole("plus"),
     search: `<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.3-4.3"/>`,
     inbox: `<path d="M5 4h14l3 10v6H2v-6z"/><path d="M2 14h6l2 3h4l2-3h6"/>`,
     filter: `<path d="M22 3H2l8 9.5V19l4 2v-8.5z"/>`,
     back: `<path d="M15 18l-6-6 6-6"/>`,
     forward: `<path d="M9 18l6-6-6-6"/>`,
-    collapse: `<path d="M11 7l-5 5 5 5M18 7l-5 5 5 5"/>`,
-    expand: `<path d="M6 7l5 5-5 5M13 7l5 5-5 5"/>`,
+    collapse: whole("collapse"),
+    expand: whole("expand"),
     close: `<path d="M18 6L6 18M6 6l12 12"/>`,
     down: `<path d="M6 9l6 6 6-6"/>`,
     stop: `<rect x="6" y="6" width="12" height="12" rx="2"/>`,
@@ -46,6 +73,7 @@
     pin: `<path d="M9 4h6l-.8 6.5L17 13v2H7v-2l2.8-2.5L9 4z"/><path d="M12 15v6"/>`,
     "pin-long": `<path d="M9 2h6l-.8 5.85L17 10.1v1.8H7v-1.8l2.8-2.25L9 2z"/><path d="M12 11.9v11.6"/>`,
     quote: `<path d="M9 6.5C6.5 7.8 5 10 5 12.6V17h5v-5H7.4c.2-1.4 1-2.5 2.4-3.2zM19 6.5c-2.5 1.3-4 3.5-4 6.1V17h5v-5h-2.6c.2-1.4 1-2.5 2.4-3.2z"/>`,
+    image: `<rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="M20.5 15.5l-4.5-4.5-9 8.5"/>`,
     maximize: `<path d="M15 3h6v6M21 3l-7 7M9 21H3v-6M3 21l7-7"/>`,
     minimize: `<path d="M20 4l-6 6M14 4v6h6M4 20l6-6M10 20v-6H4"/>`,
     "zoom-in": `<circle cx="11" cy="11" r="6"/><path d="M11 8.5v5M8.5 11h5M20 20l-4.3-4.3"/>`,
@@ -69,6 +97,8 @@
     sun: `<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/>`,
     geek: `<rect x="2.5" y="10" width="8" height="7" rx="2.5"/><rect x="13.5" y="10" width="8" height="7" rx="2.5"/><path d="M10.5 13h3M2.5 12l1.8-4.5M21.5 12l-1.8-4.5"/>`,
     clock: `<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>`,
+    calendar: `<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M7 15h10" stroke-width="2.4"/>`,
+    "calendar-days": `<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M8 14.5h.01M12 17.5h.01M16 14.5h.01" stroke-width="3"/>`,
     tool: `<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9l-3.8 3.8z"/>`,
     smile: `<circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>`,
     "arrow-down": `<path d="M12 5v14M19 12l-7 7-7-7"/>`,
@@ -84,10 +114,14 @@
     if (document.getElementById("viberoom-icons")) return;
     const style = document.createElement("style");
     style.id = "viberoom-icons";
-    style.textContent = Object.entries(ICONS)
-      .map(([name, body]) => `.i-${name}{--icon:url("${dataUri(body)}")}`)
-      .join("\n");
+    const glyphs = Object.entries(ICONS).map(([name, body]) => `.i-${name}{--icon:url("${dataUri(body)}")}`);
+    const parts = Object.keys(PARTS).flatMap((name) => Object.entries(rigParts(name)).map(([part, body]) => `.rig-${name}>.p-${part}{--icon:url("${dataUri(body)}")}`));
+    style.textContent = [...glyphs, ...parts].join("\n");
     document.head.appendChild(style);
+  }
+
+  function rigParts(name) {
+    return { ...PARTS[name], ...TRAVELLERS[name] };
   }
 
   function dataUri(body) {
@@ -98,6 +132,29 @@
   function svg(name, cls) {
     if (!ICONS[name]) name = "info";
     return `<span class="i i-${name}${cls ? ` ${cls}` : ""}" aria-hidden="true"></span>`;
+  }
+
+  function rig(name, cls) {
+    if (!PARTS[name]) return svg(name, cls);
+    const travellers = TRAVELLERS[name] || {};
+    const parts = Object.keys(rigParts(name)).map((part) => `<span class="p p-${part}${part in travellers ? " travel" : ""}"></span>`).join("");
+    return `<span class="i i-${name} rig rig-${name}${cls ? ` ${cls}` : ""}" aria-hidden="true">${parts}</span>`;
+  }
+
+  const HOSTS = "button, a[href], label, summary, [role='button']";
+  function playOnHover(root) {
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    root.addEventListener("pointerover", (event) => {
+      const host = event.target instanceof Element ? event.target.closest(HOSTS) : null;
+      if (!host || host.contains(event.relatedTarget) || still?.matches) return;
+      for (const glyph of host.querySelectorAll(".rig")) play(glyph);
+    });
+  }
+
+  function play(glyph) {
+    if (glyph.classList.contains("play")) return;
+    glyph.classList.add("play");
+    Promise.allSettled(glyph.getAnimations({ subtree: true }).map((a) => a.finished)).then(() => glyph.classList.remove("play"));
   }
 
   const SCENES = {
@@ -120,6 +177,8 @@
     failed: `<path class="bad-fill" d="M60 13l30 52H30z"/><path class="on-bad" d="M60 33v14M60 55v1" stroke-width="4"/>`,
     "carry-out": `<rect class="paper" x="14" y="18" width="58" height="38" rx="5"/><path class="chrome" d="M22 28h30M22 36h20M22 44h26" stroke-width="3"/><path class="paper" d="M6 60h74l-6 8H12z"/><path class="accent cx-trail" d="M60 40c12-3 20-12 25-24" stroke-dasharray="2 5"/><g class="cx-pkg"><path class="paper" d="M82 14l15-6 15 6v15l-15 6-15-6z"/><path class="stroke" d="M82 14l15 6 15-6M97 20v15"/><path class="accent" d="M89.5 11l15 6" stroke-width="2"/></g>`,
     "carry-in": `<rect class="paper-fill" x="42" y="18" width="70" height="54" rx="7"/><path class="chrome" d="M44.5 30h65" stroke-linecap="butt"/><circle class="chrome" cx="49" cy="24" r="1.6"/><circle class="chrome" cx="55" cy="24" r="1.6"/><circle class="chrome" cx="61" cy="24" r="1.6"/><rect class="outline" x="42" y="18" width="70" height="54" rx="7"/><path class="chrome" d="M52 42h30M52 51h40M52 60h22" stroke-width="3"/><path class="accent cx-trail" d="M28 30c9 1 15 6 19 14" stroke-dasharray="2 5"/><g class="cx-pkg"><path class="paper" d="M4 13l15-6 15 6v15l-15 6-15-6z"/><path class="stroke" d="M4 13l15 6 15-6M19 19v15"/><path class="accent" d="M11.5 10l15 6" stroke-width="2"/></g>`,
+    "auto-reminder": `<path class="paper" d="M18 34h44a7 7 0 0 1 7 7v17a7 7 0 0 1-7 7H36l-11 9v-9h-7a7 7 0 0 1-7-7V41a7 7 0 0 1 7-7z"/><path class="chrome" d="M21 45h30M21 54h20" stroke-width="3"/><circle class="accent-fill auto-dot" cx="66" cy="37" r="4.5"/><path class="accent auto-ring" d="M71 25c.8-4 2.8-7.6 5.8-10.4M113 25c-.8-4-2.8-7.6-5.8-10.4"/><path class="accent auto-ring is-far" d="M65.5 28c1-6 4-11.3 8.5-15M118.5 28c-1-6-4-11.3-8.5-15"/><g class="auto-bell"><path class="stroke" d="M92 13.5v4.5"/><path class="paper" d="M80 40V30a12 12 0 0 1 24 0v10l4.5 6h-33z"/><path class="stroke" d="M88 49a4 4 0 0 0 8 0"/><path class="accent" d="M85.5 29a7 7 0 0 1 4.5-4.6" stroke-width="2"/></g>`,
+    "auto-task": `<rect class="paper" x="18" y="12" width="56" height="62" rx="8"/><rect class="chrome" x="34" y="7" width="24" height="10" rx="4"/><rect class="stroke" x="27" y="26" width="10" height="10" rx="3"/><rect class="stroke" x="27" y="42" width="10" height="10" rx="3"/><rect class="stroke" x="27" y="58" width="10" height="10" rx="3"/><path class="chrome" d="M44 31h20M44 47h16M44 63h18" stroke-width="3"/><path class="accent auto-checkmark" d="M29 31l2.6 2.6 5-5.6" stroke-width="2.6"/><path class="accent auto-checkmark is-second" d="M29 47l2.6 2.6 5-5.6" stroke-width="2.6"/><g class="auto-mate"><path class="stroke" d="M96 34v-6"/><circle class="accent-fill" cx="96" cy="25" r="3"/><rect class="accent-fill" x="81" y="34" width="30" height="26" rx="10"/><circle class="paper-fill" cx="90" cy="45" r="2.6"/><circle class="paper-fill" cx="102" cy="45" r="2.6"/><path class="on-accent" d="M91 52c3 2.4 7 2.4 10 0" stroke-width="2"/></g><path class="accent auto-glint" d="M112 12v8M108 16h8"/>`,
   };
 
   function scene(name) {
@@ -127,5 +186,5 @@
     return `<svg viewBox="0 0 120 80" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
   }
 
-  window.Icons = { install, svg, scene, names: Object.keys(ICONS), scenes: Object.keys(SCENES) };
+  window.Icons = { install, svg, rig, playOnHover, scene, names: Object.keys(ICONS), rigs: Object.keys(PARTS), scenes: Object.keys(SCENES) };
 })();
