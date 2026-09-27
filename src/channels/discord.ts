@@ -1,5 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import type { Logger } from "../log.js";
+import { describeNetworkError } from "../net/outbound.js";
 import { authorOfPrefix, htmlToDiscord } from "./format.js";
 import type { AdapterStatus, Button, Capabilities, ChannelAdapter, InboundFile, InboundMessage, InboundResult, OutboundFile, SendFileOptions, SendOptions } from "./types.js";
 
@@ -25,6 +26,7 @@ const INTENT_DIRECT_MESSAGES = 1 << 12;
 const OP = { dispatch: 0, heartbeat: 1, identify: 2, resume: 6, reconnect: 7, invalidSession: 9, hello: 10, heartbeatAck: 11 } as const;
 const FATAL_CLOSE = new Set([4004, 4010, 4011, 4012, 4013, 4014]);
 const SUPPRESS_NOTIFICATIONS = 1 << 12;
+const IS_VOICE_MESSAGE = 1 << 13;
 const EPHEMERAL = 1 << 6;
 const RECONNECT_BACKOFF_MS = [1000, 2000, 5000, 15_000, 30_000];
 const MIB = 1024 * 1024;
@@ -49,6 +51,7 @@ interface DiscordAttachment {
   size?: number;
   url: string;
   content_type?: string;
+  duration_secs?: number;
 }
 
 interface DiscordMessage {
@@ -58,6 +61,7 @@ interface DiscordMessage {
   author?: DiscordUser;
   content?: string;
   attachments?: DiscordAttachment[];
+  flags?: number;
   referenced_message?: { id: string; content?: string; author?: DiscordUser } | null;
 }
 
@@ -306,7 +310,7 @@ export class DiscordAdapter implements ChannelAdapter {
         try {
           result = await this.handler(batch);
         } catch (error) {
-          this.log.warn(`inbound batch not taken: ${this.redact(describe(error))}`);
+          this.log.warn(`inbound batch not taken: ${this.redact(describeNetworkError(error))}`);
           this.queue.unshift(...batch);
           break;
         }
@@ -386,7 +390,7 @@ export class DiscordAdapter implements ChannelAdapter {
     try {
       response = await request();
     } catch (error) {
-      throw new Error(this.redact(describe(error)));
+      throw new Error(this.redact(describeNetworkError(error)));
     }
     if (response.status === 429) {
       const parsed = await response.json().catch(() => ({})) as { retry_after?: number; message?: string };
@@ -422,7 +426,12 @@ export function messageToInbound(m: DiscordMessage, account: string): InboundMes
   if (!m || m.guild_id || !m.author || m.author.bot) return null;
   const first = m.attachments?.[0];
   const file: InboundFile | undefined = first
-    ? { kind: first.content_type?.startsWith("image/") ? "photo" : "document", fileId: first.url, name: first.filename, mime: first.content_type, size: first.size }
+    ? {
+        kind: first.content_type?.startsWith("image/") ? "photo" : first.content_type?.startsWith("audio/") ? "sound" : "document",
+        fileId: first.url, name: first.filename, mime: first.content_type, size: first.size,
+        ...((m.flags ?? 0) & IS_VOICE_MESSAGE ? { voice: true } : {}),
+        ...(first.duration_secs ? { seconds: first.duration_secs } : {}),
+      }
     : undefined;
   const text = m.content ?? "";
   const quoted = quotedAuthor(m.referenced_message);
@@ -463,8 +472,4 @@ export function interactionToInbound(i: DiscordInteraction, account: string): In
     text: "",
     button: { callbackId: `${i.id}:${i.token}`, data: i.data?.custom_id ?? "" },
   };
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

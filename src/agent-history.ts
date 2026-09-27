@@ -1,26 +1,32 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { andedTerms, type HistoryStore } from "./history-store.js";
+import type { RecalledFact } from "./memory/provider.js";
 import { NameDirectory, namesInQuery, type NameHolder } from "./name-directory.js";
 
 export const AGENT_SEARCH_RESPONSE_BYTES = 16 * 1024;
 const SNIPPET_BYTES = 800;
 const HIT_BYTES = 2400;
 const NEIGHBOUR_BYTES = 600;
+const FACT_BYTES = 480;
 
-export interface AgentSearchArgs { query: string; rooms: "this" | "all"; kinds: "chat" | "chat,system"; limit: number; author?: string }
+export interface AgentSearchArgs { query: string; rooms: "this" | "all"; kinds: "chat" | "chat,system"; limit: number; author?: string; only?: "messages" | "facts" }
+
+export type AgentSearchFacts = { facts: RecalledFact[]; pending: number } | { unavailable: string };
 
 export function parseAgentSearchArgs(params: Record<string, unknown>, http = false): AgentSearchArgs {
   const queryKey = http ? "q" : "query";
-  for (const key of Object.keys(params)) if (![queryKey, "rooms", "kinds", "author", "limit"].includes(key)) throw new Error(`unsupported search parameter: ${key}`);
+  for (const key of Object.keys(params)) if (![queryKey, "rooms", "kinds", "author", "limit", "only"].includes(key)) throw new Error(`unsupported search parameter: ${key}`);
   const query = params[queryKey];
   if (typeof query !== "string" || !query.trim()) throw new Error("search_history needs a non-empty query");
   if (params.rooms !== undefined && params.rooms !== "this" && params.rooms !== "all") throw new Error("rooms must be this or all");
   if (params.kinds !== undefined && params.kinds !== "chat" && params.kinds !== "chat,system") throw new Error("kinds must be chat or chat,system");
   if (params.author !== undefined && typeof params.author !== "string") throw new Error("author must be a name");
+  if (params.only !== undefined && params.only !== "messages" && params.only !== "facts") throw new Error("only must be messages or facts");
   const limit = params.limit === undefined ? 3 : http ? Number(params.limit) : params.limit;
   if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 10) throw new Error("limit must be an integer from 1 to 10");
   return { query: query.trim(), rooms: params.rooms === "all" ? "all" : "this", kinds: params.kinds === "chat,system" ? "chat,system" : "chat", limit,
-    ...(typeof params.author === "string" && params.author.trim() ? { author: params.author.trim() } : {}) };
+    ...(typeof params.author === "string" && params.author.trim() ? { author: params.author.trim() } : {}),
+    ...(params.only === "messages" || params.only === "facts" ? { only: params.only } : {}) };
 }
 
 function excerpt(text: string, budget: number): { text: string; truncated: boolean; bytes: number } {
@@ -65,13 +71,15 @@ function nameHints(query: string, names: NameDirectory) {
 
 export function searchAgentHistory(
   store: HistoryStore | null,
-  room: { id: string; name: string },
+  room: { id: string; name: string; settings?: { readsOtherRooms?: string } },
   params: Record<string, unknown>,
   reachable: () => { id: string; name: string }[] = () => [room],
   directory: (roomIds: string[]) => NameDirectory = (roomIds) => new NameDirectory(store?.nameUses(roomIds) ?? [], []),
+  memory: AgentSearchFacts | null = null,
 ) {
   const args = parseAgentSearchArgs(params, true), { limit } = args;
-  if (!store) throw new Error("the conversation store is unavailable; history could not be searched");
+  const messagesAsked = args.only !== "facts";
+  if (messagesAsked && !store) throw new Error("the conversation store is unavailable; history could not be searched");
   const kinds: Array<"chat" | "system"> = args.kinds === "chat,system" ? ["chat", "system"] : ["chat"];
   const shared = args.rooms === "all" ? reachable() : [];
   const searched = shared.length ? shared : [room];
@@ -83,11 +91,25 @@ export function searchAgentHistory(
     const today = people.now(roomId, id);
     return today && today !== then ? { now: today } : {};
   };
-  const found = store.search({
+  const found = messagesAsked ? store!.search({
     text: args.query, rooms: searched.map((r) => r.id), kinds, authors: holders?.map((h) => ({ roomId: h.roomId, id: h.id })), limit, agentVisible: true,
     ...(searched.length > 1 ? { perRoom: Math.max(1, Math.ceil(limit / 2)) } : {}),
-  });
-  const context = found.hits.length ? store.agentSearchContext(found.hits[0].roomId, found.hits[0].seq, kinds) : [];
+  }) : { hits: [], usedTrigram: false, query: args.query };
+  const context = found.hits.length ? store!.agentSearchContext(found.hits[0].roomId, found.hits[0].seq, kinds) : [];
+  const recalled = args.only !== "messages" && memory && "facts" in memory ? memory.facts : [];
+  const facts: { facts?: Array<{ fact: string; validAt?: string; invalidAt?: string; relevance?: number; roomName?: string }>; factsPending?: number; factsUnavailable?: string } =
+    args.only === "messages" ? {}
+    : !memory ? (args.only === "facts" ? { factsUnavailable: "This room keeps no long-term memory." } : {})
+    : "unavailable" in memory ? { factsUnavailable: memory.unavailable }
+    : {
+      facts: recalled.map((f) => ({
+        fact: "",
+        ...(f.validAt ? { validAt: f.validAt } : {}), ...(f.invalidAt ? { invalidAt: f.invalidAt } : {}),
+        ...(typeof f.relevance === "number" ? { relevance: Math.round(f.relevance * 1000) / 1000 } : {}),
+        ...(f.room ? { roomName: f.room } : {}),
+      })),
+      ...(memory.pending ? { factsPending: memory.pending } : {}),
+    };
   const response = {
     truncated: false,
     results: found.hits.map((hit, index) => ({
@@ -99,24 +121,34 @@ export function searchAgentHistory(
         ...(m.kind === "system" ? { kind: "system" } : {}),
       })) } : {}),
     })),
-    searched: { rooms: searched.length, messages: searched.reduce((sum, r) => sum + store.agentSearchCount(r.id, kinds), 0) },
+    ...facts,
+    searched: { rooms: searched.length, messages: messagesAsked ? searched.reduce((sum, r) => sum + store!.agentSearchCount(r.id, kinds), 0) : 0 },
     ...(holders ? { author: { name: args.author!, matched: holders.map((h) => describeHolder(h, (id) => names.get(id) ?? id, searched.length > 1)) } } : {}),
     ...(hints.length ? { names: hints } : {}),
     usedTrigram: found.usedTrigram,
-    hint:
-      emptyAdvice(found.hits.length, found.query) +
+    hint: (facts.factsPending ? "factsPending counts this room's newest messages the memory has not taken in yet: the facts may lag them. " : "") + (!messagesAsked
+      ? "Only the memory's facts were asked for; search without only for the messages that said them."
+      : emptyAdvice(found.hits.length, found.query) +
       (holders && !holders.length ? `Nobody here has been called ${args.author}; the author filter takes a participant's name, current or earlier. ` : "") +
       (holders?.some((h) => h.names.length > 1) ? "author finds what a participant wrote under every name it has borne; from is the name a message was written under, now the name its writer has today. " : "") +
       "Use read_message with seq, room (the result's room ID) and optional around (0–5) for full text; omit room for this room. " +
       (searched.length > 1
         ? `Searched ${searched.length} rooms: ${searched.map((r) => r.name).join(", ")}; each result names its room.`
         : args.rooms === "all"
-          ? "Only this room is open to you; the other rooms do not share their history."
+          ? room.settings?.readsOtherRooms === "off"
+            ? "Only this room is open to you: the human set it not to search the other rooms."
+            : "Only this room is open to you: no other room shares its history."
           : "Only this room is searched; pass rooms=\"all\" to include the rooms that share their history.") +
-      " Recent messages are included. Context contains the top hit and up to two visible neighbours on each side. The response is capped at 16 KiB of JSON; snippetTruncated/truncated mark shortened text.",
+      " Recent messages are included. Context contains the top hit and up to two visible neighbours on each side. The response is capped at 16 KiB of JSON; snippetTruncated/truncated mark shortened text."),
   };
   let remaining = AGENT_SEARCH_RESPONSE_BYTES - Buffer.byteLength(JSON.stringify(response, null, 2), "utf8");
   if (remaining < 0) throw new Error("search result metadata exceeds the response budget; try a smaller limit");
+  response.facts?.forEach((entry, index) => {
+    const part = excerpt(recalled[index].fact, Math.min(FACT_BYTES, remaining));
+    entry.fact = part.text;
+    response.truncated ||= part.truncated;
+    remaining -= part.bytes;
+  });
   response.results.forEach((result, index) => {
     const part = excerpt(found.hits[index].snippet, Math.min(SNIPPET_BYTES, remaining));
     result.snippet = part.text;
@@ -141,17 +173,21 @@ export interface HistorySearchReceipt {
   searched?: { rooms: number; messages: number };
   returned?: number;
   results?: { room: string; roomName: string; seq: number }[];
+  facts?: number;
 }
 
 export function historySearchReceipt(result?: AgentSearchResult): HistorySearchReceipt {
   return { searchedAt: new Date().toISOString(), ...(result ? {
     searched: { ...result.searched }, returned: result.results.length,
     results: result.results.map(hit => ({ room: hit.room, roomName: hit.roomName, seq: hit.seq })),
+    ...(result.facts ? { facts: result.facts.length } : {}),
   } : {}) };
 }
 
 export function historySearchTitle(result: AgentSearchResult): string {
   const scope = result.searched.rooms === 1 ? "this room" : `${result.searched.rooms} rooms`;
   const count = result.results.length;
-  return `Searched ${scope} · ${count ? `${count} hit${count === 1 ? "" : "s"}` : "Nothing found"}`;
+  const facts = result.facts?.length ?? 0;
+  const found = [count ? `${count} hit${count === 1 ? "" : "s"}` : "", facts ? `${facts} fact${facts === 1 ? "" : "s"}` : ""].filter(Boolean);
+  return `Searched ${scope} · ${found.join(" · ") || "Nothing found"}`;
 }

@@ -22,7 +22,7 @@
 :where(.i-check, .i-done, .i-save, .i-package, .i-database, .i-image, .i-rooms, .i-chat, .i-skills, .i-puzzle, .i-browser, .i-code, .i-terminal, .i-unplugged) { --word: g-pop 480ms var(--ease-pop); }
 :where(.i-send, .i-forward, .i-play, .i-logout, .i-expand) { --word: g-step-right 520ms var(--ease-pop); }
 :where(.i-back, .i-collapse) { --word: g-step-left 520ms var(--ease-pop); }
-:where(.i-down, .i-inbox, .i-info, .i-question, .i-bot) { --word: g-bob 560ms var(--ease-pop); }
+:where(.i-down, .i-go-to-message, .i-inbox, .i-info, .i-question, .i-bot) { --word: g-bob 560ms var(--ease-pop); }
 :where(.i-pin, .i-quote, .i-pencil, .i-geek, .i-key, .i-lock, .i-folder, .i-files, .i-link, .i-copy) { --word: g-tilt 520ms var(--ease-pop); }
 :where(.i-search, .i-eye) { --word: g-lean 520ms var(--ease-pop); }
 :where(.i-hand, .i-smile, .i-user, .i-name) { --word: g-wave 640ms var(--ease-out); }
@@ -37,7 +37,7 @@
   .i-hush, .i-mute, .i-unmute, .i-phone, .i-filter, .i-bell, .i-spark, .i-wand, .i-bolt, .i-clock,
   .i-automation, .i-check, .i-done, .i-save, .i-package, .i-database, .i-image, .i-rooms, .i-chat, .i-skills,
   .i-puzzle, .i-browser, .i-code, .i-terminal, .i-unplugged, .i-send, .i-forward, .i-play, .i-logout,
-  .i-expand, .i-back, .i-collapse, .i-down, .i-inbox, .i-info, .i-question, .i-bot, .i-pin, .i-quote,
+  .i-expand, .i-back, .i-collapse, .i-down, .i-go-to-message, .i-inbox, .i-info, .i-question, .i-bot, .i-pin, .i-quote,
   .i-pencil, .i-geek, .i-key, .i-lock, .i-folder, .i-files, .i-link, .i-copy, .i-search, .i-eye, .i-hand,
   .i-smile, .i-user, .i-name, .i-maximize, .i-minimize, .i-stop, .i-pause, .i-tool):not(:where(:is(
   button, summary, a[href], [role="button"], label.check-row, label.search, .choice, .action, .agent-tile, .tn,
@@ -67,6 +67,8 @@
 .rig-plus.play > .p-h { animation: rig-quarter-follow var(--t-gesture) var(--ease-soft); }
 @keyframes rig-quarter-lead { 70%, to { transform: rotate(90deg); } }
 @keyframes rig-quarter-follow { 30% { transform: rotate(0deg); } to { transform: rotate(90deg); } }
+.rig-plug.play > :is(.p-prongs, .p-body, .p-cord) { animation: rig-plug var(--t-gesture) var(--ease-soft); }
+@keyframes rig-plug { 35%, 55% { transform: translateY(-8.33%); } }
 .rig-rooms > .p-tl { transform-origin: 31.25% 31.25%; }
 .rig-rooms > .p-tr { transform-origin: 68.75% 31.25%; }
 .rig-rooms > .p-br { transform-origin: 68.75% 68.75%; }
@@ -123,11 +125,11 @@
 @keyframes rig-press-needle { 30%, 45% { transform: scaleY(0.571); } 75% { transform: scaleY(1.14); } }
 .rig-clock-solid.play > .p-minute { animation: rig-round calc(var(--t-gesture) * 1.25) var(--ease-soft); }
 @keyframes rig-round { to { transform: rotate(360deg); } }
-.rig-transfer-solid { overflow: clip; }
-.rig-transfer-solid.play > .p-down { animation: rig-out-down var(--t-gesture) var(--ease-soft); }
-.rig-transfer-solid.play > .p-down-next { animation: rig-in-down var(--t-gesture) var(--ease-soft); }
-.rig-transfer-solid.play > .p-up { animation: rig-out-up var(--t-gesture) var(--ease-soft) calc(var(--t-gesture) * 0.15); }
-.rig-transfer-solid.play > .p-up-next { animation: rig-in-up var(--t-gesture) var(--ease-soft) calc(var(--t-gesture) * 0.15); }
+.rig-transfer-solid, .rig-transfer { overflow: clip; }
+.rig-transfer-solid.play > .p-down, .rig-transfer.play > .p-down { animation: rig-out-down var(--t-gesture) var(--ease-soft); }
+.rig-transfer-solid.play > .p-down-next, .rig-transfer.play > .p-down-next { animation: rig-in-down var(--t-gesture) var(--ease-soft); }
+.rig-transfer-solid.play > .p-up, .rig-transfer.play > .p-up { animation: rig-out-up var(--t-gesture) var(--ease-soft) calc(var(--t-gesture) * 0.15); }
+.rig-transfer-solid.play > .p-up-next, .rig-transfer.play > .p-up-next { animation: rig-in-up var(--t-gesture) var(--ease-soft) calc(var(--t-gesture) * 0.15); }
 @keyframes rig-out-down { to { transform: translateY(100%); } }
 @keyframes rig-in-down { from { opacity: 1; transform: translateY(-100%); } to { opacity: 1; transform: translateY(0); } }
 @keyframes rig-out-up { to { transform: translateY(-100%); } }
@@ -135,6 +137,70 @@
 .rig-folder-solid > .p-front { transform-origin: 50% 79.17%; }
 .rig-folder-solid.play > .p-front { animation: rig-open var(--t-gesture) var(--ease-soft); }
 @keyframes rig-open { from, to { transform: perspective(30px) rotateX(0deg); } 40%, 55% { transform: perspective(30px) rotateX(-62deg); } }
+.rig-palette > .p-a { transform-origin: 31.67% 47.5%; }
+.rig-palette > .p-b { transform-origin: 42.5% 30.83%; }
+.rig-palette > .p-c { transform-origin: 62.5% 31.67%; }
+.rig-palette.play { animation: rig-tilt var(--t-gesture) var(--ease-soft); }
+.rig-palette.play > :is(.p-a, .p-b, .p-c) { animation: rig-dab calc(var(--t-gesture) * 0.5) var(--ease-soft); }
+.rig-palette.play > .p-b { animation-delay: calc(var(--t-gesture) * 0.17); }
+.rig-palette.play > .p-c { animation-delay: calc(var(--t-gesture) * 0.34); }
+@keyframes rig-tilt { 40% { transform: rotate(-12deg); } 75% { transform: rotate(4deg); } }
+@keyframes rig-dab { 45% { transform: scale(1.8); } }
+.rig-bot > .p-antenna { transform-origin: 50% 35.42%; }
+.rig-bot > .p-eyes { transform-origin: 50% 55.42%; }
+.rig-bot.play > .p-antenna { animation: rig-wag var(--t-gesture) var(--ease-soft); }
+.rig-bot.play > .p-eyes { animation: rig-blink var(--t-gesture) var(--ease-soft); }
+@keyframes rig-wag { 20% { transform: rotate(20deg); } 45% { transform: rotate(-15deg); } 70% { transform: rotate(7deg); } }
+@keyframes rig-blink { 15%, 35%, 55%, 75% { transform: scaleY(1); } 25%, 65% { transform: scaleY(0.1); } }
+.rig-phone > .p-body { transform-origin: 35.42% 50%; }
+.rig-phone.play > .p-body { animation: rig-buzz var(--t-gesture) var(--ease-soft); }
+.rig-phone.play > :is(.p-near, .p-far) { animation: rig-send calc(var(--t-gesture) * 0.8) var(--ease-soft); }
+.rig-phone.play > .p-far { animation-delay: calc(var(--t-gesture) * 0.2); }
+@keyframes rig-buzz { 10% { transform: rotate(-9deg); } 20% { transform: rotate(8deg); } 30% { transform: rotate(-6deg); } 40% { transform: rotate(4deg); } 50% { transform: rotate(0deg); } }
+@keyframes rig-send { 30% { opacity: 0; transform: translateX(-10%); } 65% { opacity: 1; transform: translateX(5%); } }
+.rig-graph > .p-a { transform-origin: 25.83% 29.17%; }
+.rig-graph > .p-b { transform-origin: 74.17% 26.67%; }
+.rig-graph > .p-c { transform-origin: 50% 74.17%; }
+.rig-graph.play > :is(.p-a, .p-b, .p-c) { animation: rig-node calc(var(--t-gesture) * 0.5) var(--ease-soft); }
+.rig-graph.play > .p-b { animation-delay: calc(var(--t-gesture) * 0.25); }
+.rig-graph.play > .p-c { animation-delay: calc(var(--t-gesture) * 0.5); }
+.rig-graph.play > .p-links { animation: rig-dim var(--t-gesture) var(--ease-soft); }
+@keyframes rig-node { 50% { transform: scale(1.5); } }
+@keyframes rig-dim { 50% { opacity: 0.3; } }
+.rig-code.play > .p-left { animation: rig-apart-left var(--t-gesture) var(--ease-soft); }
+.rig-code.play > .p-right { animation: rig-apart-right var(--t-gesture) var(--ease-soft); }
+.rig-code.play > .p-slash { animation: rig-flip var(--t-gesture) var(--ease-soft); }
+@keyframes rig-apart-left { 45% { transform: translateX(-10%); } 80% { transform: translateX(2%); } }
+@keyframes rig-apart-right { 45% { transform: translateX(10%); } 80% { transform: translateX(-2%); } }
+@keyframes rig-flip { 20% { transform: rotate(0deg); } 80%, to { transform: rotate(180deg); } }
+.rig-power > .p-ring { transform-origin: 50% 52.13%; }
+.rig-power.play > .p-bar { animation: rig-press-bar var(--t-gesture) var(--ease-soft); }
+.rig-power.play > .p-ring { animation: rig-press-ring var(--t-gesture) var(--ease-soft); }
+@keyframes rig-press-bar { 25%, 40% { transform: translateY(8%); } 70% { transform: translateY(-3%); } }
+@keyframes rig-press-ring { 30%, 42% { transform: scale(0.86); } 72% { transform: scale(1.06); } }
+.rig-sliders.play > .p-a { animation: rig-slide-a var(--t-gesture) var(--ease-soft); }
+.rig-sliders.play > .p-b { animation: rig-slide-b var(--t-gesture) var(--ease-soft) calc(var(--t-gesture) * 0.12); }
+.rig-sliders.play > .p-c { animation: rig-slide-c var(--t-gesture) var(--ease-soft) calc(var(--t-gesture) * 0.24); }
+@keyframes rig-slide-a { 50% { transform: translateX(29.17%); } }
+@keyframes rig-slide-b { 50% { transform: translateX(-25%); } }
+@keyframes rig-slide-c { 50% { transform: translateX(20.83%); } }
+.rig-journal > .p-ribbon { transform-origin: 50% 14.58%; }
+.rig-journal > .p-lines { transform-origin: 47.92% 50%; }
+.rig-journal.play > .p-ribbon { animation: rig-tug var(--t-gesture) var(--ease-soft); }
+.rig-journal.play > .p-lines { animation: rig-write var(--t-gesture) var(--ease-soft); }
+@keyframes rig-tug { 35% { transform: scaleY(1.45); } 65% { transform: scaleY(0.9); } }
+@keyframes rig-write { 30% { transform: scaleX(0.05); } }
+.rig-dial > .p-pointer { transform-origin: 50% 56.25%; }
+.rig-dial.play > .p-pointer { animation: rig-tune var(--t-gesture) var(--ease-soft); }
+@keyframes rig-tune { 30% { transform: rotate(-70deg); } 70% { transform: rotate(50deg); } }
+.rig-pulse { overflow: clip; }
+.rig-pulse.play > .p-beat { animation: rig-beat-out calc(var(--t-gesture) * 1.25) var(--ease-soft); }
+.rig-pulse.play > .p-beat-next { animation: rig-beat-in calc(var(--t-gesture) * 1.25) var(--ease-soft); }
+@keyframes rig-beat-out { to { transform: translateX(-100%); } }
+@keyframes rig-beat-in { from { opacity: 1; transform: translateX(100%); } to { opacity: 1; transform: translateX(0); } }
+.rig-gauge > .p-needle { transform-origin: 50% 60.42%; }
+.rig-gauge.play > .p-needle { animation: rig-sweep var(--t-gesture) var(--ease-soft); }
+@keyframes rig-sweep { 30% { transform: rotate(-100deg); } 70% { transform: rotate(25deg); } }
 :where(.stagger) > :nth-child(2) { --arrive: 1; }
 :where(.stagger) > :nth-child(3) { --arrive: 2; }
 :where(.stagger) > :nth-child(4) { --arrive: 3; }
@@ -145,13 +211,22 @@
 .mention-menu:not([hidden]) { animation: menu-in var(--t-enter) var(--ease-spring); transform-origin: 24px 100%; }
 .mention-menu.inline:not([hidden]) { transform-origin: 24px 0; }
 @keyframes menu-in { from { opacity: 0; transform: translateY(6px) scale(0.97); } }
+[data-ui="settings-category"][data-arrive] > .head { animation: page-arrive var(--t-enter) var(--ease-spring); }
+[data-ui="settings-category"][data-arrive] > .body > * { animation: page-arrive var(--t-enter) var(--ease-spring) calc(var(--stagger) * (var(--arrive, 0) + 1)) backwards; }
+@keyframes page-arrive { from { opacity: 0; transform: translateY(10px); } }
+[data-ui="setting"] .name-line .fsaved { animation: setting-saved var(--t-slow) var(--ease-spring); }
+@keyframes setting-saved { from { opacity: 0; transform: scale(0.6); } 60% { opacity: 1; transform: scale(1.08); } }
+[data-ui="setting"] > .geek-text:not([hidden]) { animation: setting-unfold var(--t-base) var(--ease-out); }
+@keyframes setting-unfold { from { opacity: 0; transform: translateY(-6px); } }
 .msg[data-streaming="1"] .bubble::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: 0 0 0 1.5px var(--breath-ring), 0 10px 26px -12px var(--breath-glow); opacity: 0; pointer-events: none; animation: breathe var(--t-breath) var(--ease-soft) infinite; }
 @keyframes breathe { 50% { opacity: 1; } }
 [data-ui="skeleton"]:not([data-shape="bubble"])::after, [data-ui="skeleton"][data-shape="bubble"] .card::after { animation: shimmer var(--t-shimmer) var(--ease-soft) infinite; }
 @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+[data-ui="consent-lock"][data-opened] > .rows { animation: consent-open var(--t-slow) var(--ease-out) both; }
+@keyframes consent-open { from { opacity: var(--consent-gate-locked-opacity); } }
 @media (prefers-reduced-motion: reduce) {
   :where(.i, .rig > .p) { animation: none !important; transition: none; transform: none; }
   .msg[data-streaming="1"] .bubble::after { animation: none !important; opacity: 0.6; }
   [data-ui="skeleton"]::after, [data-ui="skeleton"] .card::after { animation: none !important; transform: translateX(-100%); }
-  .mention-menu:not([hidden]), .msg.landing, .room-card { animation: none !important; }
+  .mention-menu:not([hidden]), .msg.landing, .room-card, [data-ui="settings-category"][data-arrive] :is(.head, .body > *), [data-ui="setting"] :is(.fsaved, .geek-text), [data-ui="consent-lock"] > .rows { animation: none !important; }
 }

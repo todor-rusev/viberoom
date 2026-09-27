@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.js";
 import { fileURLToPath } from "node:url";
 import type { Logger } from "./log.js";
-import type { RoomSettings } from "./persona.js";
+import { upgradeRoomSettings, type RoomSettings } from "./persona.js";
+import { cleanFace } from "./faces.js";
 
 export interface TemplateVibemate {
   name: string;
@@ -56,10 +57,10 @@ export function cleanTemplate(raw: unknown, id: string): RoomTemplate {
     if (typeof o.replyDelay === "number" && Number.isFinite(o.replyDelay)) out.replyDelay = o.replyDelay;
     return out;
   });
-  const settings = (t.settings && typeof t.settings === "object" ? t.settings : {}) as Partial<RoomSettings>;
+  const settings = upgradeRoomSettings((t.settings && typeof t.settings === "object" ? t.settings : {}) as Partial<RoomSettings>);
   const out: RoomTemplate = { id, name, description: String(t.description ?? "").trim(), settings, vibemates };
   if (typeof t.order === "number" && Number.isFinite(t.order)) out.order = t.order;
-  if (typeof t.emoji === "string" && t.emoji.trim()) out.emoji = t.emoji.trim().slice(0, 8);
+  if (typeof t.emoji === "string" && t.emoji.trim()) out.emoji = cleanFace(t.emoji, "room");
   if (t.recommended === true) out.recommended = true;
   if (typeof t.dir === "string" && t.dir.trim()) out.dir = t.dir.trim();
   if (typeof t.created === "string" && t.created.trim()) out.created = t.created.trim();

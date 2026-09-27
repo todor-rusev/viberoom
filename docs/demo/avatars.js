@@ -73,7 +73,124 @@
     if (opts.muted && participant.kind === "agent") badge = UI.raw(UI.html("logo-tile", { glyph: "mute", size: "badge", tone: "muted", title: "muted: receives no prompts" }));
     if (opts.unplugged && participant.kind === "agent") badge = UI.raw(UI.html("logo-tile", { glyph: "unplugged", size: "badge", tone: "unplugged", title: `${participant.agentVendor || "the vendor"} is not logged in` }));
     const status = opts.status === true ? participant.status || "idle" : typeof opts.status === "string" ? opts.status : undefined;
-    return UI.html("face", { name: participant.name, label: emoji ? emoji : initials(participant.name), emoji: !!emoji, color, size: s, badge, status, me: !!opts.me, kind: opts.kind || "tile", ring: !!opts.ring, alert: !!opts.alert, dim: opts.dim, title: opts.title });
+    const picture = faceUrl(emoji);
+    return UI.html("face", { name: participant.name, label: emoji && !picture ? emoji : initials(participant.name), emoji: !!emoji && !picture, picture: picture || undefined, color, size: s, badge, status, me: !!opts.me, kind: opts.kind || "tile", ring: !!opts.ring, alert: !!opts.alert, dim: opts.dim, title: opts.title });
+  }
+
+
+  const PICTURE = /^pic:([a-z][a-z0-9-]{1,31})$/;
+  function faceUrl(value) {
+    const m = typeof value === "string" ? PICTURE.exec(value) : null;
+    return m ? `faces/${m[1]}.webp` : "";
+  }
+  let catalogue = null;
+  function loadFaces() {
+    catalogue = catalogue ||
+    fetch("/faces/catalogue.json", { signal: AbortSignal.timeout(10_000) }).then((r) => (r.ok ? r.json() : { groups: [], faces: [] })).catch(() => ({ groups: [], faces: [] }));
+    return catalogue;
+  }
+
+  function facePicker({ kind, current, onPick, emoji, none, field }) {
+    const UI = globalThis.UI;
+    const wrap = document.createElement("div");
+    wrap.className = "face-pick";
+    let value = current || "";
+    let tab = "pictures";
+    const tabs = document.createElement("div");
+    tabs.className = "face-pick-tabs";
+    tabs.setAttribute("role", "group");
+    tabs.setAttribute("aria-label", "Kind of face");
+    const pictures = document.createElement("div");
+    pictures.className = "face-pick-pictures";
+    const emojiTab = document.createElement("div");
+    emojiTab.className = "face-pick-emoji";
+    let typed = null;
+    const pick = (next) => {
+      value = next;
+      if (typed) typed.value = PICTURE.test(next) ? "" : next;
+      if (field) field.value = next;
+      emojiGrid.setValue(next);
+      onPick(next);
+      renderPictures();
+    };
+    const emojiGrid = searchableGrid(emoji, value, (picked) => pick(picked), none);
+    emojiTab.appendChild(emojiGrid);
+    if (field) {
+      field.type = "hidden";
+      typed = document.createElement("input");
+      typed.type = "text";
+      typed.className = "input face-pick-typed";
+      typed.maxLength = 8;
+      typed.placeholder = "Or type any emoji";
+      typed.autocomplete = "off";
+      typed.spellcheck = false;
+      typed.setAttribute("aria-label", "Any emoji");
+      typed.value = PICTURE.test(value) ? "" : value;
+      typed.addEventListener("input", () => { value = typed.value.trim(); field.value = value; emojiGrid.setValue(value); renderPictures(); });
+      emojiTab.appendChild(typed);
+    }
+    const renderTabs = () => {
+      tabs.innerHTML = UI.html("choice", { label: "Pictures", on: tab === "pictures", data: { faceTab: "pictures" } }) + UI.html("choice", { label: "Emoji", on: tab === "emoji", data: { faceTab: "emoji" } });
+      pictures.hidden = tab !== "pictures";
+      emojiTab.hidden = tab !== "emoji";
+    };
+    tabs.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-face-tab]");
+      if (!b) return;
+      e.preventDefault();
+      tab = b.dataset.faceTab;
+      renderTabs();
+    });
+    const renderPictures = () => {
+      loadFaces().then(({ groups, faces }) => {
+        pictures.innerHTML = "";
+        if (none) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "face-pick-none" + (!value ? " selected" : "");
+          b.textContent = none.label;
+          b.title = none.title;
+          b.addEventListener("click", () => pick(""));
+          pictures.appendChild(b);
+        }
+        for (const group of groups.filter((g) => g.for === kind)) {
+          const mine = faces.filter((f) => f.group === group.id);
+          if (!mine.length) continue;
+          const head = document.createElement("div");
+          head.className = "face-pick-group";
+          head.textContent = group.label;
+          const grid = document.createElement("div");
+          grid.className = "face-pick-grid";
+          for (const face of mine) {
+            const id = `pic:${face.id}`;
+            const b = document.createElement("button");
+            b.type = "button";
+            b.title = face.label;
+            b.setAttribute("aria-label", face.label);
+            b.className = id === value ? "selected" : "";
+            const img = document.createElement("img");
+            img.src = face.url;
+            img.alt = "";
+            img.loading = "lazy";
+            img.decoding = "async";
+            b.appendChild(img);
+            b.addEventListener("click", () => pick(id));
+            grid.appendChild(b);
+          }
+          pictures.append(head, grid);
+        }
+      });
+    };
+    wrap.append(tabs, pictures, emojiTab);
+    renderTabs();
+    renderPictures();
+    wrap.setValue = (v) => {
+      value = v || "";
+      emojiGrid.setValue(value);
+      if (typed) typed.value = PICTURE.test(value) ? "" : value;
+      renderPictures();
+    };
+    return wrap;
   }
 
   const GALLERY = [
@@ -209,9 +326,9 @@
     return wrap;
   }
 
-  function pickerElement(current, onPick) {
-    return searchableGrid(GALLERY, current, onPick, { label: "Aa", title: "Initials" });
+  function pickerElement(current, onPick, field) {
+    return facePicker({ kind: "vibemate", current, onPick, emoji: GALLERY, none: { label: "Aa", title: "Initials" }, field });
   }
 
-  window.Avatars = { avatarSvg, avatarHtml, castColour, initials, pickerElement, searchableGrid, emojiName, GALLERY };
+  window.Avatars = { avatarSvg, avatarHtml, castColour, initials, pickerElement, facePicker, faceUrl, loadFaces, searchableGrid, emojiName, GALLERY };
 })();

@@ -6,13 +6,16 @@ import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { exportCarry, resourceName, stageCarry, type CarryDependency, type ExportJob } from "./carry-stage.js";
 import { prepareCarryPlan, type CarryPlanJob } from "./carry-plan.js";
+import { takeBackArrivingRoom, writeArrivingRoom, type ArrivingProgress, type ArrivingRoomTask } from "./carry-write.js";
 
 export interface DependencyFolder { kind: "skill" | "look"; id: string; dir: string }
 export type CarryWorkerTask =
   | { type: "export"; job: ExportJob; folders: DependencyFolder[] }
   | { type: "stage"; input: string; stageDir: string; passphrase?: string }
   | { type: "plan"; job: CarryPlanJob }
-  | { type: "estimate"; snapshot: string; dataDir: string; rooms: ExportJob["rooms"] };
+  | { type: "estimate"; snapshot: string; dataDir: string; rooms: ExportJob["rooms"] }
+  | { type: "write-room"; room: ArrivingRoomTask }
+  | { type: "take-back-room"; history: string; dataDir: string; target: string };
 
 function dependency(folder: DependencyFolder): CarryDependency {
   const files: CarryDependency["files"] = [];
@@ -35,7 +38,9 @@ function dependency(folder: DependencyFolder): CarryDependency {
   return { kind: folder.kind, id: folder.id, files };
 }
 
-export async function executeCarryTask(task: CarryWorkerTask): Promise<unknown> {
+export async function executeCarryTask(task: CarryWorkerTask, progress: (step: ArrivingProgress) => void = () => {}): Promise<unknown> {
+  if (task.type === "write-room") return writeArrivingRoom(task.room, progress);
+  if (task.type === "take-back-room") return takeBackArrivingRoom(task);
   if (task.type === "stage") return stageCarry(task.input, task.stageDir, task.passphrase);
   if (task.type === "plan") return prepareCarryPlan(task.job);
   if (task.type === "export") return exportCarry({ ...task.job, dependencies: [...task.job.dependencies, ...task.folders.map(dependency)] });
@@ -56,7 +61,7 @@ export async function executeCarryTask(task: CarryWorkerTask): Promise<unknown> 
 }
 
 if (parentPort) {
-  executeCarryTask(workerData as CarryWorkerTask).then(
+  executeCarryTask(workerData as CarryWorkerTask, step => parentPort!.postMessage({ progress: step })).then(
     result => parentPort!.postMessage({ ok: true, result }),
     error => parentPort!.postMessage({ ok: false, error: error instanceof Error ? error.message : "The transfer could not be prepared.", code: error?.constructor?.name === "CarryPasswordNeeded" ? "password" : "invalid" }),
   );

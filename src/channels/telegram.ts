@@ -1,5 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import type { Logger } from "../log.js";
+import { describeNetworkError } from "../net/outbound.js";
 import { authorOfPrefix } from "./format.js";
 import { BOT_COMMANDS } from "./router.js";
 import type { AdapterStatus, Button, Capabilities, ChannelAdapter, InboundFile, InboundMessage, InboundResult, OutboundFile, Platform, SendFileOptions, SendOptions } from "./types.js";
@@ -32,6 +33,8 @@ interface TelegramUpdate {
     caption?: string;
     photo?: { file_id: string; file_size?: number; width?: number; height?: number }[];
     document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
+    voice?: { file_id: string; duration?: number; mime_type?: string; file_size?: number };
+    audio?: { file_id: string; duration?: number; title?: string; file_name?: string; mime_type?: string; file_size?: number };
     reply_to_message?: { message_id: number; text?: string; entities?: { type: string; offset: number; length: number }[]; from?: { id: number; is_bot?: boolean } };
   };
   callback_query?: {
@@ -103,7 +106,7 @@ export class TelegramAdapter implements ChannelAdapter {
         await this.call("setMyName", { name: this.wantedName });
         this.shownName = this.wantedName;
       } catch (error) {
-        this.log.warn(`bot name not set: ${this.redact(describe(error))}`);
+        this.log.warn(`bot name not set: ${this.redact(describeNetworkError(error))}`);
       }
     }
     await this.ensureProfileText("getMyDescription", "setMyDescription", "description", BOT_DESCRIPTION);
@@ -122,7 +125,7 @@ export class TelegramAdapter implements ChannelAdapter {
       if ((current[field] ?? "") === wanted) return;
       await this.call(setter, { [field]: wanted });
     } catch (error) {
-      this.log.warn(`bot ${field.replace("_", " ")} not set: ${this.redact(describe(error))}`);
+      this.log.warn(`bot ${field.replace("_", " ")} not set: ${this.redact(describeNetworkError(error))}`);
     }
   }
 
@@ -208,7 +211,7 @@ export class TelegramAdapter implements ChannelAdapter {
     try {
       response = await this.fetchImpl(`${this.apiBase}/file/bot${this.token}/${info.file_path}`, { signal: this.deadline(false) });
     } catch (error) {
-      throw new Error(this.redact(describe(error)));
+      throw new Error(this.redact(describeNetworkError(error)));
     }
     if (!response.ok) throw new Error(`the file could not be fetched (${response.status})`);
     const data = Buffer.from(await response.arrayBuffer());
@@ -261,7 +264,7 @@ export class TelegramAdapter implements ChannelAdapter {
         }
         if ((error as Error).name === "AbortError") continue;
         const delay = NETWORK_BACKOFF_MS[Math.min(failures++, NETWORK_BACKOFF_MS.length - 1)];
-        this.log.warn(`getUpdates failed (${this.redact(describe(error))}); again in ${delay} ms`);
+        this.log.warn(`getUpdates failed (${this.redact(describeNetworkError(error))}); again in ${delay} ms`);
         await this.sleep(delay);
         continue;
       }
@@ -318,7 +321,7 @@ export class TelegramAdapter implements ChannelAdapter {
       });
     } catch (error) {
       if (longPoll) this.inFlight = null;
-      const wrapped = new Error(this.redact(describe(error)));
+      const wrapped = new Error(this.redact(describeNetworkError(error)));
       wrapped.name = (error as Error).name;
       throw wrapped;
     }
@@ -346,10 +349,6 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 }
 
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function stripTags(html: string): string {
   return html.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 }
@@ -375,11 +374,13 @@ export function toInbound(update: TelegramUpdate): InboundMessage | null {
   const m = update.message;
   if (!m || m.chat.type !== "private" || !m.from || m.from.is_bot) return null;
   const text = m.text ?? m.caption ?? "";
-  const attachment = m.photo ? "photo" : m.document ? "document" : !m.text && !m.caption ? "other" : undefined;
   const largest = m.photo?.length ? m.photo[m.photo.length - 1] : undefined;
   const file: InboundFile | undefined = largest
     ? { kind: "photo", fileId: largest.file_id, mime: "image/jpeg", size: largest.file_size }
-    : m.document ? { kind: "document", fileId: m.document.file_id, name: m.document.file_name, mime: m.document.mime_type, size: m.document.file_size } : undefined;
+    : m.voice ? { kind: "sound", voice: true, fileId: m.voice.file_id, mime: m.voice.mime_type ?? "audio/ogg", size: m.voice.file_size, ...(m.voice.duration ? { seconds: m.voice.duration } : {}) }
+    : m.audio ? { kind: "sound", fileId: m.audio.file_id, name: m.audio.file_name ?? m.audio.title, mime: m.audio.mime_type, size: m.audio.file_size, ...(m.audio.duration ? { seconds: m.audio.duration } : {}) }
+    : m.document ? { kind: m.document.mime_type?.startsWith("audio/") ? "sound" : "document", fileId: m.document.file_id, name: m.document.file_name, mime: m.document.mime_type, size: m.document.file_size } : undefined;
+  const attachment = file?.kind ?? (!m.text && !m.caption ? "other" : undefined);
   const quoted = quotedAuthor(m.reply_to_message);
   return {
     ref: { platform: "telegram", account: "", chatId: String(m.chat.id), threadId: m.message_thread_id ? String(m.message_thread_id) : undefined },

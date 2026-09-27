@@ -1,6 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -12,8 +12,7 @@ const { packIcns, packIco } = await import(pathToFileURL(join(root, "dist", "ico
 const chrome = process.env.CHROME || findChromium();
 if (!chrome) throw new Error("no Chromium browser found; set CHROME=<path to chrome.exe>");
 const master = join(root, "assets", "icon-master.png");
-const hasMaster = existsSync(master);
-const svg = hasMaster ? "" : readFileSync(join(root, "assets", "icon-vector.svg"), "utf8");
+if (!existsSync(master)) throw new Error(`the logo's master is missing: ${master}`);
 const sizes = [16, 32, 48, 64, 128, 256, 512];
 const port = 9360 + Math.floor(Math.random() * 30);
 const profile = join(tmpdir(), `viberoom-icon-${process.pid}`);
@@ -57,13 +56,11 @@ try {
   await send("Emulation.setDeviceMetricsOverride", { width: 600, height: 600, deviceScaleFactor: 1, mobile: false });
   const pageFile = join(profile, "render.html");
   for (const size of sizes) {
-    const body = hasMaster
-      ? `<img src="${pathToFileURL(master).href}" style="display:block;width:${size}px;height:${size}px;border-radius:${(size * 0.21).toFixed(2)}px">`
-      : svg.replace(/width="256" height="256"/, `width="${size}" height="${size}"`);
-    const html = `<!doctype html><html><head><style>html,body{margin:0;background:transparent;overflow:hidden}svg,img{display:block}</style></head><body>${body}</body></html>`;
+    const body = `<img src="${pathToFileURL(master).href}" style="display:block;width:${size}px;height:${size}px;border-radius:${(size * 0.21).toFixed(2)}px">`;
+    const html = `<!doctype html><html><head><style>html,body{margin:0;background:transparent;overflow:hidden}img{display:block}</style></head><body>${body}</body></html>`;
     writeFileSync(pageFile, html);
     await send("Page.navigate", { url: pathToFileURL(pageFile).href });
-    await sleep(hasMaster ? 700 : 300);
+    await sleep(700);
     const shot = await send("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: size, height: size, scale: 1 }, fromSurface: true });
     const data = Buffer.from(shot.result.data, "base64");
     writeFileSync(join(root, "assets", `icon-${size}.png`), data);
@@ -72,9 +69,7 @@ try {
   }
   writeFileSync(join(root, "assets", "icon.ico"), packIco(icons.filter((i) => i.size <= 256)));
   writeFileSync(join(root, "assets", "icon.icns"), packIcns(icons));
-  const svgOut = hasMaster
-    ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><image href="data:image/png;base64,${icons.find((i) => i.size === 256).data.toString("base64")}" width="256" height="256"/></svg>\n`
-    : svg;
+  const svgOut = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><image href="data:image/png;base64,${icons.find((i) => i.size === 256).data.toString("base64")}" width="256" height="256"/></svg>\n`;
   writeFileSync(join(root, "assets", "icon.svg"), svgOut);
   console.log("icon.ico and icon.icns written");
   ws.close();

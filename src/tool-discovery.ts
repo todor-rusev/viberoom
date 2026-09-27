@@ -9,6 +9,7 @@ function bounded<T>(value: T): T {
   if (Buffer.byteLength(JSON.stringify(value)) > DISCOVERY_MAX_BYTES) throw new Error("The complete tool discovery response exceeds its size budget");
   return value;
 }
+const SHORT_SUMMARY = 160;
 
 export class ToolDiscovery {
   private readonly db: DatabaseSync;
@@ -22,8 +23,8 @@ export class ToolDiscovery {
     this.unknown();
     for (const op of operations) bounded(this.definition(op));
     this.db = new DatabaseSync(":memory:");
-    this.db.exec("CREATE VIRTUAL TABLE catalogue_fts USING fts5(name, purpose, tokenize='unicode61')");
-    const insert = this.db.prepare("INSERT INTO catalogue_fts(name, purpose) VALUES (?, ?)");
+    this.db.exec("CREATE VIRTUAL TABLE catalogue_fts USING fts5(name, purpose, extra UNINDEXED, tokenize='unicode61')");
+    const insert = this.db.prepare("INSERT INTO catalogue_fts(name, purpose, extra) VALUES (?, ?, 0)");
     for (const op of operations) insert.run(op.name, op.summary);
   }
   close(): void { this.db.close(); }
@@ -42,15 +43,27 @@ export class ToolDiscovery {
   unknown() {
     return bounded({ code: "unknown_operation", ...this.catalogResult(this.catalogue, 0) });
   }
-  search(query: string) {
+  exact(query: string): ReturnType<ToolDiscovery["definition"]> | null {
     const normalized = query.trim();
     const exact = this.operations.get(canonicalOperationName(normalized) ?? normalized);
-    if (exact) return this.definition(exact);
-    const terms = [...new Set(normalized.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])];
+    return exact ? this.definition(exact) : null;
+  }
+  search(query: string, connections: readonly CatalogueRow[] = []) {
+    const exact = this.exact(query);
+    if (exact) return exact;
+    const own = new Set(this.operations.keys());
+    const extra = connections.filter((row) => !own.has(row.name));
+    this.db.exec("DELETE FROM catalogue_fts WHERE extra = 1");
+    const insert = this.db.prepare("INSERT INTO catalogue_fts(name, purpose, extra) VALUES (?, ?, 1)");
+    for (const row of extra) insert.run(row.name, row.summary);
+    const terms = [...new Set(query.trim().toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])];
     const expression = terms.map(term => `"${term}"`).join(" OR ");
     const matches = expression ? this.db.prepare("SELECT name FROM catalogue_fts WHERE catalogue_fts MATCH ? ORDER BY bm25(catalogue_fts, 8.0, 1.0), name").all(expression) as { name: string }[] : [];
     const positions = new Map(matches.map((row, index) => [row.name, index]));
-    const tools = [...this.catalogue].sort((a, b) => (positions.get(a.name) ?? matches.length) - (positions.get(b.name) ?? matches.length) || alphabetical(a, b));
-    return this.catalogResult(tools, matches.length);
+    const rank = (rows: CatalogueRow[]) => rows.sort((a, b) => (positions.get(a.name) ?? matches.length) - (positions.get(b.name) ?? matches.length) || alphabetical(a, b));
+    const full = this.catalogResult(rank([...this.catalogue, ...extra.map((row) => ({ ...row, direct: false }))]), matches.length);
+    if (Buffer.byteLength(JSON.stringify(full)) <= DISCOVERY_MAX_BYTES) return full;
+    const short = extra.map((row) => ({ ...row, direct: false, summary: row.summary.length > SHORT_SUMMARY ? `${row.summary.slice(0, SHORT_SUMMARY)}… (search "${row.name}" for all its tools)` : row.summary }));
+    return bounded(this.catalogResult(rank([...this.catalogue, ...short]), matches.length));
   }
 }

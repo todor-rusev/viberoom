@@ -1,6 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, posix, resolve, win32 } from "node:path";
 import { OPERATIONAL_LOG_KEEP, rollAside } from "./log.js";
 
@@ -237,6 +237,29 @@ export function savedWindowPlacement(profileDir: string): WindowPlacement | null
   }
 }
 
+export function allowOwnNotifications(profileDir: string, origin: string, now = Date.now()): boolean {
+  const file = join(profileDir, "Default", "Preferences");
+  try {
+    let prefs: Record<string, unknown> = {};
+    if (existsSync(file)) prefs = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    const child = (o: Record<string, unknown>, key: string): Record<string, unknown> => {
+      const v = o[key];
+      if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+      return (o[key] = {});
+    };
+    const notifications = child(child(child(child(prefs, "profile"), "content_settings"), "exceptions"), "notifications");
+    const pattern = `${origin},*`;
+    if (pattern in notifications) return false;
+    notifications[pattern] = { last_modified: String((now + 11_644_473_600_000) * 1000), setting: 1 };
+    mkdirSync(join(profileDir, "Default"), { recursive: true });
+    writeFileSync(`${file}.viberoom`, JSON.stringify(prefs));
+    renameSync(`${file}.viberoom`, file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function windowFilePath(dataDir: string): string {
   return join(dataDir, "window.json");
 }
@@ -295,10 +318,4 @@ export function browserAdvice(chromium: string | null, platform: NodeJS.Platform
   const names = `${all.slice(0, -1).join(", ")} or ${all[all.length - 1]}`;
   const where = platform === "linux" ? " on PATH" : "";
   return `No Chromium-based browser found (${names}${where}); viberoom opens in a tab of your default browser instead. Install one of them for the app window.`;
-}
-
-export function openUrlCommand(url: string, platform: NodeJS.Platform = process.platform): string {
-  if (platform === "win32") return `start "" "${url}"`;
-  if (platform === "darwin") return `open "${url}"`;
-  return `xdg-open "${url}"`;
 }

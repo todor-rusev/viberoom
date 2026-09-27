@@ -27,17 +27,19 @@ export interface InboundMessage {
   replyTo?: string;
   replyToAuthor?: string;
   replyToUnread?: string;
-  attachment?: "photo" | "document" | "other";
+  attachment?: InboundFile["kind"] | "other";
   file?: InboundFile;
   button?: { callbackId: string; data: string };
 }
 
 export interface InboundFile {
-  kind: "photo" | "document";
+  kind: "photo" | "sound" | "document";
   fileId: string;
   name?: string;
   mime?: string;
   size?: number;
+  voice?: boolean;
+  seconds?: number;
 }
 
 export interface OutboundFile {

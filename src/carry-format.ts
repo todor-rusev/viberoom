@@ -6,12 +6,13 @@ import { Readable, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGzip, createGunzip } from "node:zlib";
 
-export const CARRY_SCHEMA = 3;
-export const CARRY_LIMITS = { header: 4096, record: 64 * 1024 * 1024, expanded: 4 * 1024 ** 3, records: 2_000_000 };
+export const CARRY_SCHEMA = 4;
+export const CARRY_READS = [3, 4];
+export const CARRY_LIMITS = { header: 4096, record: 64 * 1024 * 1024, expanded: 256 * 1024 ** 3, records: 2_000_000 };
 const KDF = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 export interface CarryHeader {
   format: "viberoom";
-  schema: 3;
+  schema: 3 | 4;
   at: string;
   encoding: "gzip";
   cipher?: { name: "aes-256-gcm"; kdf: "scrypt-32768-8-1"; salt: string; nonce: string };
@@ -35,7 +36,7 @@ export async function carryHeader(path: string): Promise<{ header: CarryHeader; 
     let value: CarryHeader;
     try { value = JSON.parse(bytes.toString("utf8")); } catch { throw new CarryError("This file has no readable viberoom header."); }
     if (value?.schema > CARRY_SCHEMA) throw new CarryError(`This file uses format ${value.schema}. Update viberoom before opening it.`);
-    if (value?.format !== "viberoom" || value.schema !== CARRY_SCHEMA || value.encoding !== "gzip" || !Number.isFinite(Date.parse(value.at))) throw new CarryError("This is not a supported viberoom archive.");
+    if (value?.format !== "viberoom" || !CARRY_READS.includes(value.schema) || value.encoding !== "gzip" || !Number.isFinite(Date.parse(value.at))) throw new CarryError("This is not a supported viberoom archive.");
     if (value.cipher && (value.cipher.name !== "aes-256-gcm" || value.cipher.kdf !== "scrypt-32768-8-1" || !/^[a-f0-9]{32}$/.test(value.cipher.salt) || !/^[a-f0-9]{24}$/.test(value.cipher.nonce))) throw new CarryError("This archive uses an unsupported encryption header.");
     return { header: value, bytes, size: (await fd.stat()).size };
   } finally { await fd.close(); }

@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, w
 import { onRenameRefused, writeFileAtomic } from "./atomic.js";
 import { commitFiles, recoverFileTransactions, type FileChange, type FileOps } from "./file-transaction.js";
 import { carriedParticipants } from "./carry-plan.js";
+import { ARRIVING, HELD_FILE_RETRIES, removeArrivingFolder } from "./carry-write.js";
 import { folderIdentity, isIdentity, newIdentity } from "./identity.js";
 import { qrSvg } from "./qr.js";
 import { pickBotKey } from "./bot-key.js";
@@ -16,16 +17,18 @@ import { ensureDataRoot } from "./data-root.js";
 import { RequestTraceRing } from "./mcp-diagnostics.js";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { Logger, type TranscriptMode } from "./log.js";
 import { HISTORY_DB_FILE, HistoryStore, type SearchHit, type SearchQuery } from "./history-store.js";
 import { NameDirectory, namesInQuery } from "./name-directory.js";
 
 const TRANSCRIPT_MODES: readonly TranscriptMode[] = ["off", "errors", "full"];
+export const WHEEL_STEP_DEFAULT = 20, WHEEL_STEP_MIN = 5, WHEEL_STEP_MAX = 60;
 import { DEFAULT_EDITOR_SETTINGS, type EditorSettings } from "./open.js";
 import { getRecipe, listRecipes, publicRecipes, type AgentTypeId } from "./recipes.js";
 import { AgentManager, type AgentUpdatesView } from "./agent-manager.js";
 import type { LoginFlows, LoginFlow } from "./login-flow.js";
-import { DEFAULT_ROOM_SETTINGS, type RoomSettings } from "./persona.js";
+import { DEFAULT_ROOM_SETTINGS, upgradeRoomSettings, type RoomSettings } from "./persona.js";
 import { CREATED_MODE, type NewRoomPlan } from "./new-room.js";
 import { OptionCatalog } from "./option-catalog.js";
 import { recipeStamp } from "./install-stamp.js";
@@ -35,8 +38,33 @@ import { TemplateLibrary, roomSettingsFromTemplate, type RoomTemplate } from "./
 import { LookLibrary, checkLookSpec, loadTokens, type LookCheck, type LookSpec } from "./looks.js";
 import { ChannelRouter, type ChannelsView } from "./channels/router.js";
 import { ChannelsStore, fileRootRefusal, type FileRoot } from "./channels/state.js";
+import { Vault } from "./vault.js";
+import { Connections, ConnectionError, type ConnectionView } from "./connections/service.js";
+import { commandLine, type LocalLaunch } from "./connections/local-launch.js";
+import { ConnectionDesk } from "./connections/desk.js";
+import { guardedFetch } from "./connections/outbound.js";
+import { SignInError } from "./connections/oauth.js";
+import { cleanFace, freshFace } from "./faces.js";
+import type { KeyedSystemId } from "./connections/catalog.js";
+import { launchOpen, openCommand } from "./open.js";
+import { BLOCK_CHARS_MAX, BLOCK_CHARS_MIN, MemoryConfigStore, consentWords, legacyRecallAcrossRooms, memoryReadiness, type MemoryConfigView } from "./memory/config.js";
+import { VoiceConfigStore, readingConsentWords, readingReadiness, voiceConsentWords, voiceReadiness } from "./voice/config.js";
+import { voiceProvider } from "./voice/registry.js";
+import { VoiceService } from "./voice/service.js";
+import { MEMORY_PROVIDERS, coerceProviderSettings, providerEntry } from "./memory/registry.js";
+import { MemoryPipeline, type MemoryStatus } from "./memory/service.js";
+import { QUESTION_FORMS, isQuestionForm } from "./memory/questions.js";
 import { TelegramAdapter, TelegramApiError } from "./channels/telegram.js";
 import type { AutostartStatus } from "./autostart.js";
+
+export const FROM_SOURCES = hasSourceTree(import.meta.url);
+const HUB_VERSION: string = (() => {
+  try {
+    return String((createRequire(import.meta.url)("../package.json") as { version?: string }).version ?? "0");
+  } catch {
+    return "0";
+  }
+})();
 
 export interface VendorPreset {
   model: string | null;
@@ -56,6 +84,12 @@ export interface ProgramSettings {
   diagrams: DiagramSettings;
   editor: EditorSettings;
   appearance: AppearanceSettings;
+  showMoreOnClick: boolean;
+  wheelStepPercent: number;
+  wheelInertia: boolean;
+  notifyReplies: "every" | "to-me" | "off";
+  appBadge: boolean;
+  devShowPrompts: boolean;
   checkForUpdates: boolean;
   checkAgentUpdates: boolean;
   transcripts: TranscriptMode;
@@ -65,6 +99,7 @@ export interface ProgramSettings {
 
 export interface AppearanceSettings {
   chatFontSize: number;
+  scale: number;
   font: string;
   mono: string;
   look: string;
@@ -77,7 +112,7 @@ export const ADJUSTABLE: Record<Adjustable, "colour" | "scale"> = {
 };
 export const TEXT_FONTS = ["nunito", "inter", "noto-sans", "open-sans", "source-sans-3", "ibm-plex-sans", "manrope", "rubik", "montserrat", "golos-text", "exo-2", "comfortaa", "ubuntu-sans", "arial", "system"];
 export const MONO_FONTS = ["jetbrains-mono", "fira-code", "source-code-pro", "ibm-plex-mono", "pt-mono", "victor-mono", "anonymous-pro", "cascadia-code", "system"];
-export const DEFAULT_APPEARANCE: AppearanceSettings = { chatFontSize: 14.5, font: "nunito", mono: "jetbrains-mono", look: "classic", custom: {} };
+export const DEFAULT_APPEARANCE: AppearanceSettings = { chatFontSize: 14.5, scale: 100, font: "nunito", mono: "jetbrains-mono", look: "classic", custom: {} };
 
 export interface DiagramSettings {
   preset: DiagramPreset;
@@ -103,12 +138,24 @@ interface RoomsFile {
 }
 
 import type { UpdateInfo } from "./update.js";
+import { hasSourceTree } from "./update.js";
 
 export const SECRET_CARD_MS = 10 * 60_000;
 
 export interface SecretRequest {
   id: string;
-  purpose: "telegram-token" | "telegram-pair";
+  purpose: "telegram-token" | "telegram-pair" | "memory-zep-key" | "memory-sieve-key" | "voice-key" | "consent" | "connection";
+  consent?: { feature: ConsentFeature; words: string; recipient: string; reader?: "system" | "provider"; changed?: boolean };
+  connection?: {
+    id: string; name: string; blurb: string; mark?: ConnectionView["mark"]; signingIn?: boolean;
+    url?: string;
+    command?: string;
+    launch?: LocalLaunch;
+    env?: string[];
+    envSaved?: string[];
+    add?: boolean;
+  };
+  prefill?: { baseUrl?: string; model?: string; provider?: string; language?: string };
   askedBy: { kind: "window" } | { kind: "vibemate"; roomId: string; participantId: string; name: string };
   askedAt: number;
   expiresAt: number;
@@ -116,6 +163,22 @@ export interface SecretRequest {
   outcome?: string;
   refusal?: string;
   link?: { url: string; expiresAt: number; svg: string };
+}
+
+export const KEYED_PURPOSE: Record<KeyedSystemId, SecretRequest["purpose"]> = { telegram: "telegram-token", zep: "memory-zep-key", sieve: "memory-sieve-key", voice: "voice-key" };
+
+export const CONSENT_FEATURES = ["memory", "voice", "reading"] as const;
+export type ConsentFeature = (typeof CONSENT_FEATURES)[number];
+export const CONSENT_FEATURE_WORDS: Record<ConsentFeature, string> = { memory: "the long-term memory", voice: "the voice (recordings made into words)", reading: "reading the replies aloud" };
+export const READ_HERE_WORDS = "The replies are read aloud by this computer's own voices, in the window: nothing leaves this computer.";
+
+export function secretLabel(request: Pick<SecretRequest, "purpose" | "connection" | "consent">): string {
+  const { purpose } = request;
+  if (purpose === "connection" && request.connection?.add) return `${request.connection.name} (${request.connection.url ?? request.connection.command}) to be added as a connection`;
+  if (purpose === "connection") return `a sign-in to ${request.connection?.name ?? "a system"}`;
+  if (purpose === "consent") return `their consent to ${CONSENT_FEATURE_WORDS[request.consent?.feature ?? "voice"]}`;
+  if (purpose === "voice-key") return "the voice provider's key";
+  return purpose === "memory-zep-key" ? "the Zep API key" : purpose === "memory-sieve-key" ? "the sieve key" : "the Telegram bot key";
 }
 
 export type HubEvent =
@@ -136,7 +199,8 @@ export type HubEvent =
   | { type: "login"; flow: LoginFlow }
   | { type: "restart"; restart: RestartView | null }
   | { type: "reset" }
-  | { type: "channels"; channels: ChannelsView };
+  | { type: "channels"; channels: ChannelsView }
+  | { type: "connections"; connections: ConnectionView[] };
 
 export interface RestartView {
   askedBy: string;
@@ -158,6 +222,8 @@ const INSTRUCTION_FILES = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules"
 export function nextAppearance(current: AppearanceSettings, a: Record<string, unknown>): AppearanceSettings {
   const chatFontSize = Number(a.chatFontSize ?? current.chatFontSize ?? DEFAULT_APPEARANCE.chatFontSize);
   if (!Number.isFinite(chatFontSize) || chatFontSize < 12 || chatFontSize > 32) throw new Error("appearance.chatFontSize must be between 12 and 32");
+  const scale = Number(a.scale ?? current.scale ?? DEFAULT_APPEARANCE.scale);
+  if (!Number.isFinite(scale) || scale < 70 || scale > 150) throw new Error("appearance.scale must be between 70 and 150 (per cent)");
   const font = String(a.font ?? current.font ?? DEFAULT_APPEARANCE.font);
   if (!TEXT_FONTS.includes(font)) throw new Error(`appearance.font must be one of ${TEXT_FONTS.join(", ")}`);
   const mono = String(a.mono ?? current.mono ?? DEFAULT_APPEARANCE.mono);
@@ -190,7 +256,7 @@ export function nextAppearance(current: AppearanceSettings, a: Record<string, un
       else delete custom[lookId];
     }
   }
-  return { chatFontSize: Math.round(chatFontSize * 2) / 2, font, mono, look, custom };
+  return { chatFontSize: Math.round(chatFontSize * 2) / 2, scale: Math.round(scale), font, mono, look, custom };
 }
 
 const CHANNEL_RETRY_MS = [5_000, 15_000, 60_000, 300_000];
@@ -321,6 +387,8 @@ export class Hub extends EventEmitter {
     this.settings = this.loadSettings(initialHumanName);
     if (options.backgroundAgentChecks !== false) this.agents.start();
     this.loadRooms();
+    try { this.settleArrivingRooms(); }
+    catch (error) { this.log.warn(`carry import: ${error instanceof Error ? error.message : String(error)}`); }
     try {
       const store = new AutomationStore(join(this.dataDir, "automations.sqlite"));
       const assignedRoom = (key: string) => [...this.rooms.values()].find(room => room.uuid === key);
@@ -331,7 +399,27 @@ export class Hub extends EventEmitter {
     } catch (error) { this.automationsUnavailable = `Automations are unavailable: ${error instanceof Error ? error.message : String(error)}`; this.log.warn(this.automationsUnavailable); }
     this.tellRoomsWhatEndedTheLastRun();
     if (this.renamedAttachments) this.saveRooms();
-    this.channelsStore = new ChannelsStore(join(this.dataDir, "channels.json"));
+    let vault: Vault | null | undefined;
+    const vaultHandle = (): Vault | null => {
+      if (vault !== undefined) return vault;
+      try {
+        vault = Vault.open(this.dataDir);
+      } catch (error) {
+        vault = null;
+        log.child("vault").error(`the vault could not be opened; the stored keys stay unavailable until it can: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return vault;
+    };
+    this.connections = new Connections({
+      dataDir: this.dataDir,
+      vault: vaultHandle,
+      fetch: guardedFetch(),
+      openBrowser: (url) => launchOpen(openCommand({ kind: "url", value: url }), (error) => log.child("connections").warn(`the sign-in page could not be opened: ${error.message}`)),
+      clientVersion: HUB_VERSION,
+      changed: () => this.emit("event", { type: "connections", connections: this.connectionsView() } satisfies HubEvent),
+    });
+    this.connectionDesk = new ConnectionDesk(this.connections);
+    this.channelsStore = new ChannelsStore(join(this.dataDir, "channels.json"), vaultHandle);
     this.channels = new ChannelRouter(
       {
         rooms: () => [...this.rooms.values()],
@@ -342,6 +430,7 @@ export class Hub extends EventEmitter {
         onRoomEvent: (handler) => this.on("event", (event: HubEvent) => { if (event.type === "room.event") handler(event.roomId, event.event); }),
         channelsChanged: () => this.emit("event", { type: "channels", channels: this.channels.view() } satisfies HubEvent),
         paired: (_platform, name) => this.settlePairingCards(name),
+        hear: (room, sounds) => this.voice.hearAll(sounds, room.speechNames()),
         restart: {
           writingNow: () => this.writingNow(),
           request: (input) => this.requestRestart(input),
@@ -353,6 +442,91 @@ export class Hub extends EventEmitter {
       this.channelsStore,
       log.child("channels"),
     );
+    this.voice = new VoiceService(new VoiceConfigStore(join(this.dataDir, "voice.json"), vaultHandle), log.child("voice"));
+    this.memoryStore = new MemoryConfigStore(join(this.dataDir, "memory.json"), vaultHandle);
+    const memoryLog = log.child("memory");
+    const memoryRoomView = (room: Room) => ({ id: room.id, uuid: room.uuid, name: room.name, remembers: room.settings.remembers === true, readsOtherRooms: room.settings.readsOtherRooms });
+    this.memory = new MemoryPipeline({
+      outbox: this.history.memoryOutbox,
+      history: this.history,
+      rooms: () => [...this.rooms.values()].map(memoryRoomView),
+      room: (id) => { const room = this.rooms.get(id); return room ? memoryRoomView(room) : null; },
+      searchPool: (roomId) => this.roomsForAgentSearch(roomId).flatMap(({ id }) => { const room = this.rooms.get(id); return room ? [memoryRoomView(room)] : []; }),
+      config: () => this.memoryStore.get(),
+      provider: async (config) => {
+        const entry = providerEntry(config.provider);
+        if (!entry) throw new Error("no memory provider is configured");
+        return entry.load(config.providers[entry.id] ?? {});
+      },
+      note: (roomId, text) => void this.rooms.get(roomId)?.serviceEvent(text),
+      log: { info: m => memoryLog.info(m), warn: m => memoryLog.warn(m), error: m => memoryLog.error(m) },
+    });
+    this.on("event", (event: HubEvent) => {
+      if (event.type !== "room.event") return;
+      const inner = event.event;
+      if (inner.type === "message" && inner.message.kind === "chat" && !inner.message.streaming) {
+        const edited = inner.message.edited;
+        if (edited) this.memory.edited(event.roomId, inner.message.id, inner.message.seq, edited.ts);
+        else this.memory.messageLanded(event.roomId, inner.message.seq);
+      } else if (inner.type === "messages.truncated") {
+        this.memory.truncated(event.roomId, inner.fromSeq);
+      } else if (inner.type === "message" && inner.message.kind === "system" && inner.message.details?.renamed) {
+        const { from, to } = inner.message.details.renamed;
+        this.memory.fact(event.roomId, from, "is also known as", to);
+      } else if (inner.type === "room" && inner.settings.remembers) {
+        this.memory.optIn(event.roomId);
+        this.memory.wake(event.roomId);
+      }
+    });
+  }
+
+  readonly voice: VoiceService;
+  readonly memoryStore: MemoryConfigStore;
+  readonly memory: MemoryPipeline;
+
+  async setMemory(patch: { provider?: unknown; settings?: unknown; consent?: unknown; filterMode?: unknown; filterBaseUrl?: unknown; filterApiKey?: unknown; filterModel?: unknown; filterForm?: unknown; blockChars?: unknown }): Promise<{ view: MemoryConfigView; status: MemoryStatus; verified?: { ok: boolean; reason?: string } }> {
+    if (patch.provider !== undefined && patch.provider !== "off" && !providerEntry(String(patch.provider))) throw new Error(`memory provider must be off or one of: ${MEMORY_PROVIDERS.map(e => e.id).join(", ")}`);
+    if (patch.settings !== undefined && (typeof patch.settings !== "object" || patch.settings === null || Array.isArray(patch.settings))) throw new Error("settings must be an object of the provider's fields");
+    if (patch.consent !== undefined && typeof patch.consent !== "boolean") throw new Error("consent must be true or false");
+    if (patch.blockChars !== undefined && !(Number.isInteger(patch.blockChars) && (patch.blockChars as number) >= BLOCK_CHARS_MIN && (patch.blockChars as number) <= BLOCK_CHARS_MAX)) throw new Error(`blockChars must be a whole number from ${BLOCK_CHARS_MIN} to ${BLOCK_CHARS_MAX}`);
+    if (patch.filterMode !== undefined && patch.filterMode !== "off" && patch.filterMode !== "heuristic" && patch.filterMode !== "llm") throw new Error("filter mode must be off, heuristic or llm");
+    if (patch.filterForm !== undefined && !(typeof patch.filterForm === "string" && isQuestionForm(patch.filterForm))) throw new Error(`filterForm must be one of: ${QUESTION_FORMS.join(", ")}`);
+    for (const [key, value] of [["filterBaseUrl", patch.filterBaseUrl], ["filterApiKey", patch.filterApiKey], ["filterModel", patch.filterModel]] as const) {
+      if (value !== undefined && typeof value !== "string") throw new Error(`${key} must be text`);
+    }
+    const targetId = patch.provider !== undefined ? String(patch.provider) : this.memoryStore.get().provider;
+    const target = providerEntry(targetId);
+    if (patch.settings !== undefined && !target) throw new Error("choose a provider before its settings");
+    const settings = patch.settings !== undefined && target
+      ? coerceProviderSettings(target, this.memoryStore.get().providers[target.id] ?? {}, patch.settings as Record<string, unknown>)
+      : null;
+    this.memoryStore.update((s) => {
+      if (patch.provider !== undefined) s.provider = targetId;
+      if (settings && target) s.providers[target.id] = settings;
+      if (patch.filterMode !== undefined) s.filter.mode = patch.filterMode as "off" | "heuristic" | "llm";
+      if (typeof patch.filterBaseUrl === "string" && patch.filterBaseUrl.trim()) s.filter.baseUrl = patch.filterBaseUrl.trim();
+      if (typeof patch.filterApiKey === "string" && patch.filterApiKey.trim()) s.filter.apiKey = patch.filterApiKey.trim();
+      if (typeof patch.filterModel === "string") s.filter.model = patch.filterModel.trim();
+      if (typeof patch.filterForm === "string" && isQuestionForm(patch.filterForm)) s.filter.form = patch.filterForm;
+      if (typeof patch.blockChars === "number") s.blockChars = patch.blockChars;
+      if (patch.consent === true && target) {
+        const words = consentWords(target, s.filter);
+        if (s.consent[target.id]?.words !== words) s.consent[target.id] = { at: Date.now(), words };
+      }
+      if (patch.consent === false && target) delete s.consent[target.id];
+    });
+    this.memory.configChanged();
+    let verified: { ok: boolean; reason?: string } | undefined;
+    const config = this.memoryStore.get();
+    const entry = providerEntry(config.provider);
+    if (entry && (patch.settings !== undefined || patch.provider !== undefined)) {
+      const section = config.providers[entry.id] ?? {};
+      if (entry.fields.some(f => f.kind === "secret" && String(section[f.key] ?? ""))) {
+        const result = await (await entry.load(section)).verify();
+        verified = result.ok ? { ok: true } : { ok: false, reason: result.reason };
+      }
+    }
+    return { view: this.memoryStore.describe(), status: this.memory.status(), ...(verified ? { verified } : {}) };
   }
 
   async setTelegram(patch: { enabled?: unknown; token?: unknown; fileRoots?: unknown; name?: unknown; phoneApprovals?: unknown }): Promise<ChannelsView> {
@@ -424,6 +598,7 @@ export class Hub extends EventEmitter {
     this.setHubUrl(options.url);
     this.startBackups();
     void this.startChannels();
+    this.memory.start();
     if (options.afterRestart) this.noteBackAfterRestart(options.run.build);
     const mode = options.reconnectMode;
     return this.servicesStarted = this.startRoomsAtBoot(mode ? (room, id) => room.reconnect(id, { mode }) : undefined, { afterRestart: options.afterRestart });
@@ -584,6 +759,8 @@ export class Hub extends EventEmitter {
   }
 
   readonly channels: ChannelRouter;
+  readonly connections: Connections;
+  readonly connectionDesk: ConnectionDesk;
 
   async startChannels(): Promise<void> {
     if (this.channelsRetry) {
@@ -624,11 +801,16 @@ export class Hub extends EventEmitter {
     return [...this.secrets.values()].filter((r) => r.state === "open");
   }
 
-  askSecret(purpose: SecretRequest["purpose"], askedBy: SecretRequest["askedBy"]): SecretRequest {
-    const open = this.openSecrets().find((r) => r.purpose === purpose);
+  askSecret(purpose: SecretRequest["purpose"], askedBy: SecretRequest["askedBy"], prefill?: SecretRequest["prefill"], connection?: SecretRequest["connection"], consent?: SecretRequest["consent"]): SecretRequest {
+    const key = (c?: SecretRequest["connection"]) => c?.add ? `+${c.url ?? c.command}` : c?.id;
+    const open = this.openSecrets().find((r) => r.purpose === purpose && (purpose !== "connection" || key(r.connection) === key(connection)) && (purpose !== "consent" || r.consent?.feature === consent?.feature));
     if (open) return open;
     const now = Date.now();
     const request: SecretRequest = { id: randomBytes(9).toString("base64url"), purpose, askedBy, askedAt: now, expiresAt: now + SECRET_CARD_MS, state: "open" };
+    if (connection) request.connection = { ...connection };
+    if (consent) request.consent = { ...consent };
+    const given = Object.entries(prefill ?? {}).filter(([, value]) => typeof value === "string" && value !== "");
+    if (given.length) request.prefill = Object.fromEntries(given);
     if (purpose === "telegram-pair") {
       const { url, link } = this.channels.pairLink("telegram");
       request.link = { url, expiresAt: link.expiresAt, svg: qrSvg(url) };
@@ -642,7 +824,7 @@ export class Hub extends EventEmitter {
       const human = room?.settings.humanName;
       if (room) room.channelRecord(purpose === "telegram-pair"
         ? `${askedBy.name} asked to pair a phone: a card with the link and its QR code is on ${human}'s screen.`
-        : `${askedBy.name} asked for the Telegram bot key: a card is on ${human}'s screen.`);
+        : `${askedBy.name} asked for ${secretLabel(request)}: a card is on ${human}'s screen.`);
     }
     const timer = setTimeout(() => this.expireSecrets(), request.expiresAt - now + 50);
     timer.unref();
@@ -652,12 +834,34 @@ export class Hub extends EventEmitter {
   async answerSecret(id: string, value: string): Promise<SecretRequest> {
     const request = this.secrets.get(id);
     if (!request || request.state !== "open") throw new Error("that card is no longer open");
-    if (request.purpose !== "telegram-token") throw new Error("that card takes no value");
+    if (request.purpose === "telegram-pair" || request.purpose === "connection" || request.purpose === "consent") throw new Error("that card takes no value");
+    if (!value && !(request.purpose === "voice-key" && request.prefill?.provider === "compatible")) throw new Error("the card is empty: paste the key, or close it without one");
     try {
-      const view = await this.setTelegram({ token: value, enabled: true });
-      const tg = view.telegram;
-      if (!tg || (tg.state !== "connected" && tg.state !== "listening")) throw new Error(tg?.detail || "the bot did not start");
-      request.outcome = `connected as @${tg.account}`;
+      if (request.purpose === "voice-key") {
+        const provider = request.prefill?.provider ?? "openai";
+        const entry = voiceProvider(provider);
+        if (!entry) throw new Error(`"${provider}" is not a voice provider`);
+        const settings = { ...(value ? { apiKey: value } : {}), ...(request.prefill?.baseUrl ? { baseUrl: request.prefill.baseUrl } : {}), ...(request.prefill?.model ? { model: request.prefill.model } : {}) };
+        const proven = await this.voice.proveKey(provider, settings);
+        this.voice.set({ provider, settings, ...(request.prefill?.language ? { language: request.prefill.language } : {}) });
+        request.outcome = proven ? `${entry.label} is chosen, its key in the vault, and it answers` : `${entry.label} is chosen${value ? ", its key in the vault" : ""}`;
+      } else if (request.purpose === "telegram-token") {
+        const view = await this.setTelegram({ token: value, enabled: true });
+        const tg = view.telegram;
+        if (!tg || (tg.state !== "connected" && tg.state !== "listening")) throw new Error(tg?.detail || "the bot did not start");
+        request.outcome = `connected as @${tg.account}`;
+      } else if (request.purpose === "memory-zep-key") {
+        const result = await this.setMemory({ provider: "zep", settings: { apiKey: value } });
+        if (result.verified && !result.verified.ok) throw new Error(result.verified.reason || "Zep did not accept the key");
+        request.outcome = "the Zep key is in the vault and the provider answers";
+      } else {
+        await this.setMemory({
+          filterMode: "llm", filterApiKey: value,
+          ...(request.prefill?.baseUrl ? { filterBaseUrl: request.prefill.baseUrl } : {}),
+          ...(request.prefill?.model ? { filterModel: request.prefill.model } : {}),
+        });
+        request.outcome = "the sieve key is in the vault";
+      }
     } catch (error) {
       request.refusal = error instanceof Error ? error.message : String(error);
       this.emit("event", { type: "secret", request } satisfies HubEvent);
@@ -678,9 +882,180 @@ export class Hub extends EventEmitter {
       if (!options.copied) this.channels.cancelPairLink("telegram");
       return request;
     }
+    if (request.purpose === "connection" || request.purpose === "consent") {
+      if (request.connection) this.connections.cancelSignIn(request.connection.id);
+      request.outcome = "not now";
+      this.settleSecret(request, "closed");
+      return request;
+    }
     request.outcome = "closed without a key";
     this.settleSecret(request, "closed");
     return request;
+  }
+
+  askConsent(feature: ConsentFeature, askedBy: SecretRequest["askedBy"], reader?: "system" | "provider"): SecretRequest | null {
+    const who = feature === "reading" ? reader ?? "provider" : undefined;
+    if (this.featureOn(feature, who)) return null;
+    return this.askSecret("consent", askedBy, undefined, undefined, { feature, words: this.consentWordsNow(feature, who), recipient: this.consentRecipient(feature, who), ...(who ? { reader: who } : {}) });
+  }
+
+  private consentRecipient(feature: ConsentFeature, reader?: "system" | "provider"): string {
+    if (feature === "memory") return providerEntry(this.memoryStore.get().provider)?.label ?? "the provider";
+    if (feature === "reading" && reader === "system") return "this computer's own voices";
+    const entry = voiceProvider(this.voice.store.get().provider);
+    return !entry ? "the provider" : entry.id === "compatible" ? "your own server" : entry.label;
+  }
+
+  private featureOn(feature: ConsentFeature, reader?: "system" | "provider"): boolean {
+    if (feature === "memory") return memoryReadiness(this.memoryStore.get()).ready;
+    const state = this.voice.store.get();
+    if (feature === "voice") return voiceReadiness(state).ready;
+    return state.reading.reader === reader && readingReadiness(state).ready;
+  }
+
+  private consentWordsNow(feature: ConsentFeature, reader?: "system" | "provider"): string {
+    if (feature === "memory") {
+      const state = this.memoryStore.get();
+      const entry = providerEntry(state.provider);
+      if (!entry) throw new Error("no memory provider is chosen yet: its key card, or Settings → Long-term memory, comes first");
+      return consentWords(entry, state.filter);
+    }
+    if (feature === "reading" && reader === "system") return READ_HERE_WORDS;
+    const state = this.voice.store.get();
+    const entry = voiceProvider(state.provider);
+    if (!entry) throw new Error("no voice provider is chosen yet: its key card, or Settings → Voice, comes first");
+    const settings = state.providers[entry.id] ?? {};
+    return feature === "voice" ? voiceConsentWords(entry, settings) : readingConsentWords(entry, settings);
+  }
+
+  private async applyConsent(feature: ConsentFeature, reader?: "system" | "provider"): Promise<string> {
+    if (feature === "memory") await this.setMemory({ consent: true });
+    else if (feature === "voice") this.voice.set({ consent: true });
+    else this.voice.set({ reading: reader === "system" ? { reader: "system" } : { reader: "provider", consent: true } });
+    return this.featureState(feature);
+  }
+
+  async agreeTo(feature: ConsentFeature, words: string, reader?: "system" | "provider"): Promise<string> {
+    const who = feature === "reading" ? reader ?? "provider" : undefined;
+    if (words !== this.consentWordsNow(feature, who)) throw new Error("What leaves this computer changed since the page showed it: read the words again.");
+    return this.applyConsent(feature, who);
+  }
+
+  async withdrawConsent(feature: ConsentFeature): Promise<void> {
+    if (feature === "memory") await this.setMemory({ consent: false });
+    else if (feature === "voice") this.voice.set({ consent: false });
+    else this.voice.set({ reading: { consent: false } });
+  }
+
+  private featureState(feature: ConsentFeature): string {
+    const readiness = feature === "memory" ? memoryReadiness(this.memoryStore.get()) : feature === "voice" ? voiceReadiness(this.voice.store.get()) : readingReadiness(this.voice.store.get());
+    const name = CONSENT_FEATURE_WORDS[feature];
+    return readiness.ready ? `${name} is on` : `${name} is not on yet: ${readiness.reason}`;
+  }
+
+  async giveConsent(id: string): Promise<SecretRequest> {
+    const request = this.secrets.get(id);
+    if (!request || request.state !== "open" || request.purpose !== "consent" || !request.consent) throw new Error("that card is no longer open");
+    const { feature, reader } = request.consent;
+    try {
+      const words = this.consentWordsNow(feature, reader);
+      if (words !== request.consent.words) {
+        request.consent.words = words;
+        request.consent.recipient = this.consentRecipient(feature, reader);
+        request.consent.changed = true;
+        throw new Error("What leaves this computer changed since the card opened: read the words again.");
+      }
+      request.outcome = await this.applyConsent(feature, reader);
+    } catch (error) {
+      request.refusal = error instanceof Error ? error.message : String(error);
+      this.emit("event", { type: "secret", request } satisfies HubEvent);
+      throw error;
+    }
+    request.refusal = undefined;
+    this.settleSecret(request, "done");
+    return request;
+  }
+
+  connectionsView(): ConnectionView[] {
+    const ids = new Map([...this.rooms.values()].map((room) => [room.uuid, room.id]));
+    return this.connections.view().map((view) => view.offInRooms ? { ...view, offInRooms: view.offInRooms.flatMap((uuid) => ids.has(uuid) ? [ids.get(uuid)!] : []) } : view);
+  }
+
+  askConnection(id: string, askedBy: SecretRequest["askedBy"]): SecretRequest {
+    const view = this.connections.view().find((v) => v.id === id);
+    if (!view) throw new ConnectionError(`"${id}" is not a system viberoom connects to`, "unknown-tool");
+    return this.askSecret("connection", askedBy, undefined, {
+      id, name: view.name, blurb: view.blurb, mark: view.mark, ...(view.url ? { url: view.url } : {}),
+      ...(view.command ? { command: view.command, env: view.env ?? [], envSaved: this.connections.savedEnv(id) } : {}),
+    });
+  }
+
+  askAddConnection(name: string, url: string, askedBy: SecretRequest["askedBy"]): { request: SecretRequest; known: boolean } {
+    const known = this.connections.findByUrl(url);
+    if (known) return { request: this.askConnection(known, askedBy), known: true };
+    const label = name.trim().replace(/\s+/g, " ");
+    if (!label || label.length > 60) throw new ConnectionError("give the server a name of 1 to 60 characters", "failed");
+    const href = new URL(url.trim()).href;
+    return { request: this.askSecret("connection", askedBy, undefined, { id: "", name: label, blurb: new URL(href).host, url: href, add: true }), known: false };
+  }
+
+  askAddLocalConnection(name: string, launch: LocalLaunch, env: readonly string[], askedBy: SecretRequest["askedBy"]): { request: SecretRequest; known: boolean } {
+    const known = this.connections.findByLaunch(launch);
+    if (known) return { request: this.askConnection(known, askedBy), known: true };
+    const label = name.trim().replace(/\s+/g, " ");
+    if (!label || label.length > 60) throw new ConnectionError("give the server a name of 1 to 60 characters", "failed");
+    const command = commandLine(launch);
+    return { request: this.askSecret("connection", askedBy, undefined, { id: "", name: label, blurb: "a program on this computer", command, launch: { ...launch, args: [...launch.args] }, env: [...env], add: true }), known: false };
+  }
+
+  async connectCard(cardId: string, env: Record<string, unknown> = {}): Promise<ConnectionView> {
+    const card = this.openSecrets().find((r) => r.id === cardId);
+    if (!card?.connection) throw new Error("that card is no longer open");
+    try {
+      if (card.connection.add) {
+        card.connection.id = card.connection.launch
+          ? this.connections.addOwnLocal(card.connection.name, card.connection.launch, card.connection.env ?? [])
+          : this.connections.addOwn(card.connection.name, card.connection.url!);
+        card.connection.add = false;
+      }
+      if (card.connection.env?.length) await this.connections.setEnv(card.connection.id, env);
+    } catch (error) {
+      card.refusal = error instanceof Error ? error.message : String(error);
+      this.emit("event", { type: "secret", request: card } satisfies HubEvent);
+      throw error;
+    }
+    return this.connectSystem(card.connection.id, card.id);
+  }
+
+  async connectSystem(id: string, cardId?: string): Promise<ConnectionView> {
+    const request = cardId ? this.secrets.get(cardId) : undefined;
+    if (cardId && (!request || request.state !== "open" || request.purpose !== "connection" || request.connection?.id !== id)) throw new Error("that card is no longer open");
+    if (request?.connection) {
+      request.connection.signingIn = true;
+      request.refusal = undefined;
+      this.emit("event", { type: "secret", request } satisfies HubEvent);
+    }
+    try {
+      const view = await this.connections.connect(id);
+      const tools = view.tools ?? [];
+      const reads = tools.filter((t) => t.rule === "read").length;
+      this.log.info(`connection ${id}: connected, ${tools.length} tools`);
+      for (const card of this.openSecrets()) {
+        if (card.purpose !== "connection" || card.connection?.id !== id) continue;
+        card.outcome = `connected, ${tools.length} tools (${reads} read, ${tools.length - reads} write and ask first)`;
+        this.settleSecret(card, "done");
+      }
+      return view;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.warn(`connection ${id}: the sign-in did not finish: ${message}`);
+      if (request?.connection && request.state === "open") {
+        request.connection.signingIn = false;
+        request.refusal = error instanceof SignInError && error.kind === "cancelled" ? `Not connected: ${message}.` : `The sign-in failed: ${message}.`;
+        this.emit("event", { type: "secret", request } satisfies HubEvent);
+      }
+      throw error;
+    }
   }
 
   private settlePairingCards(name: string): void {
@@ -694,6 +1069,7 @@ export class Hub extends EventEmitter {
   expireSecrets(now = Date.now()): void {
     for (const request of this.openSecrets()) {
       if (request.expiresAt > now) continue;
+      if (request.purpose === "connection" && request.connection) this.connections.cancelSignIn(request.connection.id);
       request.outcome = request.purpose === "telegram-pair" ? "expired: not used within ten minutes" : "not answered within ten minutes";
       this.settleSecret(request, "expired");
     }
@@ -708,17 +1084,31 @@ export class Hub extends EventEmitter {
     if (!room) return;
     const human = room.settings.humanName;
     if (request.purpose === "telegram-pair") {
-      room.channelRecord(
+      room.cardOutcome(
         state === "done" ? `${human} paired the phone from the card: ${request.outcome}.`
           : state === "closed" ? `${human}'s pairing card closed: ${request.outcome}.`
           : "The pairing card was not used within ten minutes and closed by itself.",
+        request.askedBy.participantId,
       );
       return;
     }
-    room.channelRecord(
-      state === "done" ? `${human} entered the Telegram bot key on the card: ${request.outcome}.`
-        : state === "closed" ? `${human} closed the key card without a key.`
+    if (request.purpose === "consent") {
+      const feature = CONSENT_FEATURE_WORDS[request.consent?.feature ?? "voice"];
+      room.cardOutcome(
+        state === "done" ? `${human} gave their consent on the card: ${request.outcome}.`
+          : state === "closed" ? `${human} closed the card for ${feature}: not now.`
+          : `The card for ${feature} was not answered within ten minutes and closed by itself.`,
+        request.askedBy.participantId,
+      );
+      return;
+    }
+    room.cardOutcome(
+      state === "done" ? (request.purpose === "connection" ? `${human} connected ${request.connection?.name} from the card: ${request.outcome}.`
+        : request.purpose === "voice-key" ? `${human} saved the voice provider's card: ${request.outcome}.`
+        : `${human} entered ${secretLabel(request)} on the card: ${request.outcome}.`)
+        : state === "closed" ? (request.purpose === "connection" ? `${human} closed the ${request.connection?.name} card: ${request.outcome}.` : `${human} closed the key card without a key.`)
         : "The key card was not answered within ten minutes and closed by itself.",
+      request.askedBy.participantId,
     );
   }
 
@@ -867,6 +1257,12 @@ export class Hub extends EventEmitter {
       diagrams: { preset: "pop", primary: null },
       editor: { ...DEFAULT_EDITOR_SETTINGS },
       appearance: { ...DEFAULT_APPEARANCE },
+      showMoreOnClick: true,
+      wheelStepPercent: WHEEL_STEP_DEFAULT,
+      wheelInertia: false,
+      notifyReplies: "every",
+      appBadge: true,
+      devShowPrompts: false,
       checkForUpdates: true,
       checkAgentUpdates: true,
       transcripts: "off",
@@ -881,11 +1277,22 @@ export class Hub extends EventEmitter {
     }
     try {
       const raw = JSON.parse(readFileSync(this.settingsPath(), "utf8")) as Partial<ProgramSettings>;
-      return { ...defaults, ...raw, roomDefaults: raw.roomDefaults ?? {}, vendorPresets: raw.vendorPresets ?? {} };
+      const loaded = { ...defaults, ...raw, roomDefaults: raw.roomDefaults ?? {}, vendorPresets: raw.vendorPresets ?? {} };
+      const roomDefaults = this.upgradeRoomDefaults(loaded.roomDefaults);
+      if (roomDefaults === loaded.roomDefaults) return loaded;
+      const upgraded = { ...loaded, roomDefaults };
+      writeJson(this.settingsPath(), upgraded);
+      return upgraded;
     } catch (error) {
       this.log.warn(`settings.json unreadable (${String(error)}); using defaults`);
       return defaults;
     }
+  }
+
+  private upgradeRoomDefaults(raw: ProgramSettings["roomDefaults"]): ProgramSettings["roomDefaults"] {
+    const upgraded = upgradeRoomSettings(raw);
+    if (upgraded.readsOtherRooms !== undefined || upgraded.sharesHistory === false || !legacyRecallAcrossRooms(join(this.dataDir, "memory.json"))) return upgraded;
+    return { ...upgraded, readsOtherRooms: "every-turn" };
   }
 
   saveWindowPlacement(report: Record<string, unknown>): void {
@@ -914,10 +1321,23 @@ export class Hub extends EventEmitter {
       next.humanName = name;
     }
     if (patch.humanDescription !== undefined) next.humanDescription = String(patch.humanDescription).slice(0, 200);
-    if (patch.humanAvatar !== undefined) next.humanAvatar = String(patch.humanAvatar).slice(0, 8);
+    if (patch.humanAvatar !== undefined) next.humanAvatar = cleanFace(String(patch.humanAvatar), "vibemate");
     if (patch.bypassPermissionsByDefault !== undefined) next.bypassPermissionsByDefault = patch.bypassPermissionsByDefault === true || patch.bypassPermissionsByDefault === "true";
     if (patch.profileCompleted !== undefined) next.profileCompleted = patch.profileCompleted === true || patch.profileCompleted === "true";
     if (patch.agentSkillsNeedApproval !== undefined) next.agentSkillsNeedApproval = patch.agentSkillsNeedApproval === true || patch.agentSkillsNeedApproval === "true";
+    if (patch.showMoreOnClick !== undefined) next.showMoreOnClick = patch.showMoreOnClick === true || patch.showMoreOnClick === "true";
+    if (patch.wheelStepPercent !== undefined) {
+      const step = Number(patch.wheelStepPercent);
+      if (!Number.isFinite(step)) throw new Error("wheelStepPercent must be a number");
+      next.wheelStepPercent = Math.round(Math.min(WHEEL_STEP_MAX, Math.max(WHEEL_STEP_MIN, step)));
+    }
+    if (patch.wheelInertia !== undefined) next.wheelInertia = patch.wheelInertia === true || patch.wheelInertia === "true";
+    if (patch.notifyReplies !== undefined) {
+      if (patch.notifyReplies !== "every" && patch.notifyReplies !== "to-me" && patch.notifyReplies !== "off") throw new Error("notifyReplies must be every, to-me or off");
+      next.notifyReplies = patch.notifyReplies;
+    }
+    if (patch.appBadge !== undefined) next.appBadge = patch.appBadge === true || patch.appBadge === "true";
+    if (patch.devShowPrompts !== undefined) next.devShowPrompts = patch.devShowPrompts === true || patch.devShowPrompts === "true";
     if (patch.checkForUpdates !== undefined) next.checkForUpdates = patch.checkForUpdates === true || patch.checkForUpdates === "true";
     if (patch.checkAgentUpdates !== undefined) next.checkAgentUpdates = patch.checkAgentUpdates === true || patch.checkAgentUpdates === "true";
     if (patch.transcripts !== undefined) {
@@ -983,6 +1403,7 @@ export class Hub extends EventEmitter {
         bypassPermissionsByDefault: next.bypassPermissionsByDefault,
         transcripts: next.transcripts,
         foldAfter: next.foldAfter,
+        recordPrompts: FROM_SOURCES && next.devShowPrompts,
       });
     }
     this.emit("event", { type: "settings", settings: this.settings } satisfies HubEvent);
@@ -1039,6 +1460,7 @@ export class Hub extends EventEmitter {
   private loadRooms(): void {
     if (!existsSync(this.roomsPath())) return;
     let backfilled = 0;
+    let upgraded = 0;
     let file: RoomsFile;
     try {
       file = JSON.parse(readFileSync(this.roomsPath(), "utf8")) as RoomsFile;
@@ -1048,7 +1470,10 @@ export class Hub extends EventEmitter {
     }
     for (const stored of file.rooms ?? []) {
       try {
-        const room = this.instantiate(stored.id, stored.name, stored.dir, stored.settings, stored.createdAt, isIdentity(stored.uuid) ? stored.uuid : newIdentity());
+        const kept = stored.settings ?? {};
+        const settings = upgradeRoomSettings(kept);
+        if (settings !== kept) upgraded++;
+        const room = this.instantiate(stored.id, stored.name, stored.dir, settings, stored.createdAt, isIdentity(stored.uuid) ? stored.uuid : newIdentity());
         if (!isIdentity(stored.uuid)) backfilled++;
         room.restore(this.keepAttachments(stored.participants ?? []));
         this.log.info(`restored room "${stored.name}" (${stored.id}): ${room.messages.length} messages, ${stored.participants?.length ?? 0} participants offline`);
@@ -1056,10 +1481,9 @@ export class Hub extends EventEmitter {
         this.log.error(`could not restore room ${stored.id}: ${String(error)}`);
       }
     }
-    if (backfilled) {
-      this.saveRooms();
-      this.log.info(`${backfilled} room(s) had no identity of their own and were given one on this machine`);
-    }
+    if (backfilled || upgraded) this.saveRooms();
+    if (backfilled) this.log.info(`${backfilled} room(s) had no identity of their own and were given one on this machine`);
+    if (upgraded) this.log.info(`${upgraded} room(s) now decide apart whether they share their history and whether they search the others, reading as before`);
   }
 
   saveRooms(): void {
@@ -1074,14 +1498,41 @@ export class Hub extends EventEmitter {
     let base = slugify(name);
     if (!ROOM_ID_PATTERN.test(base)) base = `room-${randomBytes(6).toString("hex")}`;
     let id = base;
-    for (let n = 2; this.rooms.has(id) || reserved.has(id) || existsSync(join(this.dataDir, "rooms", id)); n++) id = `${base.slice(0, 32)}-${n}`;
+    for (let n = 2; this.rooms.has(id) || this.arriving.has(id) || reserved.has(id) || existsSync(join(this.dataDir, "rooms", id)); n++) id = `${base.slice(0, 32)}-${n}`;
     return id;
+  }
+
+  readonly arriving = new Set<string>();
+
+  private settleArrivingRooms(): void {
+    const roomsDir = join(this.dataDir, "rooms");
+    if (!existsSync(roomsDir)) return;
+    const unsettled: string[] = [];
+    for (const entry of readdirSync(roomsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !ROOM_ID_PATTERN.test(entry.name) || this.arriving.has(entry.name)) continue;
+      const folder = join(roomsDir, entry.name);
+      if (!existsSync(join(folder, ARRIVING))) continue;
+      try {
+        if (this.rooms.has(entry.name)) {
+          (this.fileOps.remove ?? rmSync)(join(folder, ARRIVING), HELD_FILE_RETRIES);
+          this.log.info(`carry import: ${entry.name} had arrived before viberoom stopped; its marker is cleared`);
+          continue;
+        }
+        this.history?.dropRoom(entry.name);
+        removeArrivingFolder(folder, this.fileOps.remove);
+        this.log.warn(`carry import: viberoom stopped while an import wrote ${entry.name}; what it had written is removed`);
+      } catch (error) {
+        unsettled.push(`${entry.name} (${error instanceof Error ? error.message : String(error)})`);
+      }
+    }
+    if (unsettled.length) throw new Error(`what an earlier import left half written could not all be removed yet: ${unsettled.join("; ")}. A program may be holding one of its files; viberoom tries again at its next start and before the next import.`);
   }
 
   fileOps: FileOps = {};
 
   settleImports(): void {
     recoverFileTransactions(this.dataDir, this.history, this.fileOps);
+    this.settleArrivingRooms();
   }
 
   async pauseRoomsForImport(ids: string[], options: { waiting: (names: string[]) => void; hurry: () => boolean }): Promise<Map<string, string[]>> {
@@ -1162,9 +1613,10 @@ export class Hub extends EventEmitter {
   searchHistory(params: { q?: string; rooms?: string; kinds?: string; author?: string; sort?: string; limit?: string; offset?: string; perRoom?: string; deleted?: string }): HistorySearchResponse {
     if (!this.history) return { hits: [], query: "", usedTrigram: false, unavailable: "the conversation store is off (SQLite is not available in this Node)" };
     const kinds = (params.kinds ?? "chat").split(",").map((k) => k.trim()).filter((k): k is "chat" | "system" => k === "chat" || k === "system");
-    const rooms = params.rooms && params.rooms !== "all" ? params.rooms.split(",").map((r) => r.trim()).filter((r) => this.rooms.has(r)) : undefined;
+    const asked = params.rooms && params.rooms !== "all" ? params.rooms.split(",").map((r) => r.trim()).filter((r) => this.rooms.has(r)) : [];
+    const rooms = asked.length ? asked : [...this.rooms.keys()];
     const sort = params.sort === "newest" || params.sort === "oldest" ? params.sort : "rank";
-    const people = this.nameDirectory(rooms ?? [...this.rooms.keys()]);
+    const people = this.nameDirectory(rooms);
     const author = params.author?.trim();
     const query: SearchQuery = {
       text: params.q ?? "",
@@ -1177,7 +1629,7 @@ export class Hub extends EventEmitter {
       perRoom: params.perRoom ? clampInt(params.perRoom, 10, 1, 200) : undefined,
       includeDeleted: params.deleted === "1",
     };
-    const stale = this.staleHistoryRoomsAfterRetry(rooms ?? this.rooms.keys()).map((id) => this.rooms.get(id)?.name ?? id);
+    const stale = this.staleHistoryRoomsAfterRetry(rooms).map((id) => this.rooms.get(id)?.name ?? id);
     const result = this.history.search(query);
     const names = namesInQuery(params.q ?? "", people).map(({ term, holder, others }) => ({ term, roomId: holder.roomId, now: holder.now ?? null, others }));
     return {
@@ -1187,7 +1639,7 @@ export class Hub extends EventEmitter {
         return { ...h, roomName: this.rooms.get(h.roomId)?.name ?? h.roomId, ...(now && now !== h.fromName ? { fromNow: now } : {}) };
       }),
       ...(names.length ? { names } : {}),
-      roomsSearched: rooms ? rooms.length : this.rooms.size,
+      roomsSearched: rooms.length,
       ...(stale.length ? { stale } : {}),
     };
   }
@@ -1264,18 +1716,18 @@ export class Hub extends EventEmitter {
   roomsForAgentSearch(roomId: string): { id: string; name: string }[] {
     const own = this.rooms.get(roomId);
     if (!own) return [];
-    if (!own.settings.searchOtherRooms) return [{ id: own.id, name: own.settings.name }];
+    if (own.settings.readsOtherRooms === "off") return [{ id: own.id, name: own.settings.name }];
     return [...this.rooms.values()]
       .filter((room) => room.id === roomId || this.canReadSharedHistory(own, room))
       .map((room) => ({ id: room.id, name: room.settings.name }));
   }
 
   private canReadSharedHistory(caller: Room, target: Room): boolean {
-    return caller.settings.searchOtherRooms && target.settings.searchOtherRooms && !caller.readOnly && !target.readOnly
+    return caller.settings.readsOtherRooms !== "off" && target.settings.sharesHistory && !caller.readOnly && !target.readOnly
       && !this.staleHistoryRoomsAfterRetry([target.id]).length;
   }
 
-  readMessageForAgent(callerRoomId: string, participantId: string, seq: number, around: number, selector?: string): Record<string, unknown> {
+  readMessageForAgent(callerRoomId: string, participantId: string, seq: number, around: number, selector?: string, copy?: string): Record<string, unknown> {
     const caller = this.getRoom(callerRoomId);
     caller.assertHistoryAccessForAgent(participantId);
     let target = caller;
@@ -1288,6 +1740,7 @@ export class Hub extends EventEmitter {
       target = matches[0];
     }
     try {
+      if (copy !== undefined) seq = target.numberFromCopy(copy, seq);
       const content = target === caller
         ? caller.readMessageForAgent(participantId, seq, around)
         : target.readVisibleMessageForAgent(seq, around, `${caller.participants.get(participantId)!.name} from ${JSON.stringify(caller.settings.name)}`);
@@ -1330,13 +1783,17 @@ export class Hub extends EventEmitter {
       hubRun: () => this.run,
       programTranscripts: this.settings.transcripts,
       programFoldAfter: this.settings.foldAfter,
-      settings: { ...this.settings.roomDefaults, ...settings },
+      recordPrompts: FROM_SOURCES && this.settings.devShowPrompts,
+      settings: { ...this.settings.roomDefaults, ...upgradeRoomSettings(settings) },
       log: this.log.child(`room:${id}`),
       optionCatalog: this.optionCatalog,
       skills: this.skillsBridge,
       history: this.history,
       onHistoryFailure: (roomId) => this.staleHistoryRooms.add(roomId),
       heldParticipantIds: () => this.automationTargets(uuid),
+      memoryGraph: (roomId, addressed) => this.memory.briefBlock(roomId, addressed),
+      memoryGraphReady: (roomId, addressed) => this.memory.briefReady(roomId, addressed),
+      connections: (roomUuid) => this.connections.inRoom(roomUuid).filter((c) => c.state === "connected").map((c) => c.name),
     });
     room.on("event", (event: RoomEvent) => {
       this.emit("event", { type: "room.event", roomId: id, event } satisfies HubEvent);
@@ -1359,7 +1816,7 @@ export class Hub extends EventEmitter {
     let id = slugify(name);
     if (!ROOM_ID_PATTERN.test(id)) id = `room-${Date.now().toString(36)}`;
     let candidate = id;
-    for (let n = 2; this.rooms.has(candidate); n++) candidate = `${id}-${n}`;
+    for (let n = 2; this.rooms.has(candidate) || this.arriving.has(candidate); n++) candidate = `${id}-${n}`;
     id = candidate;
 
     const notices: string[] = [];
@@ -1374,7 +1831,10 @@ export class Hub extends EventEmitter {
       mkdirSync(dir, { recursive: true });
     }
 
-    const room = this.instantiate(id, name, dir, input.settings ?? {}, Date.now(), isIdentity(input.uuid) ? input.uuid : newIdentity());
+    const settings = input.settings?.emoji === undefined
+      ? { ...input.settings, emoji: freshFace("room", [...this.rooms.values()].map((r) => r.settings.emoji)) }
+      : { ...input.settings, emoji: cleanFace(input.settings.emoji, "room") };
+    const room = this.instantiate(id, name, dir, settings, Date.now(), isIdentity(input.uuid) ? input.uuid : newIdentity());
     for (const notice of notices) room.postNotice(notice);
     this.saveRooms();
     this.emit("event", { type: "room.created", room: room.snapshot() } satisfies HubEvent);
@@ -1516,6 +1976,7 @@ export class Hub extends EventEmitter {
 
   async removeRoom(id: string): Promise<void> {
     const room = this.getRoom(id);
+    if (room.settings.remembers) this.memory.forgetRoom(id);
     await room.shutdown();
     this.automations?.store.removeRoom(room.uuid);
     this.rooms.delete(id);
@@ -1591,6 +2052,9 @@ export class Hub extends EventEmitter {
       rooms: [...this.rooms.values()].map((room) => room.snapshot()),
       openRooms: [...this.openRooms],
       channels: this.channels.view(),
+      connections: this.connectionsView(),
+      voice: this.voice.view(),
+      memoryProvider: { view: this.memoryStore.describe(), status: this.memory.status() },
       secrets: this.openSecrets(),
       restart: { can: this.canRestart, pending: this.restartPending() },
     };
@@ -1624,10 +2088,12 @@ export class Hub extends EventEmitter {
     this.channelsRetry = null;
     this.leaving.abort();
     this.automations?.stop();
+    this.memory.stop();
     await stage("ways-in", plain, async () => {
       for (const room of this.rooms.values()) room.closeDoor();
       await this.agents.shutdown();
       await this.channels.stop();
+      await this.connections.close();
     });
     for (const room of this.rooms.values()) {
       const agents = [...room.participants.values()].filter((p) => p.kind === "agent").length;
@@ -1663,9 +2129,14 @@ export class Hub extends EventEmitter {
     this.skills.seedBuiltins();
     rmSync(this.settingsPath(), { force: true });
     this.settings = this.loadSettings();
+    for (const view of this.connections.view()) {
+      if (view.group === "own") await this.connections.removeOwn(view.id);
+      else if (view.state !== "not-connected") await this.connections.disconnect(view.id);
+    }
     await this.channels.stop();
     rmSync(join(this.dataDir, "channels.json"), { force: true });
     this.channelsStore.reload();
+    this.voice.store.clear();
     this.emit("event", { type: "reset" } satisfies HubEvent);
   }
 }

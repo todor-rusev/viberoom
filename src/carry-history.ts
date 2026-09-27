@@ -2,11 +2,12 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatMessage } from "./room.js";
-import { canonicalResourceFile } from "./files.js";
+import { canonicalResourceFile, withAttachmentLists } from "./files.js";
 
 export interface CarryRevision { revision: string; id: string; hash: string; parents: string[] }
 export interface CarryHead { id: string; revision: string; hash: string }
 export interface CarryAlternative { revision: string; message: ChatMessage; deletedAt: number | null }
+export interface CarryNumber { id: string; source: string; seq: number }
 
 function stable(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stable);
@@ -17,7 +18,7 @@ function stable(value: unknown): unknown {
 export function carryHash(message: ChatMessage, deletedAt: number | null = null): string {
   const { seq: _seq, displayOrder: _order, bodyDelivery: _delivery, bodyEdit: _edit, streaming: _streaming, branch: _branch, resourceRefs, ...content } = message;
   if (content.quotes) content.quotes = content.quotes.map(({ originSeq, id: _id, ...quote }) => ({ ...quote, seq: originSeq ?? quote.seq }));
-  if (content.images) content.images = content.images.map(({ sha256, ...image }) => sha256 ? { ...image, file: canonicalResourceFile(image.file, sha256) } : image);
+  Object.assign(content, withAttachmentLists(content, list => list.map(({ sha256, ...file }) => sha256 ? { ...file, file: canonicalResourceFile(file.file, sha256) } : file)));
   const overrides = (resourceRefs ?? []).map(ref => ({ source: ref.source, file: ref.sha256 ? canonicalResourceFile(ref.file, ref.sha256) : ref.file }))
     .filter(ref => ref.file !== ref.source.split(/[\\/]/).at(-1)).sort((a, b) => a.source.localeCompare(b.source));
   return createHash("sha256").update(JSON.stringify(stable({ content: { ...content, ...(overrides.length ? { resourceRefs: overrides } : {}) }, deleted: deletedAt !== null }))).digest("hex");
@@ -39,7 +40,21 @@ export class CarryHistory {
       create table if not exists carry_room_aliases(room text not null, uuid text not null unique, primary key(room,uuid));
       create table if not exists carry_sources(uuid text primary key, label text not null);
       create table if not exists carry_resources(room text not null,file text not null,hash text not null,primary key(room,file));
+      create table if not exists carry_numbers(room text not null, id text not null, source text not null, seq integer not null, primary key(room, source, seq));
+      create index if not exists carry_number_message on carry_numbers(room, id);
     `);
+  }
+
+  learnNumbers(room: string, numbers: CarryNumber[]): void {
+    const insert = this.db.prepare("insert or ignore into carry_numbers(room,id,source,seq) values(?,?,?,?)");
+    for (const n of numbers) insert.run(room, n.id, n.source, n.seq);
+  }
+  numbers(room: string): CarryNumber[] {
+    return this.db.prepare("select id,source,seq from carry_numbers where room=?").all(room).map(r => ({ id: String(r.id), source: String(r.source), seq: Number(r.seq) }));
+  }
+  numberedOn(room: string, source: string, seq: number): string | undefined {
+    const row = this.db.prepare("select id from carry_numbers where room=? and source=? and seq=?").get(room, source, seq);
+    return row ? String(row.id) : undefined;
   }
 
   head(room: string, id: string): CarryHead | undefined {
@@ -139,10 +154,11 @@ export class CarryHistory {
     }
   }
   sources(): { uuid: string; label: string }[] { return this.db.prepare("select uuid,label from carry_sources").all() as unknown as { uuid: string; label: string }[]; }
+  sourceLabel(uuid: string): string | undefined { const row = this.db.prepare("select label from carry_sources where uuid=?").get(uuid); return row ? String(row.label) : undefined; }
   source(uuid: string, label: string): void { this.db.prepare("insert into carry_sources(uuid,label) values(?,?) on conflict(uuid) do update set label=excluded.label").run(uuid, label); }
   resource(room: string, file: string, hash: string): void { this.db.prepare("insert into carry_resources(room,file,hash) values(?,?,?) on conflict(room,file) do update set hash=excluded.hash").run(room, file, hash); }
   resources(room: string): Record<string, string> { return Object.fromEntries(this.db.prepare("select file,hash from carry_resources where room=?").all(room).map(r => [String(r.file), String(r.hash)])); }
-  drop(room: string): void { for (const table of ["carry_revisions", "carry_heads", "carry_alternatives", "carry_room_aliases", "carry_resources"]) this.db.prepare(`delete from ${table} where room=?`).run(room); }
+  drop(room: string): void { for (const table of ["carry_revisions", "carry_heads", "carry_alternatives", "carry_room_aliases", "carry_resources", "carry_numbers"]) this.db.prepare(`delete from ${table} where room=?`).run(room); }
 }
 
 export function ancestor(revisions: ReadonlyMap<string, CarryRevision>, older: string, newer: string): boolean {

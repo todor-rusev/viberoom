@@ -1,6 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, copyFileSync, cpSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, cpSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, rmSync, writeFileSync, type RmOptions } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { renameWithRetry, type RenameOptions } from "./atomic.js";
 import type { HistoryStore } from "./history-store.js";
@@ -8,7 +8,7 @@ import type { HistoryStore } from "./history-store.js";
 export type FileChange = { path: string; data: string | Buffer | null } | { path: string; directory: { path: string; data: Buffer }[] };
 interface JournalEntry { path: string; existed: boolean; directory?: boolean; after?: string | null }
 interface Journal { version?: 2; id: string; files: JournalEntry[]; createdDirectories?: string[] }
-export type FileOps = RenameOptions & { write?: (path: string, data: Buffer) => void };
+export type FileOps = RenameOptions & { write?: (path: string, data: Buffer) => void; remove?: (path: string, options: RmOptions) => void };
 const JOURNALS = "file-transactions";
 const STARTED = "started";
 
@@ -23,7 +23,7 @@ export function safeDataFile(root: string, name: string): string {
 }
 const inside = safeDataFile;
 
-function durable(path: string, data: string | Buffer): void {
+export function durable(path: string, data: string | Buffer): void {
   const fd = openSync(path, "wx", 0o600);
   try { writeFileSync(fd, data); fsyncSync(fd); } finally { closeSync(fd); }
 }

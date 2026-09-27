@@ -22,7 +22,7 @@ function windowsTool(name: string): string {
 function ownerId(): string {
   if (process.platform !== "win32") return userInfo().username;
   try {
-    const line = execFileSync(windowsTool("whoami.exe"), ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", timeout: ACL_TIMEOUT_MS });
+    const line = execFileSync(windowsTool("whoami.exe"), ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", timeout: ACL_TIMEOUT_MS, windowsHide: true });
     const sid = /"[^"]*","(S-1-[0-9-]+)"/.exec(line.trim());
     if (sid) return `*${sid[1]}`;
   } catch {
@@ -37,7 +37,7 @@ export function narrowToOwner(path: string, kind: "dir" | "file"): void {
       return;
     }
     const grants = [ownerId(), ...ALWAYS_ALLOWED].flatMap((who) => ["/grant:r", `${who}:${kind === "dir" ? "(OI)(CI)F" : "F"}`]);
-    execFileSync(windowsTool("icacls.exe"), [path, "/inheritance:r", ...grants], { encoding: "utf8", timeout: ACL_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync(windowsTool("icacls.exe"), [path, "/inheritance:r", ...grants], { encoding: "utf8", timeout: ACL_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   } catch {
   }
 }
@@ -65,7 +65,7 @@ export function whoElseCanReach(path: string): PathAccess {
     }
   }
   try {
-    const listing = execFileSync(windowsTool("icacls.exe"), [path], { encoding: "utf8", timeout: ACL_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] });
+    const listing = execFileSync(windowsTool("icacls.exe"), [path], { encoding: "utf8", timeout: ACL_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     const me = userInfo().username;
     const mine = new RegExp(`(^|\\\\)${me.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
     const others = principalsOf(listing, path).filter((who) => !mine.test(who) && !ALWAYS_ALLOWED_NAMES.some((r) => r.test(who)));

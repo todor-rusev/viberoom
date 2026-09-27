@@ -1,6 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
-import { createHash } from "node:crypto";
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID, type Hash } from "node:crypto";
+import { closeSync, createReadStream, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { HistoryStore } from "./history-store.js";
@@ -9,7 +9,7 @@ import { readCarry, writeCarry } from "./carry-format.js";
 import { readExport, validateExportContents, type ExportContents, type ExportPartName } from "./export-file.js";
 import { roomForExport, type ExportChoice } from "./export-room.js";
 import { isIdentity } from "./identity.js";
-import { canonicalResourceFile, isRoomResourceName, isStoredFileName } from "./files.js";
+import { canonicalResourceFile, isRoomResourceName, isStoredFileName, messageAttachments, withAttachmentLists } from "./files.js";
 import type { ChatMessage } from "./room.js";
 import type { CarryState, MergeInput } from "./carry-merge.js";
 import { validateDependencies } from "./carry-dependencies.js";
@@ -35,15 +35,29 @@ export interface ExportJob {
 }
 
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const copyNumbers = (v: unknown): boolean => object(v) && Object.keys(v).length <= 256 && Object.entries(v).every(([source, seq]) => isIdentity(source) && Number.isSafeInteger(seq) && Number(seq) > 0);
 export const resourceName = isRoomResourceName;
 export const canonicalResourceName = canonicalResourceFile;
 function digest(data: Buffer): string { return createHash("sha256").update(data).digest("hex"); }
+
+export const PART_BYTES = 8 * 1024 * 1024;
+
+async function digestFile(path: string): Promise<{ hash: string; bytes: number }> {
+  const hash = createHash("sha256");
+  let bytes = 0;
+  for await (const chunk of createReadStream(path)) { hash.update(chunk as Buffer); bytes += (chunk as Buffer).length; }
+  return { hash: hash.digest("hex"), bytes };
+}
+
+interface Receiving { room: string; file: string; bytes: number; sha256: string; parts: number; next: number; written: number; hash: Hash; fd: number; temp: string; sourcePath?: string }
 function checkedBytes(value: Record<string, unknown>): Buffer {
   if (typeof value.data !== "string" || value.data.length > 40 * 1024 * 1024 || !Number.isSafeInteger(value.bytes) || Number(value.bytes) < 0 || !/^[0-9a-f]{64}$/.test(String(value.sha256))) throw new Error("An archive resource has invalid metadata.");
   const bytes = Buffer.from(value.data, "base64");
   if (bytes.length !== value.bytes || bytes.toString("base64") !== value.data || digest(bytes) !== value.sha256) throw new Error("An archive resource does not match its content hash or size.");
   return bytes;
 }
+
+export type PlanRowKind = "state" | "head" | "revision" | "alternative" | "resource" | "number";
 
 export class CarryStage {
   readonly db: DatabaseSync;
@@ -58,6 +72,7 @@ export class CarryStage {
       create table if not exists alternatives(room text not null,id text not null,body text not null,primary key(room,id));
       create table if not exists resources(room text not null,file text not null,body text not null,primary key(room,file));
       create table if not exists dependencies(kind text not null,id text not null,body text not null,primary key(kind,id));
+      create table if not exists plan_rows(room text not null,kind text not null,n integer not null,body text not null,primary key(room,kind,n));
     `);
   }
   close(): void { this.db.close(); }
@@ -68,8 +83,25 @@ export class CarryStage {
   values<T>(table: "states" | "revisions" | "alternatives" | "resources", room: string): T[] { return this.db.prepare(`select body from ${table} where room=?`).all(room).map(r => JSON.parse(String(r.body))); }
   dependencies(): CarryDependency[] { return this.db.prepare("select body from dependencies").all().map(r => JSON.parse(String(r.body))); }
   input(uuid: string): MergeInput { return { source: this.meta<CarrySource>("source")!.uuid, states: this.values<CarryState>("states", uuid), revisions: this.values<CarryRevision>("revisions", uuid), alternatives: this.values<CarryAlternative>("alternatives", uuid) }; }
+  transaction<T>(work: () => T): T {
+    this.db.exec("begin");
+    try { const result = work(); this.db.exec("commit"); return result; }
+    catch (error) { this.db.exec("rollback"); throw error; }
+  }
+
+  clearPlanRows(): void { this.db.exec("delete from plan_rows"); }
+  setPlanRows(room: string, kind: PlanRowKind, rows: readonly unknown[]): void {
+    const insert = this.db.prepare("insert into plan_rows(room,kind,n,body) values(?,?,?,?)");
+    rows.forEach((row, n) => insert.run(room, kind, n, JSON.stringify(row)));
+  }
+  planRows<T>(room: string, kind: PlanRowKind, from = 0, limit = -1): T[] {
+    return this.db.prepare("select body from plan_rows where room=? and kind=? and n>=? order by n limit ?").all(room, kind, from, limit).map(r => JSON.parse(String(r.body)) as T);
+  }
+
+  private receiving: Receiving | null = null;
 
   accept(record: Record<string, unknown>): void {
+    if (this.receiving && record.type !== "resource-part") throw new Error("An archive resource is incomplete: its parts were interrupted.");
     if (record.type === "manifest") {
       if (this.meta("source") || !object(record.source) || !isIdentity(record.source.uuid) || typeof record.source.label !== "string" || record.source.label.length > 100) throw new Error("The archive has an invalid or repeated source manifest.");
       this.setMeta("source", record.source); this.setMeta("product", record.product); this.setMeta("at", record.at);
@@ -99,7 +131,34 @@ export class CarryStage {
       if (!object(value)) throw new Error("An archive record has no body.");
       const id = record.type === "state" ? (value.message as ChatMessage)?.id : value.revision;
       if (typeof id !== "string" || !id) throw new Error("An archive record has no identity.");
+      if (record.type === "state" && value.numbers !== undefined && !copyNumbers(value.numbers)) throw new Error("An archive record has invalid message numbers.");
       this.db.prepare(`insert into ${table}(room,id,body) values(?,?,?)`).run(record.room, id, JSON.stringify(value));
+    } else if (record.type === "resource" && record.parts !== undefined) {
+      if (!isIdentity(record.room) || !this.room(record.room) || !resourceName(record.file)) throw new Error("The archive has an invalid resource destination.");
+      if (!Number.isSafeInteger(record.parts) || Number(record.parts) < 1 || !Number.isSafeInteger(record.bytes) || Number(record.bytes) < 1 || !/^[0-9a-f]{64}$/.test(String(record.sha256)) || record.data !== undefined) throw new Error("An archive resource has invalid metadata.");
+      const temp = join(this.dir, "blobs", `.receiving-${randomUUID()}`);
+      this.receiving = { room: String(record.room), file: String(record.file), bytes: Number(record.bytes), sha256: String(record.sha256), parts: Number(record.parts), next: 0, written: 0, hash: createHash("sha256"), fd: openSync(temp, "wx", 0o600), temp, ...(typeof record.sourcePath === "string" ? { sourcePath: record.sourcePath } : {}) };
+    } else if (record.type === "resource-part") {
+      const at = this.receiving;
+      if (!at || record.room !== at.room || record.file !== at.file || record.index !== at.next) throw new Error("An archive resource part is out of place.");
+      if (typeof record.data !== "string" || record.data.length > 40 * 1024 * 1024) throw new Error("An archive resource part is invalid.");
+      const part = Buffer.from(record.data, "base64");
+      if (!part.length || part.toString("base64") !== record.data || at.written + part.length > at.bytes) throw new Error("An archive resource part does not match its resource.");
+      writeSync(at.fd, part);
+      at.hash.update(part);
+      at.written += part.length;
+      if (++at.next < at.parts) return;
+      closeSync(at.fd);
+      this.receiving = null;
+      if (at.written !== at.bytes || at.hash.digest("hex") !== at.sha256) {
+        rmSync(at.temp, { force: true });
+        throw new Error("An archive resource does not match its content hash or size.");
+      }
+      const blob = join(this.dir, "blobs", at.sha256);
+      if (existsSync(blob)) rmSync(at.temp, { force: true });
+      else renameSync(at.temp, blob);
+      const resource: CarryResource = { room: at.room, file: at.file, bytes: at.bytes, sha256: at.sha256, blob: at.sha256, ...(at.sourcePath ? { sourcePath: at.sourcePath } : {}) };
+      this.db.prepare("insert into resources(room,file,body) values(?,?,?)").run(at.room, at.file, JSON.stringify(resource));
     } else if (record.type === "resource") {
       if (!isIdentity(record.room) || !this.room(record.room) || !resourceName(record.file)) throw new Error("The archive has an invalid resource destination.");
       const bytes = checkedBytes(record), hash = String(record.sha256);
@@ -121,6 +180,7 @@ export class CarryStage {
   }
 
   validate(): void {
+    if (this.receiving) throw new Error("An archive resource is incomplete: the archive ended before its last part.");
     const source = this.meta<CarrySource>("source");
     if (!source || !this.rooms().length && !this.meta("userMemory")) throw new Error("The archive contains no source, rooms or user memory.");
     for (const room of this.rooms()) {
@@ -202,17 +262,16 @@ export async function exportCarry(job: ExportJob): Promise<{ bytes: number; encr
       for (const file of allFiles) {
         const path = join(dir, file), stat = lstatSync(path);
         if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`The resource ${file} is a link or not a file. It was not exported.`);
-        if (stat.size > 20 * 1024 * 1024) throw new Error(`The resource ${file} exceeds the 20 MiB attachment limit.`);
-        const data = readFileSync(path); assets.set(file, { hash: digest(data), bytes: data.length });
+        assets.set(file, await digestFile(path));
       }
-      const wanted = new Set(all.flatMap(s => s.message.images?.map(i => i.file) ?? []));
+      const wanted = new Set(all.flatMap(s => messageAttachments(s.message).map(a => a.file)));
       const bySeq = new Map<number, ChatMessage[]>();
       for (const { message } of all) bySeq.set(message.seq, [...(bySeq.get(message.seq) ?? []), message]);
       for (const state of all) {
-        if (state.message.images) state.message = { ...state.message, images: state.message.images.map(image => {
-          const asset = assets.get(image.file);
-          return asset ? { ...image, sha256: asset.hash, bytes: asset.bytes } : image;
-        }) };
+        state.message = withAttachmentLists(state.message, list => list.map(file => {
+          const asset = assets.get(file.file);
+          return asset ? { ...file, sha256: asset.hash, bytes: asset.bytes } : file;
+        }));
         if (state.message.quotes) state.message = { ...state.message, quotes: state.message.quotes.map(q => {
           if (q.id || q.seq === undefined) return q;
           const matches = (bySeq.get(q.seq) ?? []).filter(m => m.from === q.from && m.ts === q.ts);
@@ -242,11 +301,14 @@ export async function exportCarry(job: ExportJob): Promise<{ bytes: number; encr
       yield { type: "room", value: metadata };
       if (parts.includes("conversation")) {
         const heads = store.transaction(() => new Map(all.map(state => [state.message.id, store.carry.ensure(held.id, state.message, state.deletedAt)])));
+        const numbered = new Map<string, Record<string, number>>();
+        for (const n of store.carry.numbers(held.id)) numbered.set(n.id, { ...numbered.get(n.id), [n.source]: n.seq });
         for (const state of all) {
-          const head = heads.get(state.message.id)!;
+          const head = heads.get(state.message.id)!, numbers = numbered.get(state.message.id);
           if (state.message.origin) origins.add(state.message.origin);
           if (state.message.branch) origins.add(state.message.branch.source);
-          yield { type: "state", room: held.uuid, value: { ...state, head } };
+          for (const source of Object.keys(numbers ?? {})) origins.add(source);
+          yield { type: "state", room: held.uuid, value: { ...state, head, ...(numbers ? { numbers } : {}) } };
         }
         for (const revision of store.carry.revisions(held.id)) yield { type: "revision", room: held.uuid, value: revision };
         for (const alternative of store.carry.alternatives(held.id)) yield { type: "alternative", room: held.uuid, value: alternative };
@@ -254,10 +316,27 @@ export async function exportCarry(job: ExportJob): Promise<{ bytes: number; encr
       for (const file of files) {
         const path = join(dir, file), stat = lstatSync(path);
         if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`The resource ${file} is a link or not a file. It was not exported.`);
-        if (stat.size > 20 * 1024 * 1024) throw new Error(`The resource ${file} exceeds the 20 MiB attachment limit.`);
-        const data = readFileSync(path);
-        if (digest(data) !== assets.get(file)!.hash) throw new Error(`The resource ${file} changed while the copy was being prepared. Prepare the copy again.`);
-        yield { type: "resource", room: held.uuid, file, sourcePath: resolve(path), bytes: data.length, sha256: digest(data), data: data.toString("base64") };
+        const known = assets.get(file)!;
+        const changed = () => new Error(`The resource ${file} changed while the copy was being prepared. Prepare the copy again.`);
+        if (stat.size !== known.bytes) throw changed();
+        if (stat.size <= PART_BYTES) {
+          const data = readFileSync(path);
+          if (digest(data) !== known.hash) throw changed();
+          yield { type: "resource", room: held.uuid, file, sourcePath: resolve(path), bytes: data.length, sha256: known.hash, data: data.toString("base64") };
+          continue;
+        }
+        const parts = Math.ceil(stat.size / PART_BYTES);
+        yield { type: "resource", room: held.uuid, file, sourcePath: resolve(path), bytes: stat.size, sha256: known.hash, parts };
+        const fd = openSync(path, "r"), hash = createHash("sha256");
+        try {
+          for (let index = 0; index < parts; index++) {
+            const part = Buffer.alloc(Math.min(PART_BYTES, stat.size - index * PART_BYTES));
+            if (readSync(fd, part, 0, part.length, index * PART_BYTES) !== part.length) throw changed();
+            hash.update(part);
+            yield { type: "resource-part", room: held.uuid, file, index, data: part.toString("base64") };
+          }
+        } finally { closeSync(fd); }
+        if (hash.digest("hex") !== known.hash) throw changed();
       }
     }
     if (job.choice.settings !== false) for (const dependency of job.dependencies) yield { type: "dependency", value: dependency };

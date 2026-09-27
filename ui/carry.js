@@ -7,6 +7,7 @@
   const names = list => list.length <= 1 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
   const icon = name => window.Icons?.svg?.(name) ?? "";
   const safeColor = value => /^#[0-9a-f]{3,8}$/i.test(String(value ?? "")) ? value : "var(--primary)";
+  const facePic = value => window.Avatars ? window.Avatars.faceUrl(value) : "";
   const art = (name, cls = "") => `<div class="cx-art scene-art ${cls}" aria-hidden="true">${window.Icons?.scene?.(name) ?? ""}</div>`;
   const button = (action, label, kind = "ghost", extra = "") => `<button type="button" data-ui="button" data-kind="${kind}" data-carry-act="${action}"${extra}>${label}</button>`;
   const PARTS = [
@@ -16,7 +17,7 @@
     { key: "memory", icon: "spark", label: "Room memory", hint: "What the vibemates learned in the room" },
     { key: "userMemory", icon: "smile", label: "Your preferences", hint: "What they know about you, in every room" },
   ];
-  const SETTING_NAMES = { name: "Room name", topic: "Topic", emoji: "Room picture", customRules: "Room rules", language: "Language", humanDescription: "About you", turnTaking: "Who speaks when", hopLimit: "Reply chain limit", replyDelay: "Reply delay", tools: "Tools", maxSentences: "Answer length", searchOtherRooms: "Searching other rooms", reachableFromMessengers: "Messenger access", startWithHub: "Start with viberoom", reconnectMode: "How vibemates come back", restartMessage: "Message after a restart", wakeAfterRestart: "Wake after a restart" };
+  const SETTING_NAMES = { name: "Room name", topic: "Topic", emoji: "Room picture", customRules: "Room rules", language: "Language", humanDescription: "About you", turnTaking: "Who speaks when", hopLimit: "Reply chain limit", replyDelay: "Reply delay", tools: "Tools", maxSentences: "Answer length", sharesHistory: "Sharing with other rooms", readsOtherRooms: "Searching other rooms", reachableFromMessengers: "Messenger access", startWithHub: "Start with viberoom", reconnectMode: "How vibemates come back", restartMessage: "Message after a restart", wakeAfterRestart: "Wake after a restart" };
   const settingName = key => SETTING_NAMES[key] ?? key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, c => c.toUpperCase());
 
   async function open(initialRoom, helpers = {}) {
@@ -28,24 +29,25 @@
     const controller = new AbortController();
     let closed = false, phase = "home", catalog, estimates = [], estimateJob, job, downloaded = false, exported;
     let exportSelection, exportParts = { conversation: true, settings: true, resources: true, memory: true, userMemory: true }, newLabel;
-    let inspected, fileName = "", selected = [], dependencyChoices = {}, preview, importUserMemory = false, userMemoryChoice, planning = null, replanTimer = null;
+    let inspected, fileName = "", exportedName = "viberoom.viberoom", exportedBytes = 0, selected = [], dependencyChoices = {}, preview, importUserMemory = false, userMemoryChoice, planning = null, replanTimer = null;
     let removedRoom = initialRoom?.id || "", removedOffset = 0;
+    let lastAnswerAt = 0, quietTimer = null;
     const openDetails = new Set();
     const $ = query => dialog.querySelector(query);
 
     function error(value) { errorBox.textContent = value instanceof Error ? value.message : String(value); errorBox.hidden = false; }
     function clearError() { errorBox.hidden = true; errorBox.textContent = ""; }
-    async function request(path, payload, raw = false) {
-      const response = await fetch(path, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(raw ? 120000 : 30000)]), ...(payload === undefined ? {} : { method: "POST", headers: raw ? { "Content-Type": "application/octet-stream" } : { "Content-Type": "application/json" }, body: raw ? payload : JSON.stringify(payload) }) });
+    async function request(path, payload, raw = false, patient = false) {
+      const response = await fetch(path, { signal: patient ? controller.signal : AbortSignal.any([controller.signal, AbortSignal.timeout(raw ? 120000 : 30000)]), ...(payload === undefined ? {} : { method: "POST", headers: raw ? { "Content-Type": "application/octet-stream" } : { "Content-Type": "application/json" }, body: raw ? payload : JSON.stringify(payload) }) });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || `The transfer request failed (${response.status}).`);
+      if (!response.ok) throw Object.assign(new Error(result.error || `The transfer request failed (${response.status}).`), { status: response.status });
       return result;
     }
     async function cancel(id) { if (id) await fetch(`/api/carry/${encodeURIComponent(id)}/cancel`, { method: "POST", signal: AbortSignal.timeout(10000), headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {}); }
     async function close() {
       if (closed) return;
-      if (phase === "applying") { error("The rooms are being brought in. Wait for it to finish before closing."); return; }
-      closed = true; controller.abort(); clearTimeout(replanTimer); dialog.remove();
+      closed = true; controller.abort(); clearTimeout(replanTimer); clearInterval(quietTimer); dialog.remove();
+      if (phase === "applying") return;
       await Promise.all([cancel(estimateJob), downloaded ? Promise.resolve() : cancel(job)]);
     }
     dialog.addEventListener("cancel", event => { event.preventDefault(); void close(); });
@@ -58,8 +60,25 @@
       }
       throw new DOMException("Closed", "AbortError");
     }
+    async function follow(id, onProgress) {
+      lastAnswerAt = Date.now();
+      for (let pause = 350; !closed;) {
+        try {
+          const state = await request(`/api/carry/${encodeURIComponent(id)}`, undefined, false, true);
+          lastAnswerAt = Date.now(); pause = 350;
+          if (state.status !== "working") return state;
+          onProgress?.(state);
+        } catch (err) {
+          if (closed || err?.status) throw err;
+          pause = Math.min(pause * 2, 3000);
+        }
+        await new Promise(resolve => setTimeout(resolve, pause));
+      }
+      throw new DOMException("Closed", "AbortError");
+    }
 
     function show(next, title, html) {
+      if (next !== "applying") { clearInterval(quietTimer); quietTimer = null; }
       phase = next;
       $(".cx-title").textContent = title;
       $(".cx-back").hidden = next === "home" || next === "applying" || next === "done";
@@ -105,13 +124,16 @@
         <section class="cx-section"><h4>What goes in</h4>
           <div class="cx-chips">${PARTS.map(p => `<label class="choice cx-chip" title="${esc(p.hint)}"><input type="checkbox" data-export-part="${p.key}"${exportParts[p.key] ? " checked" : ""}><span class="cx-chip-icon">${icon(p.icon)}</span><span>${esc(p.label)}</span><small data-part-size="${p.key}"></small></label>`).join("")}</div>
           <p class="cx-hint">${icon("lock")} Sign-ins and running sessions never leave this computer.</p></section>
-        <section class="cx-section cx-lock"><label class="switch cx-switch"><input type="checkbox" data-encrypt><span class="cx-switch-ui" aria-hidden="true"></span><span><strong>Lock the file with a password</strong><small>Anyone with the file needs the password to open it.</small></span></label>
-          <div class="cx-pass" data-pass-fields hidden><label class="cx-field">Password<input type="password" data-passphrase autocomplete="new-password" maxlength="4096"></label><label class="cx-field">The same password again<input type="password" data-passphrase-repeat autocomplete="new-password" maxlength="4096"></label><p class="cx-hint">Keep it somewhere safe: there is no way to recover it. Room names are locked too.</p></div></section>
+        <section class="cx-section cx-lock">${UI.html("settings-group", { id: "cx-lock", title: "", body: UI.raw([
+          UI.html("setting", { label: "Lock the file with a password", for: "cx-encrypt", kind: "switch", hint: "Anyone with the file needs the password to open it." }),
+          UI.html("setting", { label: "Password", for: "cx-passphrase", hidden: true, data: { passField: true }, control: UI.raw('<input type="password" class="input" id="cx-passphrase" autocomplete="new-password" maxlength="4096">') }),
+          UI.html("setting", { label: "The same password again", for: "cx-passphrase-repeat", hidden: true, data: { passField: true }, hint: "Keep it somewhere safe: there is no way to recover it. Room names are locked too.", control: UI.raw('<input type="password" class="input" id="cx-passphrase-repeat" autocomplete="new-password" maxlength="4096">') }),
+        ].join("")) })}</section>
         <details class="cx-more"><summary>This computer is called <b data-label-view>${esc(label)}</b></summary><label class="cx-field">Name<input data-copy-label maxlength="100" required value="${esc(label)}"></label><p class="cx-hint">The other computer shows this name, so you always know where something came from.</p></details>
         <footer class="cx-actions"><span class="cx-total" data-export-total></span>${button("prepare-export", "Create the file", "primary")}</footer>
       </form>`);
       updateExportTotals();
-      $("[data-encrypt]").addEventListener("change", event => { $("[data-pass-fields]").hidden = !event.target.checked; if (event.target.checked) $("[data-passphrase]").focus(); });
+      $("#cx-encrypt").addEventListener("change", event => { for (const row of dialog.querySelectorAll("[data-pass-field]")) row.hidden = !event.target.checked; if (event.target.checked) $("#cx-passphrase").focus(); });
       $("[data-copy-label]").addEventListener("input", event => { $("[data-label-view]").textContent = event.target.value; });
       for (const el of dialog.querySelectorAll("[data-export-room], [data-export-part]")) el.addEventListener("change", () => { keepExportInputs(); updateExportTotals(); });
       $("[data-export-form]").addEventListener("submit", event => { event.preventDefault(); void act("prepare-export"); });
@@ -221,7 +243,7 @@
       const others = r.settingsDiff.filter(d => d.field !== "participants");
       const ours = new Map((people?.ours || []).map(p => [p.id, p])), theirs = new Map((people?.incoming || []).map(p => [p.id, p]));
       const badge = (text, kind = "") => `<span class="cx-badge ${kind}">${esc(text)}</span>`;
-      const avatar = p => `<span class="cx-avatar" style="--c:${safeColor(p.color)}">${esc(p.avatar || (p.name || "?").slice(0, 1).toUpperCase())}</span>`;
+      const avatar = p => `<span class="cx-avatar" style="--c:${safeColor(p.color)}">${facePic(p.avatar) ? `<img src="${facePic(p.avatar)}" alt="">` : esc(p.avatar || (p.name || "?").slice(0, 1).toUpperCase())}</span>`;
       const changes = (a, b) => {
         const out = [];
         if ((a.role || "") !== (b.role || "")) out.push("role");
@@ -284,7 +306,7 @@
         ${r.resources.missing.length ? `<p class="cx-hint">Missing: ${r.resources.missing.map(esc).join(", ")}</p>` : ""}
         ${r.workspaceHint ? `<p class="cx-hint">On ${esc(sourceName())} the vibemates worked in ${esc(r.workspaceHint)}. Here the room keeps its own folder.</p>` : ""}</details>`;
       return `<article class="cx-room-card" data-review-room="${esc(r.uuid)}">
-        <header class="cx-room-head"><span class="cx-emoji is-big">${esc(emoji)}</span><div><h4>${esc(r.name)}</h4><p>${dest}</p></div>${inspected.rooms.length > 1 ? `<label class="check-row cx-include"><input type="checkbox" data-selected checked> Bring in</label>` : ""}</header>
+        <header class="cx-room-head"><span class="cx-emoji is-big">${facePic(emoji) ? `<img src="${facePic(emoji)}" alt="">` : esc(emoji)}</span><div><h4>${esc(r.name)}</h4><p>${dest}</p></div>${inspected.rooms.length > 1 ? `<label class="check-row cx-include"><input type="checkbox" data-selected checked> Bring in</label>` : ""}</header>
         ${choice.conversation ? story(r, r.branch ? choice.branch : null) : ""}
         ${facts.length ? `<ul class="cx-facts">${facts.map(f => `<li>${f}</li>`).join("")}</ul>` : ""}
         ${r.memory ? memoryDecision(r.memory, `memory-${r.uuid}`, "Room memory", "data-room-memory", r.made) : ""}
@@ -328,10 +350,19 @@
       onChange("[data-new-name]", el => { choiceOf(el).name = el.value.trim() || choiceOf(el).name; });
     }
 
+    function arriving() {
+      const messages = (preview?.rooms || []).reduce((n, r) => n + (r.counts?.added || 0), 0);
+      const files = (preview?.rooms || []).reduce((n, r) => n + (r.resources?.write || 0), 0);
+      const parts = [messages ? count(messages, "message") : "", files ? count(files, "picture or file", "pictures and files") : ""].filter(Boolean);
+      return parts.length ? `Bringing in ${parts.join(" and ")}…` : "Bringing your rooms in…";
+    }
     function renderApplying(progress) {
       const waiting = /^Waiting for /.test(progress || "");
-      if (phase !== "applying") show("applying", "Bring rooms in", `<div class="cx-working">${art("carry-in", "is-busy")}<p class="cx-lead" data-progress role="status"></p><div class="cx-bar" aria-hidden="true"></div><p class="cx-hint" data-wait-hint hidden>They finish their reply first, so nothing is cut off. ${button("hurry", "Don't wait")}</p></div>`);
-      $("[data-progress]").textContent = progress ? `${progress}…` : "Bringing your rooms in…";
+      if (phase !== "applying") {
+        show("applying", "Bring rooms in", `<div class="cx-working">${art("carry-in", "is-busy")}<p class="cx-lead" data-progress role="status"></p><div class="cx-bar" aria-hidden="true"></div><p class="cx-hint" data-wait-hint hidden>They finish their reply first, so nothing is cut off. ${button("hurry", "Don't wait")}</p><p class="cx-hint" data-quiet-hint hidden>A large room takes a while. viberoom pauses while it writes the conversation and answers again when it is done. You can close this window: the import goes on, and the room appears when it is in.</p></div>`);
+        quietTimer = setInterval(() => { const hint = $("[data-quiet-hint]"); if (hint) hint.hidden = Date.now() - lastAnswerAt < 3000; }, 500);
+      }
+      $("[data-progress]").textContent = progress ? `${progress}…` : arriving();
       $("[data-wait-hint]").hidden = !waiting;
     }
     function renderDone(result) {
@@ -369,9 +400,9 @@
           if (!$("[data-export-form]").reportValidity()) return;
           keepExportInputs();
           if ((!exportSelection.size && !exportParts.userMemory) || !Object.values(exportParts).some(Boolean)) throw new Error("Choose a room and at least one thing to take.");
-          const encrypt = $("[data-encrypt]").checked, passphrase = $("[data-passphrase]").value;
-          if (encrypt && (!passphrase || passphrase !== $("[data-passphrase-repeat]").value)) throw new Error("Type the same password in both fields.");
-          $("[data-passphrase]").value = $("[data-passphrase-repeat]").value = "";
+          const encrypt = $("#cx-encrypt").checked, passphrase = $("#cx-passphrase").value;
+          if (encrypt && (!passphrase || passphrase !== $("#cx-passphrase-repeat").value)) throw new Error("Type the same password in both fields.");
+          $("#cx-passphrase").value = $("#cx-passphrase-repeat").value = "";
           if (job && !downloaded) await cancel(job);
           downloaded = false; working("Packing your rooms…", "carry-out");
           const started = await request("/api/carry/export", { rooms: [...exportSelection], ...exportParts, sourceLabel: newLabel, ...(encrypt ? { passphrase } : {}) });
@@ -380,9 +411,13 @@
           catalog.source = { ...catalog.source, label: newLabel };
           const one = exportSelection.size === 1 ? catalog.rooms.find(r => exportSelection.has(r.id)) : null;
           const stem = !encrypt && one ? one.name.replace(/[^\p{L}\p{N}._-]+/gu, "-") : "viberoom";
-          renderExported({ ...state.result, encrypted: encrypt, fileName: `${stem}-${new Date().toISOString().slice(0, 10)}.viberoom` });
+          exportedName = `${stem}-${new Date().toISOString().slice(0, 10)}.viberoom`;
+          exportedBytes = state.result.bytes || 0;
+          renderExported({ ...state.result, encrypted: encrypt, fileName: exportedName });
         } else if (action === "download") {
-          const a = document.createElement("a"); a.href = `/api/carry/${job}/download`; a.download = "viberoom.viberoom"; document.body.appendChild(a); a.click(); a.remove(); downloaded = true;
+          const saved = await window.VIBEROOM_SAVE.saveFile({ name: exportedName, url: `/api/carry/${job}/download`, bytes: exportedBytes, description: "viberoom rooms", type: "application/octet-stream", extension: ".viberoom" });
+          if (saved === "cancelled") return;
+          downloaded = true;
           target.innerHTML = `${icon("check")} Saved — save again`;
         } else if (action === "unlock") {
           const passphrase = $("[data-import-pass]").value; if (!passphrase) throw new Error("Type the password.");
@@ -393,8 +428,12 @@
         } else if (action === "apply") {
           if (!preview?.ready) return;
           renderApplying();
-          await request(`/api/carry/${job}/apply`, { previewToken: preview.previewToken });
-          const state = await poll(job, s => renderApplying(s.progress));
+          lastAnswerAt = Date.now();
+          try { await request(`/api/carry/${job}/apply`, { previewToken: preview.previewToken }, false, true); }
+          catch (err) { renderSummary(); throw err; }
+          let state;
+          try { state = await follow(job, s => renderApplying(s.progress)); }
+          catch (err) { if (err?.status) renderDrop(); throw err; }
           if (state.status === "applied") { renderDone(state.result); helpers.imported?.(state.result); }
           else if (state.status === "ready") { preview = state.result; renderSummary(!!preview.refreshed); }
           else { phase = "summary"; await plan(); throw new Error(state.error || "The import did not finish."); }

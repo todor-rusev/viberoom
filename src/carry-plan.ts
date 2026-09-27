@@ -2,10 +2,11 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { messageAttachments, withAttachmentLists } from "./files.js";
 import { HistoryStore } from "./history-store.js";
-import { canonicalResourceName, CarryStage, type CarryDependency, type CarryResource, type CarrySource, type PortableRoom } from "./carry-stage.js";
+import { canonicalResourceName, CarryStage, type CarryDependency, type CarryResource, type CarrySource, type PlanRowKind, type PortableRoom } from "./carry-stage.js";
 import { mergeCarried, type BranchChoice, type CarryBranch, type CarryState, type MergeInput } from "./carry-merge.js";
-import { carryHash, type CarryAlternative, type CarryHead, type CarryRevision } from "./carry-history.js";
+import { carryHash, type CarryAlternative, type CarryHead, type CarryNumber, type CarryRevision } from "./carry-history.js";
 import type { StoredRoom } from "./hub.js";
 import type { ChatMessage } from "./room.js";
 import { dependencyFiles, dependencyStamp } from "./carry-dependencies.js";
@@ -39,11 +40,28 @@ export interface RoomCarryPreview {
   workspaceHint?: string;
 }
 export interface PlannedRoom {
-  stored: StoredRoom; setup: boolean; aliases: string[]; states: CarryState[]; revisions: CarryRevision[];
-  alternatives: CarryAlternative[]; resources: CarryResource[]; heads: CarryHead[]; changed: boolean;
+  uuid: string;
+  stored: StoredRoom; setup: boolean; aliases: string[]; changed: boolean;
+  made: boolean;
   memory?: PortableMemory;
   memoryMode?: "merge" | "replace";
   added: number;
+  rows: Record<PlanRowKind, number>;
+}
+export interface PlannedRows { state: CarryState[]; head: CarryHead[]; revision: CarryRevision[]; alternative: CarryAlternative[]; resource: CarryResource[]; number: CarryNumber[] }
+
+export function numbersToLearn(incoming: MergeInput, here: string, held: ReadonlySet<string>, known: readonly CarryNumber[]): CarryNumber[] {
+  const seen = new Set(known.map(n => `${n.source}:${n.seq}`)), out: CarryNumber[] = [];
+  for (const state of incoming.states) {
+    if (!held.has(state.message.id)) continue;
+    const said: Record<string, number> = { ...state.numbers, [incoming.source]: state.message.seq };
+    for (const [source, seq] of Object.entries(said)) {
+      if (source === here || !Number.isSafeInteger(seq) || seq < 1 || seen.has(`${source}:${seq}`)) continue;
+      seen.add(`${source}:${seq}`);
+      out.push({ id: state.message.id, source, seq });
+    }
+  }
+  return out;
 }
 export interface PlannedDependency extends CarryDependency { targetDir: string }
 export interface CarryPlanJob {
@@ -67,8 +85,7 @@ function localInput(store: HistoryStore, id: string, source: string): MergeInput
 }
 
 function localResourcePointers(original: ChatMessage): ChatMessage {
-  const message = { ...original };
-  if (message.images) message.images = message.images.map(image => image.sha256 ? { ...image, file: canonicalResourceName(image.file, image.sha256) } : image);
+  const message = withAttachmentLists({ ...original }, list => list.map(file => file.sha256 ? { ...file, file: canonicalResourceName(file.file, file.sha256) } : file));
   if (message.resourceRefs) message.resourceRefs = message.resourceRefs.map(ref => ref.sha256 ? { ...ref, file: canonicalResourceName(ref.file, ref.sha256) } : ref);
   return message;
 }
@@ -113,14 +130,15 @@ export function prepareCarryPlan(job: CarryPlanJob): CarryPlanPreview {
     if (!stage.meta("ready")) throw new Error("This archive has not passed validation.");
     const preview: CarryPlanPreview = { rooms: [], dependencies: [], ready: true };
     const plans: PlannedRoom[] = [];
+    const planned: { uuid: string; rows: PlannedRows }[] = [];
     const fileVersions = new Map<string, string | null>();
     const directoryVersions: { path: string; hash: string }[] = [];
     const removeFiles: string[] = [];
-    const rememberFile = (path: string): string | null => {
+    const hashOf = (path: string): string | null => {
       const full = safeDataFile(job.dataDir, path);
-      const hash = existsSync(full) ? lstatSync(full).isDirectory() ? "#directory" : createHash("sha256").update(readFileSync(full)).digest("hex") : null;
-      fileVersions.set(path, hash); return hash;
+      return existsSync(full) ? lstatSync(full).isDirectory() ? "#directory" : createHash("sha256").update(readFileSync(full)).digest("hex") : null;
     };
+    const rememberFile = (path: string): string | null => { const hash = hashOf(path); fileVersions.set(path, hash); return hash; };
     const incomingUserMemory = job.userMemory ? stage.meta<PortableMemory>("userMemory") : null;
     if (!job.choices.length && !incomingUserMemory) throw new Error("Choose a room or the shared user memory to bring in.");
     let userMemory: PortableMemory | undefined, userMemoryMode: "merge" | "replace" | undefined;
@@ -162,16 +180,17 @@ export function prepareCarryPlan(job: CarryPlanJob): CarryPlanPreview {
       const localized = localize(merged.states, here.states);
       const alternatives = merged.alternatives.map(a => ({ ...a, message: localResourcePointers(a.message) }));
       const displayStates = localized.length ? localized : localize([...here.states, ...incoming.states.filter(s => !here.states.some(h => h.message.id === s.message.id))], here.states);
-      const refs = new Set([...displayStates, ...alternatives].flatMap(s => [...(s.message.images?.map(i => i.file) ?? []), ...(s.message.resourceRefs?.map(r => r.file) ?? [])]));
+      const refs = new Set([...displayStates, ...alternatives].flatMap(s => [...messageAttachments(s.message).map(a => a.file), ...(s.message.resourceRefs?.map(r => r.file) ?? [])]));
       const filesDir = join(job.dataDir, "rooms", choice.target.id, "files");
       const resourceConflicts: RoomCarryPreview["resources"]["conflicts"] = [];
       const writesByName = new Map<string, CarryResource>();
       let already = 0;
+      const look = choice.made ? hashOf : rememberFile;
       for (const r of resources) {
         const file = canonicalResourceName(r.file, r.sha256);
-        const destinationHash = rememberFile(join("rooms", choice.target.id, "files", file));
+        const destinationHash = look(join("rooms", choice.target.id, "files", file));
         if (destinationHash === r.sha256) { already++; continue; }
-        const hash = rememberFile(join("rooms", choice.target.id, "files", r.file));
+        const hash = look(join("rooms", choice.target.id, "files", r.file));
         if (hash && hash !== r.sha256) {
           resourceConflicts.push({ file: r.file, oursHash: hash, incomingHash: r.sha256, incomingBytes: r.bytes });
           if (choice.resourcesChoice !== "incoming") continue;
@@ -198,8 +217,12 @@ export function prepareCarryPlan(job: CarryPlanJob): CarryPlanPreview {
       const changedAlternatives = alternatives.filter(a => knownAlternatives.get(a.revision) !== JSON.stringify(a));
       const knownAliases = new Set(store.carry.aliases(stored.id));
       const aliases = [...new Set([room.uuid, ...room.aliases])].filter(uuid => uuid !== stored.uuid && !knownAliases.has(uuid));
-      plans.push({ stored, setup: replaceSetup, aliases, states, added: merged.counts.added, heads, revisions, alternatives: changedAlternatives, resources: writes, ...(useMemory ? { memory: room.memory, memoryMode: memoryChoice === "both" ? "merge" as const : "replace" as const } : {}),
-        changed: !!(useMemory || replaceSetup || states.length || heads.length || revisions.length || changedAlternatives.length || aliases.length || writes.length) });
+      const numbers = numbersToLearn(incoming, job.source.uuid, new Set(localized.map(s => s.message.id)), store.carry.numbers(choice.target.id));
+      planned.push({ uuid: room.uuid, rows: { state: states, head: heads, revision: revisions, alternative: changedAlternatives, resource: writes, number: numbers } });
+      plans.push({ uuid: room.uuid, stored, setup: replaceSetup, made: choice.made, aliases, added: merged.counts.added,
+        rows: { state: states.length, head: heads.length, revision: revisions.length, alternative: changedAlternatives.length, resource: writes.length, number: numbers.length },
+        ...(useMemory ? { memory: room.memory, memoryMode: memoryChoice === "both" ? "merge" as const : "replace" as const } : {}),
+        changed: !!(useMemory || replaceSetup || states.length || heads.length || revisions.length || changedAlternatives.length || aliases.length || writes.length || numbers.length) });
     }
     const takeDependencies: PlannedDependency[] = [];
     const relevant = new Set(plans.filter((_, i) => job.choices[i].settings).flatMap(p => p.stored.participants.flatMap(person => person.skills ?? [])).map(name => name.toLowerCase()));
@@ -227,8 +250,12 @@ export function prepareCarryPlan(job: CarryPlanJob): CarryPlanPreview {
       for (const file of extra) changed.push({ path: file.path, action: "remove", oursBytes: file.bytes, incomingBytes: null });
       preview.dependencies.push({ key, kind: dependency.kind, id: dependency.id, targetDir: relativeDir, differs, choice: selected, files: changed });
     }
-    stage.setMeta("plan", preview.ready ? { rooms: plans, userMemory, userMemoryMode, dependencies: takeDependencies, removeFiles, directoryVersions, fileVersions: [...fileVersions].map(([path, hash]) => ({ path, hash })) } : null);
-    stage.setMeta("preview", preview);
+    stage.transaction(() => {
+      stage.clearPlanRows();
+      if (preview.ready) for (const { uuid, rows } of planned) for (const kind of Object.keys(rows) as PlanRowKind[]) stage.setPlanRows(uuid, kind, rows[kind]);
+      stage.setMeta("plan", preview.ready ? { rooms: plans, userMemory, userMemoryMode, dependencies: takeDependencies, removeFiles, directoryVersions, fileVersions: [...fileVersions].map(([path, hash]) => ({ path, hash })) } : null);
+      stage.setMeta("preview", preview);
+    });
     return preview;
   } finally { store.close(); stage.close(); }
 }

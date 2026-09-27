@@ -55,6 +55,7 @@ export interface AgentRecipe {
   bypassMode: string | null;
   bypassConfig?: Record<string, string>;
   modeAtLaunch?: boolean;
+  systemPromptAppend?: boolean;
   build(options: { model: string | null; mode: string | null }): LaunchSpec;
 }
 
@@ -114,6 +115,7 @@ function buildRecipes(): AgentRecipe[] {
       modePresets: ["default", "acceptEdits", "plan", "auto", "bypassPermissions"],
       defaultMode: "default",
       bypassMode: "bypassPermissions",
+      systemPromptAppend: true,
       unavailableReason: claudeExe ? null : "Claude Code not found",
       installedAt: claudeExe,
       installHint: "install Claude Code (npm install -g @anthropic-ai/claude-code, or the native installer) and log in with `claude`",

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { shortcutScript } from "./shortcuts.js";
+import { placeLauncherIcon, runPowershell, shortcutScript, windowsStartupShortcutPath } from "./shortcuts.js";
 
 export interface AutostartOptions {
   root: string;
@@ -43,7 +43,7 @@ export function cliAutostartControl(options: AutostartOptions): AutostartControl
 export const LAUNCH_AGENT_LABEL = "dev.viberoom.hub";
 
 export function autostartEntryPath(platform: NodeJS.Platform, home: string, env: NodeJS.ProcessEnv): string {
-  if (platform === "win32") return join(env.APPDATA ?? join(home, "AppData", "Roaming"), "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "viberoom.lnk");
+  if (platform === "win32") return windowsStartupShortcutPath(home, env);
   if (platform === "darwin") return join(home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`);
   return join(home, ".config", "autostart", "viberoom.desktop");
 }
@@ -157,12 +157,7 @@ function uidOf(o: AutostartOptions): number {
 }
 
 const runLaunchctl = (args: string[]): { status: number | null; stderr: string } => {
-  const r = spawnSync("launchctl", args, { encoding: "utf8" });
-  return { status: r.status, stderr: r.stderr ?? "" };
-};
-
-const runPowershell = (script: string): { status: number | null; stderr: string } => {
-  const r = spawnSync("powershell", ["-NoProfile", "-Command", script], { encoding: "utf8", windowsHide: true });
+  const r = spawnSync("launchctl", args, { encoding: "utf8", windowsHide: true });
   return { status: r.status, stderr: r.stderr ?? "" };
 };
 
@@ -220,8 +215,8 @@ export function installAutostart(o: AutostartOptions, on: boolean): AutostartSta
   if (platform === "win32") {
     writeFileSync(script, autostartVbs(o.node, main, o.dataDir));
     const wscript = join(env.SystemRoot ?? "C:\\Windows", "System32", "wscript.exe");
-    const ico = join(o.dataDir, "launcher", "viberoom.ico");
-    const r = (o.powershell ?? runPowershell)(shortcutScript(entry, wscript, script, o.dataDir, existsSync(ico) ? ico : null, null));
+    const ico = placeLauncherIcon(join(o.root, "assets", "icon.ico"), join(o.dataDir, "launcher"));
+    const r = (o.powershell ?? runPowershell)(shortcutScript(entry, wscript, script, o.dataDir, ico, null));
     if (r.status !== 0) throw new Error(`the Startup shortcut could not be created: ${(r.stderr || "").split("\n")[0] || "PowerShell refused"}`);
   } else {
     writeFileSync(script, autostartShell(o.node, main, o.dataDir));

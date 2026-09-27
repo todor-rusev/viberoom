@@ -5,49 +5,181 @@
 
   UI.define("settings-group", {
     group: "settingsGroup",
-    describe: "A named settings group on its own paper; the native heading folds it without removing any fields or changing their values.",
+    describe: "A named group of settings, as a card on its own paper, on a page of Settings, in a section of a side panel and in a dialog alike. It stays open: the menu at the side of Settings and the tabs of a panel are what keep a page short. Its settings (the setting type) run from edge to edge, a hairline between two.",
     props: {
       id: { type: "string", required: true },
-      title: { type: "string", required: true },
+      title: { type: "string", required: true, note: "empty on a card that is the whole of its page, the only one of its section, or what a dialog asks: the page, the tab or the dialog says it" },
       body: { type: "node", required: true },
-      open: { type: "boolean", default: true },
       tone: { type: "enum", values: ["plain", "danger"], default: "plain" },
     },
-    build: ({ id, title, body, open, tone }, ui) => ui.h("details", { id, class: "section", open, "data-tone": tone },
-      ui.h("summary", {}, ui.h("h4", {}, title), ui.h("span", { class: "chev", "aria-hidden": "true" }, ui.icon("down"))),
+    build: ({ id, title, body, tone }, ui) => ui.h("section", { id, "data-tone": tone },
+      title ? ui.h("h3", {}, title) : null,
       ui.h("div", { class: "group-body" }, body)),
     states: ["rest"],
     samples: [
-      { label: "open", props: { id: "sample-settings-open", title: "Room", body: UI.raw('<p class="hint">Choose a name and a topic for this room.</p>') } },
-      { label: "closed", props: { id: "sample-settings-closed", title: "Start and restart", body: UI.raw('<p class="hint">Choose how this room comes back.</p>'), open: false } },
+      { label: "a card", props: { id: "sample-settings-card", title: "Updates", body: UI.raw('<p class="hint">Check for a newer viberoom once a day.</p>') } },
       { label: "danger", props: { id: "sample-settings-danger", title: "Danger zone", body: UI.raw('<p class="hint">Actions that remove this room.</p>'), tone: "danger" } },
     ],
   });
 
+  const GLYPH_TONES = ["violet", "sky", "orchid", "amber", "mint", "peach", "slate", "geek", "pad"];
+  UI.define("settings-glyph", {
+    group: "settingsGlyph",
+    describe: "A category's picture on a tile in the category's own tint. The ones for geeks share two quiet tiles, each standing off its ground: geek, the paper's, on the darker pad of the menu; pad, the pad's own tint, at the top of their page, on the paper. The glyph is a rig: it plays its gesture when the pointer arrives at the entry that holds it, and once when its page opens. Small in the menu, large at the top of the page.",
+    props: {
+      glyph: { type: "icon", required: true, note: "a glyph of ui/icons.js; one with parts (a rig) plays a gesture" },
+      tone: { type: "enum", values: GLYPH_TONES, default: "slate" },
+      size: { type: "enum", values: ["sm", "lg"], default: "sm" },
+    },
+    build: ({ glyph, tone, size }, ui) => ui.h("span", { "data-tone": tone, "data-size": size, "aria-hidden": "true" }, ui.raw(globalThis.Icons.rig(glyph))),
+    states: ["rest"],
+    samples: [
+      { label: "appearance", props: { glyph: "palette", tone: "peach" } },
+      { label: "vibemates", props: { glyph: "bot", tone: "violet" } },
+      { label: "channels", props: { glyph: "phone", tone: "sky" } },
+      { label: "memory", props: { glyph: "graph", tone: "orchid" } },
+      { label: "export / import", props: { glyph: "transfer", tone: "amber" } },
+      { label: "editor", props: { glyph: "code", tone: "mint" } },
+      { label: "system", props: { glyph: "power", tone: "slate" } },
+      { label: "for geeks, on the pad of the menu", props: { glyph: "sliders", tone: "geek" } },
+      { label: "large, at the top of a page", props: { glyph: "graph", tone: "orchid", size: "lg" } },
+      { label: "large, at the top of a page for geeks", props: { glyph: "sliders", tone: "pad", size: "lg" } },
+    ],
+  });
+
+  UI.define("settings-nav", {
+    group: "settingsNav",
+    describe: "The menu of a set of categories, an entry per category with its picture and its word: a column at the side of Settings, a row of tabs over the sections of a side panel. The one shown carries the accent's bar, which slides to the next one picked; the categories for geeks follow a labelled rule, on a darker pad. The arrows, Home and End move along it and show what they reach; Tab goes on to the page. Where a row has little room, the tabs' own words go and the word of the one shown stays (compact); \"for geeks:\" stays with them, and only where there is less room still does it give way to its glasses (tight).",
+    props: {
+      items: { type: "list", required: true, note: "[{ id, label, glyph, tone, geek, attention }] in the order shown; those for geeks after the others" },
+      current: { type: "string", required: true, note: "the id of the category shown" },
+      label: { type: "string", default: "Settings", note: "what a screen reader calls the menu" },
+      layout: { type: "enum", values: ["column", "row"], default: "column", note: "row: the tabs over the sections of a side panel" },
+      prefix: { type: "string", default: "sp", note: "the start of its ids and of its pages' ids (settings-category): sp on the page of Settings, one of its own in each panel" },
+    },
+    build: ({ items, current, label, layout, prefix }, ui) => {
+      const entry = (item) => ui.h("li", {},
+        ui.h("button", { type: "button", id: `${prefix}-tab-${item.id}`, "data-category": item.id, "aria-controls": `${prefix}-cat-${item.id}`, "aria-current": item.id === current ? "page" : null, "data-state": item.id === current ? "on" : null, tabindex: item.id === current ? "0" : "-1", title: item.label },
+          ui.raw(UI.html("settings-glyph", { glyph: item.glyph, tone: item.geek ? "geek" : item.tone || "slate" })),
+          ui.h("span", { class: "label", "data-text": item.label }, item.label),
+          item.attention ? ui.h("span", { class: "dot", role: "img", "aria-label": item.attention, title: item.attention }) : null));
+      const plain = items.filter((item) => !item.geek);
+      const geeks = items.filter((item) => item.geek);
+      return ui.h("nav", { class: "quiet-glyphs", "aria-label": label, "data-layout": layout === "row" ? "row" : null },
+        ui.h("span", { class: "bar", "aria-hidden": "true" }),
+        ui.h("ul", { class: "entries" }, plain.map(entry)),
+        geeks.length ? ui.h("div", { class: "geeks" },
+          ui.h("p", { class: "rule", id: `${prefix}-nav-geeks`, title: "For geeks" }, ui.icon("geek"), ui.h("span", {}, layout === "row" ? "for geeks:" : "for geeks")),
+          ui.h("ul", { class: "entries", "aria-labelledby": `${prefix}-nav-geeks` }, geeks.map(entry))) : null);
+    },
+    states: ["rest", "compact", "tight"],
+    samples: [
+      {
+        label: "the tabs of a side panel",
+        props: {
+          current: "sample-conversation",
+          layout: "row",
+          prefix: "sample-rp",
+          label: "Room settings",
+          items: [
+            { id: "sample-general", label: "General", glyph: "rooms", tone: "violet" },
+            { id: "sample-rules", label: "Rules", glyph: "journal", tone: "amber" },
+            { id: "sample-conversation", label: "Conversation", glyph: "chat", tone: "sky" },
+            { id: "sample-briefs", label: "Briefs", glyph: "sliders", geek: true },
+          ],
+        },
+      },
+      {
+        label: "a menu",
+        props: {
+          current: "channels",
+          items: [
+            { id: "s-appearance", label: "Appearance", glyph: "palette", tone: "peach" },
+            { id: "channels", label: "Channels", glyph: "phone", tone: "sky" },
+            { id: "s-system", label: "System", glyph: "power", tone: "slate", attention: "This folder is not private" },
+            { id: "s-defaults", label: "Defaults for new rooms", glyph: "sliders", geek: true },
+            { id: "s-trouble", label: "Troubleshooting", glyph: "pulse", geek: true },
+          ],
+        },
+      },
+    ],
+  });
+
+  UI.define("settings-category", {
+    group: "settingsCategory",
+    describe: "One category as a page of Settings, or as a section of a side panel: its picture, its name and a line on what it holds, then its groups as cards. The page of every other category stays in the form, hidden, so a save still sees every field. A section of a panel shows its name only while the panel searches (found): the tab above names it otherwise.",
+    props: {
+      id: { type: "string", required: true },
+      title: { type: "string", required: true },
+      about: { type: "string", default: "" },
+      glyph: { type: "icon", required: true },
+      tone: { type: "enum", values: GLYPH_TONES, default: "slate" },
+      geek: { type: "boolean", default: false },
+      current: { type: "boolean", default: false, note: "the page shown; the others are hidden" },
+      body: { type: "node", required: true },
+      form: { type: "enum", values: ["page", "section"], default: "page", note: "section: a section of a side panel, under the panel's tabs (settings-nav in a row)" },
+      prefix: { type: "string", default: "sp", note: "the start of its id, the same as its menu's" },
+    },
+    build: ({ id, title, about, glyph, tone, geek, current, body, form, prefix }, ui) => {
+      const section = form === "section";
+      return ui.h("section", { id: `${prefix}-cat-${id}`, "data-category": id, "data-geek": geek || null, "data-form": section ? "section" : null, "aria-labelledby": `${prefix}-cat-${id}-title`, hidden: !current },
+        ui.h("header", { class: "head" },
+          ui.raw(UI.html("settings-glyph", { glyph, tone: geek ? "pad" : tone, size: section ? "sm" : "lg" })),
+          ui.h("div", { class: "words" },
+            geek ? ui.h("span", { class: "for-geeks" }, ui.icon("geek"), "for geeks") : null,
+            ui.h(section ? "h4" : "h2", { id: `${prefix}-cat-${id}-title` }, title),
+            about && !section ? ui.h("p", {}, about) : null)),
+        ui.h("div", { class: "body" }, body));
+    },
+    states: ["rest", "found"],
+    samples: [
+      { label: "a page", props: { id: "sample-memory", title: "Long-term memory", about: "What the rooms that remember learn, and where it is kept.", glyph: "graph", tone: "orchid", current: true, body: UI.raw('<p class="hint">The groups of the category come here, as cards.</p>') } },
+      { label: "a page for geeks", props: { id: "sample-defaults", title: "Defaults for new rooms", about: "Where every new room starts.", glyph: "sliders", geek: true, current: true, body: UI.raw('<p class="hint">Each room can change them later.</p>') } },
+      { label: "a section of a panel, where the search found something", props: { id: "sample-rules", prefix: "sample-rp", form: "section", title: "Rules", glyph: "journal", tone: "amber", current: true, body: UI.raw('<p class="hint">Its cards come here; the name above shows only while the panel searches.</p>') } },
+    ],
+  });
+
+  const HEX = /^#[0-9a-f]{6}$/i;
+  function inkOn(hex) {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return 1.05 / (lum + 0.05) >= 3 ? "light" : "dark";
+  }
   UI.define("logo-tile", {
     group: "logoTile",
-    describe: "A vendor's mark on a tile: the vendor's own drawing laid over the look's ink through a mask, so it reads on any paper; a letter stands in where there is no drawing, a glyph from the icon set for the marks the room adds (muted). As a badge it sits in a face's corner.",
+    describe: "A vendor's mark on a tile: the vendor's own drawing laid over the look's ink through a mask, so it reads on any paper; a letter stands in where there is no drawing, a glyph from the icon set for the marks the room adds (muted). With a brand colour the tile wears it and the mark is white, or black where white would not stand out. As a badge it sits in a face's corner.",
     props: {
       icon: { type: "string", note: "the drawing's url (a recipe's icon); empty for a letter" },
       letter: { type: "string", note: "the letter shown without a drawing" },
       glyph: { type: "icon", note: "an icon from the set instead of a drawing (the mute mark)" },
+      brand: { type: "string", note: "#rrggbb: the tile in the brand's colour, like its app icon (a catalogue system); data-brand says light or dark mark" },
       size: { type: "enum", values: ["sm", "md", "lg", "badge"], default: "md", note: "badge: the corner of a face, sized by the face" },
       tone: { type: "enum", values: ["plain", "muted", "unplugged"], default: "plain", note: "unplugged: the vendor is logged out (U147)" },
       title: { type: "string" },
     },
-    build: ({ icon, letter, glyph, size, tone, title }, ui) =>
-      ui.h("span", { "data-size": size, "data-tone": tone !== "plain" ? tone : null, title, style: icon ? `--logo:url("${icon}")` : null, role: title ? "img" : null, "aria-label": title || null },
-        icon ? ui.h("span", { class: "mark" }) : glyph ? ui.icon(glyph) : ui.h("span", { class: "letter" }, (letter || "?").slice(0, 1).toUpperCase())),
+    build: ({ icon, letter, glyph, brand, size, tone, title }, ui) => {
+      const branded = typeof brand === "string" && HEX.test(brand);
+      const style = [icon ? `--logo:url("${icon}")` : "", branded ? `--logo-brand:${brand}` : ""].filter(Boolean).join(";");
+      return ui.h("span", { "data-size": size, "data-tone": tone !== "plain" ? tone : null, "data-brand": branded ? inkOn(brand) : null, title, style: style || null, role: title ? "img" : null, "aria-label": title || null },
+        icon ? ui.h("span", { class: "mark" }) : glyph ? ui.icon(glyph) : ui.h("span", { class: "letter" }, (letter || "?").slice(0, 1).toUpperCase()));
+    },
     states: ["rest"],
-    samples: [
+    samples: (() => {
+      const p = globalThis.VIBEROOM_TOKENS.current.palette;
+      return [
       { label: "a drawing", props: { icon: "vendor-icons/claude.svg", title: "Claude" } },
       { label: "another", props: { icon: "vendor-icons/codex.svg", size: "lg", title: "Codex" } },
       { label: "a letter", props: { letter: "F", size: "sm", title: "Fake" } },
       { label: "a badge", props: { icon: "vendor-icons/gemini.svg", size: "badge", title: "Gemini" } },
       { label: "muted", props: { glyph: "mute", size: "badge", tone: "muted", title: "muted: receives no prompts" } },
       { label: "unplugged", props: { glyph: "unplugged", size: "badge", tone: "unplugged", title: "not logged in" } },
-    ],
+      { label: "a brand, light mark", props: { icon: "/connection-logos/linear.svg", brand: p.indigo, title: "Linear" } },
+      { label: "a brand, dark mark", props: { icon: "/connection-logos/huggingface.svg", brand: p.spark, title: "Hugging Face" } },
+      ];
+    })(),
   });
+
+  const facePicture = (url) => typeof url === "string" && /^faces\/[a-z][a-z0-9-]{1,31}\.webp$/.test(url);
 
   const FACE_STATUSES = ["idle", "queued", "starting", "thinking", "writing", "error", "offline", "left", "unstaffed"];
   UI.define("face", {
@@ -59,6 +191,7 @@
       color: { type: "string", required: true, note: "the participant's colour, #rrggbb" },
       size: { type: "number", required: true, note: "px" },
       emoji: { type: "boolean", default: false, note: "the label is an emoji: bigger" },
+      picture: { type: "string", note: "a picture of viberoom's (/faces/<id>.webp) instead of the label, which stays its name for a reader" },
       badge: { type: "node", note: "markup of the mark in the corner (a logo-tile), as ui.raw" },
       status: { type: "enum", values: FACE_STATUSES, note: "the dot at the foot" },
       me: { type: "boolean", default: false, note: "the human's own face: wears the accent ring" },
@@ -68,10 +201,12 @@
       dim: { type: "enum", values: ["asleep", "unstaffed"], note: "greyed: asleep a little, unstaffed more" },
       title: { type: "string" },
     },
-    build: ({ name, label, color, size, emoji, badge, status, me, kind, ring, alert, dim, title }, ui) =>
+    build: ({ name, label, color, size, emoji, picture, badge, status, me, kind, ring, alert, dim, title }, ui) =>
       ui.h("span", { class: "avatar", role: "img", "aria-label": name, title, "data-kind": kind !== "tile" ? kind : null, "data-me": me || null, "data-ring": ring || null, "data-alert": alert || null, "data-dim": dim || null, style: `--face-color:${color};--face-size:${size}px;width:${size}px;height:${size}px` },
-        ui.h("span", { class: "tile", "data-emoji": emoji || null, style: `font-size:${Math.round(emoji ? size * 0.56 : size * 0.38)}px` },
-          ui.h("span", { class: "glyph" }, label)),
+        facePicture(picture)
+          ? ui.h("span", { class: "tile", "data-picture": "" }, ui.h("img", { class: "glyph pic", src: picture, alt: "", draggable: "false", decoding: "async" }))
+          : ui.h("span", { class: "tile", "data-emoji": emoji || null, style: `font-size:${Math.round(emoji ? size * 0.56 : size * 0.38)}px` },
+            ui.h("span", { class: "glyph" }, label)),
         badge,
         status ? ui.h("span", { class: "status", "data-status": status }) : null),
     states: ["rest"],
@@ -84,6 +219,7 @@
         { label: "needs you", props: { name: "Nia", label: "NI", color: p.primary, size: 44, alert: true, status: "error" } },
         { label: "asleep", props: { name: "Rex", label: "🦖", emoji: true, color: p.green, size: 44, dim: "asleep", status: "offline", badge: UI.raw(UI.html("logo-tile", { glyph: "mute", size: "badge", tone: "muted", title: "muted" })) } },
         { label: "on the card", props: { name: "You", label: "🧑‍💻", emoji: true, color: p.indigo, size: 64, kind: "card" } },
+        { label: "a picture", props: { name: "Fox", label: "FO", picture: "/faces/fox.webp", color: p.orange, size: 64 } },
       ];
     })(),
   });
@@ -95,20 +231,26 @@
       hue: { type: "number", note: "0–359, the room's own; not for the accent kind" },
       letter: { type: "string", note: "the first letter of the room's name" },
       emoji: { type: "string", note: "the room's emoji, instead of the letter" },
+      picture: { type: "string", note: "a room picture of viberoom's (/faces/<id>.webp), instead of the emoji or the letter" },
       icon: { type: "icon", note: "the accent kind: an icon on the accent gradient" },
-      size: { type: "enum", values: ["md", "lg"], default: "md" },
+      size: { type: "enum", values: ["sm", "md", "lg"], default: "md", note: "sm: before a name in a list; md: a tile; lg: a panel's head" },
       title: { type: "string" },
     },
-    build: ({ hue, letter, emoji, icon, size, title }, ui) => {
-      const kind = icon ? "accent" : emoji ? "emoji" : "letter";
+    build: ({ hue, letter, emoji, picture, icon, size, title }, ui) => {
+      const kind = icon ? "accent" : facePicture(picture) ? "picture" : emoji ? "emoji" : "letter";
       const style = icon ? null : `--room-hue:${Number(hue) || 0};--room-hue-2:${((Number(hue) || 0) + 30) % 360}`;
-      return ui.h("span", { "data-kind": kind, "data-size": size !== "md" ? size : null, style, title }, icon ? ui.icon(icon) : emoji ? emoji : (letter || "?").slice(0, 1).toUpperCase());
+      const glyph = icon ? ui.icon(icon)
+        : kind === "picture" ? ui.h("img", { class: "rm-pic", src: picture, alt: "", draggable: "false", decoding: "async" })
+        : ui.h("span", { class: "rm-glyph" }, emoji || (letter || "?").slice(0, 1).toUpperCase());
+      return ui.h("span", { "data-kind": kind, "data-size": size !== "md" ? size : null, style, title }, glyph);
     },
     states: ["rest"],
     samples: [
       { label: "a letter", props: { hue: 200, letter: "V", title: "Vibes" } },
       { label: "an emoji", props: { hue: 40, emoji: "🎭", title: "Theatre" } },
+      { label: "a picture", props: { hue: 200, picture: "/faces/ideas.webp", title: "Ideas" } },
       { label: "large", props: { hue: 300, letter: "P", size: "lg" } },
+      { label: "small", props: { hue: 120, letter: "S", size: "sm" } },
       { label: "the accent", props: { icon: "skills", title: "All skills" } },
     ],
   });
@@ -129,9 +271,27 @@
     ],
   });
 
+  UI.define("skeleton", {
+    group: "skeleton",
+    describe: "Grey bones in the shape of the content that is on its way (a message body, the conversation), with one soft band of light sweeping over them. Decorative: the words that say what loads stay beside it for screen readers.",
+    props: {
+      lines: { type: "number", default: 3, note: "how many bones, 1–6; each is a little shorter than the one before" },
+      shape: { type: "enum", values: ["lines", "bubble"], default: "lines", note: "bubble: the bones sit on a message-shaped card with a face beside it" },
+    },
+    build: ({ lines, shape }, ui) => {
+      const bones = Array.from({ length: Math.max(1, Math.min(6, Math.round(Number(lines) || 3))) }, () => ui.h("i", {}));
+      return ui.h("span", { "aria-hidden": "true", "data-shape": shape }, shape === "bubble" ? [ui.h("b", { class: "face" }), ui.h("span", { class: "card" }, bones)] : bones);
+    },
+    states: ["rest"],
+    samples: [
+      { label: "three lines", props: { lines: 3 } },
+      { label: "a message on its way", props: { lines: 2, shape: "bubble" } },
+    ],
+  });
+
   UI.define("number-field", {
     group: "numberField",
-    describe: "A number to type or step: the field with two small steps at its right edge, drawn from the look instead of the browser's own spinner (U126). A step raises the same input and change events a typed value does, so a form saves on it. The id, the bounds and the step are the caller's.",
+    describe: "A number to type or step: the field with two small steps at its right edge, drawn from the look instead of the browser's own spinner (U126). Its input wears the house look of a field (.input) wherever it sits, so it is a field on a card of Settings as much as in a panel. A step raises the same input and change events a typed value does, so a form saves on it. The id, the bounds and the step are the caller's.",
     props: {
       id: { type: "string" },
       value: { type: "string", note: "the current value, as text; empty for none" },
@@ -145,7 +305,7 @@
     },
     build: ({ id, value, min, max, step, placeholder, hook, data, disabled }, ui) =>
       ui.h("span", { class: hook },
-        ui.h("input", { type: "number", id, value, min, max, step, placeholder, disabled, ...ui.dataAttrs(data) }),
+        ui.h("input", { type: "number", class: "input", id, value, min, max, step, placeholder, disabled, ...ui.dataAttrs(data) }),
         ui.h("span", { class: "steps", "aria-hidden": "true" },
           ui.h("button", { type: "button", "data-act": "up", tabindex: "-1", title: "More" }),
           ui.h("button", { type: "button", "data-act": "down", tabindex: "-1", title: "Less" }))),
@@ -153,6 +313,31 @@
     samples: [
       { label: "seconds", props: { value: "4", min: 0, max: 120, step: 0.5 } },
       { label: "empty, with a placeholder", props: { value: "", min: 1, max: 100, placeholder: "no limit" } },
+    ],
+  });
+
+  UI.define("slider-field", {
+    group: "sliderField",
+    describe: "A value picked by dragging along a range, the number written beside it in its unit: for a setting that is felt rather than typed, like the scale of the whole window (Settings → Appearance). The range raises the browser's own input and change events, so a form saves on it; the page keeps the number beside it in step as the human drags.",
+    props: {
+      id: { type: "string" },
+      value: { type: "string", required: true, note: "the current value, as text" },
+      min: { type: "number" },
+      max: { type: "number" },
+      step: { type: "number" },
+      unit: { type: "string", note: "written after the number, e.g. %" },
+      label: { type: "string", required: true, note: "what the range is, for a screen reader" },
+      hook: { type: "string", note: "a class the page composes with" },
+      data: { type: "object", note: "data-* marks on the range, for the page's own handlers" },
+    },
+    build: ({ id, value, min, max, step, unit, label, hook, data }, ui) =>
+      ui.h("span", { class: hook },
+        ui.h("input", { type: "range", id, value, min, max, step, "aria-label": label, ...ui.dataAttrs(data) }),
+        ui.h("output", { class: "value", for: id }, `${value}${unit || ""}`)),
+    states: ["rest"],
+    samples: [
+      { label: "a scale in per cent", props: { value: "100", min: 70, max: 150, step: 5, unit: "%", label: "Scale" } },
+      { label: "near its end", props: { value: "145", min: 70, max: 150, step: 5, unit: "%", label: "Scale" } },
     ],
   });
 
@@ -228,7 +413,7 @@
       { label: "news", props: { text: "Maken is back in the room (session restored)." } },
       { label: "attention", props: { text: "Maken is at 84% of its context; it will leave notes with its next reply.", tone: "attention" } },
       { label: "error", props: { text: "Maken could not answer: no result", tone: "error" } },
-      { label: "hush", props: { text: "Hush: everyone waits until you write again.", tone: "hush", face: UI.raw('<span class="hush-face">🤫</span>') } },
+      { label: "hush", props: { text: "Hush: everyone waits until you write again.", tone: "hush", face: UI.raw('<span class="hush-face" aria-hidden="true"></span>') } },
       { label: "leads to a reply", props: { text: "Maken finished the reply started at 16:21 · 2m 30s", ref: "sample", title: "go to the reply", face: UI.raw(UI.html("face", { name: "Maken", label: "🔨", emoji: true, color: globalThis.VIBEROOM_TOKENS.current.palette.primary, size: 20 })) } },
     ],
   });
@@ -414,11 +599,11 @@
 
   UI.define("file-card", {
     group: "fileCard",
-    describe: "A fragment of a file, or a picture, under the message that names it: a dark card whose head says the file's name and the lines shown and offers to open the whole file; its body is the code or the drawing. What could not be shown says why in the body instead.",
+    describe: "A fragment of a file, a picture, or a video or a sound, under the message that names it: a dark card whose head says the file's name and the lines shown and offers to open the whole file; its body is the code, the drawing or the player. What could not be shown says why in the body instead.",
     props: {
       name: { type: "string", required: true },
       lines: { type: "string", note: "what part is shown, in words: 'lines 120–160', or a picture's size once it loaded" },
-      kind: { type: "enum", values: ["code", "image", "doc"], default: "code", note: "doc: a rendered Markdown page or a CSV table instead of source" },
+      kind: { type: "enum", values: ["code", "image", "doc", "media"], default: "code", note: "doc: a rendered Markdown page or a CSV table instead of source; media: a video or a sound, with its player" },
       body: { type: "html", note: "the code view or the picture: markup the caller vouches for" },
       error: { type: "string", note: "why the file could not be shown; takes the body's place" },
       act: { type: "string", default: "open-file", note: "the head button's act" },
@@ -434,6 +619,7 @@
     samples: [
       { label: "a fragment", props: { name: "room.ts", lines: "lines 120–124", body: "<pre style=\"margin:0;padding:10px 12px\">120  const key = randomUUID();\n121  const entry = { key, ts: Date.now() };\n122  this.pending.set(key, entry);\n123  this.push({ type: \"permission\", key });\n124  return entry;</pre>" } },
       { label: "a picture", props: { name: "mockup.png", lines: "640×400", kind: "image", openTitle: "Open it big", body: "<div style=\"width:200px;height:90px;border-radius:8px;background:var(--lav)\"></div>" } },
+      { label: "a video", props: { name: "trailer.mp4", lines: "0:42 · 1920×1080", kind: "media", openTitle: "Open it with this computer's player", body: "<video controls preload=\"none\" style=\"width:100%\"></video>" } },
       { label: "a rendered document", props: { name: "notes.md", lines: "first 40 of 380 lines", kind: "doc", body: "<div class=\"file-view markdown doc-preview\"><h1>Tuesday</h1><p><b>What we decided.</b> The list keeps the reader where they are; a jump says who asked for it.</p></div>" } },
       { label: "could not be shown", props: { name: "gone.ts", error: "gone.ts could not be shown here: no such file." } },
     ],
@@ -632,6 +818,68 @@
     ],
   });
 
+  UI.define("message-ref", {
+    group: "link",
+    describe: "The number of another message of the room, as a message's words write it (a # and the number): a word that leads to it. A dotted rule says it stays in the room, where a path or a site opens elsewhere; under the pointer it raises a message-peek, a click goes to the message, and a drag over it selects it like the words around it.",
+    props: {
+      seq: { type: "number", required: true, note: "the message's number in the room: where it leads" },
+      written: { type: "number", note: "the number as the words write it, when they were written on another copy of the room, which numbered that message so (src/message-numbers.ts)" },
+      copy: { type: "string", note: "the name of that copy's computer" },
+    },
+    build: ({ seq, written, copy }, ui) => ui.h("span", { role: "link", "data-seq": String(seq), "data-written": written ? String(written) : null, "data-copy": written ? copy || null : null }, `#${written || seq}`),
+    states: ["rest", "hover"],
+    samples: [
+      { label: "in words", props: { seq: 7144 } },
+      { label: "written on another copy", props: { seq: 7807, written: 7738, copy: "studio-mac" } },
+    ],
+  });
+  UI.define("hint", {
+    group: "hint",
+    describe: "The words a control keeps for the pointer, beside it after the hover delay: to the right of an item of the main menu, under any other control (above it when there is no room below). Every title in the window becomes one (ui/hints.js), so the system's grey box never rises; a button whose words were its only name keeps them as its accessible name.",
+    props: {
+      text: { type: "string", required: true, note: "the words, as the control's title says them" },
+      side: { type: "enum", values: ["right", "below", "above"], default: "below", note: "where it stands, which is where it rises from" },
+    },
+    build: ({ text, side }, ui) => ui.h("div", { role: "tooltip", "data-side": side }, text),
+    states: ["rest"],
+    samples: [
+      { label: "beside an item of the main menu", props: { text: "Connections", side: "right" } },
+      { label: "under a button, two lines", props: { text: "Copy the message\nas Markdown", side: "below" } },
+    ],
+  });
+  UI.define("message-peek", {
+    group: "messagePeek",
+    describe: "The card the number of another message raises under the pointer: whose words they are (the face and the name in the writer's colour), the number and the time, and how the message begins. A number the room holds no message under says so. It only shows; the number itself is what goes there.",
+    props: {
+      seq: { type: "number", required: true },
+      name: { type: "string", note: "who wrote it, as they were named then; none when the room holds no such message" },
+      color: { type: "string", note: "the writer's colour, #rrggbb" },
+      face: { type: "node", note: "markup of the writer's face (a face, as ui.raw)" },
+      when: { type: "string", note: "when it was written, in words" },
+      text: { type: "string", required: true, note: "how the message begins; or why there is nothing to show" },
+      missing: { type: "boolean", default: false, note: "the room holds no message with this number" },
+      written: { type: "number", note: "the number as the words that raised it write it, when another copy of the room gave it" },
+      copy: { type: "string", note: "the name of that copy's computer" },
+      id: { type: "string", note: "for the reference that raised it to name it (aria-describedby)" },
+      hook: { type: "string", note: "a class the page composes with (where it floats)" },
+    },
+    build: ({ seq, name, color, face, when, text, missing, written, copy, id, hook }, ui) =>
+      ui.h("div", { id, class: hook || null, role: "tooltip", "data-state": missing ? "missing" : null },
+        ui.h("div", { class: "head" }, face || null, name ? ui.h("b", { class: "who", style: color ? `color:${color}` : null }, name) : null,
+          ui.h("span", { class: "when" }, when ? `#${seq} · ${when}` : `#${seq}`)),
+        written ? ui.h("div", { class: "written" }, `Written as #${written} on ${copy || "another computer"}`) : null,
+        ui.h("div", { class: "words" }, text)),
+    states: ["rest", "missing"],
+    samples: (() => {
+      const p = globalThis.VIBEROOM_TOKENS.current.palette;
+      return [
+        { label: "a reply", props: { seq: 7144, name: "Maken", color: p.primary, face: UI.raw(UI.html("face", { name: "Maken", label: "MA", color: p.primary, size: 18 })), when: "Today 11:03", text: "The list keeps the reader where they are; a jump says who asked for it, and the room opens at its end or where its reader left it higher up." } },
+        { label: "written on another copy", props: { seq: 7807, name: "Maken", color: p.primary, when: "Yesterday 23:32", written: 7738, copy: "studio-mac", text: "A scale for the whole window, in Settings: can we have one?" } },
+        { label: "no such message", props: { seq: 99999, text: "This room has no message with this number.", missing: true } },
+      ];
+    })(),
+  });
+
   UI.define("look-card", {
     group: "lookCard",
     describe: "A look, shown as a small picture of itself: its paper, a reply and your bubble on it, its accent, its corners, its name in its own font. The picker in Settings and the style guide's own switch are rows of these; the colours come from the look's tokens, so the card is right whatever look the page wears.",
@@ -661,6 +909,139 @@
     samples: [
       ...Object.values(globalThis.VIBEROOM_TOKENS.looks).map((l) => ({ label: l.label, props: { look: l, on: l.id === globalThis.VIBEROOM_TOKENS.current.id } })),
       { label: "one of the human's own", props: { look: globalThis.VIBEROOM_TOKENS.current, tag: "Sam's look" } },
+    ],
+  });
+
+  UI.define("switch", {
+    group: "switch",
+    describe: "The window's one switch: an outline in the quiet ink when off, filled with the accent when on, its knob sliding over, and On or Off beside it in words. A row of the setting type holds one when the setting is a switch, and the row's name is its label; standing alone (a card switched on and off as a whole), it is named for a reader by label, and a click on its words switches it too.",
+    props: {
+      id: { type: "string", note: "the input's id: a label elsewhere (a setting's name) names the switch by it" },
+      name: { type: "string", note: "the input's name in its form, for a form read by names" },
+      checked: { type: "boolean", default: false },
+      disabled: { type: "boolean", default: false },
+      label: { type: "string", note: "the name a reader hears when no label elsewhere names the switch: a card's own switch" },
+      describedBy: { type: "string", note: "the ids of what describes it (a setting's words, its status)" },
+      data: { type: "object", note: "data-* marks on the input, for the page's own handlers" },
+    },
+    build: ({ id, name, checked, disabled, label, describedBy, data }, ui) => ui.h("label", null,
+      ui.h("span", { class: "state", "aria-hidden": "true" }, ui.h("span", { class: "on" }, "On"), ui.h("span", { class: "off" }, "Off")),
+      ui.h("input", { type: "checkbox", role: "switch", id, name, checked, disabled, "aria-label": label, "aria-describedby": describedBy, ...ui.dataAttrs(data) })),
+    states: ["rest", "hover"],
+    samples: [
+      { label: "on", props: { label: "Morning check-in", checked: true } },
+      { label: "off", props: { label: "Morning check-in" } },
+      { label: "off, and it cannot change now", props: { label: "Morning check-in", disabled: true } },
+    ],
+  });
+
+  UI.define("consent-gate", {
+    group: "consentGate",
+    describe: "The consent at the head of a feature's card of Settings, the first thing on it and above what it unlocks. Asked, it says who receives, shows the exact words of what leaves this computer and offers its answers; asked again, when what leaves changed since it was given, it says that first. Given, it folds to one line with a way to withdraw, and says under it what the feature still misses to be on. The words are the hub's, byte for byte: the answer sends them back, and the hub gives the consent over them alone.",
+    props: {
+      state: { type: "enum", values: ["ask", "lapsed", "given"], required: true },
+      icon: { type: "string", note: "ask: the feature's picture (mic, speaker, graph); the lock without" },
+      title: { type: "string", required: true, note: "who receives, in words: 'Your voice goes to OpenAI'; given, what is on" },
+      words: { type: "string", note: "ask and lapsed: the exact words agreed to" },
+      missing: { type: "string", note: "given: what the feature still misses to be on; none, it is on" },
+      answers: { type: "array", note: "ask and lapsed: [button props]: on a page the one agreement, on a card Not now beside it" },
+      withdraw: { type: "object", note: "given: { act, data } of the way to withdraw it; the settings stay" },
+    },
+    build: ({ state, icon, title, words, missing, answers, withdraw }, ui) => state === "given"
+      ? ui.h("div", { "data-state": "given", "data-on": missing ? null : "" },
+          ui.h("div", { class: "given-line" },
+            ui.h("span", { class: "mark" }, ui.icon("check")),
+            ui.h("span", { class: "title" }, title),
+            withdraw ? ui.build("button", { label: "Withdraw", kind: "ghost", size: "sm", act: withdraw.act, data: withdraw.data, title: "Nothing leaves this computer from then on; the settings stay" }) : null),
+          missing ? ui.h("div", { class: "missing", role: "status" }, missing) : null)
+      : ui.h("div", { "data-state": state, role: "group", "aria-label": state === "lapsed" ? "What leaves this computer changed" : title },
+          ui.h("div", { class: "head" },
+            ui.h("span", { class: "mark" }, ui.icon(state === "lapsed" ? "alert" : icon || "lock")),
+            ui.h("span", { class: "heading" },
+              ui.h("span", { class: "title" }, state === "lapsed" ? "What leaves this computer changed" : title),
+              ui.h("span", { class: "sub" }, state === "lapsed" ? `${title}. It stays off until you agree to the words as they are now.` : "Nothing leaves this computer until you agree."))),
+          ui.h("p", { class: "words" }, words || ""),
+          ui.h("div", { class: "answers" }, (answers || []).map((b) => ui.build("button", b)))),
+    states: ["rest"],
+    samples: [
+      { label: "asked", props: { state: "ask", icon: "mic", title: "Your voice goes to OpenAI", words: "Each recording, and each sound of a room a vibemate asks to hear, is sent whole to OpenAI (api.openai.com), which turns it into text under its own terms. A dictation's words go only into your message field; a voice message or a sound file keeps its words in the room, as the message does.", answers: [{ label: "I agree, turn it on", kind: "primary", act: "consent-agree" }] } },
+      { label: "asked again: what leaves changed", props: { state: "lapsed", title: "Your voice goes to Groq", words: "Each recording, and each sound of a room a vibemate asks to hear, is sent whole to Groq (api.groq.com), which turns it into text under its own terms. A dictation's words go only into your message field; a voice message or a sound file keeps its words in the room, as the message does.", answers: [{ label: "I agree", kind: "primary", act: "consent-agree" }] } },
+      { label: "given, a piece still missing", props: { state: "given", title: "You agreed: your voice goes to OpenAI", missing: "Not on yet: OpenAI API key is not set yet.", withdraw: { act: "consent-withdraw" } } },
+      { label: "given, on", props: { state: "given", title: "On: your voice goes to OpenAI", withdraw: { act: "consent-withdraw" } } },
+    ],
+  });
+
+  UI.define("consent-lock", {
+    group: "consentGate",
+    describe: "What a consent-gate unlocks, while the consent is not given: the rows stay in their place, blurred and faded, out of reach of the pointer, the keyboard and a screen reader (inert), under a pill that says what unlocks them. Unlocked a moment ago, they come clear with a short fade; still, where less motion is asked for.",
+    props: {
+      locked: { type: "boolean", default: false },
+      note: { type: "string", note: "the pill's words, when locked" },
+      body: { type: "html", required: true, note: "the rows it holds; markup the caller vouches for" },
+      opened: { type: "boolean", default: false, note: "unlocked a moment ago: the rows come clear with the fade" },
+    },
+    build: ({ locked, note, body, opened }, ui) =>
+      ui.h("div", { "data-locked": locked ? "" : null, "data-opened": opened && !locked ? "" : null },
+        locked ? ui.h("div", { class: "pill" }, ui.icon("lock"), note || "Agree above to set it up") : null,
+        ui.h("div", { class: "rows", inert: locked || null }, ui.raw(body || ""))),
+    states: ["rest"],
+    samples: [
+      { label: "locked", props: { locked: true, note: "Agree above to set it up", body: '<div data-ui="setting" data-kind="control"><span class="words"><span class="name-line"><span class="name">Model</span></span><span class="hint">gpt-4o-transcribe by default.</span></span><span class="control"><input class="input" value="gpt-4o-transcribe"></span></div>' } },
+      { label: "open", props: { body: '<div data-ui="setting" data-kind="control"><span class="words"><span class="name-line"><span class="name">Model</span></span><span class="hint">gpt-4o-transcribe by default.</span></span><span class="control"><input class="input" value="gpt-4o-transcribe"></span></div>' } },
+    ],
+  });
+
+  UI.define("setting", {
+    group: "setting",
+    describe: "One setting on a card: its name and what it does on the left, its control on the right, a hairline between two of them. A card of these is a page of Settings, a section of a side panel, or the settings a dialog asks for. A switch is the switch type, named by the row; the name reaches over the whole row, so a click anywhere on the row switches it. Any other control is the caller's markup; stacked puts it under the words, as wide as the card. A status line under the words says what the setting reports, and the explanation for geeks folds out under the row. A picker that would take a screen when always open (a face, an emoji, a coding agent) folds out under the row too, when its control (a button with data-act setting-fold) opens it.",
+    props: {
+      label: { type: "string", required: true, note: "the setting's name" },
+      for: { type: "string", note: "the id of the control the setting names: the name is its label, the Saved mark finds the row by it; a switch gets it as its own id" },
+      hint: { type: "node", note: "what it does, in a line or two: text, or ui.raw for words with <code>" },
+      kind: { type: "enum", values: ["control", "switch"], default: "control" },
+      control: { type: "node", note: "kind control: the control's markup (a select, a number-field, buttons, choices), as ui.raw" },
+      checked: { type: "boolean", default: false, note: "kind switch" },
+      disabled: { type: "boolean", default: false, note: "kind switch" },
+      name: { type: "string", note: "kind switch: the switch's name in its form, for a form read by names" },
+      stacked: { type: "boolean", default: false, note: "the control under the words, as wide as the card" },
+      lead: { type: "node", note: "a picture before the words (a vendor's mark), as ui.raw" },
+      status: { type: "node", note: "a line under the words: what the setting reports (when it was checked, how much is kept)" },
+      statusId: { type: "string", note: "the status line's id: the page rewrites it, and a reader hears the change; with it the line is there even while it is empty" },
+      statusTone: { type: "enum", values: ["plain", "warn"], default: "plain" },
+      geek: { type: "node", note: "the explanation for geeks, folded under the row until its glasses are pressed" },
+      fold: { type: "node", note: "a picker folded under the row until the control opens it (a button with data-act setting-fold), as ui.raw; the page closes it after a pick" },
+      id: { type: "string", note: "the row's own id, for a page that shows or hides it" },
+      hidden: { type: "boolean", default: false },
+      data: { type: "object", note: "data-* marks on the row, for the page's own handlers (a group of rows shown together)" },
+    },
+    build: ({ label, for: target, hint, kind, control, checked, disabled, name, stacked, lead, status, statusId, statusTone, geek, fold, id, hidden, data }, ui) => {
+      const hintId = hint && target ? `${target}-hint` : null;
+      const described = [hintId, status && statusId].filter(Boolean).join(" ") || undefined;
+      const ctl = kind === "switch"
+        ? ui.h("span", { class: "control" }, ui.build("switch", { id: target, name, checked, disabled, describedBy: described }))
+        : control ? ui.h("span", { class: "control" }, control) : null;
+      return ui.h("div", { id, hidden, "data-kind": kind, "data-stacked": stacked || null, "data-lead": lead ? "" : null, ...ui.dataAttrs(data) },
+        lead ? ui.h("span", { class: "lead" }, lead) : null,
+        ui.h("span", { class: "words" },
+          ui.h("span", { class: "name-line" },
+            target ? ui.h("label", { class: "name", for: target }, label) : ui.h("span", { class: "name" }, label),
+            geek ? ui.h("button", { type: "button", class: "geek-tip", title: "For geeks", "aria-expanded": "false", "aria-controls": target ? `${target}-geek` : null }, ui.icon("geek"), "for geeks") : null),
+          hint ? ui.h("span", { class: "hint", id: hintId }, hint) : null,
+          status || statusId ? ui.h("span", { class: "status", id: statusId, role: statusId ? "status" : null, "data-tone": statusTone === "plain" ? null : statusTone }, status || null) : null),
+        ctl,
+        geek ? ui.h("span", { class: "geek-text", id: target ? `${target}-geek` : null, hidden: true }, geek) : null,
+        fold ? ui.h("div", { class: "fold", id: target || id ? `${target || id}-fold` : null, hidden: true }, fold) : null);
+    },
+    states: ["rest", "hover"],
+    samples: [
+      { label: "a switch, on", props: { label: "Check for updates once a day", for: "sample-setting-updates", hint: "One request to the npm registry at start; nothing else leaves this computer.", kind: "switch", checked: true } },
+      { label: "a switch, off, with what it reports", props: { label: "Start viberoom when you sign in", for: "sample-setting-autostart", hint: "A quiet start, without a window.", kind: "switch", status: "Last automatic start: never." } },
+      { label: "a choice from a list", props: { label: "Turn taking in new rooms", for: "sample-setting-turns", hint: "Each room can change it in its own settings.", control: UI.raw('<select class="select" id="sample-setting-turns"><option>One vibemate at a time</option><option>All addressed vibemates at once</option></select>') } },
+      { label: "a number", props: { label: "Reply delay, seconds", for: "sample-setting-delay", hint: "Before each turn a vibemate waits up to this long.", control: UI.raw(UI.html("number-field", { id: "sample-setting-delay", value: "4", min: 0, max: 120, step: 0.5 })) } },
+      { label: "an action", props: { label: "Restart viberoom", hint: "Starts the room again with what is on disk.", control: UI.raw(UI.html("button", { label: "Restart…", kind: "secondary", size: "sm" })) } },
+      { label: "stacked, with the explanation for geeks", props: { label: "Command", for: "sample-setting-command", hint: "{file}, {line} and {column} are filled in.", stacked: true, control: UI.raw('<input type="text" class="input" id="sample-setting-command" placeholder="code --goto {file}:{line}">'), geek: "Quotes group arguments, as in a shell." } },
+      { label: "a picture and a warning", props: { label: "Codex", hint: "Found on this computer.", lead: UI.raw(UI.html("logo-tile", { letter: "C", title: "Codex" })), control: UI.raw(UI.html("badge", { label: "no login", tone: "thinking", dot: true })), status: "Not logged in: run codex login once.", statusTone: "warn" } },
+      { label: "a picker that folds out under it", props: { label: "Emoji", id: "sample-setting-emoji", hint: "A face for the room, next to its name.", control: UI.raw(`<span class="pick-now" aria-hidden="true">🦉</span>${UI.html("button", { label: "Change…", kind: "secondary", size: "sm", act: "setting-fold" })}`), fold: UI.raw('<p class="hint">The grid of emoji opens here, with its search.</p>') } },
     ],
   });
 })();

@@ -2,6 +2,7 @@
 
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { redact } from "./redact.js";
 import { forgetTranscriptBudgets, reserveTranscript, TRANSCRIPT_LIMITS } from "./transcript-budget.js";
 
 let sink: (line: string) => void = (line) => void process.stderr.write(line);
@@ -9,16 +10,17 @@ let sink: (line: string) => void = (line) => void process.stderr.write(line);
 export class Logger {
   constructor(private readonly scope: string) {}
 
+
   info(message: string): void {
-    sink(`[${timestamp()}] [${this.scope}] ${message}\n`);
+    sink(`[${timestamp()}] [${this.scope}] ${redact(message)}\n`);
   }
 
   warn(message: string): void {
-    sink(`[${timestamp()}] [${this.scope}] WARN ${message}\n`);
+    sink(`[${timestamp()}] [${this.scope}] WARN ${redact(message)}\n`);
   }
 
   error(message: string): void {
-    sink(`[${timestamp()}] [${this.scope}] ERROR ${message}\n`);
+    sink(`[${timestamp()}] [${this.scope}] ERROR ${redact(message)}\n`);
   }
 
   child(scope: string): Logger {

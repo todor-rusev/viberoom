@@ -1,8 +1,10 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, win32 } from "node:path";
+import { basename, extname, join, win32 } from "node:path";
+import { renameWithRetry } from "./atomic.js";
 import { findChromium, hubUrl } from "./launcher.js";
 import { ensureDataRoot } from "./data-root.js";
 
@@ -65,6 +67,17 @@ public static class LnkAumid {
 
 const psq = (s: string): string => s.replace(/'/g, "''");
 
+export interface PowershellResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+export function runPowershell(script: string): PowershellResult {
+  const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", timeout: 30_000, windowsHide: true });
+  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr || r.error?.message || "" };
+}
+
 export function shortcutScript(lnk: string, wscript: string, vbs: string, workingDir: string, ico: string | null, aumid: string | null = null): string {
   const lines = [
     "$ErrorActionPreference = 'Stop'",
@@ -100,17 +113,36 @@ export function aumidSyncScript(profileDir: string, shortcuts: string[]): string
   ].join("\n");
 }
 
+const roaming = (home: string, env: NodeJS.ProcessEnv): string => env.APPDATA ?? join(home, "AppData", "Roaming");
+
 export function windowsShortcutPaths(home: string, env: NodeJS.ProcessEnv, desktop: boolean): string[] {
-  const targets = [join(env.APPDATA ?? join(home, "AppData", "Roaming"), "Microsoft", "Windows", "Start Menu", "Programs", "viberoom.lnk")];
+  const targets = [join(roaming(home, env), "Microsoft", "Windows", "Start Menu", "Programs", "viberoom.lnk")];
   if (desktop) targets.push(join(home, "Desktop", "viberoom.lnk"));
   return targets;
 }
 
-export function desktopEntry(node: string, main: string, icon: string, workingDir: string): string {
-  return ["[Desktop Entry]", "Type=Application", "Name=viberoom", "Comment=Rooms for you and your coding agents", `Exec="${node}" "${main}" start`, `Path=${workingDir}`, `Icon=${icon}`, "Terminal=false", "StartupWMClass=viberoom", "Categories=Development;Chat;", ""].join("\n");
+export function windowsStartupShortcutPath(home: string, env: NodeJS.ProcessEnv): string {
+  return join(roaming(home, env), "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "viberoom.lnk");
 }
 
-export function macPlist(version: string): string {
+export function windowsLauncherShortcuts(home: string, env: NodeJS.ProcessEnv): string[] {
+  const pin = join(roaming(home, env), "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar", "viberoom.lnk");
+  return [...windowsShortcutPaths(home, env, true), pin, windowsStartupShortcutPath(home, env)];
+}
+
+export function desktopEntry(node: string, main: string, icon: string | null, workingDir: string): string {
+  return ["[Desktop Entry]", "Type=Application", "Name=viberoom", "Comment=Rooms for you and your coding agents", `Exec="${node}" "${main}" start`, `Path=${workingDir}`, ...(icon ? [`Icon=${icon}`] : []), "Terminal=false", "StartupWMClass=viberoom", "Categories=Development;Chat;", ""].join("\n");
+}
+
+export function entryIcon(entry: string): string | null {
+  return /^Icon=(.*)$/m.exec(entry)?.[1] ?? null;
+}
+
+export function withEntryIcon(entry: string, icon: string): string {
+  return entryIcon(entry) === null ? entry.replace(/^Terminal=/m, `Icon=${icon}\nTerminal=`) : entry.replace(/^Icon=.*$/m, `Icon=${icon}`);
+}
+
+export function macPlist(version: string, icon = "icon"): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -120,7 +152,7 @@ export function macPlist(version: string): string {
   <key>CFBundleVersion</key><string>${version}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>viberoom</string>
-  <key>CFBundleIconFile</key><string>icon</string>
+  <key>CFBundleIconFile</key><string>${icon}</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
 </dict></plist>
 `;
@@ -143,18 +175,14 @@ export function installShortcuts(o: ShortcutOptions): ShortcutResult {
     const vbs = join(launcherDir, "viberoom.vbs");
     writeFileSync(vbs, vbsLauncher(o.node, main, o.dataDir));
     result.files.push(vbs);
-    let ico: string | null = null;
-    if (existsSync(icoSrc)) {
-      ico = join(launcherDir, "viberoom.ico");
-      copyFileSync(icoSrc, ico);
-      result.files.push(ico);
-    }
+    const ico = placeLauncherIcon(icoSrc, launcherDir);
+    if (ico) result.files.push(ico);
     const wscript = join(env.SystemRoot ?? "C:\\Windows", "System32", "wscript.exe");
     const browser = o.browser === undefined ? findChromium(env, platform) : o.browser;
     const aumid = appUserModelId(browser, hubUrl(o.port), basename(join(o.dataDir, "browser")));
     for (const lnk of windowsShortcutPaths(home, env, o.desktop)) {
       mkdirSync(join(lnk, ".."), { recursive: true });
-      const r = spawnSync("powershell", ["-NoProfile", "-Command", shortcutScript(lnk, wscript, vbs, o.dataDir, ico, aumid)], { encoding: "utf8", windowsHide: true });
+      const r = runPowershell(shortcutScript(lnk, wscript, vbs, o.dataDir, ico, aumid));
       if (r.status === 0) result.files.push(lnk);
       else result.notes.push(`could not create ${lnk}: ${(r.stderr || "").split("\n")[0]}`);
     }
@@ -167,23 +195,18 @@ export function installShortcuts(o: ShortcutOptions): ShortcutResult {
     const app = join(home, "Applications", "viberoom.app");
     mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
     mkdirSync(join(app, "Contents", "Resources"), { recursive: true });
-    writeFileSync(join(app, "Contents", "Info.plist"), macPlist(o.version));
+    const icns = placeLauncherIcon(icnsSrc, join(app, "Contents", "Resources"));
+    writeFileSync(join(app, "Contents", "Info.plist"), macPlist(o.version, icns ? basename(icns) : undefined));
     const exe = join(app, "Contents", "MacOS", "viberoom");
     writeFileSync(exe, `#!/bin/sh\ncd "${o.dataDir}" 2>/dev/null\nexec "${o.node}" "${main}" start\n`);
     chmodSync(exe, 0o755);
-    if (existsSync(icnsSrc)) copyFileSync(icnsSrc, join(app, "Contents", "Resources", "icon.icns"));
     result.files.push(app);
     result.notes.push(`${app}: open it from Launchpad or Finder (drag it to the Dock if you like)`);
     return result;
   }
 
-  const iconDir = join(home, ".local", "share", "icons", "hicolor", "256x256", "apps");
-  mkdirSync(iconDir, { recursive: true });
-  const icon = join(iconDir, "viberoom.png");
-  if (existsSync(pngSrc)) {
-    copyFileSync(pngSrc, icon);
-    result.files.push(icon);
-  }
+  const icon = placeLauncherIcon(pngSrc, linuxIconDir(home));
+  if (icon) result.files.push(icon);
   const entry = desktopEntry(o.node, main, icon, o.dataDir);
   const appsDir = join(home, ".local", "share", "applications");
   mkdirSync(appsDir, { recursive: true });
@@ -201,3 +224,149 @@ export function installShortcuts(o: ShortcutOptions): ShortcutResult {
   result.notes.push("applications menu: viberoom" + (o.desktop ? "; Desktop: viberoom.desktop (some desktops ask once to trust it)" : ""));
   return result;
 }
+
+
+const WINDOWS_ICON = /^viberoom(-[0-9a-f]{12})?\.ico$/;
+const MAC_ICON = /^(icon|viberoom-[0-9a-f]{12})\.icns$/;
+const LINUX_ICON = /^viberoom(-[0-9a-f]{12})?\.png$/;
+
+const linuxIconDir = (home: string): string => join(home, ".local", "share", "icons", "hicolor", "256x256", "apps");
+
+export function launcherIconName(source: string): string {
+  return `viberoom-${createHash("sha256").update(readFileSync(source)).digest("hex").slice(0, 12)}${extname(source)}`;
+}
+
+export function placeLauncherIcon(source: string, dir: string): string | null {
+  if (!existsSync(source)) return null;
+  const copy = join(dir, launcherIconName(source));
+  if (existsSync(copy)) return copy;
+  mkdirSync(dir, { recursive: true });
+  const tmp = `${copy}.tmp`;
+  copyFileSync(source, tmp);
+  if (!renameWithRetry(tmp, copy)) {
+    copyFileSync(source, copy);
+    rmSync(tmp, { force: true });
+  }
+  return copy;
+}
+
+function otherCopies(dir: string, pattern: RegExp, keep: string): string[] {
+  return existsSync(dir) ? readdirSync(dir).filter((name) => pattern.test(name)).map((name) => join(dir, name)).filter((path) => path !== keep) : [];
+}
+
+function removeCopies(copies: string[]): string[] {
+  return copies.filter((copy) => {
+    try {
+      rmSync(copy, { force: true });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+export interface LauncherIconOptions {
+  root: string;
+  dataDir: string;
+  version: string;
+  platform?: NodeJS.Platform;
+  home?: string;
+  env?: NodeJS.ProcessEnv;
+  powershell?: (script: string) => PowershellResult;
+  notify?: (paths: string[]) => void;
+}
+
+export interface LauncherIconChange {
+  icon: string;
+  launchers: string[];
+  removed: string[];
+}
+
+export function refreshLauncherIcons(o: LauncherIconOptions): LauncherIconChange | null {
+  const platform = o.platform ?? process.platform;
+  const home = o.home ?? homedir();
+  const main = join(o.root, "dist", "main.js");
+  const same = platform === "win32" ? (s: string) => s.toLowerCase() : (s: string) => s;
+  const startsThisBuild = (launcher: string): boolean => existsSync(launcher) && same(readFileSync(launcher, "utf8")).includes(same(main));
+  if (platform === "win32") {
+    const launcherDir = join(o.dataDir, "launcher");
+    if (!startsThisBuild(join(launcherDir, "viberoom.vbs"))) return null;
+    const ico = placeLauncherIcon(join(o.root, "assets", "icon.ico"), launcherDir);
+    const older = ico ? otherCopies(launcherDir, WINDOWS_ICON, ico) : [];
+    if (!ico || !older.length) return null;
+    const shortcuts = windowsLauncherShortcuts(home, o.env ?? process.env).filter((path) => existsSync(path));
+    let launchers: string[] = [];
+    if (shortcuts.length) {
+      const r = (o.powershell ?? runPowershell)(repointShortcutsScript(shortcuts, launcherDir, ico));
+      if (r.status !== 0) throw new Error(`the shortcuts could not be pointed at ${ico}: ${r.stderr.trim().split(/\r?\n/)[0] || `PowerShell ended with ${r.status}`}`);
+      launchers = r.stdout.split(/\s+/).filter(Boolean).map(Number).map((i) => shortcuts[i]).filter(Boolean);
+    }
+    return { icon: ico, launchers, removed: removeCopies(older) };
+  }
+  if (platform === "darwin") {
+    const app = join(home, "Applications", "viberoom.app");
+    if (!startsThisBuild(join(app, "Contents", "MacOS", "viberoom"))) return null;
+    const resources = join(app, "Contents", "Resources");
+    const icns = placeLauncherIcon(join(o.root, "assets", "icon.icns"), resources);
+    if (!icns) return null;
+    const plist = join(app, "Contents", "Info.plist");
+    const named = existsSync(plist) && readFileSync(plist, "utf8").includes(`<key>CFBundleIconFile</key><string>${basename(icns)}</string>`);
+    const older = otherCopies(resources, MAC_ICON, icns);
+    if (named && !older.length) return null;
+    if (!named) {
+      writeFileSync(plist, macPlist(o.version, basename(icns)));
+      (o.notify ?? touch)([app]);
+    }
+    return { icon: icns, launchers: named ? [] : [app], removed: removeCopies(older) };
+  }
+  const entries = [join(home, ".local", "share", "applications", "viberoom.desktop"), join(home, "Desktop", "viberoom.desktop")];
+  const ours = entries.filter(startsThisBuild);
+  if (!ours.length) return null;
+  const icon = placeLauncherIcon(join(o.root, "assets", "icon-256.png"), linuxIconDir(home));
+  if (!icon) return null;
+  const launchers = ours.filter((entry) => entryIcon(readFileSync(entry, "utf8")) !== icon);
+  for (const entry of launchers) writeFileSync(entry, withEntryIcon(readFileSync(entry, "utf8"), icon));
+  const named = new Set(entries.filter((entry) => existsSync(entry)).map((entry) => entryIcon(readFileSync(entry, "utf8"))));
+  const removed = removeCopies(otherCopies(linuxIconDir(home), LINUX_ICON, icon).filter((copy) => !named.has(copy)));
+  return launchers.length || removed.length ? { icon, launchers, removed } : null;
+}
+
+function touch(paths: string[]): void {
+  const now = new Date();
+  for (const path of paths) utimesSync(path, now, now);
+}
+
+export function repointShortcutsScript(shortcuts: string[], launcherDir: string, ico: string): string {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "$shell = New-Object -ComObject WScript.Shell",
+    `$paths = @(${shortcuts.map((s) => `'${psq(s)}'`).join(", ")})`,
+    `$folder = '${psq(launcherDir.replace(/[\\/]+$/, ""))}\\'`,
+    `$icon = '${psq(ico)},0'`,
+    "$changed = @()",
+    "for ($i = 0; $i -lt $paths.Count; $i++) {",
+    "  $s = $shell.CreateShortcut($paths[$i])",
+    "  if ($s.Arguments.IndexOf($folder, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }",
+    "  if (-not [string]::Equals($s.IconLocation, $icon, [StringComparison]::OrdinalIgnoreCase)) { $s.IconLocation = $icon; $s.Save(); $changed += $i }",
+    "}",
+    "if (-not $changed.Count) { exit 0 }",
+    "Add-Type -TypeDefinition @'",
+    SHELL_NOTIFY_TYPE,
+    "'@",
+    "foreach ($i in $changed) { [ShellNotify]::Item($paths[$i]); $i }",
+    "[ShellNotify]::Icons()",
+  ].join("\n");
+}
+
+const SHELL_NOTIFY_TYPE = [
+  "using System;",
+  "using System.Runtime.InteropServices;",
+  "public static class ShellNotify {",
+  '  [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern void SHChangeNotify(int eventId, uint flags, string item1, IntPtr item2);',
+  '  [DllImport("shell32.dll")] static extern void SHChangeNotify(int eventId, uint flags, IntPtr item1, IntPtr item2);',
+  "  const int SHCNE_UPDATEITEM = 0x00002000, SHCNE_ASSOCCHANGED = 0x08000000;",
+  "  const uint SHCNF_IDLIST = 0x0000, SHCNF_PATHW = 0x0005;",
+  "  public static void Item(string path) { SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW, path, IntPtr.Zero); }",
+  "  public static void Icons() { SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero); }",
+  "}",
+].join("\n");

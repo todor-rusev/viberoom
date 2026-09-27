@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CarryBranch, CarryState, MergeInput } from "./carry-merge.js";
+import { messageAttachments } from "./files.js";
 
 export function writeCarryReview(dir: string, name: string, branch: CarryBranch, ours: MergeInput, incoming: MergeInput): { text: string; records: string } {
   const collect = (input: MergeInput, ids: string[]) => { const wanted = new Set(ids); return input.states.filter(s => wanted.has(s.message.id)); };
@@ -30,7 +31,7 @@ export function writeCarryReview(dir: string, name: string, branch: CarryBranch,
         yield `### #${m.seq} · ${String(m.fromName ?? m.from).replace(/[\r\n]/g, " ")} · ${new Date(m.ts).toISOString()}${row.deletedAt !== null ? " · removed" : ""}${m.pinned ? " · pinned" : ""}\n\n`;
         yield `${m.text}\n\n`;
         for (const quote of m.quotes ?? []) yield `Quote ${quote.n} from ${quote.fromName} (#${quote.seq}):\n\n${quote.text.split("\n").map(line => `> ${line}`).join("\n")}\n\n`;
-        for (const image of m.images ?? []) yield `Attachment: ${image.name} (${image.file}${image.sha256 ? `; SHA-256 ${image.sha256}` : ""})\n\n`;
+        for (const file of messageAttachments(m)) yield `Attachment: ${file.name} (${file.file}${file.sha256 ? `; SHA-256 ${file.sha256}` : ""})\n\n`;
         for (const ref of m.resourceRefs ?? []) yield `File reference: ${ref.source} → ${ref.file}${ref.sha256 ? `; SHA-256 ${ref.sha256}` : ""}\n\n`;
         if (m.toolCalls?.length) yield `Tool records: ${m.toolCalls.length}; see the full JSONL comparison.\n\n`;
         yield "---\n\n";

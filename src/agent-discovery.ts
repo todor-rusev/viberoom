@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { processCommand, runManaged, type AgentCommand } from "./managed-process.js";
 import { withRunAsNode, RUN_AS_NODE } from "./own-runtime.js";
 import { findOnPath } from "./open.js";
+import { machineEnvironment } from "./child-environment.js";
 
 export const AGENT_PACKAGES = {
   claude: ["@anthropic-ai/claude-code"], codex: ["@openai/codex"], gemini: ["@google/gemini-cli"],
@@ -65,10 +66,8 @@ export class AgentDiscovery {
   private dirs(path: string): string[] { try { return this.host.dirs(path); } catch { return []; } }
   private query(command: AgentCommand): string | null { try { return this.host.query(command) || null; } catch { return null; } }
   onPath(name: string): string | null {
-    const env = { ...this.host.env };
-    env.PATH = (env.PATH ?? env.Path ?? "").split(this.host.platform === "win32" ? ";" : ":")
-      .filter(dir => !/[\\/]node_modules[\\/]\.bin[\\/]?$/i.test(dir)).join(this.host.platform === "win32" ? ";" : ":");
-    if (this.host.platform === "win32" && this.p.extname(name)) return env.PATH.split(";").map(dir => this.p.join(dir, name)).find(file => this.host.exists(file)) ?? null;
+    const env = machineEnvironment(this.host.env, this.host.platform);
+    if (this.host.platform === "win32" && this.p.extname(name)) return (env.PATH ?? env.Path ?? "").split(";").map(dir => this.p.join(dir, name)).find(file => this.host.exists(file)) ?? null;
     return findOnPath(name, env, this.host.platform, this.host.exists);
   }
   npm(): string | null {

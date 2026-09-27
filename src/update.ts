@@ -12,6 +12,14 @@ export interface UpdateInfo {
   available: boolean;
   checkedAt: string | null;
   error: string | null;
+  stage?: "downloading" | "ready";
+  progress?: number;
+}
+
+export interface UpdateChannel {
+  state(): UpdateInfo;
+  check(): Promise<UpdateInfo>;
+  install(): Promise<void>;
 }
 
 interface CheckRecord {
@@ -77,6 +85,10 @@ export async function checkForUpdate(dataDir: string, current: string, options: 
   return toInfo(current, record);
 }
 
+export function hasSourceTree(moduleUrl: string): boolean {
+  return existsSync(fileURLToPath(new URL("../src", moduleUrl)));
+}
+
 export function runsFromSourceCheckout(mainModuleUrl: string): boolean {
   const path = decodeURIComponent(new URL(mainModuleUrl).pathname);
   return !/\/node_modules\/viberoom\//.test(path);
@@ -135,7 +147,7 @@ export function installCommandLine(version: string): string {
 export function installUpdate(version: string, cwd: string): Promise<{ ok: boolean; output: string }> {
   const line = installCommandLine(version);
   return new Promise((resolve) => {
-    const child = process.platform === "win32" ? spawn(line, { cwd, shell: true, windowsHide: true }) : spawn("npm", line.split(" ").slice(1), { cwd });
+    const child = process.platform === "win32" ? spawn(line, { cwd, shell: true, windowsHide: true }) : spawn("npm", line.split(" ").slice(1), { cwd, windowsHide: true });
     let output = "";
     const collect = (chunk: Buffer): void => {
       output = (output + chunk.toString()).slice(-4000);

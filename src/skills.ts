@@ -305,7 +305,7 @@ export const SET_UP_ON_MESSENGER: SkillDraft = {
     "1. Open BotFather in Telegram (https://t.me/BotFather) and press Start. Success: BotFather greets them. Stop and wait.",
     "2. Send /newbot. BotFather asks for a name: any name they like. Stop and wait.",
     "3. BotFather asks for a username ending in bot (for example viberoom_home_bot). Success: a reply with a long line that has a colon in it; that line is the key. Say why they make the bot themselves: the key never passes through anyone else's server. Stop and wait.",
-    "4. Call ask_for_bot_token: a card opens on the human's screen. Tell them to paste BotFather's whole reply into it; the key is taken out of it. Wait for the outcome. \"connected as @name\": go on. \"refused: <reason>\": say the smallest next thing to try, then wait. \"closed without a key\": ask whether to continue or stop, without pressing.",
+    "4. Call connect with system \"telegram\": a card opens on the human's screen. Tell them to paste BotFather's whole reply into it; the key is taken out of it. Wait for the outcome. \"connected as @name\": go on. \"refused: <reason>\": say the smallest next thing to try, then wait. \"closed without a key\": ask whether to continue or stop, without pressing.",
     "5. Suggest a neutral name that tells their computers apart (viberoom home, viberoom work), in one sentence, and where to set it (Settings → Channels → Rename…). Anyone who opens the bot sees this name. Stop and wait.",
     "6. Call show_pairing_link: the QR code appears on the human's screen. Tell them to scan it with the phone's camera (or open the link on the phone) and press Start; the account that does it is paired on every device signed in to it. Wait for the outcome: \"paired: <name>\" means done; \"expired\" means call it again.",
     "7. Done: ask them to send /rooms to the bot and /open a room; if the bot says a vibemate is offline, point at the Reconnect button under that message. Stop here; do not repeat the steps.",
@@ -321,7 +321,93 @@ export const SET_UP_ON_MESSENGER: SkillDraft = {
   draft: false,
 };
 
-export const BUILTIN_SKILLS: SkillDraft[] = [SKILL_WRITER, ROOM_DESIGNER, LOOK_DESIGNER, ROOM_LIBRARIAN, SET_UP_ON_MESSENGER];
+export const SET_UP_LONG_TERM_MEMORY: SkillDraft = {
+  name: "set-up-long-term-memory",
+  description:
+    "Walk the human through turning on the long-term memory: a Zep Cloud account, its key on a card (you never see it), the sieve and its small model, the consent, the rooms that remember. Use when the human asks to set up, enable or configure the long-term memory, or types /set-up-long-term-memory.",
+  argumentHint: "[zep | sieve | consent | rooms]",
+  body: [
+    DEFERRED_OPERATIONS,
+    "",
+    "You are an experienced friend at the human's side, not a brochure. One action per message, at most a few sentences, then stop and wait for the human's word; never list the steps ahead. Longer explanations only when the human asks. Keys never appear in the chat: each goes through a card on their screen — the card shows a vibemate that has turned away and shut its eyes, because that is literally what happens — and you learn only the outcome, as a room row that wakes you. Before every card, warn first: \"I am about to open a card for the key — ready?\" Open it only on their word.",
+    "",
+    "0. One line on what they are turning on: rooms that opt in feed one long-term memory; what was said becomes facts vibemates recall later, with the time each held true. Offer the geek path once: everything can also be set by hand in Settings → Long-term memory. Ask which they prefer, then stop.",
+    "1. Zep Cloud is the memory provider: a hosted temporal knowledge graph with a free tier. Send them to https://app.getzep.com to sign up (or sign in) and create a project. Success: they see the project's dashboard. If what they see differs from what you expect, ask them to describe the screen and navigate from their words — the dashboard changes; their eyes are current, your memory may not be.",
+    "2. The project key: in the project's settings the dashboard has an API Keys page; they create a key and copy it. Do not let them paste it in the chat — if they do, tell them to revoke that key in the same page and make a new one, and say why in one line. Warn, then call connect with system \"zep\": the card opens, they paste the key there. Entering it also chooses Zep as the provider, and the key is proven against Zep before the card closes. Wait for the outcome row. \"refused\": say the smallest next thing to try (usually: a whole key, freshly copied). \"closed without a key\": ask whether to continue or stop, without pressing.",
+    "3. The sieve, when the moment comes and in one breath: it is the small model that reads the room's messages and forwards only a condensed episode of what matters — it decides what is worth remembering, so it must be cheap and need not be clever. A strong model here is wasted money. Suggest gpt-5.6-luna at https://api.openai.com/v1 (an OpenAI account and a key from https://platform.openai.com/api-keys), or any OpenAI-compatible endpoint they already have — a local Ollama needs no key at all. Stop and wait for their choice.",
+    "4. Warn, then call connect with system \"sieve\" and the baseUrl and model they chose: both are shown on the card and saved with the key; the sieve switches to its model mode. Wait for the outcome row.",
+    "5. Consent is theirs alone: you open the card, only their press gives it. Warn, then call ask_consent with feature \"memory\": the card shows the words that name exactly what leaves this computer and through which sieve — tell them to read those before they press Turn on. Changing the data path later voids the consent, and the card is asked again. Wait for the outcome row: \"is on\" goes on; \"not on yet: …\" says what is still missing; \"not now\" is their answer, respect it.",
+    "6. Rooms: nothing is remembered until a room opts in. In each room they choose: the room's gear → \"This room remembers\". Suggest starting with one room, not all.",
+    "7. Done: in Settings → Long-term memory the Provider row's status should say On, with the month's credits; after the next few messages in a remembering room, facts appear. Point them at the ceiling field (credits per month) as the spending brake. Stop here; do not repeat the steps.",
+    "",
+    "When something goes wrong, say only the smallest next thing to try: the key is refused → copy it whole and fresh from the dashboard; the status says Paused → read its reason aloud and follow it; the sieve endpoint refuses → check the endpoint URL ends with /v1 and the key belongs to it; no credits appear → the room's own \"This room remembers\" switch is off. For anything else, Settings → Long-term memory shows the live status line.",
+    "",
+    "Start at: $ARGUMENTS (one of zep, sieve, consent, rooms; nothing means from step 0).",
+  ].join("\n"),
+  userInvocable: true,
+  agentInvocable: true,
+  author: BUILTIN_AUTHOR,
+  reviewed: true,
+  draft: false,
+};
+
+export const SET_UP_VOICE: SkillDraft = {
+  name: "set-up-voice",
+  description:
+    "Walk the human through turning on the voice: a speech provider (OpenAI, Groq or their own server), its key on a card (you never see it), the consent on a card, reading aloud. Use when the human asks to set up the voice, the microphone, voice messages or reading aloud, or types /set-up-voice.",
+  argumentHint: "[provider | key | consent | reading]",
+  body: [
+    DEFERRED_OPERATIONS,
+    "",
+    "You are an experienced friend at the human's side, not a brochure. One action per message, at most a few sentences, then stop and wait for the human's word; never list the steps ahead. The key never appears in the chat: it goes through a card on their screen, and you learn only the outcome, as a room row that wakes you. Before every card, warn first: \"I am about to open a card — ready?\" Open it only on their word.",
+    "",
+    "0. One line on what they are turning on: the microphone in the message field makes their words into text, Send while it records sends a voice message, and voice notes from the phone come with their words; the replies can be read aloud too. Offer the geek path once: everything can also be set by hand in Settings → Voice. Ask which they prefer, then stop.",
+    "1. The provider, in three short lines, then their choice: OpenAI — the most exact, paid by the minute (a minute costs about a cent); Groq — Whisper on Groq's servers, fast, with a free plan; their own server — a Whisper server on this computer keeps their voice here, and they need its address and model name. Stop and wait.",
+    "2. The key. OpenAI: https://platform.openai.com/api-keys → Create new secret key; the account needs a little credit under Billing. Groq: https://console.groq.com/keys → Create API Key. Their own server: its address and model, and a key only if it asks for one. Do not let them paste a key in the chat — if they do, tell them to revoke it where they made it and make a new one, and say why in one line. Ask which language they speak (bg, en…). Warn, then call connect with system \"voice\", the provider (openai, groq or compatible, with baseUrl and model for their own server) and the language. The key is proven against the provider before the card closes. Wait for the outcome row; \"refused\": the smallest next thing to try (a whole key, freshly copied; credit on OpenAI).",
+    "3. The consent is theirs alone. Warn, then call ask_consent with feature \"voice\": the card names where each recording goes; tell them to read it before they press Turn on. Wait for the outcome row: \"is on\" goes on; \"not now\" is their answer.",
+    "4. Reading aloud, if they want it, in two lines: this computer's own voices are free and send nothing anywhere, but need a voice in their language installed in the system; the provider sounds more natural and sends the replies' text to it. On their choice, warn, then call ask_consent with feature \"reading\" and reader \"system\" or \"provider\". Groq and their own server read with a model and a voice of the provider's own naming, which the human types in Settings → Voice, under Replies read aloud; the outcome row says when they are still missing. Which replies are read by themselves is chosen there too.",
+    "5. Done: in a room, the microphone beside Send — press, speak, press again: the words land in the field; Send while it records sends a voice message. Stop here; do not repeat the steps.",
+    "",
+    "When something goes wrong, say only the smallest next thing to try: the key is refused → a whole key, freshly copied, and on OpenAI some credit under Billing; the microphone does not open → allow it in the browser's or the system's privacy settings; the words are wrong → name their language in Settings → Voice; this computer has no voice in their language → add one in the system's language settings, or let the provider read. For anything else, Settings → Voice shows what is missing.",
+    "",
+    "Start at: $ARGUMENTS (one of provider, key, consent, reading; nothing means from step 0).",
+  ].join("\n"),
+  userInvocable: true,
+  agentInvocable: true,
+  author: BUILTIN_AUTHOR,
+  reviewed: true,
+  draft: false,
+};
+
+export const ADD_CONNECTION: SkillDraft = {
+  name: "add-connection",
+  description:
+    "Connect a system that is not in the Connections catalogue: find its MCP server (a remote address or a local command) in the system's own docs, check it, and bring the human the card; it shows in Connections under Your own. Use when the human asks to connect or add a system, tool or service.",
+  argumentHint: "[system name]",
+  body: [
+    DEFERRED_OPERATIONS,
+    "",
+    "You do the work; the human decides with one press. Keep each message short and say what happens next.",
+    "",
+    "1. Look first. tool_search the system's name: a catalogue system or a server the human already added is listed there, with its state. If it is, use connect with its system id, as for any catalogue system, and stop here.",
+    "2. Find its MCP server in the system's own documentation: a page on the system's own domain, or its official repository. Never take it from a directory, a forum, a blog or a search snippet alone: a lookalike server can read what the vibemates send it and tell them what to do, and a lookalike package runs on the human's computer. If you cannot browse, ask the human for the page and read it with them.",
+    "3. Say plainly which kind it is. A remote server is an HTTPS address, usually ending in /mcp (or /sse for older servers), on the system's own domain or one its docs name; if it needs a sign-in, that opens in the human's browser. A local server is a command the docs give to start it (npx, uvx, docker or a program), often with keys in environment variables. When the docs offer both, prefer the remote one: nothing runs on the computer and the sign-in is the system's own. A remote server that asks for an API key in a header instead of a sign-in cannot be added yet; say so and stop.",
+    "4. Tell the human, in two or three sentences: what the system is, the exact address or command and the page you found it on, and that every tool of a server outside the catalogue asks them before it runs, reading too. For a local server add that the program runs on their computer with their rights, and name the keys it needs and where they get them. Ask whether to put the card up. Stop and wait for their word.",
+    "5. On their word, call connect. A remote server: url (the address) and name (the system's own name, as the human would say it). A local server: command (the program, such as npx), args (its arguments exactly as the docs give them, one string each), env (the names of the variables for its keys) and name. A key's value never goes into args, env or the conversation: the card has a field for each name, and the value goes from there into the vault. Nothing is added until they press the card. Wait for the outcome row: connected with its tools, not now, or failed.",
+    "6. Connected: tool_search the new id for its tools, and say in one line what it can do. Every call asks the human first, so offer the first useful thing and ask before you call it.",
+    "",
+    "When it fails, say only the smallest next thing: the address is refused as not HTTPS or not public → it is a private server, which connect does not reach; the sign-in says viberoom cannot register → the system wants an application registered with it by viberoom, which the human cannot do from here, so say it waits for that; no answer from the address → check it against the docs page again, character by character; a local program is not installed → say what installs it (Node.js for npx, uv for uvx, Docker) and stop; a local server stopped at the start → its words are in the outcome, usually a missing or wrong key; the human closed the card → ask whether they want it at all, without pressing. The human can also add a server by hand: Connections → Your own → Add a connection….",
+    "",
+    "The system: $ARGUMENTS",
+  ].join("\n"),
+  userInvocable: true,
+  agentInvocable: true,
+  author: BUILTIN_AUTHOR,
+  reviewed: true,
+  draft: false,
+};
+
+export const BUILTIN_SKILLS: SkillDraft[] = [SKILL_WRITER, ROOM_DESIGNER, LOOK_DESIGNER, ROOM_LIBRARIAN, SET_UP_ON_MESSENGER, SET_UP_LONG_TERM_MEMORY, SET_UP_VOICE, ADD_CONNECTION];
 
 export function isBuiltinSkill(name: string): boolean {
   const lower = name.trim().toLowerCase();

@@ -3,6 +3,7 @@
 import { AGENT_SETTINGS, DEFAULT_ROOM_SETTINGS, NAME_PATTERN, ROOM_SETTINGS_SPEC, SILENT_MARKER, REQUEST_BRIEF_MARKER, buildInstructionPreview, coerceSetting, type Persona, type RoomSettings, type RosterEntry, type SkillsForPrompt } from "./persona.js";
 import type { LintIssue, LintResult } from "./skills.js";
 import type { TemplateVibemate } from "./templates.js";
+import { cleanFace } from "./faces.js";
 
 export const TAGLINE_MAX = 80;
 export const ROLE_MAX = 8000;
@@ -76,7 +77,10 @@ export function lintRoomDesign(design: RoomDesign, context: RoomDesignContext): 
       error("invalid-setting", e instanceof Error ? e.message : String(e));
     }
   }
-  if (design.emoji !== undefined && !settings.emoji) settings.emoji = String(design.emoji).trim().slice(0, AVATAR_MAX);
+  if (design.emoji !== undefined && !settings.emoji) {
+    try { settings.emoji = cleanFace(String(design.emoji), "room"); }
+    catch (e) { error("unknown-picture", e instanceof Error ? e.message : String(e)); }
+  }
 
   const vibemates = design.vibemates ?? [];
   if (context.kind === "template") {
@@ -105,7 +109,10 @@ export function lintRoomDesign(design: RoomDesign, context: RoomDesignContext): 
     if ((v?.role ?? "").length > roleMax) error("role-too-long", `${who}: the role is ${v.role!.length} characters; the limit is ${roleMax} (the briefTextLimit setting)`);
     else if (soft && !(v?.role ?? "").trim()) warn("vibemate-no-role", `${who} has no role: without one it is the agent's default self, not a character`);
     else if (soft && (v.role ?? "").length > ROLE_SOFT_MAX) warn("role-restates-rules", `${who}: a role of ${v.role!.length} characters is probably restating the protocol; a role says who this one is and which way it leans, the rules say how they work together`);
-    if ((v?.avatar ?? "").length > AVATAR_MAX) error("avatar-too-long", `${who}: the avatar is one emoji`);
+    const avatar = v?.avatar ?? "";
+    if (avatar.startsWith("pic:")) {
+      try { cleanFace(avatar, "vibemate"); } catch (e) { error("unknown-picture", `${who}: ${e instanceof Error ? e.message : String(e)}`); }
+    } else if (avatar.length > AVATAR_MAX) error("avatar-too-long", `${who}: the avatar is one emoji, or one of viberoom's pictures as pic:<id>`);
     if (context.knownSkills) {
       for (const skill of v?.skills ?? []) if (!context.knownSkills.includes(skill)) error("unknown-skill", `${who}: no skill named "${skill}" in the library`);
     }

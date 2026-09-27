@@ -1,5 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import type { TemplateVibemate } from "./templates.js";
+import { cleanFace } from "./faces.js";
 
 export const NEW_ROOM_VIBEMATE_MAX = 6;
 export const NEW_ROOM_NAME_MAX = 40;
@@ -60,7 +61,7 @@ export function planNewRoom(request: Record<string, unknown>, context: NewRoomCo
       name: vibeName,
       ...(one?.tagline !== undefined ? { tagline: text(one.tagline, 80) } : {}),
       ...(one?.role !== undefined ? { role: text(one.role, 8000) } : {}),
-      ...(one?.avatar !== undefined ? { avatar: text(one.avatar, 8) } : {}),
+      ...(one?.avatar !== undefined ? { avatar: cleanFace(typeof one.avatar === "string" ? one.avatar : "", "vibemate") } : {}),
       ...(one?.agentType !== undefined ? { agentType: text(one.agentType, 40) } : {}),
       ...(one?.model !== undefined ? { model: text(one.model, 60) } : {}),
       ...(one?.effort !== undefined ? { effort: text(one.effort, 20) } : {}),

@@ -4,12 +4,41 @@ import { parseMessageCheckArgs } from "./message-check.js";
 import { parseAgentSearchArgs } from "./agent-history.js";
 import { TOOL_NAME } from "./tool-spec.js";
 export interface McpResult { content: { type: "text"; text: string }[]; isError?: boolean; structuredContent?: Record<string, unknown> }
-export type HubRequest = (path: string, init?: RequestInit) => Promise<{ ok: boolean; status: number; body: Record<string, unknown> }>;
+export type HubRequest = (path: string, init?: RequestInit, options?: { timeoutMs?: number }) => Promise<{ ok: boolean; status: number; body: Record<string, unknown> }>;
 export class OperationArgumentError extends Error {}
 export class OperationUnconfirmedError extends Error {}
 export function jsonResult(value: unknown, isError = false): McpResult {
   return { content: [{ type: "text", text: JSON.stringify(value) }], ...(isError ? { isError: true } : {}) };
 }
+export const CONNECTION_TOOL = /^[a-z][a-z0-9-]{1,31}\.[^\s.][^\s]{0,127}$/;
+const CONNECTION_CALL_MS = 150_000;
+const CONNECTION_ROWS_MS = 20_000;
+
+export async function connectionRows(TOKEN: string, hub: HubRequest): Promise<{ name: string; summary: string; direct: boolean }[]> {
+  let res: Awaited<ReturnType<HubRequest>>;
+  try { res = await hub(`/api/mcp/connections?token=${encodeURIComponent(TOKEN)}`, undefined, { timeoutMs: CONNECTION_ROWS_MS }); }
+  catch { return []; }
+  if (!res.ok || !Array.isArray(res.body.rows)) return [];
+  return (res.body.rows as unknown[]).filter((row): row is { name: string; summary: string; direct: boolean } =>
+    !!row && typeof (row as { name?: unknown }).name === "string" && typeof (row as { summary?: unknown }).summary === "string").map((row) => ({ name: row.name, summary: row.summary, direct: false }));
+}
+
+export async function describeConnection(name: string, TOKEN: string, hub: HubRequest): Promise<Record<string, unknown> | null> {
+  let res: Awaited<ReturnType<HubRequest>>;
+  try { res = await hub(`/api/mcp/connections/describe?token=${encodeURIComponent(TOKEN)}&name=${encodeURIComponent(name)}`, undefined, { timeoutMs: CONNECTION_ROWS_MS }); }
+  catch { return null; }
+  return res.ok && res.body.definition && typeof res.body.definition === "object" ? res.body.definition as Record<string, unknown> : null;
+}
+
+export async function callConnection(name: string, args: Record<string, unknown>, TOKEN: string, hub: HubRequest): Promise<McpResult> {
+  const res = await hub("/api/mcp/connections/call", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN, name, arguments: args }),
+  }, { timeoutMs: CONNECTION_CALL_MS });
+  if (res.status === 0 || res.body.code === "unconfirmed_result") throw new OperationUnconfirmedError();
+  if (!res.ok) return { content: [{ type: "text", text: typeof res.body.error === "string" ? res.body.error : "the connection could not run the tool" }], isError: true };
+  return jsonResult(res.body, res.body.isError === true);
+}
+
 export async function executeOperation(name: string, args: Record<string, unknown>, TOKEN: string, hub: HubRequest): Promise<McpResult> {
   const errorResult = (fallback: string, res: { status: number; body: Record<string, unknown> }): McpResult => {
     if (res.status === 0 || res.body.code === "unconfirmed_result") throw new OperationUnconfirmedError();
@@ -50,6 +79,11 @@ export async function executeOperation(name: string, args: Record<string, unknow
     const res = await hub("/api/mcp/memory", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...args, token: TOKEN }) });
     if (!res.ok) return errorResult("memory could not be maintained", res);
     return { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] };
+  }
+  if (name === "remember") {
+    const res = await hub("/api/mcp/remember", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN, text: args.text }) });
+    if (!res.ok) return errorResult("the note could not be queued for the long-term memory", res);
+    return { content: [{ type: "text", text: String(res.body.message ?? "queued") }] };
   }
   if (name === "describe_room") {
     const res = await hub(`/api/mcp/room?token=${encodeURIComponent(TOKEN)}`);
@@ -92,9 +126,14 @@ export async function executeOperation(name: string, args: Record<string, unknow
     if (!res.ok) return errorResult("the room could not be proposed", res);
     return { content: [{ type: "text", text: String(res.body.message ?? "proposed") }] };
   }
-  if (name === "ask_for_bot_token") {
-    const res = await hub("/api/mcp/ask-bot-token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN }) });
-    if (!res.ok) return errorResult("the key card could not be opened", res);
+  if (name === "connect") {
+    const res = await hub("/api/mcp/connect", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN, system: args.system, url: args.url, command: args.command, args: args.args, env: args.env, name: args.name, baseUrl: args.baseUrl, model: args.model, provider: args.provider, language: args.language }) });
+    if (!res.ok) return errorResult("the connection card could not be opened", res);
+    return { content: [{ type: "text", text: String(res.body.message ?? "asked") }] };
+  }
+  if (name === "ask_consent") {
+    const res = await hub("/api/mcp/consent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN, feature: args.feature, reader: args.reader }) });
+    if (!res.ok) return errorResult("the consent card could not be opened", res);
     return { content: [{ type: "text", text: String(res.body.message ?? "asked") }] };
   }
   if (name === "show_pairing_link") {
@@ -135,6 +174,7 @@ export async function executeOperation(name: string, args: Record<string, unknow
     catch { throw new OperationArgumentError(); }
     const query = new URLSearchParams({ token: TOKEN, q: parsed.query, rooms: parsed.rooms, kinds: parsed.kinds, limit: String(parsed.limit) });
     if (parsed.author !== undefined) query.set("author", parsed.author);
+    if (parsed.only !== undefined) query.set("only", parsed.only);
     const res = await hub(`/api/mcp/search?${query}`);
     if (!res.ok) return errorResult("the history could not be searched", res);
     return { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] };
@@ -158,8 +198,16 @@ export async function executeOperation(name: string, args: Record<string, unknow
     const query = new URLSearchParams({ token: TOKEN, seq: String(parsed.seq) });
     if (parsed.around > 0) query.set("around", String(parsed.around));
     if (parsed.room !== undefined) query.set("room", parsed.room);
+    if (parsed.copy !== undefined) query.set("copy", parsed.copy);
     const res = await hub(`/api/mcp/message?${query}`);
     if (!res.ok) return errorResult("the message could not be read", res);
+    return { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] };
+  }
+  if (name === "transcribe_audio") {
+    const ref = typeof args.ref === "string" ? args.ref : undefined, path = typeof args.path === "string" ? args.path : undefined;
+    if (!ref === !path) throw new OperationArgumentError();
+    const res = await hub("/api/mcp/transcribe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN, ref, path, language: args.language }) });
+    if (!res.ok) return errorResult("the sound could not be heard", res);
     return { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] };
   }
   if (name === "fix_diagram") {

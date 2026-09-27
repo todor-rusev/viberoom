@@ -1,4 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
+import { ATTACHMENT_KINDS, type AttachmentField } from "./files.js";
+
 export interface BodyDelivery {
   version: number;
   readers: Record<string, { epoch: string; version: number }>;
@@ -6,12 +8,12 @@ export interface BodyDelivery {
 export interface BodyEdit {
   id: string; fromVersion: number; version: number; append: boolean; complete: boolean;
 }
-export interface BodyRow {
+export type BodyRow = {
   id: string; from: string; kind: string;
   bodyDelivery?: BodyDelivery;
   bodyEdit?: BodyEdit;
-  images?: unknown[]; quotes?: unknown[];
-}
+  quotes?: unknown[];
+} & { [F in AttachmentField]?: unknown[] };
 export interface BodyRef { id: string; version?: number }
 
 export function registerBodyReader(row: BodyRow, id: string, epoch: string): boolean {
@@ -45,7 +47,7 @@ export function supplyBodies(rows: BodyRow[], refs: BodyRef[], id: string, epoch
     const version = edit ? edit.version : ref.version;
     if (!version || version > delivery.version || prior >= version) continue;
     if (edit && (!edit.complete || (edit.append && prior !== edit.fromVersion)
-      || (!edit.append && (row.images?.length || row.quotes?.length) && !prior))) continue;
+      || (!edit.append && (ATTACHMENT_KINDS.some((kind) => row[kind.field]?.length) || row.quotes?.length) && !prior))) continue;
     row.bodyDelivery = { ...delivery, readers: { ...delivery.readers, [id]: { epoch, version } } };
     changed.add(row);
   }

@@ -7,14 +7,16 @@ import { existsSync, readFileSync, realpathSync, statSync, type Dirent } from "n
 import { readdir } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { saveDocument } from "../files.js";
+import { AUDIO_KIND, saveDocument, takesType, type AudioAttachment, type AudioInput, type HeardSound, type ImageInput } from "../files.js";
+import { AUDIO_MARKER_PATTERN, VIDEO_MARKER_PATTERN } from "../persona.js";
 import { splitLocation } from "../open.js";
 import type { ChatMessage, ExternalReceipt, Participant, ParticipantStatus, PendingPermission, QuietTurn, ReconnectOptions, Room, RoomEvent } from "../room.js";
 import { spokenText } from "../room.js";
 import { ZERO_WIDTH, authorPrefix, defuseMentions, markdownToTelegramHtml } from "./format.js";
 import { PairingDesk, telegramPairUrl, type PairLink } from "./pairing.js";
 import { ChannelsStore, pathInside, type FileRoot, type Pairing } from "./state.js";
-import { acceptKey, chatKey, type AdapterStatus, type Button, type ChannelAdapter, type ChatRef, type InboundMessage, type InboundResult, type Platform } from "./types.js";
+import { acceptKey, chatKey, type AdapterStatus, type Button, type ChannelAdapter, type ChatRef, type InboundFile, type InboundMessage, type InboundResult, type Platform } from "./types.js";
+import { faceText } from "../faces.js";
 
 export interface RouterHost {
   rooms(): Room[];
@@ -25,6 +27,7 @@ export interface RouterHost {
   onRoomEvent(handler: (roomId: string, event: RoomEvent) => void): void;
   channelsChanged(): void;
   paired?(platform: Platform, name: string): void;
+  hear?(room: Room, sounds: AudioInput[]): Promise<HeardSound[]>;
   restart?: {
     writingNow(): string[];
     request(input: { askedBy: string; from: Platform; when: "now" | "idle" }): { waitingFor: string[] };
@@ -169,6 +172,10 @@ export function escapeHtml(text: string): string {
 
 const adapterKey = (adapter: ChannelAdapter): string => `${adapter.platform}:${adapter.account}`;
 const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+function fileNoun(file: InboundFile): string {
+  return file.kind === "sound" ? (file.voice ? "voice message" : "sound") : file.kind;
+}
 
 export class ChannelRouter {
   private readonly options: Required<RouterOptions>;
@@ -402,10 +409,12 @@ export class ChannelRouter {
     if (m.replyToUnread) this.log.info(`${adapter.platform}: a reply to one of my own messages names nobody: ${m.replyToUnread}`);
     const addressed = m.replyToAuthor ? room.findByName(m.replyToAuthor) : undefined;
     if (addressed?.kind === "agent" && addressed.status !== "left" && !mentions(spokenText(text), addressed.name)) text = `@${addressed.name} ${text}`;
-    let images: { name?: string; mimeType: string; data: string }[] = [];
+    let images: ImageInput[] = [];
+    let sounds: AudioInput[] = [];
+    const what = m.file ? fileNoun(m.file) : "message";
     if (m.file) {
       if (m.file.size !== undefined && m.file.size > adapter.limits.download) {
-        await this.reply(adapter, m.ref, `That ${m.file.kind} is larger than ${Math.round(adapter.limits.download / 1024 / 1024)} MB, which is more than can be fetched from here; your words${m.text.trim() ? " went through without it" : " were not sent"}. Use viberoom on your computer for a file that big.`);
+        await this.reply(adapter, m.ref, `That ${what} is larger than ${Math.round(adapter.limits.download / 1024 / 1024)} MB, which is more than can be fetched from here; your words${m.text.trim() ? " went through without it" : " were not sent"}. Use viberoom on your computer for a file that big.`);
         if (!m.text.trim()) return "done";
       } else {
         let fetched: { data: Buffer; name?: string; mime?: string };
@@ -413,22 +422,26 @@ export class ChannelRouter {
           fetched = await adapter.downloadFile(m.file);
         } catch (error) {
           this.log.warn(`file from ${key} not fetched: ${describe(error)}`);
-          await this.reply(adapter, m.ref, `The ${m.file.kind} could not be fetched from ${PLATFORM_NAMES[m.ref.platform]} (${describe(error)}); your words${m.text.trim() ? " went through without it" : " were not sent"}. Try sending it again.`);
+          await this.reply(adapter, m.ref, `The ${what} could not be fetched from ${PLATFORM_NAMES[m.ref.platform]} (${describe(error)}); your words${m.text.trim() ? " went through without it" : " were not sent"}. Try sending it again.`);
           if (!m.text.trim()) return "done";
           fetched = { data: Buffer.alloc(0) };
         }
         if (fetched.data.length) {
+          const mimeType = fetched.mime ?? m.file.mime ?? "";
           if (m.file.kind === "photo") images = [{ name: fetched.name, mimeType: fetched.mime ?? "image/jpeg", data: fetched.data.toString("base64") }];
-          else {
+          else if (m.file.kind === "sound" && takesType(AUDIO_KIND, mimeType)) {
+            sounds = [{ name: m.file.voice ? "voice message" : fetched.name ?? m.file.name, mimeType, data: fetched.data.toString("base64"), ...(m.file.seconds ? { seconds: m.file.seconds } : {}) }];
+          } else {
             const saved = saveDocument(room.filesDir(), fetched.name ?? m.file.name, fetched.data);
             text = `${text.trim()}${text.trim() ? "\n" : ""}📎 ${basename(saved.path)} — ${saved.path}`;
           }
         }
       }
     } else if (!m.text.trim() && m.attachment) {
-      await this.reply(adapter, m.ref, "Only text, photos and files reach the room; that kind of message does not.");
+      await this.reply(adapter, m.ref, "Only text, photos, voice messages and files reach the room; that kind of message does not.");
       return "done";
     }
+    const heard = sounds.length ? await this.hear(room, sounds) : [];
     let receipt: ExternalReceipt;
     try {
       receipt = room.acceptExternalMessage({
@@ -436,6 +449,7 @@ export class ChannelRouter {
         via: { platform: m.ref.platform, account: m.ref.account, chatId: m.ref.chatId, threadId: m.ref.threadId, updateId: m.updateId, messageId: m.messageId, senderId: m.senderId },
         text,
         ...(images.length ? { images } : {}),
+        ...(heard.length ? { audio: heard } : {}),
       });
     } catch (error) {
       await this.pause(adapter, m.ref, `the room could not take the message: ${describe(error)}`, "unavailable");
@@ -455,10 +469,22 @@ export class ChannelRouter {
       return "pause";
     }
     if (!receipt.repeated) {
+      const wordless = heard.find((sound) => !sound.words?.trim());
+      if (wordless) await this.reply(adapter, m.ref, wordless.unheard ? `Your ${what} is in the room, but the vibemates get no words of it. ${wordless.unheard}` : `Your ${what} is in the room, but no words were heard in it.`);
       const hint = this.offlineHint(adapter, key, room, "Your message is in the room, but");
       if (hint) await this.reply(adapter, m.ref, hint.text, false, hint.buttons);
     }
     return "done";
+  }
+
+  private async hear(room: Room, sounds: AudioInput[]): Promise<HeardSound[]> {
+    if (!this.host.hear) return sounds.map((sound) => ({ ...sound, unheard: "This viberoom does not hear sounds." }));
+    try {
+      return await this.host.hear(room, sounds);
+    } catch (error) {
+      this.log.warn(`sounds for room ${room.id} not heard: ${describe(error)}`);
+      return sounds.map((sound) => ({ ...sound, unheard: describe(error) }));
+    }
   }
 
   private detach(key: string, room: Room | string, why: "switched-off" | "removed"): void {
@@ -1569,7 +1595,7 @@ export class ChannelRouter {
     if (room && message.images?.length) {
       for (const image of message.images) {
         try {
-          const data = readFileSync(room.imagePath(image));
+          const data = readFileSync(room.attachmentPath(image));
           await adapter.sendFile(chatId, { name: image.name, data, mime: image.mimeType }, { photo: data.length <= adapter.limits.photo, silent: true });
         } catch (error) {
           this.log.warn(`picture ${image.file} not sent to ${key}: ${describe(error)}`);
@@ -1657,7 +1683,7 @@ const HELP = defuseMentions([
   "/help — this",
   "Buttons under the bot's messages do what they say: open a room, show earlier messages, stop a vibemate, reconnect them.",
   "While a vibemate writes, its reply grows here; Stop under it stops that reply. The finished reply comes as its own message.",
-  "A photo or a file you send here lands in the room. A file a message names gets a Send button when it is within reach; nothing leaves the computer without your press.",
+  "A photo, a voice message or a file you send here lands in the room; a voice message comes with its words when viberoom on your computer has a voice set up. A file a message names gets a Send button when it is within reach; nothing leaves the computer without your press.",
   "Anything else you write goes to the open room as your message, @Name and /skill included, as it does on your computer.",
   "The guide, with pictures, is in viberoom on your computer: Settings → Channels → Guide.",
 ].join("\n"), { commands: false });
@@ -1675,9 +1701,30 @@ export function renderForPhone(message: ChatMessage): Rendered | null {
     return { prefix: "", body: defuseMentions(escapeHtml(message.text)), italic: true };
   }
   const attachments = message.images?.length ? (message.text.trim() ? " [image]" : "[image]") : "";
-  const body = markdownToTelegramHtml(message.text) + attachments;
+  const sounds = new Map((message.audio ?? []).map((sound, i) => [sound.n ?? i + 1, sound]));
+  const videos = new Map((message.video ?? []).map((video, i) => [video.n ?? i + 1, video]));
+  const placed = new Set<number>();
+  const text = markdownToTelegramHtml(message.text).replace(AUDIO_AT, (_marker, n: string) => {
+    const sound = sounds.get(Number(n));
+    if (!sound) return "";
+    placed.add(Number(n));
+    return soundForPhone(sound);
+  }).replace(VIDEO_AT, (_marker, n: string) => {
+    const video = videos.get(Number(n));
+    return video ? `🎬 ${escapeHtml(video.name)}` : "";
+  });
+  const unplaced = [...sounds].filter(([n]) => !placed.has(n)).map(([, sound]) => soundForPhone(sound));
+  const body = [text + attachments, ...unplaced].filter((part) => part.trim()).join("\n");
   if (!body.trim()) return null;
   return { prefix: authorPrefix(message.fromName), body, italic: false };
+}
+
+const AUDIO_AT = new RegExp(AUDIO_MARKER_PATTERN.source, "gi");
+const VIDEO_AT = new RegExp(VIDEO_MARKER_PATTERN.source, "gi");
+
+function soundForPhone(sound: AudioAttachment): string {
+  const words = sound.words?.trim();
+  return `🎤 ${words ? `<i>${defuseMentions(escapeHtml(words))}</i>` : escapeHtml(sound.name)}`;
 }
 
 interface LiveRow {
@@ -1819,12 +1866,12 @@ function statusWords(room: Room, who: Participant): string {
 }
 
 function roomLabel(room: Room): string {
-  const emoji = (room.settings as { emoji?: string }).emoji;
+  const emoji = faceText((room.settings as { emoji?: string }).emoji);
   return `${emoji ? `${escapeHtml(emoji)} ` : ""}<b>${escapeHtml(roomName(room))}</b>`;
 }
 
 function roomTitle(room: Room): string {
-  const emoji = (room.settings as { emoji?: string }).emoji;
+  const emoji = faceText((room.settings as { emoji?: string }).emoji);
   return `${emoji ? `${emoji} ` : ""}${roomName(room)}`;
 }
 
@@ -2144,7 +2191,7 @@ function whoHtml(room: Room): string {
   const agents = presentAgents(room);
   if (!agents.length) return "<i>No vibemates in the room yet.</i>";
   const face = (p: Participant): string => {
-    const avatar = (p as { avatar?: string }).avatar;
+    const avatar = faceText((p as { avatar?: string }).avatar);
     return avatar && !/^[A-Za-z0-9]/.test(avatar) ? `${escapeHtml(avatar)} ` : "";
   };
   return agents.map((p) => `${face(p)}<b>${escapeHtml(p.name)}</b> — ${statusWords(room, p)}`).join("\n");

@@ -14,6 +14,7 @@ import { watchTerminal, recoverTerminals } from "./agent-terminal.js";
 import { compareSemanticVersions } from "./agent-version.js";
 
 export const AGENT_CHECK_INTERVAL = 24 * 60 * 60_000;
+export class UpdateAlreadyDone extends Error {}
 export interface AgentUpdateBatch {
   id: string; startedAt: number; state: "running" | "cancelling" | "done" | "cancelled" | "interrupted";
   entries: { vendor: string; key: string; state: "queued" | "preparing" | "running" | "done" | "failed" | "cancelled"; detail: string }[];
@@ -334,7 +335,7 @@ export class AgentManager extends EventEmitter {
           await this.updates.get(entry.vendor);
           entry.state = flow.state; entry.detail = flow.detail;
         } catch (error) {
-          entry.state = signal.aborted ? "cancelled" : "failed";
+          entry.state = signal.aborted ? "cancelled" : error instanceof UpdateAlreadyDone ? "done" : "failed";
           entry.detail = signal.aborted ? "Cancelled before the updater started." : error instanceof Error ? error.message : String(error);
         }
         this.batchChanged();
@@ -369,7 +370,18 @@ export class AgentManager extends EventEmitter {
       if (!installation) throw new Error("This agent is no longer installed");
       signal.throwIfAborted();
       const offer = await this.providers.check(installation, signal);
-      if (offer.key !== key || !offer.canUpdate) throw new Error("The available version changed or this installation needs attention. Check updates again before continuing.");
+      if (offer.key !== key || !offer.canUpdate) {
+        const wanted = this.saved.updates.find(u => u.key === key)?.latest ?? key.split(":").slice(2).join(":");
+        this.saved.updates = this.saved.updates.filter(u => u.installationId !== installation.id);
+        this.saved.updates.push(offer);
+        this.save(); this.changed(); this.recipesChanged();
+        const already = offer.current && wanted && (offer.current === wanted || (compareSemanticVersions(offer.current, wanted) ?? -1) >= 0);
+        if (offer.status === "current" && already) {
+          throw new UpdateAlreadyDone(`${vendor} already reports ${offer.current}: it updated itself outside viberoom, so there was nothing to run. The list of updates is refreshed.`);
+        }
+        if (offer.canUpdate) throw new Error(`The available update changed to ${offer.latest}. Check updates again and start from the fresh offer.`);
+        throw new Error(`This update offer is out of date. A fresh check says: ${offer.detail} Check updates again before continuing.`);
+      }
       const plan = await this.providers.plan(installation, offer, signal);
       signal.throwIfAborted();
       const sessions = this.options.prepare(vendor);

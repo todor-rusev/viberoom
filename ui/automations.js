@@ -202,7 +202,7 @@
       const key = `job-${job.id}`;
       return `<article class="auto-card${job.enabled ? "" : " is-off"}${arriving(key)}" data-auto-card="${esc(key)}">
         <div class="auto-card-heading">${mark(job)}<div class="auto-card-title"><h4>${esc(job.name)}</h4><p>${esc(recipient(job))}</p></div>
-          <label class="switch auto-onoff"><span class="label">${job.enabled ? "On" : "Off"}</span><input type="checkbox" role="switch" data-auto="toggle" data-id="${esc(job.id)}" aria-label="${esc(job.name)}"${job.enabled ? " checked" : ""}></label></div>
+          ${UI.html("switch", { checked: !!job.enabled, label: job.name, data: { auto: "toggle", id: job.id } })}</div>
         <div class="auto-when">${when(job)}</div>${last(job)}
         <details data-auto-details="${esc(key)}"><summary>${job.action === "reminder" ? "What it says" : "What they are asked"}</summary>${summary(job)}</details>
         <div class="auto-toolbar">${button("Run now", "run", job.id, "soft")}${button("Edit", "edit", job.id)}${button("Delete", "delete", job.id, "danger-quiet")}</div></article>`;
@@ -303,8 +303,10 @@
             <label class="choice"><input type="radio" name="catchUp" value="once"${e.catchUp !== "skip" ? " checked" : ""}><span class="auto-tile-words"><strong>Do it once, as soon as it can</strong><small>Several missed times count as one.</small></span></label>
             <label class="choice"><input type="radio" name="catchUp" value="skip"${e.catchUp === "skip" ? " checked" : ""}><span class="auto-tile-words"><strong>Skip it</strong><small>More than a minute late waits for the next time.</small></span></label></div></div>
           <div class="auto-field auto-inline" data-agent-only><span>Stop the task after</span><input type="number" name="maxMinutes" min="1" max="1440" step="1" value="${esc(e.maxMinutes)}" aria-label="Minutes before the task is stopped"><span>minutes</span></div>
-          <label class="switch" data-agent-only><span class="label">Wake the vibemate if they are offline<span class="hint">It uses this room's session, workspace and permissions. Muted or stopped vibemates wait for you. Scheduled work can use paid model calls.</span></span><input type="checkbox" name="wakeOffline"${e.wakeOffline ? " checked" : ""}></label>
-          <label class="switch"><span class="label">Write the time as cron<span class="hint">For people who know five-field cron.</span></span><input type="checkbox" name="cron"${f.cron ? " checked" : ""}></label>
+          ${UI.html("settings-group", { id: "auto-switches", title: "", body: UI.raw([
+            UI.html("setting", { label: "Wake the vibemate if they are offline", for: "auto-wake-offline", name: "wakeOffline", kind: "switch", checked: !!e.wakeOffline, hint: "It uses this room's session, workspace and permissions. Muted or stopped vibemates wait for you. Scheduled work can use paid model calls.", data: { agentOnly: true } }),
+            UI.html("setting", { label: "Write the time as cron", for: "auto-cron", name: "cron", kind: "switch", checked: !!f.cron, hint: "For people who know five-field cron." }),
+          ].join("")) })}
         </div></details>
         <footer class="auto-form-actions">${button("Cancel", "back")}<button type="submit" data-ui="button" data-kind="primary">${icon("check")}<span>${e.id ? "Save changes" : "Save automation"}</span></button></footer></form>`;
     }

@@ -1,7 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
-import { canonicalOperationName } from "./tool-spec.js";
+import { CALL_TOOL, OPERATIONS, SEARCH_TOOL, canonicalOperationName, type ToolSpec } from "./tool-spec.js";
 import { validArguments } from "./tool-validation.js";
-const PREFIXES = ["mcp__viberoom__", "viberoom.", "viberoom/", "viberoom: ", "viberoom:", "viberoom_", "mcp::viberoom::"];
+const PREFIXES = ["mcp__viberoom__", "mcp.viberoom.", "viberoom.", "viberoom/", "viberoom: ", "viberoom:", "viberoom_", "mcp::viberoom::"];
 
 function localRoomTool(name: string | null | undefined): string | undefined {
   if (typeof name !== "string") return undefined;
@@ -16,11 +16,18 @@ export function isDirectRoomTool(name: string | null | undefined, tool: string):
 
 export type ToolIdentity = { name?: string | null; title?: string | null; rawInput?: unknown };
 
+function toolArguments(tool: string, input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const call = input as Record<string, unknown>;
+  const keys = Object.keys(call).sort().join(",");
+  return keys === "arguments,server,tool" && call.server === "viberoom" && call.tool === tool ? call.arguments : input;
+}
+
 export function roomOperation(call: ToolIdentity, known?: ToolIdentity): { name: string; arguments: Record<string, unknown>; wrapped: boolean } | undefined {
   const name = call.name ?? known?.name ?? call.title ?? known?.title;
   const local = localRoomTool(name);
   if (!local) return undefined;
-  const input = call.rawInput !== undefined ? call.rawInput : known?.rawInput;
+  const input = toolArguments(local, call.rawInput !== undefined ? call.rawInput : known?.rawInput);
   if (local === "tool_call") {
     if (!validArguments("tool_call", input)) return undefined;
     const canonical = canonicalOperationName(input.name as string);
@@ -34,6 +41,21 @@ export function roomOperation(call: ToolIdentity, known?: ToolIdentity): { name:
 
 export function isWrappedRoomCall(call: ToolIdentity, known?: ToolIdentity): boolean {
   return isDirectRoomTool(call.name ?? known?.name ?? call.title ?? known?.title, "tool_call");
+}
+
+const ROOM_TOOLS = new Map<string, ToolSpec>([...OPERATIONS, SEARCH_TOOL, CALL_TOOL].map((tool) => [tool.name, tool]));
+
+export function roomToolChip(call: ToolIdentity, known?: ToolIdentity): { title: string; kind?: "read"; name: string } | undefined {
+  const operation = roomOperation(call, known);
+  if (!operation) return undefined;
+  const tool = ROOM_TOOLS.get(operation.name);
+  if (!tool) return undefined;
+  const words = operation.name.replace(/_/g, " ");
+  return {
+    title: tool.chip ? tool.chip(operation.arguments) : `${words[0].toUpperCase()}${words.slice(1)}`,
+    ...(tool.annotations?.readOnlyHint ? { kind: "read" as const } : {}),
+    name: `viberoom.${operation.wrapped ? "tool_call" : operation.name}`,
+  };
 }
 
 export function roomToolTitle(call: ToolIdentity, known?: ToolIdentity): string | undefined {

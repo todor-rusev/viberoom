@@ -5,9 +5,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>viberoom</title>
-  <link rel="icon" href="/favicon.ico?v=8" sizes="16x16 32x32 48x48 64x64 128x128 256x256">
-  <link rel="icon" href="/icon-256.png?v=8" type="image/png" sizes="256x256">
-  <link rel="apple-touch-icon" href="/icon-256.png?v=8">
+  <link rel="icon" href="/favicon.ico?v=12" sizes="16x16 32x32 48x48 64x64 128x128 256x256">
+  <link rel="icon" href="/icon-256.png?v=12" type="image/png" sizes="256x256">
+  <link rel="apple-touch-icon" href="/icon-256.png?v=12">
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#6d5dfc">
   <link rel="stylesheet" href="/theme.css">
@@ -23,13 +23,14 @@
   <div id="app" class="shell view-rooms">
     <nav class="rail quiet-glyphs" id="rail" aria-label="Main menu">
       <div class="rail-head">
-        <button class="rail-logo" id="rail-logo" title="viberoom"><img class="mark" src="/icon-256.png?v=7" alt=""><span class="word">viberoom</span></button>
+        <button class="rail-logo" id="rail-logo" title="viberoom"><img class="mark" src="/icon-256.png?v=12" alt=""><span class="word">viberoom</span></button>
       </div>
       <div class="rail-items">
         <button class="rail-item new" id="rail-new-room" title="Open a room"><span class="ico" data-rig="plus"></span><span class="label">Open a room</span></button>
         <button class="rail-item" data-nav="rooms" title="Rooms"><span class="ico" data-rig="rooms"></span><span class="label">Rooms</span></button>
         <div class="rail-rooms-wrap" id="rail-rooms-wrap" hidden><span class="rail-hr"></span><div class="rail-rooms" id="rail-rooms" aria-label="Open rooms"></div><span class="rail-hr"></span></div>
         <button class="rail-item" data-nav="skills" title="Skills"><span class="ico" data-rig="skills"></span><span class="label">Skills</span></button>
+        <button class="rail-item" data-nav="connections" title="Connections"><span class="ico" data-rig="plug"></span><span class="label">Connections</span></button>
         <button class="rail-item" data-nav="settings" title="Settings"><span class="ico" data-rig="settings"></span><span class="label">Settings</span></button>
       </div>
       <div class="rail-foot">
@@ -63,7 +64,7 @@
         </div>
         <div class="side-foot">
           <button id="reconnect-all-btn" data-ui="button" data-full class="wake" hidden title="Bring offline vibemates back"><span data-icon="refresh"></span><span class="label">Wake everyone up</span></button>
-          <button id="focus-btn" data-ui="button" data-full class="hush" title="Stop every running reply; vibemates stay quiet until you speak again"><span class="hush-face">🤫</span><span class="label">Hush the room</span></button>
+          <button id="focus-btn" data-ui="button" data-full class="hush" title="Stop every running reply; vibemates stay quiet until you speak again"><span class="hush-face" aria-hidden="true"></span><span class="label">Hush the room</span></button>
         </div>
       </div>
     </aside>
@@ -124,8 +125,10 @@
             <div class="quotes-tray" id="quotes-tray" hidden></div>
             <div class="shots-tray" id="shots-tray" hidden></div>
             <div id="input" class="composer-input" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Message" spellcheck="true" data-placeholder="Message the room… @Name or /skill" aria-placeholder="Message the room… @Name or /skill" title="Enter sends, Shift+Enter is a new line; paste or drop a picture or a file"></div>
+            <div class="voice-panel" id="voice-panel" role="status" aria-live="polite" hidden><span class="vp-dot" aria-hidden="true"></span><span class="vp-words"></span><span class="vp-wave" aria-hidden="true"></span><span class="vp-time">0:00</span><span class="vp-acts"></span></div>
           </div>
           <button type="button" id="composer-clear" class="composer-clear" title="Clear the message" hidden>×</button>
+          <button type="button" class="smile-btn mic-btn" id="mic-btn" data-state="idle" aria-pressed="false" aria-label="Say it" data-hint="Say it: press, speak, press again"><span data-icon="mic"></span><span class="mic-time" hidden></span></button>
           <button type="submit" class="send-btn" title="Send"><span data-icon="send"></span></button>
         </form>
       </section>
@@ -140,7 +143,7 @@
   </div>
   <section class="no-key" id="no-key" hidden>
     <div class="nk-card">
-      <img class="nk-mark" src="/icon-256.png?v=8" alt="">
+      <img class="nk-mark" src="/icon-256.png?v=12" alt="">
       <h1>Open viberoom from its icon</h1>
       <p>viberoom is running on this computer — this page came from it. This tab has no key, so your rooms stay closed to it. That is what keeps anyone else signed in to this computer out of your conversations.</p>
       <p class="nk-quiet">A tab your browser restored after a restart lands here every time. Click the <b>viberoom</b> icon and use that window; in a terminal, <code>viberoom open</code> does the same.</p>
@@ -154,7 +157,7 @@
       <label>Vibename <span class="hint">(how you appear in every room)</span><input id="pf-name" type="text" maxlength="24" required autocomplete="off" placeholder="letters, digits, _ or -"></label>
       <label>Vibeface <span class="hint">(pick one, or type any emoji)</span>
         <div id="pf-avatar-picker"></div>
-        <input id="pf-avatar" type="text" maxlength="8" placeholder="custom emoji (optional)"></label>
+        <input id="pf-avatar" type="text" maxlength="40" placeholder="custom emoji (optional)"></label>
       <label>Your vibe line <span class="hint">(a sentence or two about you)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The vibemates get this line in every room's brief, so they know who they are talking to. A room can add its own line or replace it (Your vibe, in the room).</span>
         <textarea id="pf-desc" rows="3" maxlength="200" placeholder="e.g. software engineer, enjoys learning; likes short answers"></textarea></label>
       <p class="error" id="pf-error" hidden></p>
@@ -193,8 +196,7 @@
       <label>Room name<input id="room-name" type="text" maxlength="60" required placeholder="e.g. Architecture review"></label>
       <label>Working directory <span class="hint">(optional)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The folder the vibemates work in (their cwd). Leave it empty and viberoom keeps a folder per room. Instruction files in it (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules) are read by the vibemates by their own conventions; the room tells you if it finds any.</span>
         <span class="dir-row"><input id="room-dir" type="text" placeholder="C:\projects\my-app"><button type="button" data-ui="button" data-kind="ghost" class="browse-btn" id="room-dir-browse" title="Choose a folder"><span data-icon="folder"></span>Browse</button></span></label>
-      <label class="switch"><span class="label">Share this room's history with the other rooms<span class="hint">The vibemates here may search the other rooms that also share theirs, and those rooms' vibemates may find messages written here. Hidden and deleted messages are never shared. You can change this later in the room's settings.</span></span><input type="checkbox" id="room-share-history" checked></label>
-      <label class="switch"><span class="label">Reachable from messengers<span class="hint">A phone paired to viberoom can open this room, write to it and read its replies. You can change this later in the room's settings.</span></span><input type="checkbox" id="room-reachable" checked></label>
+      <div id="room-options"></div>
       <p class="error" id="room-error" hidden></p>
       <div class="actions"><button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button><button type="submit" data-ui="button" data-kind="primary">Open the room</button></div>
     </form>
@@ -245,13 +247,13 @@
       </div>
       <label>Vibeface <span class="hint">(pick one, or type any emoji)</span>
         <div id="inv-avatar-picker"></div>
-        <input id="inv-avatar" type="text" maxlength="8" placeholder="custom emoji (optional)"></label>
+        <input id="inv-avatar" type="text" maxlength="40" placeholder="custom emoji (optional)"></label>
       <label>Vibio <span class="hint">(only this vibemate reads it)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Who it is, how it speaks, what it cares about. It reaches the vibemate as instructions in its brief; the other participants never see it. You can change it later in the vibemate's panel.</span>
         <textarea id="inv-role" rows="4" maxlength="4000" placeholder="e.g. A calm team lead who asks one question at a time."></textarea></label>
       <details class="geek" id="inv-geek">
         <summary><span data-icon="geek"></span>for geeks<span class="g-hint">reply delay, skills, where the vibemate lives</span><span class="chev" data-icon="down"></span></summary>
         <div class="geek-body">
-          <label>Reply delay override, seconds<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Empty: the room's delay. A value here overrides it for this vibemate only. Before each turn the vibemate waits a random 0–N seconds, so replies cross less often; messages that arrive meanwhile land in its backlog.</span><span data-ui="number-field"><input id="inv-delay" type="number" min="0" max="120" step="0.5" placeholder="the room's"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span></label>
+          <label>Reply delay override, seconds<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Empty: the room's delay. A value here overrides it for this vibemate only. Before each turn the vibemate waits a random 0–N seconds, so replies cross less often; messages that arrive meanwhile land in its backlog.</span><span data-ui="number-field"><input class="input" id="inv-delay" type="number" min="0" max="120" step="0.5" placeholder="the room's"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span></label>
           <label>Skills <span class="hint">(from the library)</span><div id="inv-skills" class="check-list"></div></label>
           <p class="hint" id="inv-where"></p>
           <p class="hint" id="inv-note"></p>
@@ -298,7 +300,7 @@
       <h3><span class="h-ico" data-icon="refresh"></span>Welcome back</h3>
       <p class="lead" id="rc-intro"></p>
       <div class="choice-list">
-        <label class="choice"><input type="radio" name="rc-mode" value="replay" checked> <span><strong>Replay the last</strong> <span data-ui="number-field" class="rc-num"><input id="rc-replay" type="number" min="0" max="500" value="10"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span> <strong>chat messages</strong> — a fresh start with the recent history.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="replay" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>A new vibemate session that reads the recent room history (room events in between come along), like a person coming back from a break. Cheap and works for every vibemate.</span></span></label>
+        <label class="choice"><input type="radio" name="rc-mode" value="replay" checked> <span><strong>Replay the last</strong> <span data-ui="number-field" class="rc-num"><input class="input" id="rc-replay" type="number" min="0" max="500" value="10"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span> <strong>chat messages</strong> — a fresh start with the recent history.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="replay" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>A new vibemate session that reads the recent room history (room events in between come along), like a person coming back from a break. Cheap and works for every vibemate.</span></span></label>
         <label class="choice"><input type="radio" name="rc-mode" value="load"> <span><strong>Restore the full session</strong> — the vibemate continues its saved session.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="load" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Continue the vibemate's saved conversation, including its previous work. A long conversation can make the next reply more costly. If it cannot be restored, the vibemate starts a new session with recent messages from this room.</span></span></label>
       </div>
       <table class="rc-table" id="rc-table"></table>
@@ -345,7 +347,7 @@
       <div class="fv-tools" id="fv-tools" hidden>
         <label class="search fv-find"><span class="search-icon" data-icon="search"></span><input id="fv-search" type="search" placeholder="Find in this file…" autocomplete="off"></label>
         <span class="fv-hits" id="fv-hits"></span>
-        <label class="fv-goto">line <span data-ui="number-field" class="fv-num"><input id="fv-line" type="number" min="1" step="1" placeholder="1"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span></label>
+        <label class="fv-goto">line <span data-ui="number-field" class="fv-num"><input class="input" id="fv-line" type="number" min="1" step="1" placeholder="1"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span></label>
         <label class="fv-wrap"><input id="fv-wrap" type="checkbox"> wrap</label>
         <span class="fv-count" id="fv-count"></span>
       </div>
@@ -361,6 +363,9 @@
   <script src="/icons.js"></script>
   <script src="/ui.js"></script>
   <script src="/components.js"></script>
+  <script src="/hints.js"></script>
+  <script src="/context-menu.js"></script>
+  <script src="/save-file.js"></script>
   <script src="/avatars.js"></script>
   <script src="/fold.js"></script>
   <script src="/keyed-list.js"></script>
@@ -374,6 +379,9 @@
   <script src="/layout.js"></script>
   <script src="/agent-updates.js"></script>
   <script src="/composer.js"></script>
+  <script src="/voice.js"></script>
+  <script src="/reader.js"></script>
+  <script src="/passage.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

@@ -48,7 +48,7 @@ export class McpHttpClient {
     if (since && /^\d+$/.test(since)) this.diagnostics.discardBefore(Number(since));
   }
 
-  async request(path: string, init?: RequestInit): Promise<HubResult> {
+  async request(path: string, init?: RequestInit, options: { timeoutMs?: number } = {}): Promise<HubResult> {
     if (!this.baseUrl || !this.token) return { ok: false, status: 0, body: { error: "viberoom address or token missing" } };
     const requestId = randomUUID();
     const startedAt = Date.now(), started = performance.now();
@@ -60,7 +60,7 @@ export class McpHttpClient {
       if (trace) this.diagnostics.put({ ...trace, outcome, durationMs: performance.now() - started, ...(status !== undefined ? { status } : {}) });
       if (outcome !== "ok") { this.failureGeneration++; this.reportPending = true; }
     };
-    const timeout = deadline(this.timeoutMs);
+    const timeout = deadline(options.timeoutMs ?? this.timeoutMs);
     try {
       const headers = new Headers(init?.headers);
       headers.set(TRACE_ID_HEADER, requestId);

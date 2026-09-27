@@ -56,6 +56,26 @@ const IMAGE_MEDIA: Record<string, string> = {
 };
 export const IMAGE_VIEW_MAX_BYTES = 20 * 1024 * 1024;
 
+const PLAYABLE_MEDIA: Record<string, { type: string; kind: "video" | "audio" }> = {
+  ".mp4": { type: "video/mp4", kind: "video" },
+  ".m4v": { type: "video/mp4", kind: "video" },
+  ".mov": { type: "video/quicktime", kind: "video" },
+  ".webm": { type: "video/webm", kind: "video" },
+  ".ogv": { type: "video/ogg", kind: "video" },
+  ".mp3": { type: "audio/mpeg", kind: "audio" },
+  ".m4a": { type: "audio/mp4", kind: "audio" },
+  ".wav": { type: "audio/wav", kind: "audio" },
+  ".ogg": { type: "audio/ogg", kind: "audio" },
+  ".oga": { type: "audio/ogg", kind: "audio" },
+  ".opus": { type: "audio/ogg", kind: "audio" },
+  ".weba": { type: "audio/webm", kind: "audio" },
+  ".flac": { type: "audio/flac", kind: "audio" },
+};
+
+export function playableMediaType(path: string): { type: string; kind: "video" | "audio" } | null {
+  return PLAYABLE_MEDIA[extname(path).toLowerCase()] ?? null;
+}
+
 export function imageMediaType(path: string): string | null {
   return IMAGE_MEDIA[extname(path).toLowerCase()] ?? null;
 }

@@ -1,8 +1,9 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { DatabaseSync, backup as sqliteBackup } from "node:sqlite";
+import { DatabaseSync, backup as sqliteBackup, type StatementSync } from "node:sqlite";
 import { CarryHistory } from "./carry-history.js";
 import { SharedMemory } from "./shared-memory.js";
+import { MemoryOutbox } from "./memory/outbox.js";
 import { RoomCards } from "./room-cards.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import type { ChatMessage } from "./room.js";
@@ -60,6 +61,8 @@ export interface MessageFeatures {
   fences: number;
   diagrams: number;
   images: number;
+  audio?: number;
+  video?: number;
   toolCalls: number;
   quotes: number;
 }
@@ -73,13 +76,19 @@ export function messageFeatures(message: StoredMessage): MessageFeatures {
     fences: (text.match(/^\s*```/gm) ?? []).length >> 1,
     diagrams: (text.match(/^\s*```\s*mermaid/gim) ?? []).length,
     images: message.images?.length ?? 0,
+    audio: message.audio?.length ?? 0,
+    video: message.video?.length ?? 0,
     toolCalls: message.toolCalls?.length ?? 0,
     quotes: message.quotes?.length ?? 0,
   };
 }
 
+export function searchableText(message: StoredMessage): string {
+  return [message.text ?? "", ...(message.audio ?? []).map((sound) => sound.words ?? "")].filter(Boolean).join("\n");
+}
+
 export function messageWeight(features: MessageFeatures): number {
-  return features.chars + 120 * features.tableRows + 400 * features.fences + 2500 * features.diagrams + 1500 * features.images + 400 * features.toolCalls + 200 * features.quotes;
+  return features.chars + 120 * features.tableRows + 400 * features.fences + 2500 * features.diagrams + 1500 * features.images + 800 * (features.audio ?? 0) + 2500 * (features.video ?? 0) + 400 * features.toolCalls + 200 * features.quotes;
 }
 
 export interface FoldBoundary {
@@ -233,9 +242,11 @@ type Row = Record<string, unknown>;
 
 export class HistoryStore {
   private readonly db: DatabaseSync;
+  private upsertStatement: StatementSync | undefined;
   private readonly log: Logger;
   readonly carry: CarryHistory;
   readonly memory: SharedMemory;
+  readonly memoryOutbox: MemoryOutbox;
   readonly cards: RoomCards;
 
   constructor(readonly path: string, log?: Logger) {
@@ -245,12 +256,14 @@ export class HistoryStore {
     this.db.exec("pragma journal_mode = wal");
     this.db.exec("pragma synchronous = full");
     this.db.exec("pragma foreign_keys = on");
+    this.db.exec("pragma busy_timeout = 5000");
     this.refuseIfNewer();
     this.backupBeforeUpgrade();
     this.db.exec(SCHEMA);
     this.db.exec("create table if not exists file_transactions(id text primary key)");
     this.carry = new CarryHistory(this.db);
     this.memory = new SharedMemory(this.db);
+    this.memoryOutbox = new MemoryOutbox(this.db);
     this.cards = new RoomCards(this.db);
     this.reconcileColumns();
     const version = this.meta("schema_version");
@@ -344,15 +357,14 @@ export class HistoryStore {
       this.carry.record(roomId, message);
     }
     const features = messageFeatures(message);
-    this.db
-      .prepare(
+    (this.upsertStatement ??= this.db.prepare(
         `insert into messages(room, id, seq, display_order, kind, author, author_name, ts, text, pinned, body, features, weight)
          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(room, id) do update set
            seq = excluded.seq, display_order = excluded.display_order, kind = excluded.kind, author = excluded.author,
            author_name = excluded.author_name, ts = excluded.ts, text = excluded.text, pinned = excluded.pinned, body = excluded.body,
            features = excluded.features, weight = excluded.weight, deleted_at = null`,
-      )
+      ))
       .run(
         roomId,
         message.id,
@@ -362,7 +374,7 @@ export class HistoryStore {
         message.from ?? null,
         message.fromName ?? null,
         message.ts,
-        message.text ?? "",
+        searchableText(message),
         message.pinned ? 1 : 0,
         JSON.stringify(message),
         JSON.stringify(features),
@@ -428,6 +440,10 @@ export class HistoryStore {
     });
   }
 
+  dropRoomPortion(roomId: string, limit: number): number {
+    return this.transaction(() => Number(this.db.prepare("delete from messages where rowid in (select rowid from messages where room = ? limit ?)").run(roomId, limit).changes));
+  }
+
   dropRoom(roomId: string): void {
     this.transaction(() => {
       this.db.prepare("delete from messages where room = ?").run(roomId);
@@ -490,6 +506,11 @@ export class HistoryStore {
   get(roomId: string, seq: number): StoredMessage | null {
     const row = this.db.prepare("select body from messages where room = ? and seq = ? and deleted_at is null").get(roomId, seq) as Row | undefined;
     return row ? this.decode(row) : null;
+  }
+
+  chatAfter(roomId: string, afterSeq: number, limit: number): StoredMessage[] {
+    return (this.db.prepare("select body from messages where room = ? and deleted_at is null and kind = 'chat' and seq > ? order by seq limit ?")
+      .all(roomId, afterSeq, Math.max(1, Math.floor(limit))) as Row[]).map((r) => this.decode(r));
   }
 
   all(roomId: string): StoredMessage[] {
@@ -705,7 +726,7 @@ export class HistoryStore {
                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                on conflict(room, id) do update set deleted_at = excluded.deleted_at where messages.deleted_at is not null`,
             )
-            .run(roomId, message.id, message.seq, message.displayOrder ?? null, message.kind, message.from ?? null, message.fromName ?? null, message.ts, message.text ?? "", message.pinned ? 1 : 0, deletedAt, JSON.stringify(message), JSON.stringify(messageFeatures(message)), messageWeight(messageFeatures(message)));
+            .run(roomId, message.id, message.seq, message.displayOrder ?? null, message.kind, message.from ?? null, message.fromName ?? null, message.ts, searchableText(message), message.pinned ? 1 : 0, deletedAt, JSON.stringify(message), JSON.stringify(messageFeatures(message)), messageWeight(messageFeatures(message)));
         }
         report.imported++;
       }
@@ -743,6 +764,7 @@ export class HistoryStore {
   search(query: SearchQuery): SearchResult {
     const sanitized = sanitizeQuery(query.text);
     if (!sanitized) return { hits: [], query: sanitized, usedTrigram: false };
+    if (query.rooms && !query.rooms.length) return { hits: [], query: sanitized, usedTrigram: false };
     let hits = this.match("messages_fts", sanitized, query, true);
     if (hits === null) {
       hits = this.match("messages_fts", quoteEverything(query.text), query, true);

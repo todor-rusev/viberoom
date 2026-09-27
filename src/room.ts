@@ -7,24 +7,27 @@ import { EventEmitter } from "node:events";
 import { memoryBlock } from "./shared-memory.js";
 import { instructionBlock, planInstructionDelivery, type InstructionRevisions } from "./instruction-delivery.js";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { NameDirectory } from "./name-directory.js";
 import type { CardKind, StoredCard } from "./room-cards.js";
+import { citedNumbers, numbersNote, type CitedNumber } from "./message-numbers.js";
 import { HistoryStore, type DivertOp, type PendingOp, cursorOf, type Cursor } from "./history-store.js";
 import { foldIndex } from "./fold.js";
 import { NOTES_ONLY_PROMPT, NOTES_REQUEST, crossedThreshold, emptyUsageReport, extractNotes, isBareContextFullError, isContextFullError, looksCompacted, overThreshold, settledVisible } from "./context.js";
 import { spokenText } from "./spoken-text.js";
+import { MENTION_PATTERN } from "./mentions.js";
 import { planNewRoom, type NewRoomPlan } from "./new-room.js";
 import { formatDuration } from "./duration.js";
 import { affectedByEdit, editNotice, EDIT_NOTICE_MAX, partitionHistory, rewriteNotice, type AgentReadState, type EditMode } from "./edit.js";
 import { bodyRefs, registerBodyReader, resetBodyDelivery, supplyBodies, type BodyDelivery, type BodyEdit, type BodyRef } from "./body-delivery.js";
-import { isRoomResourceName, saveImages, type Attachment, type ImageInput } from "./files.js";
+import { isRoomResourceName, saveAudio, saveImages, saveVideo, type Attachment, type AudioAttachment, type HeardSound, type ImageInput, type VideoAttachment, type VideoInput } from "./files.js";
 import { agentReadableWindow, resolveQuotes, visibleToAgents, type Quote, type QuoteInput } from "./quotes.js";
 import { canAutoApproveMessageCheck, isDirectMessageCheck, messageAddressing, messageCheckCursor, messageCheckHeader, messageCheckPageCursor, messageCheckPagePosition, messageCheckPosition, messageCheckTitle, packMessageCheck, packLiveDraft, parseMessageCheckArgs, type MessageCheckArgs, type MessageCheckCounts, type MessageCheckResult } from "./message-check.js";
 import { historySearchReceipt, historySearchTitle, parseAgentSearchArgs, type AgentSearchArgs, type AgentSearchResult, type HistorySearchReceipt } from "./agent-history.js";
-import { canAutoApproveRoomTool, isWrappedRoomCall, roomOperation, roomToolTitle, cursorPermissionInput } from "./room-tool-identity.js";
+import { canAutoApproveRoomTool, isWrappedRoomCall, roomOperation, roomToolChip, roomToolTitle, cursorPermissionInput } from "./room-tool-identity.js";
 import { dirname, join, resolve } from "node:path";
 import { AcpAgent } from "./acp-client.js";
+import { ExtensionRouter, type AgentAuthStatus } from "./acp-extensions.js";
 import { errorCode, errorDetail, RemoteError } from "./jsonrpc.js";
 import { getRecipe, listRecipes, publicRecipes, type AgentRecipe } from "./recipes.js";
 import { recipeStamp } from "./install-stamp.js";
@@ -33,6 +36,7 @@ import { assertAgentAvailable, useAgent } from "./agent-maintenance.js";
 import { classifyStartFailure, classifyTurnFailure, type Trouble } from "./agent-health.js";
 import { legacyRowTone } from "./rows.js";
 import { DIAGRAM_REPAIR_WINDOW_MS, boundedError, diagramSourceProblem, fenceFor, giveUp, mermaidBlocks, recordFailure, recordFix, replaceDiagramSource, type DiagramRepair } from "./diagram-repair.js";
+import { cleanFace, freshFace } from "./faces.js";
 import { composeSkillBlock, formatQuoteTime, skillPull, SKILL_TOOL_NAME, type BriefNotes, type NotesSource, type SkillsForPrompt } from "./persona.js";
 import {
   BUILTIN_AUTHOR,
@@ -45,6 +49,7 @@ import {
   type SkillMeta,
 } from "./skills.js";
 import type { McpServer } from "./acp-types.js";
+import type { BriefSearch } from "./memory/service.js";
 import { runAsNodeEntries } from "./own-runtime.js";
 import { templateId, type TemplateLibrary, type TemplateVibemate } from "./templates.js";
 import type { LookCheck, LookSpec } from "./looks.js";
@@ -62,14 +67,18 @@ import {
   SILENT_MARKER,
   buildBrief,
   buildInstructionContents,
+  buildStandingText,
   buildInstructionPreview,
   buildHeader,
   composeCorrectionPrompt,
   composePrompt,
   countSentences,
+  replyLanguageClause,
   ensureDir,
   type BacklogImage,
   type BacklogLine,
+  type BacklogAudio,
+  type BacklogVideo,
   type BacklogQuote,
   type Persona,
   type PromptPart,
@@ -102,6 +111,12 @@ export interface LaunchPrefs {
   mode: string | null;
 }
 
+interface ConfigShortfall {
+  category: string;
+  log: string;
+  said: string;
+}
+
 export interface QuietTurn {
   since: number;
   turnId: string;
@@ -126,6 +141,7 @@ export interface Participant {
   mode?: string;
   configOptions?: SessionConfigOption[];
   installOutdated?: boolean;
+  authStatus?: AgentAuthStatus;
   modes?: { id: string; name: string; description?: string | null }[];
   contextUsed?: number;
   contextSize?: number;
@@ -143,6 +159,7 @@ export interface Participant {
   skills?: string[];
   skillChannel?: "tool" | "marker" | "pending";
   launch?: LaunchPrefs;
+  earlierLaunches?: Record<string, LaunchPrefs>;
   violations?: number;
   notes?: string;
   notesAt?: number;
@@ -179,6 +196,7 @@ export interface StoredParticipant {
   color: string;
   colorSlot?: number;
   launch: LaunchPrefs;
+  earlierLaunches?: Record<string, LaunchPrefs>;
   muted: boolean;
   createdByVibemate?: boolean;
   replyDelay?: number;
@@ -291,6 +309,8 @@ export class RoomRefusal extends Error {
 
 export interface Renamed { id: string; from: string; to: string }
 
+export type WindowMessage = ChatMessage & { numbersHere?: { copy: string; here: Record<string, number | null> } };
+
 export interface ChatMessage {
   id: string;
   seq: number;
@@ -311,12 +331,16 @@ export interface ChatMessage {
   pinned?: true;
   diagramRepairs?: DiagramRepair[];
   images?: Attachment[];
+  audio?: AudioAttachment[];
+  answerFrom?: number;
+  video?: VideoAttachment[];
   quotes?: Quote[];
   audience?: "agents" | "human";
   wakes?: true;
   streaming?: boolean;
   thought?: string;
   origin?: string;
+  numbering?: string;
   branch?: { source: string; revision: string };
   variantOf?: { id: string; revision: string };
   resourceRefs?: { source: string; file: string; sha256?: string }[];
@@ -325,7 +349,7 @@ export interface ChatMessage {
   plan?: PlanEntry[];
   stopReason?: StopReason;
   stoppedBy?: string;
-  cancelledBy?: "human" | "agent";
+  cancelledBy?: "human" | "agent" | "room";
   failed?: string;
   usage?: Usage | null;
   durationMs?: number;
@@ -454,6 +478,7 @@ export interface LookChangeSet {
   look?: string;
   adjust?: Record<string, unknown>;
   chatFontSize?: number;
+  scale?: number;
   font?: string;
   mono?: string;
 }
@@ -504,8 +529,12 @@ export interface RoomOptions {
   programHumanDescription: string;
   bypassPermissionsByDefault: boolean;
   hubRun?: () => { id: string; build: string } | null;
+  memoryGraph?: (roomId: string, addressed: readonly number[]) => { revision: string; block: string; search?: BriefSearch } | null;
+  memoryGraphReady?: (roomId: string, addressed: readonly number[]) => Promise<void>;
+  connections?: (roomUuid: string) => string[];
   programTranscripts?: TranscriptMode;
   programFoldAfter?: number;
+  recordPrompts?: boolean;
   settings?: Partial<Omit<RoomSettings, "name" | "humanName">>;
   log: Logger;
   optionCatalog?: OptionCatalog;
@@ -529,6 +558,7 @@ interface AgentRuntime {
   workBusy?: boolean;
   notesPending?: boolean;
   workCancelled?: boolean;
+  roomStopped?: boolean;
   usageSeenThisTurn?: boolean;
   fixedDiagramThisTurn?: boolean;
   pendingTurn: boolean;
@@ -545,6 +575,7 @@ interface AgentRuntime {
   instructionRevisions?: InstructionRevisions;
   skillCatalogPending?: boolean;
   memoryStamp?: string;
+  memoryGraphStamp?: string;
   headerNotes: string[];
   historyNoticePending: boolean;
   briefRequestedAtSeq: number;
@@ -573,6 +604,15 @@ interface RetryRequest {
   record: ChatMessage;
 }
 
+type PromptMemoryNote = BriefSearch & { sent: boolean };
+
+interface TurnExtras {
+  hidden?: boolean;
+  historyNoticeOffered?: boolean;
+  supplied?: BodyRef[];
+  memorySearch?: PromptMemoryNote;
+}
+
 interface PermissionEntry extends PendingPermission {
   resolve: (response: RequestPermissionResponse) => void;
 }
@@ -586,11 +626,14 @@ const NUDGE_WAIT_MS = 10_000;
 
 const COLORS = ["#6d5dfc", "#16a34a", "#d97706", "#dc2626", "#0891b2", "#be185d", "#4d7c0f", "#7c3aed"];
 export const CAST_SIZE = 8;
-const MENTION_PATTERN = /@([\p{L}\p{N}][\p{L}\p{N}_-]*)/gu;
 export { spokenText };
 const RULE_REF_TOKEN = /@\{p:([^}]+)\}/g;
 const ADAPTER_ERROR_PATTERN =
   /^(?:Warning: Falling back from WebSockets|unexpected status \d{3}|Error when talking to|API Error|You have exhausted your (?:daily )?quota|Rate limit|429 |5\d\d )/i;
+
+export function sessionMeta(recipe: Pick<AgentRecipe, "systemPromptAppend"> | undefined, settings: RoomSettings, withTools: boolean): Record<string, unknown> | undefined {
+  return recipe?.systemPromptAppend ? { systemPrompt: { append: buildStandingText(settings, withTools) } } : undefined;
+}
 
 function needsTheHuman(method: { id: string; name?: string | null; description?: string | null }, recipe?: AgentRecipe): boolean {
   if (recipe?.loginFlow.kind === "acp" && method.id === recipe.loginFlow.methodId) return true;
@@ -632,6 +675,9 @@ export class Room extends EventEmitter {
   dir: string;
   readonly dataDir: string;
   private readonly hubRun: () => { id: string; build: string } | null;
+  private readonly memoryGraph: (roomId: string, addressed: readonly number[]) => { revision: string; block: string; search?: BriefSearch } | null;
+  private readonly memoryGraphReady: (roomId: string, addressed: readonly number[]) => Promise<void>;
+  private readonly connections: (roomUuid: string) => string[];
   readonly createdAt: number;
   settings: RoomSettings;
   hops = 0;
@@ -644,6 +690,7 @@ export class Room extends EventEmitter {
   private bypassPermissionsByDefault: boolean;
   private programTranscripts: TranscriptMode;
   private programFoldAfter: number;
+  private recordPrompts: boolean;
   private readonly historyEpoch = randomUUID();
   private historyRevision = 0;
   private readonly messageCheckKey = randomUUID();
@@ -675,6 +722,9 @@ export class Room extends EventEmitter {
     const slot = this.colorIndex++ % CAST_SIZE;
     return { color: given ?? COLORS[slot % COLORS.length], colorSlot: slot };
   }
+  private freshAvatar(): string {
+    return freshFace("vibemate", [...this.participants.values()].map((p) => p.avatar));
+  }
   private readonly departed = new Map<string, string>();
   private readonly restoredSeen = new Map<string, number>();
 
@@ -690,8 +740,12 @@ export class Room extends EventEmitter {
     this.programHumanDescription = options.programHumanDescription;
     this.bypassPermissionsByDefault = options.bypassPermissionsByDefault;
     this.hubRun = options.hubRun ?? (() => null);
+    this.memoryGraph = options.memoryGraph ?? (() => null);
+    this.memoryGraphReady = options.memoryGraphReady ?? (async () => {});
+    this.connections = options.connections ?? (() => []);
     this.programTranscripts = options.programTranscripts ?? "off";
     this.programFoldAfter = options.programFoldAfter ?? 1200;
+    this.recordPrompts = options.recordPrompts === true;
     this.skills = options.skills;
     this.history = options.history;
     this.onHistoryFailure = options.onHistoryFailure;
@@ -721,7 +775,7 @@ export class Room extends EventEmitter {
     return join(this.dataDir, "files");
   }
 
-  imagePath(attachment: Attachment): string {
+  attachmentPath(attachment: Attachment): string {
     return join(this.filesDir(), attachment.file);
   }
 
@@ -973,6 +1027,7 @@ export class Room extends EventEmitter {
         replyDelay: s.replyDelay,
         skills: normalizeSkillList(s.skills),
         launch: s.launch,
+        earlierLaunches: s.earlierLaunches,
         sessionId: s.sessionId,
         deliveryEpoch: s.deliveryEpoch,
         suppliedThrough: s.suppliedThrough,
@@ -1046,6 +1101,7 @@ export class Room extends EventEmitter {
           color: p.color,
           colorSlot: p.colorSlot,
           launch: p.launch ?? { model: p.model ?? null, effort: p.effort ?? null, mode: p.mode ?? null },
+          earlierLaunches: p.earlierLaunches ? { ...p.earlierLaunches } : undefined,
           muted: !!p.muted,
           createdByVibemate: p.createdByVibemate || undefined,
           replyDelay: p.replyDelay,
@@ -1148,6 +1204,10 @@ export class Room extends EventEmitter {
     return this.settings.humanName;
   }
 
+  speechNames(): string[] {
+    return [this.humanName, ...[...this.participants.values()].filter((p) => p.kind === "agent" && p.status !== "left").map((p) => p.name)];
+  }
+
   turnProgressMark(participantId: string): string {
     const turn = this.runtimes.get(participantId)?.turn;
     return turn ? `${turn.message.id}:${turn.lastSignAt ?? turn.startedAt}:${turn.message.text.length}:${turn.message.toolCalls?.length ?? 0}` : "";
@@ -1221,7 +1281,7 @@ export class Room extends EventEmitter {
     return {
       history: { ...this.historyStamp(), hidden, oldest: hidden ? cursorOf(shown[0]) : null, latest,
         lastChat: lastChat ? { id: lastChat.id, seq: lastChat.seq, from: lastChat.from, fromName: lastChat.fromName, ts: lastChat.ts, text: lastChat.text.slice(0, 160) } : null },
-      pinnedOlder: from ? all.slice(0, from).filter((m) => m.pinned && m.kind === "chat") : [],
+      pinnedOlder: from ? all.slice(0, from).filter((m) => m.pinned && m.kind === "chat").map((m) => this.forWindow(m)) : [],
       id: this.id,
       filesDir: this.filesDir(),
       sources: this.history.carry.sources(),
@@ -1237,7 +1297,7 @@ export class Room extends EventEmitter {
       settings: this.settings,
       customRulesText: this.renderRuleReferences(this.settings.customRules),
       participants: [...this.participants.values()].map(p => this.participantView(p)),
-      messages: shown,
+      messages: shown.map((m) => this.forWindow(m)),
       permissions: [...this.permissions.values()].map(({ resolve: _r, ...p }) => p),
       proposals: [...this.proposals.values()],
       newRooms: [...this.newRooms.values()],
@@ -1248,12 +1308,13 @@ export class Room extends EventEmitter {
     };
   }
 
-  applyProgramSettings(program: { humanName: string; humanDescription: string; bypassPermissionsByDefault: boolean; transcripts?: TranscriptMode; foldAfter?: number }): void {
+  applyProgramSettings(program: { humanName: string; humanDescription: string; bypassPermissionsByDefault: boolean; transcripts?: TranscriptMode; foldAfter?: number; recordPrompts?: boolean }): void {
     const changed: string[] = [];
     this.bypassPermissionsByDefault = program.bypassPermissionsByDefault;
     if (program.transcripts) this.programTranscripts = program.transcripts;
     if (program.transcripts) this.updateTranscriptModes();
     if (program.foldAfter) this.programFoldAfter = program.foldAfter;
+    if (program.recordPrompts !== undefined) this.recordPrompts = program.recordPrompts;
     if (program.humanName !== this.settings.humanName) {
       this.settings = { ...this.settings, humanName: program.humanName };
       const human = this.participants.get("human")!;
@@ -1317,8 +1378,42 @@ export class Room extends EventEmitter {
     this.notice(text, level);
   }
 
+  serviceNotice(text: string, level: "info" | "warn" | "error"): void {
+    this.notice(text, level);
+  }
+
+  serviceEvent(text: string): ChatMessage {
+    return this.postRoomEvent(text, "human", false, { tone: "attention" });
+  }
+
   channelRecord(text: string): void {
     this.postRoomEvent(text);
+  }
+
+  cardOutcome(text: string, participantId: string): void {
+    this.postRoomEvent(text, undefined, true);
+    this.requestTurn(participantId, true);
+  }
+
+  askConnectionWrite(participantId: string, call: { title: string; input: Record<string, unknown> }): Promise<boolean> {
+    return new Promise((resolve) => {
+      const entry: PermissionEntry = {
+        key: randomUUID(),
+        participantId,
+        toolCall: { toolCallId: `connection-${randomUUID()}`, title: call.title, kind: "other", rawInput: call.input },
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "deny", name: "Deny", kind: "reject_once" },
+        ],
+        ts: Date.now(),
+        afterSeq: this.seq,
+        resolve: (response) => resolve(response.outcome.outcome === "selected" && response.outcome.optionId === "allow"),
+      };
+      this.permissions.set(entry.key, entry);
+      const { resolve: _r, ...view } = entry;
+      this.push({ type: "permission", permission: view });
+      this.notice(`${this.participants.get(participantId)?.name ?? participantId} asks for permission: ${call.title}`, "info");
+    });
   }
 
   shownStatus(id: string): ParticipantStatus | "working" | "writing" | "notes" {
@@ -1458,8 +1553,8 @@ export class Room extends EventEmitter {
     return this.adopting;
   }
 
-  postHumanMessage(text: string, images: ImageInput[] = [], quotes: QuoteInput[] = []): ChatMessage {
-    const message = this.buildHumanMessage(text, images, quotes);
+  postHumanMessage(text: string, images: ImageInput[] = [], quotes: QuoteInput[] = [], audio: HeardSound[] = [], video: VideoInput[] = []): ChatMessage {
+    const message = this.buildHumanMessage(text, images, quotes, audio, video);
     this.commit(message);
     this.route(message);
     this.emit("humanActivity");
@@ -1522,14 +1617,14 @@ export class Room extends EventEmitter {
     this.automationTasks.delete(id); task.cleanup(); task.resolve(outcome ?? task.outcome);
   }
 
-  acceptExternalMessage(input: { opId: string; via: MessageVia; text: string; images?: ImageInput[]; quotes?: QuoteInput[] }): ExternalReceipt {
+  acceptExternalMessage(input: { opId: string; via: MessageVia; text: string; images?: ImageInput[]; quotes?: QuoteInput[]; audio?: HeardSound[]; video?: VideoInput[] }): ExternalReceipt {
     const held = this.unsavedExternal.get(input.opId);
     if (held) return { id: held.message.id, seq: held.message.seq, stored: held.stored, repeated: true, rerouted: false };
     const applied = this.appliedReceipt(input.opId);
     if (applied) return { id: applied.messageId, seq: applied.seq, stored: "record", repeated: true, rerouted: this.rerouteIfNeverSeen(applied.messageId) };
     let message: ChatMessage;
     try {
-      message = this.buildHumanMessage(input.text, input.images ?? [], input.quotes ?? []);
+      message = this.buildHumanMessage(input.text, input.images ?? [], input.quotes ?? [], input.audio ?? [], input.video ?? []);
     } catch (error) {
       if (error instanceof RoomRefusal) return { stored: "rejected", reason: error.message, repeated: false, rerouted: false, transient: error.transient };
       throw error;
@@ -1559,14 +1654,16 @@ export class Room extends EventEmitter {
     }
   }
 
-  private buildHumanMessage(text: string, images: ImageInput[], quotes: QuoteInput[]): ChatMessage {
+  private buildHumanMessage(text: string, images: ImageInput[], quotes: QuoteInput[], audio: HeardSound[] = [], video: VideoInput[] = []): ChatMessage {
     this.assertRecordOpen();
     const waiting = this.unstaffed();
     if (waiting.length) throw new RoomRefusal(`${waiting.map((p) => p.name).join(", ")} ${waiting.length === 1 ? "has" : "have"} no coding agent yet: summon ${waiting.length === 1 ? "it" : "them"} from the roster to start the conversation`);
     const trimmed = text.trim();
-    if (!trimmed && !images.length && !quotes.length) throw new RoomRefusal("empty message");
+    if (!trimmed && !images.length && !audio.length && !video.length && !quotes.length) throw new RoomRefusal("empty message");
     const quoted = quotes.length ? resolveQuotes(quotes, this.messages, this.drafts) : [];
     const attachments = images.length ? saveImages(ensureDir(this.filesDir()), images) : [];
+    const sounds = audio.length ? saveAudio(ensureDir(this.filesDir()), audio).map((kept, i) => ({ ...kept, ...(audio[i].words !== undefined ? { words: audio[i].words } : {}), ...(audio[i].unheard ? { unheard: audio[i].unheard } : {}) })) : [];
+    const clips = video.length ? saveVideo(ensureDir(this.filesDir()), video) : [];
     this.humanTypingUntil = 0;
     const human = this.participants.get("human")!;
     const message: ChatMessage = {
@@ -1581,6 +1678,8 @@ export class Room extends EventEmitter {
       kind: "chat",
     };
     if (attachments.length) message.images = attachments;
+    if (sounds.length) message.audio = sounds;
+    if (clips.length) message.video = clips;
     if (quoted.length) message.quotes = quoted;
     this.awaitNumbers(message);
     this.decorateHumanMessage(message);
@@ -1762,6 +1861,7 @@ export class Room extends EventEmitter {
     }
     message.edited = { ts: Date.now(), previous };
     message.text = trimmed;
+    if (this.folderId && (message.numbering ?? message.origin ?? this.folderId) !== this.folderId) message.numbering = this.folderId;
     this.decorateHumanMessage(message);
     this.humanTypingUntil = 0;
     if (this.focused) {
@@ -1903,7 +2003,7 @@ export class Room extends EventEmitter {
       runtime.log.info("notes: hidden turn");
       participant.notesTurn = true;
       this.push({ type: "participant", participant });
-      await this.executeTurn(participant, runtime, [{ type: "text", text: `${header}\n\n${NOTES_ONLY_PROMPT}` }], null, true);
+      await this.executeTurn(participant, runtime, [{ type: "text", text: `${header}\n\n${NOTES_ONLY_PROMPT}` }], null, { hidden: true });
     } finally {
       participant.notesTurn = undefined;
       try {
@@ -2107,7 +2207,7 @@ export class Room extends EventEmitter {
       participant.role = this.guardBriefText(`${participant.name}'s vibio`, patch.role.trim());
     }
     if (patch.avatar !== undefined) {
-      participant.avatar = patch.avatar.trim().slice(0, 8) || undefined;
+      participant.avatar = cleanFace(patch.avatar, "vibemate") || undefined;
     }
     if (patch.replyDelay !== undefined) {
       if (patch.replyDelay === null) participant.replyDelay = undefined;
@@ -2330,7 +2430,7 @@ export class Room extends EventEmitter {
       ...this.nextColour(options.color),
       tagline: (options.tagline ?? "").trim().slice(0, 80),
       role: this.guardBriefText(`${name}'s vibio`, (options.role ?? "").trim(), options.textCheck),
-      avatar: (options.avatar ?? "").trim().slice(0, 8) || undefined,
+      avatar: (options.avatar == null ? this.freshAvatar() : cleanFace(options.avatar, "vibemate")) || undefined,
       replyDelay: options.replyDelay === undefined || options.replyDelay === null ? undefined : Math.max(0, Math.min(120, Number(options.replyDelay) || 0)),
       skills: normalizeSkillList(options.skills ?? undefined),
       launch,
@@ -2360,7 +2460,7 @@ export class Room extends EventEmitter {
       ...this.nextColour(input.color),
       tagline: (input.tagline ?? "").trim().slice(0, 80),
       role: this.guardBriefText(`${name}'s vibio`, (input.role ?? "").trim(), input.textCheck),
-      avatar: (input.avatar ?? "").trim().slice(0, 8) || undefined,
+      avatar: (input.avatar == null ? this.freshAvatar() : cleanFace(input.avatar, "vibemate")) || undefined,
       skills: normalizeSkillList(input.skills),
       violations: 0,
       briefsSent: 0,
@@ -2412,6 +2512,11 @@ export class Room extends EventEmitter {
       await this.retireRuntime(id);
     }
     const from = participant.agentVendor ?? participant.agentType;
+    const earlier = { ...participant.earlierLaunches };
+    if (participant.agentType) earlier[participant.agentType] = participant.launch ?? { model: participant.model ?? null, effort: participant.effort ?? null, mode: participant.mode ?? null };
+    const remembered = earlier[recipe.id];
+    delete earlier[recipe.id];
+    participant.earlierLaunches = Object.keys(earlier).length ? earlier : undefined;
     participant.agentType = recipe.id;
     participant.agentLabel = recipe.label;
     participant.agentVendor = recipe.vendor;
@@ -2425,11 +2530,14 @@ export class Room extends EventEmitter {
     participant.contextUsed = undefined;
     participant.contextSize = undefined;
     participant.cost = undefined;
-    participant.launch = {
-      model: choice.model ?? recipe.defaultModel,
-      effort: choice.effort ?? recipe.defaultEffort,
-      mode: choice.mode ?? (this.bypassPermissionsByDefault ? recipe.bypassMode ?? recipe.defaultMode : recipe.defaultMode),
+    const base: LaunchPrefs = remembered ?? {
+      model: recipe.defaultModel,
+      effort: recipe.defaultEffort,
+      mode: this.bypassPermissionsByDefault ? recipe.bypassMode ?? recipe.defaultMode : recipe.defaultMode,
     };
+    participant.launch = { model: choice.model ?? base.model, effort: choice.effort ?? base.effort, mode: choice.mode ?? base.mode };
+    const source = choice.model || choice.effort ? "as chosen" : remembered ? "as it had there before" : `the defaults for ${recipe.vendor}`;
+    this.postSystem(`${participant.name} on ${recipe.vendor}: model ${participant.launch.model ?? "the agent's own"}, effort ${participant.launch.effort ?? "the agent's own"}, ${source}`, "human", false, { agentId: participant.id });
     this.log.info(`${participant.name}: coding agent ${from} -> ${recipe.vendor}`);
     return this.respawnAgent(id, { memory: true, replay: choice.replay, reason: `it now runs on ${recipe.vendor}` });
   }
@@ -2484,6 +2592,17 @@ export class Room extends EventEmitter {
 
     const stderrTail: string[] = [];
 
+    const extensions = new ExtensionRouter(
+      {
+        onAuthStatus: (status) => {
+          const p = this.participants.get(id);
+          if (!p) return;
+          p.authStatus = status;
+          this.push({ type: "participant", participant: p });
+        },
+      },
+      { info: (text) => log.info(`protocol: ${text}`), warn: (text) => log.warn(`protocol: ${text}`) },
+    );
     let agent: AcpAgent;
     try {
       agent = new AcpAgent(
@@ -2501,7 +2620,8 @@ export class Room extends EventEmitter {
           }),
           onExit: (code, signal) => this.onAgentExit(id, code, signal, agent),
           onRaw: (direction, message) => transcript.record(direction, message),
-          onProtocolError: (text) => log.warn(`protocol: ${text}`),
+          onProtocolError: (text) => extensions.protocolFault(text),
+          onExtensionNotification: (method, params) => extensions.notification(method, params),
         },
       );
     } catch (error) {
@@ -2519,6 +2639,7 @@ export class Room extends EventEmitter {
       const mcp = this.skillMcpServers(id);
       const mcpToken = mcp ? mcp.token : null;
       const mcpServers = mcp ? [mcp.server] : [];
+      const meta = sessionMeta(recipe, this.settings, mcpServers.length > 0);
 
       let session: NewSessionResult | null = null;
       let origin: NonNullable<Participant["sessionOrigin"]> = fresh ? "new" : "replayed";
@@ -2528,14 +2649,14 @@ export class Room extends EventEmitter {
         else {
           try {
             log.info(`session/load ${participant.sessionId}`);
-            session = await agent.loadSession(participant.sessionId, cwd, mcpServers);
+            session = await agent.loadSession(participant.sessionId, cwd, mcpServers, meta);
             origin = "loaded";
           } catch (error) {
             this.notice(`${name}: session/load failed (${describeError(error)}); starting a new session with replayed history.`, "warn");
           }
         }
       }
-      if (!session) session = await this.openSession(agent, cwd, log, mcpServers, recipe);
+      if (!session) session = await this.openSession(agent, cwd, log, mcpServers, recipe, meta);
       participant.sessionId = session.sessionId;
       participant.sessionOrigin = origin;
       if (origin !== "loaded" || !participant.deliveryEpoch) {
@@ -2603,7 +2724,10 @@ export class Room extends EventEmitter {
         if (!participant.modes?.length) participant.modes = recipe.modePresets.map((id) => ({ id, name: id }));
         participant.mode = launch.mode ?? recipe.defaultMode ?? participant.mode;
       }
-      for (const w of warnings) this.notice(`${name}: ${w}`, "warn");
+      for (const w of warnings) {
+        this.log.warn(`${name}: ${w.log}`);
+        this.postSystem(`${name}: ${w.said}.`, "human", false, { agentId: participant.id, tone: "attention" });
+      }
 
       participant.status = "idle";
       participant.statusDetail = undefined;
@@ -2942,7 +3066,10 @@ export class Room extends EventEmitter {
     this.closeDoor();
     for (const [id, runtime] of this.runtimes) {
       try {
-        if (runtime.turnActive) runtime.agent.cancel(runtime.sessionId);
+        if (runtime.turnActive) {
+          runtime.roomStopped = true;
+          runtime.agent.cancel(runtime.sessionId);
+        }
         await Promise.race([runtime.agent.closeSession(runtime.sessionId), delay(1000)]);
       } catch {
       }
@@ -3101,6 +3228,18 @@ export class Room extends EventEmitter {
     return result;
   }
 
+  soundForAgent(participantId: string, ref: string): { path: string; mimeType: string; name: string; seconds?: number } {
+    this.assertRecordOpenForAgents();
+    this.agentInRoom(participantId);
+    const match = /^#(\d+)\.(\d+)$/.exec(ref.trim());
+    if (!match) throw new Error("a sound's reference is #<message>.<n>, as its \"[audio N · #…]\" line gives it");
+    const window = agentReadableWindow(this.messages, Number(match[1]), 0);
+    if (!window) throw new Error(`no message #${match[1]} in this room (or it is one the vibemates do not see)`);
+    const sound = (window.message.audio ?? []).find((a, i) => (a.n ?? i + 1) === Number(match[2]));
+    if (!sound) throw new Error(`message #${match[1]} has no sound ${match[2]}`);
+    return { path: this.attachmentPath(sound), mimeType: sound.mimeType, name: sound.name, ...(sound.seconds ? { seconds: sound.seconds } : {}) };
+  }
+
   readVisibleMessageForAgent(seq: number, around: number, reader: string): Record<string, unknown> {
     this.assertRecordOpenForAgents();
     const window = agentReadableWindow(this.messages, seq, around);
@@ -3112,6 +3251,7 @@ export class Room extends EventEmitter {
   private agentMessageView(m: ChatMessage) {
     const files = this.carriedFilePaths(m);
     const now = this.participants.get(m.from)?.name;
+    const numbers = this.numbersHere(m), differ = numbers?.cited.filter(c => c.here !== c.written) ?? [];
     return {
       seq: m.seq,
       from: m.fromName,
@@ -3119,12 +3259,33 @@ export class Room extends EventEmitter {
       to: m.toNames,
       at: new Date(m.ts).toISOString(),
       text: m.text,
+      ...(differ.length ? { numbers: { writtenOn: numbers!.copy, here: Object.fromEntries(differ.map(c => [`#${c.written}`, c.here === null ? null : `#${c.here}`])) } } : {}),
       ...(files.length ? { files } : {}),
       ...(m.kind === "system" ? { kind: "system" } : {}),
       ...(m.edited ? { edited: true } : {}),
-      ...(m.images && m.images.length ? { images: m.images.map((a, i) => ({ ref: `#${m.seq}.${a.n ?? i + 1}`, name: a.name, path: this.imagePath(a) })) } : {}),
+      ...(m.images && m.images.length ? { images: m.images.map((a, i) => ({ ref: `#${m.seq}.${a.n ?? i + 1}`, name: a.name, path: this.attachmentPath(a) })) } : {}),
+      ...(m.audio && m.audio.length ? { audio: this.backlogAudio(m) } : {}),
+      ...(m.video && m.video.length ? { video: this.backlogVideo(m) } : {}),
       ...(m.quotes && m.quotes.length ? { quotes: m.quotes.map((q) => ({ n: q.n, seq: q.seq, from: q.fromName, text: q.text })) } : {}),
     };
+  }
+
+  private backlogVideo(m: ChatMessage): BacklogVideo[] | undefined {
+    if (!m.video || !m.video.length) return undefined;
+    return m.video.map((v, i) => ({ n: v.n ?? i + 1, ref: `#${m.seq}.${v.n ?? i + 1}`, name: v.name, path: this.attachmentPath(v), ...(v.seconds ? { seconds: v.seconds } : {}) }));
+  }
+
+  private backlogAudio(m: ChatMessage): BacklogAudio[] | undefined {
+    if (!m.audio || !m.audio.length) return undefined;
+    return m.audio.map((a, i) => ({
+      n: a.n ?? i + 1,
+      ref: `#${m.seq}.${a.n ?? i + 1}`,
+      name: a.name,
+      path: this.attachmentPath(a),
+      ...(a.seconds ? { seconds: a.seconds } : {}),
+      ...(a.words !== undefined ? { words: a.words } : {}),
+      ...(a.unheard ? { unheard: a.unheard } : {}),
+    }));
   }
 
   private carriedFilePaths(m: ChatMessage): { original: string; path: string }[] {
@@ -3132,8 +3293,43 @@ export class Room extends EventEmitter {
   }
 
   private backlogText(m: ChatMessage): string {
-    const files = this.carriedFilePaths(m);
-    return files.length ? `${m.text}\n\n[Files carried with this message; paths on this computer]\n${files.map(file => JSON.stringify(file)).join("\n")}` : m.text;
+    const files = this.carriedFilePaths(m), numbers = this.numbersHere(m);
+    const note = numbers ? numbersNote(numbers.copy, numbers.cited) : "";
+    const text = files.length ? `${m.text}\n\n[Files carried with this message; paths on this computer]\n${files.map(file => JSON.stringify(file)).join("\n")}` : m.text;
+    return note ? `${text}\n\n${note}` : text;
+  }
+
+  numberFromCopy(copy: string, seq: number): number {
+    const carry = this.history.carry, wanted = copy.trim().toLowerCase();
+    if (this.folderId && (copy === this.folderId || (carry.sourceLabel(this.folderId) ?? "").toLowerCase() === wanted)) return seq;
+    const sources = carry.sources().filter(s => s.uuid !== this.folderId);
+    const byId = sources.filter(s => s.uuid === copy), named = byId.length ? byId : sources.filter(s => s.label.toLowerCase() === wanted);
+    if (named.length > 1) throw new Error(`${named.length} copies of this room are called ${JSON.stringify(copy)}; name one by its identity: ${named.map(s => s.uuid).join(", ")}`);
+    if (!named.length) throw new Error(`no copy called ${JSON.stringify(copy)} is known here; the copies this room has heard of: ${sources.map(s => JSON.stringify(s.label)).join(", ") || "none"}`);
+    const id = carry.numberedOn(this.id, named[0].uuid, seq), here = id ? this.messageById(id)?.seq : undefined;
+    if (here === undefined) throw new Error(`#${seq} of ${named[0].label} is not in this room`);
+    return here;
+  }
+
+  forWindow(m: ChatMessage): WindowMessage {
+    const numbers = this.numbersHere(m), differ = numbers?.cited.filter(c => c.here !== c.written) ?? [];
+    if (!differ.length) return m;
+    return { ...m, numbersHere: { copy: numbers!.copy, here: Object.fromEntries(differ.map(c => [String(c.written), c.here])) } };
+  }
+
+  numbersHere(m: ChatMessage): { copy: string; cited: CitedNumber[] } | null {
+    const origin = m.numbering ?? m.origin;
+    if (!origin || !this.folderId || origin === this.folderId) return null;
+    const cited = citedNumbers(m.text);
+    if (!cited.length) return null;
+    const carry = this.history.carry;
+    return {
+      copy: carry.sourceLabel(origin) ?? "another computer",
+      cited: cited.map(written => {
+        const id = carry.numberedOn(this.id, origin, written);
+        return { written, here: id ? this.messageById(id)?.seq ?? null : null };
+      }),
+    };
   }
 
   private ensureDeliveryEpoch(participant: Participant): string {
@@ -3204,7 +3400,7 @@ export class Room extends EventEmitter {
       if (!call.rawInput || typeof call.rawInput !== "object" || Array.isArray(call.rawInput)) return false;
       try {
         const input = parseAgentSearchArgs(roomOperation(call)!.arguments);
-        return input.query === args.query && input.rooms === args.rooms && input.kinds === args.kinds && input.author === args.author && input.limit === args.limit;
+        return input.query === args.query && input.rooms === args.rooms && input.kinds === args.kinds && input.author === args.author && input.limit === args.limit && input.only === args.only;
       }
       catch { return false; }
     });
@@ -3523,11 +3719,11 @@ export class Room extends EventEmitter {
         if (String(from).toLowerCase() !== String(to).toLowerCase()) rows.push({ key: `${key} (${own.label})`, from, to });
       }
     }
-    for (const key of ["chatFontSize", "font", "mono"] as const) {
+    for (const key of ["chatFontSize", "scale", "font", "mono"] as const) {
       if (changes[key] === undefined) continue;
       patch[key] = changes[key];
       const previewed = this.skills.appearance.preview({ [key]: changes[key] });
-      if (String(previewed[key]) !== String(current[key])) rows.push({ key: key === "chatFontSize" ? "text size" : key === "font" ? "font" : "code font", from: current[key], to: previewed[key] });
+      if (String(previewed[key]) !== String(current[key])) rows.push({ key: key === "chatFontSize" ? "text size" : key === "scale" ? "scale, %" : key === "font" ? "font" : "code font", from: current[key], to: previewed[key] });
     }
     this.skills.appearance.preview(patch);
     if (!rows.length) throw new Error("not proposed: the change leaves the window as it is");
@@ -4024,17 +4220,45 @@ export class Room extends EventEmitter {
     return this.messages.filter(m => m.kind === "chat" && m.from !== id && m.audience !== "human" && !m.streaming && m.seq > runtime.lastSeenSeq);
   }
 
+  private noticeOnly(id: string, runtime: AgentRuntime): boolean {
+    return !!runtime.missedNotice && !this.automationTasks.has(id) && !this.repairTasks.has(id);
+  }
+
+  private addressedIn(id: string, messages: readonly ChatMessage[]): number[] {
+    return messages.filter(m => m.kind === "chat" && (m.to.length === 0 || m.to.includes(id))).map(m => m.seq);
+  }
+
+  private parallelWorkNote(id: string): string | null {
+    const starting: string[] = [];
+    const midTurn: string[] = [];
+    for (const [otherId, other] of this.runtimes) {
+      if (otherId === id) continue;
+      const p = this.participants.get(otherId);
+      if (!p || p.kind !== "agent" || p.muted || !other.agent.alive || other.retiring || p.status === "left" || p.status === "error") continue;
+      if (other.turnActive || other.workBusy) midTurn.push(p.name);
+      else if (this.settings.turnTaking !== "one-at-a-time" && (other.pendingTurn || other.delayTimer || this.floorQueue.includes(otherId) || p.status === "queued")) starting.push(p.name);
+    }
+    if (!starting.length && !midTurn.length) return null;
+    const clauses: string[] = [];
+    if (starting.length) clauses.push(`${starting.join(", ")} start${starting.length === 1 ? "s" : ""} a turn in parallel with you right now`);
+    if (midTurn.length) clauses.push(`${midTurn.join(", ")} ${midTurn.length === 1 ? "is" : "are"} mid-turn`);
+    return `${clauses.join("; ")}.`;
+  }
+
   private async runTurnInner(id: string, participant: Participant, runtime: AgentRuntime): Promise<void> {
     runtime.pendingTurn = false;
     if (!runtime.agent.alive || participant.muted || this.focused || runtime.workCancelled) return;
     await this.awaitSkillChannel(participant, runtime);
+    if (this.settings.remembers && !this.noticeOnly(id, runtime)) {
+      await this.memoryGraphReady(this.id, this.addressedIn(id, this.messages.filter(m => m.seq > runtime.lastSeenSeq)));
+    }
     if (!runtime.agent.alive || runtime.retiring || this.runtimes.get(id) !== runtime || participant.muted || this.focused || runtime.workCancelled) return;
 
     const unreadAll = this.messages.filter(
       (m) => m.kind !== "hidden" && m.audience !== "human" && m.seq > runtime.lastSeenSeq && (m.kind === "system" || m.from !== id || m.seq <= runtime.replayOwnUntilSeq),
     );
     if (!unreadAll.some((m) => m.kind === "chat" || m.wakes) && !this.automationTasks.has(id) && !this.repairTasks.has(id)) return;
-    const missed = runtime.missedNotice && !this.automationTasks.has(id) && !this.repairTasks.has(id) ? this.missedChat(id, runtime).length : 0;
+    const missed = this.noticeOnly(id, runtime) ? this.missedChat(id, runtime).length : 0;
     runtime.missedNotice = false;
     runtime.promptedThisWork = !missed;
     const cap = this.settings.backlogCap;
@@ -4063,10 +4287,14 @@ export class Room extends EventEmitter {
     const contents = buildInstructionContents(settings, persona, roster, skillsForPrompt);
     const delivery = planInstructionDelivery(contents, runtime.instructionRevisions, briefReason !== null, runtime.skillCatalogPending);
     const sendMemory = delivery.full || runtime.memoryStamp !== memoryStamp;
+    const memoryGraph = this.settings.remembers ? this.memoryGraph(this.id, this.addressedIn(id, unread)) : null;
+    const sendMemoryGraph = !!memoryGraph && (delivery.full || runtime.memoryGraphStamp !== memoryGraph.revision);
 
     const notes = [...runtime.headerNotes];
     runtime.headerNotes = [];
     if (missed) notes.push(`${missed} message${missed === 1 ? "" : "s"} arrived while you were working; none was addressed to you. Read ${missed === 1 ? "it" : "them"} with check_room if the conversation may concern you, then answer or reply [silent]. Either way ${missed === 1 ? "it arrives" : "they arrive"} again with your next turn.`);
+    const parallelNote = this.parallelWorkNote(id);
+    if (parallelNote) notes.push(parallelNote);
     if (briefReason && overThreshold(runtime.lastUsed, participant.contextSize ?? 0)) this.askForNotes(runtime);
     runtime.notesAskedThisTurn = runtime.notesDue;
     if (runtime.notesDue) notes.push(NOTES_REQUEST);
@@ -4078,6 +4306,7 @@ export class Room extends EventEmitter {
       const updated = [delivery.brief && "room-brief", delivery.roomRules && "room-rules", delivery.vibio && "vibio"].filter(Boolean);
       if (updated.length) notes.push(`instructions updated (${updated.join(", ")}); each supplied block replaces its previous version`);
       if (sendMemory) notes.push("shared memory changed");
+      if (sendMemoryGraph) notes.push("memory-graph refreshed; it replaces the previous memory-graph block");
     }
     notes.push(`instruction versions: room-rules=${delivery.revisions.roomRules}, vibio=${delivery.revisions.vibio}`);
     if (runtime.skillCatalogPending) notes.push("your skill library changed; reload an affected skill before using its instructions again");
@@ -4097,7 +4326,7 @@ export class Room extends EventEmitter {
     const backlogImages = (m: ChatMessage): BacklogImage[] | undefined => {
       if (!m.images || !m.images.length) return undefined;
       const attached = seesImages && (m.to.length === 0 || m.to.includes(id));
-      return m.images.map((a, i) => ({ n: a.n ?? i + 1, ref: `#${m.seq}.${a.n ?? i + 1}`, name: a.name, path: this.imagePath(a), mimeType: a.mimeType, attached, forNames: m.to.length ? m.toNames : [] }));
+      return m.images.map((a, i) => ({ n: a.n ?? i + 1, ref: `#${m.seq}.${a.n ?? i + 1}`, name: a.name, path: this.attachmentPath(a), mimeType: a.mimeType, attached, forNames: m.to.length ? m.toNames : [] }));
     };
     const backlogQuotes = (m: ChatMessage): BacklogQuote[] | undefined =>
       m.quotes && m.quotes.length ? m.quotes.map((q) => ({ n: q.n, seq: q.seq, fromName: q.fromName, ts: q.ts, text: q.text })) : undefined;
@@ -4105,8 +4334,9 @@ export class Room extends EventEmitter {
       brief: delivery.brief ? buildBrief(settings, persona, roster, this.notesForBrief(participant, runtime), skillsForPrompt) : undefined,
       roomRules: delivery.roomRules ? instructionBlock("room-rules", contents.roomRules) : undefined,
       vibio: delivery.vibio ? instructionBlock("vibio", contents.vibio) : undefined,
-      header: buildHeader(settings, persona, roster, this.hops, notes, skillsForPrompt),
+      header: buildHeader(settings, persona, roster, this.hops, notes, skillsForPrompt, this.connections(this.uuid)),
       memory: sendMemory ? memoryBlock(userMemory, roomMemory) : undefined,
+      memoryGraph: sendMemoryGraph ? memoryGraph!.block : undefined,
       skills: attached.map((s) => composeSkillBlock({ name: s.name, text: s.text, invokedBy: s.invokedBy, extraFiles: s.extraFiles })),
       backlog: unread.map<BacklogLine>((m) =>
         m.kind === "system"
@@ -4118,14 +4348,18 @@ export class Room extends EventEmitter {
               text: this.backlogText(m),
               images: backlogImages(m),
               quotes: backlogQuotes(m),
+              audio: this.backlogAudio(m),
+              video: this.backlogVideo(m),
             },
       ),
       omitted,
       personaName: participant.name,
+      replyLanguage: replyLanguageClause(settings),
     });
     runtime.instructionRevisions = delivery.revisions;
     runtime.skillCatalogPending = false;
     if (sendMemory) runtime.memoryStamp = memoryStamp;
+    if (sendMemoryGraph) runtime.memoryGraphStamp = memoryGraph!.revision;
     if (delivery.full) {
       runtime.briefPending = null;
       runtime.turnsSinceBrief = 0;
@@ -4149,9 +4383,42 @@ export class Room extends EventEmitter {
       if (text) blocks.push({ type: "text", text });
     }
     if (automation) blocks.unshift({ type: "text", text: `<automation-task>\nSaved by ${this.humanName}: ${automation.run.job.name}\n${automation.run.job.text}\n\nThis task is assigned to you using this room's context and existing permissions. Your final reply will be shown in the room without waking other participants. Finish with the result, or [silent] if there is nothing to report.\n</automation-task>` });
-    const retry = await this.executeTurn(participant, runtime, blocks, null, false, offerHistoryNotice, supplied);
+    const memorySearch = memoryGraph?.search ? { ...memoryGraph.search, sent: sendMemoryGraph } : undefined;
+    const retry = await this.executeTurn(participant, runtime, blocks, null, { historyNoticeOffered: offerHistoryNotice, supplied, ...(memorySearch ? { memorySearch } : {}) });
     if (retry) {
       await this.executeTurn(participant, runtime, [{ type: "text", text: retry.prompt }], retry);
+    }
+  }
+
+  static readonly PROMPTS_KEPT = 300;
+  private static readonly PROMPTS_SLACK = 50;
+  private promptsDir(): string {
+    return join(this.dataDir, "prompts");
+  }
+  private recordPrompt(messageId: string, participant: Participant, blocks: ContentBlock[], hidden: boolean, correction: boolean, memory?: PromptMemoryNote): void {
+    try {
+      const dir = ensureDir(this.promptsDir());
+      const kept = blocks.map((b) =>
+        b.type === "text" ? { type: "text", text: b.text }
+        : b.type === "image" ? { type: "image", mimeType: b.mimeType, bytes: Math.floor((b.data.length * 3) / 4) }
+        : { type: b.type },
+      );
+      writeFileSync(join(dir, `${messageId}.json`), JSON.stringify({ messageId, at: Date.now(), vibemate: participant.name, hidden, correction, blocks: kept, ...(memory ? { memory } : {}) }));
+      const names = readdirSync(dir).filter((n) => n.endsWith(".json"));
+      if (names.length > Room.PROMPTS_KEPT + Room.PROMPTS_SLACK) {
+        const byAge = names.map((n) => ({ n, at: statSync(join(dir, n)).mtimeMs })).sort((a, b) => a.at - b.at);
+        for (const { n } of byAge.slice(0, names.length - Room.PROMPTS_KEPT)) rmSync(join(dir, n), { force: true });
+      }
+    } catch (error) {
+      this.log.warn(`the prompt of ${participant.name}'s turn could not be kept: ${describeError(error)}`);
+    }
+  }
+  promptOf(messageId: string): unknown {
+    if (!/^[A-Za-z0-9-]{1,80}$/.test(messageId)) return null;
+    try {
+      return JSON.parse(readFileSync(join(this.promptsDir(), `${messageId}.json`), "utf8"));
+    } catch {
+      return null;
     }
   }
 
@@ -4172,7 +4439,8 @@ export class Room extends EventEmitter {
     return blocks;
   }
 
-  private async executeTurn(participant: Participant, runtime: AgentRuntime, blocks: ContentBlock[], retry: RetryRequest | null, hidden = false, historyNoticeOffered = false, supplied: BodyRef[] = []): Promise<RetryRequest | null> {
+  private async executeTurn(participant: Participant, runtime: AgentRuntime, blocks: ContentBlock[], retry: RetryRequest | null, extras: TurnExtras = {}): Promise<RetryRequest | null> {
+    const { hidden = false, historyNoticeOffered = false, supplied = [], memorySearch } = extras;
     if (runtime.turnActive || runtime.turn) throw new Error(`${participant.name} is already answering`);
     const id = participant.id;
     runtime.turnActive = true;
@@ -4205,6 +4473,7 @@ export class Room extends EventEmitter {
     let failureCode = "";
     try {
       const epoch = participant.deliveryEpoch;
+      if (this.recordPrompts) this.recordPrompt(draft.id, participant, blocks, hidden, retry !== null, memorySearch);
       const pending = runtime.agent.prompt(runtime.sessionId, blocks);
       if (!hidden && this.runtimes.get(id) === runtime) this.recordBodySupply(id, supplied, epoch);
       result = await pending;
@@ -4324,8 +4593,11 @@ export class Room extends EventEmitter {
     this.push({ type: "participant", participant });
 
     const cancelled = result.stopReason === "cancelled";
-    const stoppedByHuman = cancelled && !!runtime.workCancelled;
-    const cancelledByAgent = cancelled && !stoppedByHuman;
+    const endedBy: ChatMessage["cancelledBy"] = !cancelled ? undefined : runtime.workCancelled ? "human" : runtime.roomStopped ? "room" : "agent";
+    const stoppedByHuman = endedBy === "human";
+    const stopRow = () => endedBy === "human" ? `${participant.name} was stopped by ${this.humanName}${stoppedWork(draft)}.`
+      : endedBy === "room" ? `${participant.name}'s turn ended when viberoom stopped${stoppedWork(draft)}.`
+      : `${participant.name}'s agent ended the turn${stoppedWork(draft)}.`;
     if (cancelled) runtime.briefPending = runtime.briefPending ?? "previous turn was cancelled";
 
     const extracted = extractNotes(draft.text);
@@ -4385,19 +4657,15 @@ export class Room extends EventEmitter {
       if (published && !keepBubble) this.push({ type: "message.removed", id: draft.id });
       if (keepBubble) {
         this.commit({ ...draft, seq: ++this.seq, to: [], toNames: [], text: "", streaming: false,
-          stopReason: result.stopReason, cancelledBy: stoppedByHuman ? "human" : "agent",
+          stopReason: result.stopReason, cancelledBy: endedBy,
           ...(stoppedByHuman ? { stoppedBy: this.humanName } : {}),
           audience: "human", usage: result.usage ?? null, durationMs });
       }
       if (retry) {
         this.closeRetry(retry, cancelled ? "the correction turn was stopped; nothing was posted" : "the agent withdrew the reply");
-        if (cancelled) this.postRoomEvent(stoppedByHuman
-          ? `${participant.name} was stopped by ${this.humanName}${stoppedWork(draft)}.`
-          : `${participant.name}'s agent ended the turn${stoppedWork(draft)}.`, undefined, false, { tone: "attention" });
+        if (cancelled) this.postRoomEvent(stopRow(), undefined, false, { tone: "attention" });
       } else if (cancelled) {
-        this.postRoomEvent(stoppedByHuman
-          ? `${participant.name} was stopped by ${this.humanName}${stoppedWork(draft)}.`
-          : `${participant.name}'s agent ended the turn${stoppedWork(draft)}.`, undefined, false, { tone: "attention" });
+        this.postRoomEvent(stopRow(), undefined, false, { tone: "attention" });
       } else if (!runtime.fixedDiagramThisTurn) {
         this.postSystem(`${participant.name} read the room and has nothing to add.`);
       }
@@ -4456,15 +4724,17 @@ export class Room extends EventEmitter {
       this.push({ type: "participant", participant });
     }
 
+    const answerFrom = (draft.answerFrom ?? 0) - (draft.text.length - draft.text.trimStart().length);
     const message: ChatMessage = {
       ...draft,
       seq: ++this.seq,
       to: mentions.ids,
       toNames: mentions.names,
       text,
+      answerFrom: answerFrom > 0 && answerFrom < text.length ? answerFrom : undefined,
       streaming: false,
       stopReason: result.stopReason,
-      ...(cancelled ? { cancelledBy: stoppedByHuman ? "human" : "agent" } : {}),
+      ...(endedBy ? { cancelledBy: endedBy } : {}),
       ...(stoppedByHuman ? { stoppedBy: this.humanName } : {}),
       usage: result.usage ?? null,
       durationMs,
@@ -4485,7 +4755,10 @@ export class Room extends EventEmitter {
       this.closeRetry(retry, corrections.length ? `corrected reply posted, but it still breaks: ${corrections.map((c) => c.replace(/^reminder:\s*/i, "")).join("; ")}` : "corrected reply posted");
     }
     if (cancelled) {
-      this.postSystem(`${participant.name} was stopped mid-reply by ${this.humanName}; what it had written stays in the room.`, "agents", false, { tone: "attention" });
+      const cut = endedBy === "human" ? `${participant.name} was stopped mid-reply by ${this.humanName}`
+        : endedBy === "room" ? `${participant.name}'s turn ended mid-reply when viberoom stopped`
+        : `${participant.name}'s agent ended the turn mid-reply`;
+      this.postSystem(`${cut}; what it had written stays in the room.`, "agents", false, { tone: "attention" });
       return null;
     }
     if (result.stopReason !== "end_turn") {
@@ -4610,10 +4883,12 @@ export class Room extends EventEmitter {
           const notices = (turn.message.notices ??= []);
           notices.push(turn.message.text.trim());
           turn.message.text = "";
+          turn.message.answerFrom = undefined;
           turn.shownLength = 0;
           if (turn.published) this.push({ type: "message", message: turn.message });
         } else if (messageId !== turn.messageId && turn.message.text) {
           text = "\n\n" + text;
+          turn.message.answerFrom = turn.message.text.length + 2;
         }
         if (messageId) turn.sawMessageId = true;
         turn.messageId = messageId;
@@ -4744,6 +5019,7 @@ export class Room extends EventEmitter {
     const runtime = this.runtimes.get(id);
     if (!participant) return;
     if (!runtime || runtime.agent !== agent) return;
+    delete participant.authStatus;
     this.cancelPermissionsOf(id);
     if (this.closing || runtime.retiring) {
       this.forgetRuntime(id);
@@ -4765,9 +5041,9 @@ export class Room extends EventEmitter {
   }
 
 
-  private async openSession(agent: AcpAgent, cwd: string, log: Logger, mcpServers: McpServer[] = [], recipe?: AgentRecipe): Promise<NewSessionResult> {
+  private async openSession(agent: AcpAgent, cwd: string, log: Logger, mcpServers: McpServer[] = [], recipe?: AgentRecipe, meta?: Record<string, unknown>): Promise<NewSessionResult> {
     try {
-      return await agent.newSession(cwd, mcpServers);
+      return await agent.newSession(cwd, mcpServers, meta);
     } catch (error) {
       if (!isAuthRequired(error) || !agent.authMethods.length) throw error;
       log.info(`session/new needs authentication: ${describeError(error)}`);
@@ -4787,7 +5063,7 @@ export class Room extends EventEmitter {
           failures.push(`${method.id}: no answer in ${AUTH_WAIT_MS / 1000} s (a sign-in that needs you)`);
           continue;
         }
-        return await agent.newSession(cwd, mcpServers);
+        return await agent.newSession(cwd, mcpServers, meta);
       } catch (error) {
         failures.push(`${method.id}: ${describeError(error)}`);
       }
@@ -4799,14 +5075,14 @@ export class Room extends EventEmitter {
     runtime: AgentRuntime,
     participant: Participant,
     wanted: { model: string | null; effort: string | null; mode: string | null },
-  ): Promise<string[]> {
-    const warnings: string[] = [];
-    const plan: [string, string | null][] = [
-      ["model", wanted.model],
-      ["thought_level", wanted.effort],
-      ["mode", wanted.mode],
+  ): Promise<ConfigShortfall[]> {
+    const warnings: ConfigShortfall[] = [];
+    const plan: [string, string, string | null][] = [
+      ["model", "model", wanted.model],
+      ["thought_level", "effort", wanted.effort],
+      ["mode", "mode", wanted.mode],
     ];
-    for (const [category, value] of plan) {
+    for (const [category, label, value] of plan) {
       if (!value) continue;
       const option = participant.configOptions?.find((o) => o.category === category);
       if (!option || option.type !== "select") {
@@ -4815,23 +5091,23 @@ export class Room extends EventEmitter {
             const reported = await runtime.agent.setMode(runtime.sessionId, value);
             participant.mode = reported?.currentModeId ?? value;
           } catch (error) {
-            warnings.push(`mode: set_mode failed: ${describeError(error)}`);
+            warnings.push({ category, log: `mode: set_mode failed: ${describeError(error)}`, said: `the agent refused mode ${value}; it uses ${participant.mode ?? "its own"}` });
           }
           continue;
         }
-        warnings.push(`${category}: the agent exposes no such config option; left at its default`);
+        warnings.push({ category, log: `${category}: the agent exposes no such config option; left at its default`, said: `${label} ${value} cannot be chosen for this agent; it uses the agent's own` });
         continue;
       }
       const values = flattenOptions(option.options);
       if (!values.some((v) => v.value === value)) {
-        warnings.push(`${category}: "${value}" is not offered (${values.map((v) => v.value).join(", ")}); left at ${String(option.currentValue)}`);
+        warnings.push({ category, log: `${category}: "${value}" is not offered (${values.map((v) => v.value).join(", ")}); left at ${String(option.currentValue)}`, said: `${label} ${value} is not available on this computer; it uses ${String(option.currentValue)}` });
         continue;
       }
       if (option.currentValue === value) continue;
       try {
         participant.configOptions = await runtime.agent.setConfigOption(runtime.sessionId, option.id, value);
       } catch (error) {
-        warnings.push(`${category}: set_config_option failed: ${error instanceof Error ? error.message : String(error)}`);
+        warnings.push({ category, log: `${category}: set_config_option failed: ${describeError(error)}`, said: `the agent refused ${label} ${value}; it uses ${String(option.currentValue)}` });
       }
     }
     const recipe = participant.agentType ? getRecipe(participant.agentType) : undefined;
@@ -4843,13 +5119,13 @@ export class Room extends EventEmitter {
         try {
           participant.configOptions = await runtime.agent.setConfigOption(runtime.sessionId, option.id, value);
         } catch (error) {
-          warnings.push(`${optionId}: set_config_option failed: ${error instanceof Error ? error.message : String(error)}`);
+          warnings.push({ category: optionId, log: `${optionId}: set_config_option failed: ${describeError(error)}`, said: `the agent refused ${option.name || optionId} ${value}, which acting without asking needs; it may ask before it acts` });
         }
       }
     }
     this.applyConfigSummary(participant);
-    if (wanted.mode && participant.mode && participant.mode !== wanted.mode && !warnings.some(w => w.startsWith("mode:"))) {
-      warnings.push(`mode: requested ${wanted.mode}; the agent reports ${participant.mode}`);
+    if (wanted.mode && participant.mode && participant.mode !== wanted.mode && !warnings.some(w => w.category === "mode")) {
+      warnings.push({ category: "mode", log: `mode: requested ${wanted.mode}; the agent reports ${participant.mode}`, said: `mode ${wanted.mode} was asked for; the agent uses ${participant.mode}` });
     }
     return warnings;
   }
@@ -5142,10 +5418,11 @@ export function applyToolCallUpdate(view: ToolCallView, u: ToolCallUpdate): bool
   if (u.rawInput !== undefined) view.rawInput = u.rawInput;
   const touched = [...(u.locations ?? []).map((l) => l.path), ...(u.content ?? []).filter((c) => c.type === "diff").map((c) => (c as { path: string }).path)].filter((path) => typeof path === "string" && path);
   if (touched.length) view.locations = [...new Set([...(view.locations ?? []), ...touched])];
-  const operationTitle = roomToolTitle(view);
-  if (operationTitle) {
-    view.name ??= "viberoom.tool_call";
-    view.title = operationTitle;
+  const chip = roomToolChip(view);
+  if (chip) {
+    view.name ??= chip.name;
+    view.title = chip.title;
+    if (chip.kind) view.kind = chip.kind;
   }
   const output = toolOutputText(u);
   if (output) view.output = output;

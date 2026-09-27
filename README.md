@@ -15,11 +15,11 @@ Open a room, summon the agents you already have, give each one a role, and let t
 </p>
 
 <p align="center">
-  <a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/looks.gif" width="960" alt="The recorded session, drawn in each of the six looks in turn; click to open the interactive demo"></a>
+  <a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/looks.gif" width="960" alt="The recorded session, drawn in each of the eight looks in turn; click to open the interactive demo"></a>
 </p>
 
 <p align="center">
-  <a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/try-the-demo.png" width="880" alt="Try the interactive demo: a recorded session in the real viberoom window, two rooms, six vibemates, six looks, nothing to install"></a>
+  <a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic.html"><img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/try-the-demo.png" width="880" alt="Try the interactive demo: a recorded session in the real viberoom window, two rooms, six vibemates, eight looks, nothing to install"></a>
 </p>
 
 <p align="center">
@@ -40,6 +40,54 @@ Every word ever said in a room stays with it. Ask about something from a year ag
 
 <br>
 
+## Connect your tools
+
+Connect Jira, Notion, Linear, Sentry and the others once, and the vibemates can look things up there in
+every room: an issue, a page, an error. Connections has a catalogue of systems in five groups, each with its
+own logo; a server of your own joins them by its address, or as a command viberoom starts on this computer.
+Or just ask a vibemate, "connect Figma", and the card comes to you.
+
+You sign in at the system itself, in your browser; the access goes into this computer's vault and no
+vibemate ever sees it. Reading runs at once. **Before anything is written, you see the exact request and say
+yes**, in the room or on your phone. Every connection has its own page: its tools and which of them ask you
+first, where it is reached, how it signs in, and a switch for each room that should stay out of it.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/connections.png" width="820" alt="Connections: the connected systems as tiles, then the catalogue">
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/connection-page.png" width="820" alt="One system's own page: since when, its tools, the rooms that may use it, its address and how it signs in">
+</p>
+
+<br>
+
+## What they remember
+
+A room keeps every word, and there is more that stays:
+
+- **Their own notes.** A vibemate writes about ten lines on its work (what it is on, what is decided, what
+  comes next) when its context fills up, or when you ask. A fresh start or a move to another coding agent
+  carries them. You read and edit them in its panel, beside the context bar and what its last reply cost.
+- **A shared memory.** Short notes the vibemates keep about you, for every room, and about the room itself.
+  They read both sets before they change one, cite your messages, and leave alone the notes you protect.
+  Eight notes per set; edit, restore or clear them yourself.
+- **A long-term memory, if you want one.** Turn on a provider under Settings → Long-term memory (Zep or
+  Honcho) and choose the rooms that remember. A small model of your choice sifts
+  each message and keeps what is worth keeping; before every turn, the facts that answer the message the
+  vibemate is replying to come with it. Nothing is sent until you have agreed to the whole route: the sieve
+  and the provider. The keys go into a card no vibemate ever sees.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/vibemate-notes.png" width="820" alt="A vibemate's panel: its coding agent, its session settings and the notes it wrote for a restart">
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/memory.png" width="420" alt="The room's shared memory: two notes, who wrote each and when, and a switch for agent edits">
+</p>
+
+<br>
+
 ## Room automations
 
 Use **Automations** in the room's top bar for reminders or recurring tasks assigned to one vibemate. Choose a date, an interval, a daily or weekly schedule, or a five-field cron expression with a named time zone. Preview the next times before saving. Room events can trigger work when viberoom starts or on the first new human message of each day.
@@ -47,6 +95,10 @@ Use **Automations** in the room's top bar for reminders or recurring tasks assig
 Tasks use the selected vibemate's existing session, workspace and permissions. Busy or muted participants wait; Hush stays in control. Waking an offline participant is an explicit option. Pause, edit, run once, stop a run and inspect its history in the same panel. Vibemates can propose automations, which you review and apply.
 
 The computer must be awake and the hub running; the browser can be closed. Missed times are combined into one run or skipped, according to your choice. Interrupted runs are marked for review and are never automatically retried. A completed reply and its delivery to the room are tracked separately; read the result to verify the task. These are room tasks, with shared context and files, rather than isolated coding worktrees.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/automations.png" width="420" alt="A room's automations: a weekday test run for one vibemate, a weekly review for another, and what happened">
+</p>
 
 Automations are stored in `automations.sqlite` in the data folder. Conversation exports and conversation-only backups do not include them. To back up the complete profile, stop viberoom and copy the data folder. Importing a conversation does not activate schedules from another computer.
 
@@ -73,7 +125,9 @@ Two rooms, six vibemates, one afternoon: a small CLI fixed and tested by Claude,
 bakery's launch planned by Claude, Codex and Gemini, with the tool calls, the pictures, the file previews and
 the Mermaid diagrams as they happened. The session is recorded as pages that run the real viberoom window
 with no hub behind it. Every card below opens it in that look: walk between the rooms, open the participants,
-change the look under Settings. (The pages live in [`docs/demo/`](docs/demo/) too, for a copy of your own.)
+change the look under Settings. What came to viberoom after that afternoon is there too, with invented content
+that fits the two rooms: connected systems, the rooms' shared memory, a vibemate's notes and the automations.
+(The pages live in [`docs/demo/`](docs/demo/) too, for a copy of your own.)
 
 <a href="https://todor-rusev.github.io/viberoom/demo/vibeclassic.html"><img align="right" width="460" src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/card-vibeclassic.webp" alt="VibeClassic"></a>
 
@@ -118,7 +172,22 @@ change the look under Settings. (The pages live in [`docs/demo/`](docs/demo/) to
 <br clear="all">
 
 
-## Six looks, or your own
+<a href="https://todor-rusev.github.io/viberoom/demo/plain-light.html"><img align="right" width="460" src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/card-plain-light.webp" alt="Plain Light"></a>
+
+**Plain Light** &mdash; white paper and hairlines; the only colour in the window is what a vibemate carries.<br>
+<a href="https://todor-rusev.github.io/viberoom/demo/plain-light.html">Open the demo in Plain Light &rarr;</a>
+
+<br clear="all">
+
+<a href="https://todor-rusev.github.io/viberoom/demo/plain-dark.html"><img align="left" width="460" src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/readme/card-plain-dark.webp" alt="Plain Dark"></a>
+
+**Plain Dark** &mdash; the same plain window after dark: near-black paper, a light accent, no shadows.<br>
+<a href="https://todor-rusev.github.io/viberoom/demo/plain-dark.html">Open the demo in Plain Dark &rarr;</a>
+
+<br clear="all">
+
+
+## Eight looks, or your own
 
 A look is how the window is drawn: colours, light, corners, fonts. Pick one under Settings, fine-tune it,
 or ask a vibemate for "a warm paper look for long evenings": it reads every design token with what it
@@ -128,7 +197,7 @@ wearing it as a card you can try on first. Your looks are files: export one to s
 someone sent you.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks-picker.png" width="820" alt="Settings: the look picker with the six shipped looks">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/looks-picker.png" width="820" alt="Settings: the look picker with the eight shipped looks">
 </p>
 
 <br>
@@ -247,6 +316,12 @@ viberoom
 3. **Summon vibemates.** Pick an agent, name it, give it a character. Repeat.
 4. **Say hello.** Everyone answers in turn. `@Name` one of them, `/name` runs a skill.
 
+The home page keeps your latest rooms at hand and says, card by card, what the rest can do.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/todor-rusev/viberoom/main/docs/screenshots/home.png" width="820" alt="The home page: what you can do here, from rooms and vibemates to memory, connections and skills">
+</p>
+
 The menu that appears can put an icon on your desktop or open viberoom in a window of its own; a browser tab
 works too, for as long as that browser stays open. Later, `npm install -g viberoom@latest` — and then
 **restart viberoom** (the window has a button for it): a hub that is already running keeps the build it
@@ -265,11 +340,6 @@ store. Older builds cannot open the upgraded store; use the current build, or re
 backup into a separate data folder when deliberately returning to an older version.
 
 - **Rooms remember.** The history stays with the room. Move the folder and the vibemates move with it.
-- **A small shared memory.** Vibemates can maintain durable preferences about you and conventions for each
-  room. They must read both complete sets before changing one, cite your messages, and respect notes you
-  protect. Each scope holds up to eight short notes. Inspect, edit, restore or clear them under **For geeks**
-  in your settings or the room's settings; agent edits can be switched off. Memory is supplied with the
-  brief and refreshed after a change. Source checks and lint catch mechanical problems, not every mistaken inference.
 - **Export / Import.** Choose one or several rooms, their conversations, setup and attached files.
   Protect the copy with an optional passphrase. Import previews differences before applying them;
   competing branches can be kept together, and removed versions remain available for inspection.
@@ -277,8 +347,18 @@ backup into a separate data folder when deliberately returning to an older versi
   Learned room memory and shared user preferences have separate optional checkboxes, off by default.
   Import previews both sides before replacing memory; prior local versions remain in its revision history.
 - **The window remembers.** Where it was, how big, which screen. Unplug that screen and it walks back.
-- **Nothing leaves your machine** except what each agent sends to its own provider. viberoom never
-  sees your keys; every agent keeps its own login.
+- **Nothing leaves your machine** except what each agent sends to its own provider, and what you choose to
+  send: a system you connect, a long-term memory you turn on. Every agent keeps its own login. The keys you
+  give viberoom itself (a connection's access, your Telegram bot, a memory provider) live in a vault behind
+  your system's keystore, typed into cards no vibemate ever sees.
+- **Two panels, one for each.** A vibemate's settings open on the left and the room's on the right, so the
+  conversation stays in view; yours are a page of their own, Your vibe. Settings has a menu down the side,
+  one page per topic and one search box.
+- **A glance at a vibemate.** Rest the pointer on its row for its context, its last reply, what it cost and
+  its notes; a click takes you to its last reply, and the gear beside it opens its panel.
+- **Unread, counted.** Replies you have not read yet are counted in the window's title and on its icon.
+- **`#N` is a link.** A message number in a reply takes you to that message; *Go to* on a quote takes you to
+  the words it quotes.
 - **Only from this computer, and only from viberoom.** The rooms answer on this machine alone, and a window
   has to be opened by viberoom itself — from its icon, the menu it shows, or `viberoom open`. A tab you
   bookmarked works while the browser is open; after that the address shows you where the icon is instead.

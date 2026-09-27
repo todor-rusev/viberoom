@@ -28,7 +28,7 @@ export async function stopManaged(child: ChildProcess, group = true): Promise<vo
     });
   } else {
     if (!group) {
-      const listing = spawnSync("ps", ["-eo", "pid=,ppid="], { encoding: "utf8", timeout: 2000, maxBuffer: 1024 * 1024 });
+      const listing = spawnSync("ps", ["-eo", "pid=,ppid="], { encoding: "utf8", timeout: 2000, maxBuffer: 1024 * 1024, windowsHide: true });
       const rows = (listing.stdout || "").split("\n").map(row => row.trim().split(/\s+/).map(Number)).filter(row => row.length === 2 && row.every(Number.isSafeInteger));
       const descendants: number[] = [];
       const collect = (parent: number) => { for (const [pid, ppid] of rows) if (ppid === parent && pid !== parent) { collect(pid); descendants.push(pid); } };

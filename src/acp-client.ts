@@ -34,6 +34,7 @@ export interface AgentHooks {
   onExit(code: number | null, signal: NodeJS.Signals | null): void;
   onRaw?(direction: "in" | "out", message: unknown): void;
   onProtocolError?(text: string): void;
+  onExtensionNotification?(method: string, params: unknown): void;
 }
 
 export class AcpAgent {
@@ -114,8 +115,8 @@ export class AcpAgent {
     await this.peer.request("authenticate", { methodId });
   }
 
-  newSession(cwd: string, mcpServers: McpServer[] = []): Promise<NewSessionResult> {
-    return this.peer.request("session/new", { cwd, mcpServers }) as Promise<NewSessionResult>;
+  newSession(cwd: string, mcpServers: McpServer[] = [], meta?: Record<string, unknown>): Promise<NewSessionResult> {
+    return this.peer.request("session/new", { cwd, mcpServers, ...(meta ? { _meta: meta } : {}) }) as Promise<NewSessionResult>;
   }
 
   get supportsLoadSession(): boolean {
@@ -126,8 +127,8 @@ export class AcpAgent {
     return this.initResult?.agentCapabilities?.promptCapabilities?.image === true;
   }
 
-  loadSession(sessionId: string, cwd: string, mcpServers: McpServer[] = []): Promise<NewSessionResult> {
-    return this.peer.request("session/load", { sessionId, cwd, mcpServers }).then((result) => ({
+  loadSession(sessionId: string, cwd: string, mcpServers: McpServer[] = [], meta?: Record<string, unknown>): Promise<NewSessionResult> {
+    return this.peer.request("session/load", { sessionId, cwd, mcpServers, ...(meta ? { _meta: meta } : {}) }).then((result) => ({
       ...((result as Partial<NewSessionResult>) ?? {}),
       sessionId,
     }));
@@ -197,6 +198,7 @@ export class AcpAgent {
       this.hooks.onSessionUpdate(p.sessionId, p.update);
       return;
     }
-    this.hooks.onProtocolError?.(`unhandled notification ${method}`);
+    if (this.hooks.onExtensionNotification) this.hooks.onExtensionNotification(method, params);
+    else this.hooks.onProtocolError?.(`unhandled notification ${method}`);
   }
 }

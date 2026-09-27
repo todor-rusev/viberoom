@@ -8,7 +8,7 @@ import type { ChatMessage } from "./room.js";
 import type { ExportContents, ExportManifest } from "./export-file.js";
 import type { ExportFile } from "./export-file.js";
 import { ExportUnreadable, readExport, writeExport } from "./export-file.js";
-import { contentTypeOf, isStoredFileName } from "./files.js";
+import { contentTypeOf, isStoredFileName, messageAttachments, type WithAttachments } from "./files.js";
 import { NAME_PATTERN, ROOM_SETTINGS_SPEC, coerceSetting, type RoomSettings } from "./persona.js";
 
 
@@ -31,7 +31,7 @@ export function roomForExport(stored: Record<string, unknown>): { settings: Reco
   }
   for (const key of Object.keys(settings) as (keyof RoomSettings)[]) {
     const spec = ROOM_SETTINGS_SPEC[key];
-    if (spec.kind === "boolean" && typeof settings[key] !== "boolean" || spec.kind === "text" && typeof settings[key] !== "string") throw new ExportUnreadable(`The room setting ${key} has the wrong type.`);
+    if (spec.kind === "boolean" && typeof settings[key] !== "boolean" || (spec.kind === "text" || spec.kind === "face") && typeof settings[key] !== "string") throw new ExportUnreadable(`The room setting ${key} has the wrong type.`);
     settings[key] = coerceSetting(key, settings[key]);
   }
   return { settings, participants };
@@ -48,8 +48,8 @@ export interface ExportChoice {
 function picturesOf(messages: Record<string, unknown>[]): string[] {
   const seen = new Set<string>();
   for (const message of messages) {
-    for (const image of ((message as { images?: { file?: string }[] }).images ?? [])) {
-      const file = image?.file;
+    for (const attachment of messageAttachments(message as WithAttachments)) {
+      const file = attachment?.file;
       if (typeof file === "string" && isStoredFileName(file) && !seen.has(file)) seen.add(file);
     }
   }

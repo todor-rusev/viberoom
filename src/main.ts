@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { exec, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -15,6 +15,7 @@ import { KEY_HEADER, OPENING_PARAM } from "./local-gate.js";
 import { mintOpening, readKey } from "./local-key.js";
 import { startServer, type BuildInfo, type RunningServer } from "./server.js";
 import {
+  allowOwnNotifications,
   appWindowArgs,
   recordedWindowPlacement,
   savedWindowPlacement,
@@ -25,7 +26,6 @@ import {
   hubUrl,
   isProcessAlive,
   logFilePath,
-  openUrlCommand,
   pidFilePath,
   readPidFile,
   rotateLog,
@@ -41,11 +41,13 @@ import {
   type PidRecord,
 } from "./launcher.js";
 import { busyMessage, claimPort } from "./claim.js";
-import { aumidSyncScript, installShortcuts, windowsShortcutPaths } from "./shortcuts.js";
+import { classifyOpenTarget, launchOpen, openCommand } from "./open.js";
+import { aumidSyncScript, installShortcuts, refreshLauncherIcons, windowsShortcutPaths } from "./shortcuts.js";
 import { autostartLogPath, autostartStatus, cliAutostartControl, installAutostart, recordAutoStart, refreshAutostart, type AutostartOptions } from "./autostart.js";
 import { askEnter, renderInstalled, runMenu, unicodeSupported } from "./tui.js";
 import { listRecipes } from "./recipes.js";
 import { checkLogin } from "./login-status.js";
+import { fileNameStore, installOutbound, saveOutboundNames } from "./net/outbound.js";
 
 interface CliOptions {
   command: Command;
@@ -176,7 +178,7 @@ Options
 `);
 }
 
-import { checkForUpdate, newerSourceThanBuild } from "./update.js";
+import { checkForUpdate, hasSourceTree, newerSourceThanBuild } from "./update.js";
 
 function buildInfo(): BuildInfo {
   const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")) as { name: string; version: string };
@@ -184,7 +186,7 @@ function buildInfo(): BuildInfo {
   return {
     name: pkg.name, version: pkg.version, build: built.toISOString(),
     staleSource: newerSourceThanBuild(import.meta.url),
-    sourceCheckout: existsSync(fileURLToPath(new URL("../src", import.meta.url))),
+    sourceCheckout: hasSourceTree(import.meta.url),
   };
 }
 
@@ -286,6 +288,7 @@ function openWindow(address: string, options: CliOptions, log: Logger): void {
     const recorded = fresh ? null : recordedWindowPlacement(options.dataDir);
     const placement = recorded ?? (fresh ? null : savedWindowPlacement(profile));
     const args = appWindowArgs(url, profile, fresh, placement);
+    if (allowOwnNotifications(profile, new URL(address).origin)) log.info("the app window may show notifications of the system");
     const where = placement
       ? `last seen (${recorded ? "window's own report" : "browser profile"}) at ${placement.left},${placement.top} ${placement.width}x${placement.height}${placement.maximized ? " maximized" : ""}${placement.workArea ? ` on the screen ${placement.workArea.left},${placement.workArea.top}-${placement.workArea.right},${placement.workArea.bottom}` : ""}; flags ${args.filter((a) => a.startsWith("--window-")).join(" ")}`
       : "no saved placement";
@@ -294,7 +297,7 @@ function openWindow(address: string, options: CliOptions, log: Logger): void {
       appendFileSync(logFilePath(options.dataDir), `[${logDateTime()}] [launcher] app window: ${where}\n`);
     } catch {
     }
-    spawn(chromium, args, { cwd: options.dataDir, detached: true, stdio: "ignore" }).unref();
+    spawn(chromium, args, { cwd: options.dataDir, detached: true, stdio: "ignore", windowsHide: false }).unref();
     if (process.platform === "win32") {
       const shortcuts = windowsShortcutPaths(homedir(), process.env, true).filter((p) => existsSync(p));
       if (shortcuts.length) spawn("powershell", ["-NoProfile", "-Command", aumidSyncScript(profile, shortcuts)], { detached: true, stdio: "ignore", windowsHide: true }).unref();
@@ -311,7 +314,9 @@ function openWindow(address: string, options: CliOptions, log: Logger): void {
     }
   }
   log.info("opening the default browser");
-  exec(openUrlCommand(url), { windowsHide: true }, () => undefined);
+  const target = classifyOpenTarget(url);
+  if (target) launchOpen(openCommand(target), (error) => log.warn(`the default browser could not be opened: ${error.message}`));
+  else log.warn(`the default browser was not opened: ${url} is not a web address`);
 }
 
 async function runDoctor(options: CliOptions, info: BuildInfo): Promise<void> {
@@ -378,6 +383,7 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
 
   if (!options.dataDirGiven) migrateLegacyData(options.dataDir, log);
   const runStartedAt = Date.now();
+  installOutbound(log.child("net"), { store: fileNameStore(join(options.dataDir, "net-names.json")) });
   const hub = new Hub(options.dataDir, log, options.name);
   faultWitness = () => hub.writingNow();
   hub.restartWith = (sessions) => handOverToFreshHub(options, log, sessions);
@@ -391,6 +397,7 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
     log.info("shutting down: closing agent sessions");
     await hub.shutdown({ onStage: (step) => log.info(`shutdown: ${step.stage} ${step.timedOut ? `gave up after ${step.ms} ms` : `in ${step.ms} ms`}`) });
     server?.close();
+    saveOutboundNames();
     rmSync(pidFilePath(options.dataDir), { force: true });
     process.exit(0);
   };
@@ -432,6 +439,7 @@ async function runHub(options: CliOptions, log: Logger, info: BuildInfo): Promis
   }
   writePidFile(options.dataDir, { pid: process.pid, port: options.port, build: info.build, startedAt: Date.now(), ...(background ? {} : { foreground: true }) });
   log.info(`viberoom ${info.version} (build ${info.build}) is open at ${server.url} (data: ${hub.dataDir}; rooms: ${[...hub.rooms.values()].map((r) => r.name).join(", ")})`);
+  refreshLauncherIcon(options, log, info);
   if (info.staleSource) log.warn(`the code on disk is newer than this build (${info.staleSource} changed after dist/ was compiled): the UI is served live, the room is not; rebuild and restart with: node scripts/update.mjs`);
   const reach = wideOpenNotice(hub.dataDir, dataFolder.state());
   if (reach) log.warn(reach);
@@ -484,6 +492,15 @@ async function startAtSignIn(options: CliOptions, log: Logger, info: BuildInfo):
     note(how === "started" ? `started the room on port ${port} (build ${info.build})` : `a viberoom for these rooms was already answering on port ${port}; this start stepped aside`);
   } catch (error) {
     note(`could not start: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function refreshLauncherIcon(options: CliOptions, log: Logger, info: BuildInfo): void {
+  try {
+    const change = refreshLauncherIcons({ root: fileURLToPath(new URL("..", import.meta.url)), dataDir: options.dataDir, version: info.version });
+    if (change) log.info(`the launchers show this build's icon, ${change.icon}${change.launchers.length ? `: ${change.launchers.join(", ")}` : ""}${change.removed.length ? `; older copies removed: ${change.removed.join(", ")}` : ""}`);
+  } catch (error) {
+    log.warn(`the launcher's icon could not be refreshed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

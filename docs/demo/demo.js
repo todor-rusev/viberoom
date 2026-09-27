@@ -18,7 +18,7 @@
   const emit = (message) => { for (const s of sockets) if (s.onmessage) s.onmessage({ data: JSON.stringify(message) }); };
   const changed = () => setTimeout(() => emit({ type: "snapshot", snapshot: state }), 0);
   const roomOf = (id) => (state.rooms || []).find((r) => r.id === decodeURIComponent(id));
-  const agentsOf = (room) => (room.participants || []).filter((p) => p.kind === "agent" && p.status !== "left").map((p) => ({ id: p.id, name: p.name, status: p.status, muted: !!p.muted }));
+  const agentsOf = (room) => (room.participants || []).filter((p) => p.kind === "agent" && p.status !== "left").map((p) => ({ id: p.id, name: p.name, status: p.status, muted: !!p.muted, avatar: p.avatar, color: p.color, colorSlot: p.colorSlot }));
 
   const WINDOW_MAX_LINES = 400;
   const normalise = (p) => String(p || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
@@ -75,14 +75,24 @@
     return json({ ok: true, kind: entry.kind, path: target, language: entry.language, ...sliceLines(entry.text, from, to), bytes: entry.text.length });
   };
 
-  const memoryView = () => ({
+  const memoryView = (roomId) => ({
     limits: { notes: 8, noteChars: 240, scopeChars: 1600, revisions: 20 },
-    rule: "Shared memory is written by the vibemates of a live room and reviewed by you. This recording carries none.",
-    user: { revision: 0, enabled: true, notes: [] }, room: { revision: 0, enabled: true, notes: [] },
+    rule: "Shared memory is written by the vibemates of a live room and reviewed by you.",
+    user: DATA.memory.user, room: DATA.memory.rooms[roomId] || { revision: 0, enabled: true, notes: [] },
     warnings: { user: [], room: [] }, revisions: { user: [], room: [] },
   });
+  const memoryProviderView = () => ({
+    view: DATA.memoryProvider,
+    status: { provider: "off", consent: false, paused: false, pendingOps: 0, lastError: null, usage: { month: new Date().toISOString().slice(0, 7), credits: 0, cap: 0 }, rooms: [] },
+  });
   const updatesView = () => ({ instance: "demo", revision: 1, checking: false, enabled: false, checkedAt: null, nextCheckAt: null, snoozeUntil: 0, updates: [], notification: null, batch: null });
-  const automationsView = (room) => ({ available: true, error: "", participants: agentsOf(room), jobs: [], runs: [], proposals: [] });
+  const WEEK = 7 * 24 * 3600_000;
+  const ahead = (at, now) => (at == null || at > now ? at : at + Math.ceil((now - at) / WEEK) * WEEK);
+  const automationsView = (room) => {
+    const now = Date.now();
+    const recorded = DATA.automations[room.id] || { jobs: [], runs: [] };
+    return { available: true, error: "", participants: agentsOf(room), timeZone: DATA.timeZone, now, jobs: recorded.jobs.map((job) => ({ ...job, nextAt: ahead(job.nextAt, now) })), runs: recorded.runs.map((run) => ({ ...run, stopping: false })), proposals: [] };
+  };
   const search = (params) => {
     const q = String(params.get("q") || "").trim().toLowerCase();
     const scope = params.get("rooms") || "all";
@@ -126,7 +136,10 @@
       if (path === "/api/templates") return json({ templates: [] });
       if (path === "/api/looks") return json({ looks: state.looks || [] });
       if (path === "/api/update") return json(state.update || {});
-      if (path === "/api/memory") return json(memoryView());
+      if (path === "/api/memory") return json(memoryView(params.get("room")));
+      if (path === "/api/memory-provider") return json(memoryProviderView());
+      if (path === "/api/voice") return json({ view: DATA.voice });
+      if (path === "/api/connections") return json({ ok: true, connections: state.connections });
       if (path === "/api/channels") return json(state.channels);
       if (path === "/api/search") return search(params);
       if (path === "/api/diagnostic-logs") return json({ bytes: 0, files: 0, skipped: 0, unavailable: "A recording keeps no diagnostic details; a live hub writes them to its data folder." });
@@ -177,6 +190,10 @@
     if (path === "/api/agents/updates/check") return json({ updates: updatesView() });
     if (path.startsWith("/api/agents/updates/")) return fail(RECORDING("Agents are updated"));
     if (path === "/api/memory") return fail(RECORDING("Shared memory is edited"));
+    if (path === "/api/memory-provider") return fail(RECORDING("The long-term memory is set up"));
+    if (path.startsWith("/api/voice")) return fail(RECORDING("A voice is turned into words"));
+    if (path.startsWith("/api/connections")) return fail(RECORDING("Systems are connected"));
+    if (path.startsWith("/api/login/")) return fail(RECORDING("Coding agents are signed in"));
     if (path.startsWith("/api/carry")) return fail(RECORDING("Conversations are carried between machines"));
     if (path.startsWith("/api/channels") || path.startsWith("/api/secrets") || path === "/api/qr") return fail(RECORDING("A phone is paired"));
     if (path.startsWith("/api/restart") || path === "/api/autostart" || path === "/api/data-folder/narrow" || path === "/api/update/install" || path === "/api/profile/erase") return fail(RECORDING("viberoom itself is managed"));
@@ -203,6 +220,7 @@
   const realFetch = window.fetch.bind(window);
   window.fetch = (input, init) => {
     const url = typeof input === "string" ? input : input && input.url ? input.url : String(input);
+    if (url === "/faces/catalogue.json") return Promise.resolve(json(DATA.faces || { groups: [], faces: [] }));
     if (!url.startsWith("/api/")) return realFetch(input, init);
     const q = url.indexOf("?");
     const path = q >= 0 ? url.slice(0, q) : url;

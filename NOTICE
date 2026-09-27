@@ -33,6 +33,14 @@ This product bundles the following third-party material:
   Each mark belongs to its owner and is used only to identify the agent it
   stands for.
 
+- Connection marks (assets/connections/): the marks of the systems in the
+  Connections catalogue, each reduced to one path in one colour, as the
+  folder's README says for each: from Simple Icons (https://simpleicons.org,
+  CC0 1.0), from SVGL (https://svgl.app), which keeps each brand's official
+  file with its source, from Wikimedia Commons in the public domain, and from
+  the brands' own websites. Each mark belongs to its owner and is used only to
+  name the system a connection goes to.
+
 - ACP adapters (vendor/acp/, copied from the npm packages at build time by
   scripts/vendor-acp.mjs, each with its licence file):
   - @agentclientprotocol/claude-agent-acp: Apache License 2.0, Copyright (c)

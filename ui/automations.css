@@ -66,8 +66,7 @@
 .auto-card:hover .auto-mark .i-bell { animation: auto-swing 700ms var(--ease-out); }
 .auto-card:hover .auto-mark .i-spark { animation: auto-twinkle 700ms var(--ease-pop); }
 .auto-card:hover .auto-mark .i-user { transform: translateY(-1px) scale(1.1); }
-.automations-dialog .auto-onoff { flex: none; gap: 8px; margin: 0; font-size: var(--fs-xs); font-weight: 800; color: var(--muted); }
-.automations-dialog .auto-onoff:has(input:checked) { color: var(--primary); }
+.auto-card-heading > [data-ui="switch"] { flex: none; }
 .auto-card.is-off .auto-mark, .auto-card.is-off .auto-when { opacity: .62; filter: saturate(.4); }
 .auto-card.is-off .auto-card-title h4 { color: var(--ink-3); }
 .auto-card .auto-toolbar [data-auto="delete"] { margin-inline-start: auto; }
@@ -222,7 +221,6 @@
 .auto-preview .auto-leaf { animation: auto-flip 560ms var(--ease-pop) both; animation-delay: calc(var(--i, 0) * 90ms); }
 .auto-more { margin: 0; padding: 0 2px; }
 .auto-more-body { display: grid; gap: 14px; padding: 4px 0 2px; }
-.automations-dialog .auto-more .switch { margin: 0; }
 .auto-form-actions { position: sticky; bottom: -24px; z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 4px -24px -24px; padding: 14px 24px 18px; background: linear-gradient(to bottom, transparent, var(--panel) 34%); }
 .auto-form-actions [type="submit"] { min-width: 170px; }
 .auto-form-actions [type="submit"]:not(:disabled):hover { transform: translateY(-1px); }

@@ -1,5 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
+import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, posix, resolve, win32 } from "node:path";
 
@@ -117,42 +118,79 @@ export interface OpenCommand {
   args: string[];
   action: "open-url" | "open-file" | "open-line" | "reveal";
   editor?: string;
+  verbatim?: boolean;
+  hideWindow?: boolean;
 }
 
-function spawnable(command: string, args: string[], platform: NodeJS.Platform): { command: string; args: string[] } {
-  if (platform === "win32" && /\.(cmd|bat)$/i.test(command)) return { command: "cmd.exe", args: ["/c", command, ...args] };
-  return { command, args };
+function windowsProgram(env: NodeJS.ProcessEnv, ...parts: string[]): string {
+  return win32.join(env.SystemRoot || env.windir || "C:\\Windows", ...parts);
 }
 
-export function editorCommand(target: OpenTarget, settings: EditorSettings, detected: DetectedEditor | null, platform: NodeJS.Platform = process.platform): OpenCommand | null {
+
+const CMD_SYNTAX = /([()\][%!^"`<>&|;, *?])/g;
+
+function argvQuoted(arg: string): string {
+  let out = '"';
+  let slashes = 0;
+  for (const ch of arg) {
+    if (ch === "\\") {
+      slashes++;
+      continue;
+    }
+    out += ch === '"' ? `${"\\".repeat(slashes * 2 + 1)}"` : `${"\\".repeat(slashes)}${ch}`;
+    slashes = 0;
+  }
+  return `${out}${"\\".repeat(slashes * 2)}"`;
+}
+
+export function batchArgument(arg: string): string {
+  return argvQuoted(arg).replace(CMD_SYNTAX, "^$1").replace(CMD_SYNTAX, "^$1");
+}
+
+function spawnable(command: string, args: string[], platform: NodeJS.Platform, env: NodeJS.ProcessEnv): Pick<OpenCommand, "command" | "args" | "verbatim" | "hideWindow"> {
+  if (platform !== "win32" || !/\.(cmd|bat)$/i.test(command)) return { command, args };
+  const line = [command.replace(CMD_SYNTAX, "^$1"), ...args.map(batchArgument)].join(" ");
+  return { command: windowsProgram(env, "System32", "cmd.exe"), args: ["/d", "/s", "/c", `"${line}"`], verbatim: true, hideWindow: true };
+}
+
+export function editorCommand(target: OpenTarget, settings: EditorSettings, detected: DetectedEditor | null, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): OpenCommand | null {
   if (target.kind !== "path" || target.line === undefined) return null;
   if (settings.mode === "default-app") return null;
   if (settings.mode === "custom") {
     const parts = splitCommandLine(settings.command).map((p) => p.replace(/\{file\}/g, target.value).replace(/\{line\}/g, String(target.line)).replace(/\{column\}/g, String(target.column ?? 1)));
     if (!parts.length) return null;
     const [command, ...args] = parts;
-    return { ...spawnable(command, args, platform), action: "open-line", editor: (platform === "win32" ? win32 : posix).basename(command) };
+    return { ...spawnable(command, args, platform, env), action: "open-line", editor: (platform === "win32" ? win32 : posix).basename(command) };
   }
   if (!detected) return null;
   const spec = EDITORS.find((e) => e.id === detected.id);
   if (!spec) return null;
-  return { ...spawnable(detected.command, spec.args(target.value, target.line, target.column), platform), action: "open-line", editor: detected.label };
+  return { ...spawnable(detected.command, spec.args(target.value, target.line, target.column), platform, env), action: "open-line", editor: detected.label };
 }
 
-export function openCommand(target: OpenTarget, platform: NodeJS.Platform = process.platform, reveal = false): OpenCommand {
+export function openCommand(target: OpenTarget, platform: NodeJS.Platform = process.platform, reveal = false, env: NodeJS.ProcessEnv = process.env): OpenCommand {
+  if (platform === "win32") return windowsOpenCommand(target, reveal, env);
+  const open = platform === "darwin" ? "open" : "xdg-open";
+  if (target.kind === "url") return { command: open, args: [target.value], action: "open-url" };
+  if (reveal) return platform === "darwin" ? { command: "open", args: ["-R", target.value], action: "reveal" } : { command: "xdg-open", args: [dirname(target.value)], action: "reveal" };
+  return { command: open, args: [target.value], action: "open-file" };
+}
+
+function windowsOpenCommand(target: OpenTarget, reveal: boolean, env: NodeJS.ProcessEnv): OpenCommand {
   if (target.kind === "url") {
-    if (platform === "win32") return { command: "cmd", args: ["/c", "start", "", target.value], action: "open-url" };
-    if (platform === "darwin") return { command: "open", args: [target.value], action: "open-url" };
-    return { command: "xdg-open", args: [target.value], action: "open-url" };
+    if (/[\s"]/.test(target.value)) throw new Error("a link with spaces or quotes cannot be opened");
+    return { command: windowsProgram(env, "System32", "rundll32.exe"), args: ["url.dll,FileProtocolHandler", target.value], action: "open-url" };
   }
-  if (reveal) {
-    if (platform === "win32") return { command: "explorer.exe", args: [`/select,${target.value}`], action: "reveal" };
-    if (platform === "darwin") return { command: "open", args: ["-R", target.value], action: "reveal" };
-    return { command: "xdg-open", args: [dirname(target.value)], action: "reveal" };
-  }
-  if (platform === "win32") return { command: "cmd", args: ["/c", "start", "", target.value], action: "open-file" };
-  if (platform === "darwin") return { command: "open", args: [target.value], action: "open-file" };
-  return { command: "xdg-open", args: [target.value], action: "open-file" };
+  if (target.value.includes('"')) throw new Error("a Windows path cannot contain a quote");
+  const explorer = windowsProgram(env, "explorer.exe");
+  if (reveal) return { command: explorer, args: [`/select,"${target.value}"`], verbatim: true, action: "reveal" };
+  return { command: explorer, args: [`"${target.value}"`], verbatim: true, action: "open-file" };
+}
+
+export function launchOpen(cmd: OpenCommand, onError: (error: Error) => void): void {
+  const child = spawn(cmd.command, cmd.args, { detached: true, stdio: "ignore", windowsHide: cmd.hideWindow === true, windowsVerbatimArguments: cmd.verbatim === true });
+  child.on("error", onError);
+  child.unref();
 }
 
 export function describeOpen(target: OpenTarget, action: OpenCommand["action"], editor?: string): string {

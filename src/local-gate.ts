@@ -13,7 +13,7 @@ export const PUBLIC_ROUTES: { path: string; why: string }[] = [
 const TOKEN_PREFIX = "/api/mcp/";
 
 const SHELL_FILE = /^\/(?:[a-z0-9_-]+\.(?:js|css|html|svg|json|png|ico|woff2)|styleguide|guide)$/i;
-const SHELL_FOLDERS = ["/fonts/", "/vendor/", "/vendor-icons/", "/vendor/prism-lang/"];
+const SHELL_FOLDERS = ["/fonts/", "/vendor/", "/vendor-icons/", "/vendor/prism-lang/", "/connection-logos/", "/faces/"];
 const NOT_SHELL = ["/looks-custom.css"];
 
 export function isShell(path: string): boolean {

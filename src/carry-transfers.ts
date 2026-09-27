@@ -10,10 +10,12 @@ import { Worker } from "node:worker_threads";
 import { DatabaseSync } from "node:sqlite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { writeFileAtomic } from "./atomic.js";
-import { CarryStage, type CarryDependency, type CarrySource, type ExportJob, type PortableRoom } from "./carry-stage.js";
+import { CarryStage, type CarryDependency, type CarryResource, type CarrySource, type ExportJob, type PortableRoom } from "./carry-stage.js";
 import type { CarryWorkerTask, DependencyFolder } from "./carry-worker.js";
 import type { CarryPlanPreview, PlannedDependency, PlannedRoom, RoomImportChoice } from "./carry-plan.js";
-import type { BranchChoice } from "./carry-merge.js";
+import type { BranchChoice, CarryState } from "./carry-merge.js";
+import type { CarryAlternative, CarryHead, CarryNumber, CarryRevision } from "./carry-history.js";
+import { ARRIVING, HELD_FILE_RETRIES, type ArrivingProgress } from "./carry-write.js";
 import type { Hub, StoredRoom } from "./hub.js";
 import type { Logger } from "./log.js";
 import type { FileChange } from "./file-transaction.js";
@@ -41,6 +43,7 @@ interface Job {
   progress?: string;
   hurry?: boolean;
 }
+interface PlanMeta { userMemory?: PortableMemory; userMemoryMode?: "merge" | "replace"; rooms: PlannedRoom[]; dependencies: PlannedDependency[]; directoryVersions: { path: string; hash: string }[]; fileVersions: { path: string; hash: string | null }[] }
 interface PlanInput { selected: SelectedRoom[]; dependencies: Record<string, "ours" | "incoming">; userMemory: boolean; userMemoryChoice?: "ours" | "incoming" | "both" }
 class StalePreview extends Error {}
 
@@ -114,13 +117,13 @@ export class CarryTransfers {
     if (!job) throw new Error("This transfer expired or viberoom restarted. Open the file again.");
     job.touched = Date.now(); return job;
   }
-  private async work<T>(job: Job, task: CarryWorkerTask): Promise<T> {
+  private async work<T>(job: Job, task: CarryWorkerTask, onProgress?: (step: ArrivingProgress) => void): Promise<T> {
     if (this.closing || this.jobs.get(job.id) !== job) throw new Error("This transfer was cancelled or viberoom is shutting down.");
     return new Promise<T>((resolve, reject) => {
       const worker = new Worker(new URL("./carry-worker.js", import.meta.url), { workerData: task, resourceLimits: { maxOldGenerationSizeMb: 1024 } });
       job.worker = worker;
       let answer: { ok: boolean; result?: T; error?: string; code?: string } | undefined, failed: Error | undefined;
-      worker.once("message", value => { answer = value; });
+      worker.on("message", value => { if (value && typeof value === "object" && "progress" in value) onProgress?.(value.progress); else answer = value; });
       worker.once("error", error => { failed = error; });
       worker.once("exit", code => {
         job.worker = undefined;
@@ -131,13 +134,17 @@ export class CarryTransfers {
       });
     });
   }
-  private launch(job: Job, run: () => Promise<unknown>, final: Job["status"] = "ready"): void {
+  private launch(job: Job, step: string, run: () => Promise<unknown>, final: Job["status"] = "ready"): void {
     job.status = "working"; job.error = undefined;
-    job.pending = run().then(result => { job.result = result; job.status = final; job.touched = Date.now(); }, error => {
+    const started = Date.now();
+    job.pending = run().then(result => {
+      job.result = result; job.status = final; job.touched = Date.now();
+      this.log.info(`carry ${job.kind} ${step}: ${Date.now() - started} ms`);
+    }, error => {
       job.status = error?.code === "password" ? "password" : "error";
       job.error = error instanceof Error ? error.message : "The transfer could not be completed.";
       job.touched = Date.now();
-      this.log.warn(`carry ${job.kind}: ${job.status}`);
+      this.log.warn(`carry ${job.kind} ${step}: ${job.status} after ${Date.now() - started} ms`);
     });
   }
   private source(): CarrySource & { suggested: string } {
@@ -185,7 +192,7 @@ export class CarryTransfers {
 
   private inspect(job: Job, passphrase?: string): void {
     if (job.kind !== "import" || !["uploaded", "password", "error"].includes(job.status)) throw new Error("This file is already being prepared or has been inspected.");
-    this.launch(job, () => this.work(job, { type: "stage", input: join(job.dir, "upload"), stageDir: join(job.dir, "stage"), passphrase }));
+    this.launch(job, "staging", () => this.work(job, { type: "stage", input: join(job.dir, "upload"), stageDir: join(job.dir, "stage"), passphrase }));
   }
 
   private choices(stage: CarryStage, selected: SelectedRoom[]): RoomImportChoice[] {
@@ -219,7 +226,7 @@ export class CarryTransfers {
     this.hub.settleImports();
     const choices = this.stagedChoices(job, input.selected);
     job.planInput = input;
-    this.launch(job, () => this.planNow(job, input, choices));
+    this.launch(job, "plan", () => this.planNow(job, input, choices));
   }
 
   private async planNow(job: Job, input: PlanInput, choices = this.stagedChoices(job, input.selected)): Promise<CarryPlanPreview & { previewToken: string }> {
@@ -236,13 +243,14 @@ export class CarryTransfers {
   private startApply(job: Job): void {
     const reviewed = job.result as CarryPlanPreview;
     job.applying = true; job.hurry = false; job.status = "working"; job.error = undefined; job.progress = undefined;
-    job.pending = this.applyNow(job, reviewed).then(outcome => {
-      if ("review" in outcome) { job.result = outcome.review; job.status = "ready"; }
+    const started = Date.now();
+    job.pending = new Promise<void>(resolve => setImmediate(resolve)).then(() => this.applyNow(job, reviewed)).then(outcome => {
+      if ("review" in outcome) { job.result = outcome.review; job.status = "ready"; this.log.info(`carry import: the rooms moved on, the summary goes back for another look (${Date.now() - started} ms)`); }
       else { job.result = outcome.applied; job.status = "applied"; job.previewToken = undefined; }
     }, error => {
       job.status = "error";
       job.error = error instanceof Error ? error.message : "The import could not be completed.";
-      this.log.warn(`carry import: ${job.error}`);
+      this.log.warn(`carry import: ${job.error} (after ${Date.now() - started} ms)`);
     }).finally(() => { job.applying = false; job.progress = undefined; job.touched = Date.now(); });
   }
 
@@ -255,7 +263,7 @@ export class CarryTransfers {
     }) : null;
     try {
       for (let attempt = 1; ; attempt++) {
-        job.progress = "Bringing it in";
+        job.progress = undefined;
         try {
           return { applied: await this.commitPlan(job) };
         } catch (error) {
@@ -281,12 +289,17 @@ export class CarryTransfers {
   private async commitPlan(job: Job): Promise<unknown> {
     const versions = job.versions;
     if (!versions) throw new Error("Review this import before applying it.");
+    const started = Date.now();
     const stage = new CarryStage(join(job.dir, "stage"));
+    const written: PlannedRoom[] = [];
+    let committed = false;
     try {
-      const plan = stage.meta<{ userMemory?: PortableMemory; userMemoryMode?: "merge" | "replace"; rooms: PlannedRoom[]; dependencies: PlannedDependency[]; directoryVersions: { path: string; hash: string }[]; fileVersions: { path: string; hash: string | null }[] }>("plan");
-      if (job.userMemoryRevision !== undefined && job.userMemoryRevision !== this.hub.history.memory.read("user").revision) throw new StalePreview("Shared user memory changed after the preview. Review the import again.");
+      const plan = stage.meta<PlanMeta>("plan");
+      const userMemoryCurrent = () => { if (job.userMemoryRevision !== undefined && job.userMemoryRevision !== this.hub.history.memory.read("user").revision) throw new StalePreview("Shared user memory changed after the preview. Review the import again."); };
+      const roomMemoryCurrent = () => { for (const [, expected] of versions) if (this.hub.history.memory.read(`room:${expected.uuid}`).revision !== expected.memoryRevision) throw new StalePreview("Room memory changed after the preview. Review the import again; nothing was imported."); };
+      userMemoryCurrent();
       if (!plan) throw new Error("Choose how to handle every conflict before importing.");
-      for (const [id, expected] of versions) if (this.hub.history.memory.read(`room:${expected.uuid}`).revision !== expected.memoryRevision) throw new StalePreview("Room memory changed after the preview. Review the import again; nothing was imported.");
+      roomMemoryCurrent();
       const files: FileChange[] = [];
       for (const dependency of plan.dependencies) {
         if (dependency.kind === "skill" && isBuiltinSkill(dependency.id)) throw new Error("Built-in skills stay with the installed viberoom. They cannot be replaced by an archive.");
@@ -299,17 +312,32 @@ export class CarryTransfers {
         if (dependency.kind === "skill") files.push({ path: dependency.targetDir, directory: dependency.files.map(file => ({ path: file.path, data: Buffer.from(file.data, "base64") })) });
         else for (const file of dependency.files) files.push({ path: join("looks", file.path), data: Buffer.from(file.data, "base64") });
       }
-      for (const [id, at] of versions) {
-        const room = this.hub.rooms.get(id);
-        if ((room?.historyStamp().version ?? null) !== at.version || (room ? setupStamp(room.toStored()) : null) !== at.setup || (room && room.uuid !== at.uuid)) throw new StalePreview("A target room changed after the preview. Review the import again; nothing was imported.");
+      const roomsCurrent = () => {
+        for (const [id, at] of versions) {
+          const room = this.hub.rooms.get(id);
+          if ((room?.historyStamp().version ?? null) !== at.version || (room ? setupStamp(room.toStored()) : null) !== at.setup || (room && room.uuid !== at.uuid)) throw new StalePreview("A target room changed after the preview. Review the import again; nothing was imported.");
+        }
+        for (const file of plan.fileVersions) {
+          const path = safeDataFile(this.hub.dataDir, file.path);
+          const hash = existsSync(path) ? lstatSync(path).isDirectory() ? "#directory" : createHash("sha256").update(readFileSync(path)).digest("hex") : null;
+          if (hash !== file.hash) throw new StalePreview("A resource, skill or look changed after the preview. Review the import again; nothing was imported.");
+        }
+        for (const directory of plan.directoryVersions) if (dependencyStamp(dependencyFiles(safeDataFile(this.hub.dataDir, directory.path))) !== directory.hash) throw new StalePreview("A skill's files changed after the preview. Review the import again; nothing was imported.");
+      };
+      roomsCurrent();
+      for (const room of plan.rooms) {
+        if (!room.made || !room.changed) continue;
+        this.hub.arriving.add(room.stored.id);
+        written.push(room);
+        await this.work(job, { type: "write-room", room: { history: this.hub.history.path, stageDir: stage.dir, dataDir: this.hub.dataDir, uuid: room.uuid, target: room.stored.id, aliases: room.aliases, rows: room.rows } }, step => {
+          job.progress = step.phase === "messages" ? `Writing ${step.done.toLocaleString("en")} of ${step.total.toLocaleString("en")} messages` : `Copying ${step.done.toLocaleString("en")} of ${step.total.toLocaleString("en")} pictures and files`;
+        });
       }
-      for (const file of plan.fileVersions) {
-        const path = safeDataFile(this.hub.dataDir, file.path);
-        const hash = existsSync(path) ? lstatSync(path).isDirectory() ? "#directory" : createHash("sha256").update(readFileSync(path)).digest("hex") : null;
-        if (hash !== file.hash) throw new StalePreview("A resource, skill or look changed after the preview. Review the import again; nothing was imported.");
-      }
-      for (const directory of plan.directoryVersions) if (dependencyStamp(dependencyFiles(safeDataFile(this.hub.dataDir, directory.path))) !== directory.hash) throw new StalePreview("A skill's files changed after the preview. Review the import again; nothing was imported.");
-      for (const room of plan.rooms) for (const resource of room.resources) files.push({ path: join("rooms", room.stored.id, "files", resource.file), data: readFileSync(join(stage.dir, "blobs", resource.blob)) });
+      const wroteMs = Date.now() - started;
+      job.progress = undefined;
+      userMemoryCurrent(); roomMemoryCurrent(); roomsCurrent();
+      const held = Date.now();
+      for (const room of plan.rooms) if (!room.made) for (const resource of stage.planRows<CarryResource>(room.uuid, "resource")) files.push({ path: join("rooms", room.stored.id, "files", resource.file), data: readFileSync(join(stage.dir, "blobs", resource.blob)) });
       const knownSources = new Map(this.hub.history.carry.sources().map(source => [source.uuid, source.label]));
       const sources = [stage.meta<CarrySource>("source")!, ...stage.db.prepare("select value from meta where key like 'source:%'").all().map(row => JSON.parse(String(row.value)) as CarrySource)];
       const changedSources = sources.filter(source => knownSources.get(source.uuid) !== source.label);
@@ -321,26 +349,44 @@ export class CarryTransfers {
         }
         for (const room of plan.rooms) {
           const history = this.hub.history, id = room.stored.id;
-          history.carry.importRevisions(id, room.revisions);
           if (room.memory) {
             if (room.memoryMode === "merge") this.hub.history.memory.mergeRoom(room.stored.uuid!, room.memory);
             else this.hub.history.memory.importRoom(room.stored.uuid!, room.memory);
           }
-          for (const state of room.states) {
+          if (room.made) continue;
+          history.carry.importRevisions(id, stage.planRows<CarryRevision>(room.uuid, "revision"));
+          for (const state of stage.planRows<CarryState>(room.uuid, "state")) {
             history.upsert(id, state.message, { track: false });
             if (state.deletedAt !== null) history.markDeleted(id, [state.message.id], state.deletedAt, { track: false });
           }
-          for (const head of room.heads) history.carry.acceptHead(id, head);
-          for (const alternative of room.alternatives) history.carry.archive(id, alternative);
+          for (const head of stage.planRows<CarryHead>(room.uuid, "head")) history.carry.acceptHead(id, head);
+          for (const alternative of stage.planRows<CarryAlternative>(room.uuid, "alternative")) history.carry.archive(id, alternative);
           history.carry.addAliases(id, room.aliases);
-          for (const resource of room.resources) history.carry.resource(id, resource.file, resource.sha256);
+          for (const resource of stage.planRows<CarryResource>(room.uuid, "resource")) history.carry.resource(id, resource.file, resource.sha256);
+          history.carry.learnNumbers(id, stage.planRows<CarryNumber>(room.uuid, "number"));
         }
         for (const source of changedSources) this.hub.history.carry.source(source.uuid, source.label);
       });
+      committed = true;
+      for (const room of written) {
+        try { rmSync(join(this.hub.dataDir, "rooms", room.stored.id, ARRIVING), HELD_FILE_RETRIES); }
+        catch (error) { this.log.warn(`carry import: the marker of ${room.stored.id} stays until the next start (${error instanceof Error ? error.message : String(error)})`); }
+      }
       for (const dependency of plan.dependencies) if (dependency.kind === "skill") this.hub.skillsChanged(dependency.id);
       if (plan.dependencies.some(d => d.kind === "look")) this.hub.emit("event", { type: "looks", looks: this.hub.looks.list() });
-      return { userMemory: !!plan.userMemory, rooms: plan.rooms.map(r => ({ id: r.stored.id, name: r.stored.name, messages: r.added ?? r.states.length, files: r.resources.length })) };
-    } finally { stage.close(); }
+      const arrived = { userMemory: !!plan.userMemory, rooms: plan.rooms.map(r => ({ id: r.stored.id, name: r.stored.name, messages: r.added ?? r.rows.state, files: r.rows.resource })) };
+      this.log.info(`carry import applied: ${arrived.rooms.map(r => `${r.name} (${r.messages} messages, ${r.files} files)`).join(", ") || "shared memory only"}; ${written.length ? `written by the worker in ${wroteMs} ms, then ` : ""}${Date.now() - held} ms on the hub's main thread`);
+      return arrived;
+    } catch (error) {
+      if (!committed) for (const room of written) {
+        try { await this.work(job, { type: "take-back-room", history: this.hub.history.path, dataDir: this.hub.dataDir, target: room.stored.id }); }
+        catch (cause) { this.log.warn(`carry import: what was written for ${room.stored.id} is taken back at the next start (${cause instanceof Error ? cause.message : String(cause)})`); }
+      }
+      throw error;
+    } finally {
+      stage.close();
+      for (const room of written) this.hub.arriving.delete(room.stored.id);
+    }
   }
 
   async handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
@@ -440,7 +486,7 @@ export class CarryTransfers {
       const passphrase = typeof body.passphrase === "string" ? body.passphrase : undefined;
       const job = this.create(estimate ? "estimate" : "export");
       job.fileName = `${passphrase !== undefined || rooms.length !== 1 ? "viberoom" : rooms[0].name.replace(/[^\p{L}\p{N}._-]+/gu, "-")}-${new Date().toISOString().slice(0, 10)}.viberoom`;
-      this.launch(job, async () => {
+      this.launch(job, estimate ? "estimate" : "export", async () => {
         const snapshot = await this.snapshot(job);
         return estimate ? this.work(job, { type: "estimate", snapshot, dataDir: this.hub.dataDir, rooms }) : this.work(job, { type: "export", folders: choice.settings ? this.dependencies(rooms) : [], job: { snapshot, dataDir: this.hub.dataDir, output: join(job.dir, "export.viberoom"), product: this.product, source, choice, rooms, dependencies: [], passphrase } });
       });

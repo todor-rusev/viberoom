@@ -1,7 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { createHash } from "node:crypto";
 import { isIdentity } from "./identity.js";
-import { contentTypeOf, isStoredFileName } from "./files.js";
+import { ATTACHMENT_KINDS, contentTypeOf, isStoredFileName } from "./files.js";
 
 export const SCHEMA = 2;
 
@@ -126,8 +126,16 @@ export function validateExportContents(contents: ExportContents): void {
       if (call.detailsAvailable === true) throw new ExportUnreadable("This file contains tool previews without their complete records. Export the saved conversation from viberoom instead.");
       for (const key of ["toolCallId", "name", "title", "output"]) if (call[key] !== undefined && call[key] !== null && typeof call[key] !== "string") throw new ExportUnreadable("A tool record has an invalid field.");
     }
-    if (message.images) for (const image of message.images as Record<string, unknown>[]) if (!isStoredFileName(String(image.file)) || typeof image.name !== "string" || typeof image.mimeType !== "string" || !finite(image.bytes) || image.bytes < 0) throw new ExportUnreadable("A message has an invalid image reference.");
-    if (message.images) for (const image of message.images as Record<string, unknown>[]) if (image.sha256 !== undefined && !/^[0-9a-f]{64}$/.test(String(image.sha256))) throw new ExportUnreadable("An image has an invalid content identity.");
+    for (const kind of ATTACHMENT_KINDS) {
+      const list = message[kind.field];
+      if (list === undefined) continue;
+      if (!Array.isArray(list)) throw new ExportUnreadable(`A message has an invalid ${kind.noun} reference.`);
+      for (const file of list as Record<string, unknown>[]) {
+        if (!object(file) || !isStoredFileName(String(file.file)) || typeof file.name !== "string" || typeof file.mimeType !== "string" || !finite(file.bytes) || file.bytes < 0) throw new ExportUnreadable(`A message has an invalid ${kind.noun} reference.`);
+        if (file.sha256 !== undefined && !/^[0-9a-f]{64}$/.test(String(file.sha256))) throw new ExportUnreadable(`${/^[aeiou]/.test(kind.noun) ? "An" : "A"} ${kind.noun} has an invalid content identity.`);
+        if ((file.seconds !== undefined && (!finite(file.seconds) || file.seconds < 0)) || (file.words !== undefined && typeof file.words !== "string") || (file.unheard !== undefined && typeof file.unheard !== "string")) throw new ExportUnreadable(`A message has an invalid ${kind.noun} reference.`);
+      }
+    }
     if (message.resourceRefs !== undefined) {
       if (!Array.isArray(message.resourceRefs)) throw new ExportUnreadable("A message has invalid resource references.");
       for (const ref of message.resourceRefs) if (!object(ref) || typeof ref.source !== "string" || ref.source.length > 4096 || typeof ref.file !== "string" || !/^(?:[0-9a-f]{32}\.(?:png|jpg|webp|gif)|[0-9a-f]{12}-[^\\/:*?"<>|\u0000-\u001f]+)$/.test(ref.file) || ref.file.endsWith(".") || ref.file.endsWith(" ") || ref.sha256 !== undefined && !/^[0-9a-f]{64}$/.test(String(ref.sha256))) throw new ExportUnreadable("A message has an invalid carried file reference.");

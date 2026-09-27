@@ -1,9 +1,10 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { createHash } from "node:crypto";
 import { ancestor, carryHash, carryRevision, type CarryAlternative, type CarryHead, type CarryRevision } from "./carry-history.js";
+import { withAttachmentLists } from "./files.js";
 import type { ChatMessage } from "./room.js";
 
-export interface CarryState { message: ChatMessage; deletedAt: number | null; head: CarryHead }
+export interface CarryState { message: ChatMessage; deletedAt: number | null; head: CarryHead; numbers?: Record<string, number> }
 export interface CarryBranch { key: string; changed: number; localContinuation: number; incomingContinuation: number; examples: { id: string; ours: string; incoming: string }[]; members: { changed: string[]; ours: string[]; incoming: string[] } }
 export type BranchChoice = "ours" | "incoming" | "both";
 export interface MergeInput { states: CarryState[]; revisions: CarryRevision[]; alternatives: CarryAlternative[]; source: string }
@@ -13,9 +14,11 @@ function ordered(states: CarryState[]): CarryState[] { return [...states].sort((
 function preview(state: CarryState): string { return state.deletedAt !== null ? "[removed] " + state.message.text.slice(0, 180) : state.message.text.slice(0, 180); }
 
 function completeReferences(base: CarryState, other: CarryState): CarryState {
-  const message = { ...base.message };
+  const message = withAttachmentLists({ ...base.message }, (list, kind) => list.map((file, i) => {
+    const theirs = other.message[kind.field]?.[i];
+    return file.sha256 || !theirs?.sha256 ? file : { ...file, sha256: theirs.sha256 };
+  }));
   if (message.quotes) message.quotes = message.quotes.map((q, i) => q.id || !other.message.quotes?.[i]?.id ? q : { ...q, id: other.message.quotes[i].id });
-  if (message.images) message.images = message.images.map((image, i) => image.sha256 || !other.message.images?.[i]?.sha256 ? image : { ...image, sha256: other.message.images[i].sha256 });
   const refs = new Map((message.resourceRefs ?? []).map(ref => [ref.source, ref]));
   for (const ref of other.message.resourceRefs ?? []) if (message.text.includes(ref.source)) {
     const held = refs.get(ref.source);

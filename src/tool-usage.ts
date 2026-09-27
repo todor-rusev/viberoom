@@ -1,6 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { OPERATIONS, DISCOVERY_SCHEMA_VERSION } from "./tool-spec.js";
-const names = new Set([...OPERATIONS.map(op => op.name), "tool_search", "tool_call", "unknown"]);
+const names = new Set([...OPERATIONS.map(op => op.name), "tool_search", "tool_call", "unknown", "connection"]);
 const outcomes = ["attempt", "ok", "invalid_arguments", "refused", "unknown_operation", "no_match", "internal_error", "unconfirmed_result"] as const;
 export interface ToolUsage {
   callId: string;

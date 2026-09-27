@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, parse, resolve, sep } from "node:path";
 import { writeFileAtomic } from "../atomic.js";
+import { isVaultRef, vaultRef, type Vault } from "../vault.js";
 import type { Platform } from "./types.js";
 
 export interface TelegramConfig {
@@ -52,11 +53,25 @@ export interface ChannelsState {
 
 const EMPTY: ChannelsState = { version: 1, bindings: {}, pairings: [], detached: {}, fileRoots: [] };
 
+const TOKEN_SECRET = "channels.telegram.token";
+
 export class ChannelsStore {
   private state: ChannelsState;
+  private readonly vault: () => Vault | null;
 
-  constructor(readonly path: string) {
+  constructor(readonly path: string, vault?: Vault | (() => Vault | null)) {
+    this.vault = typeof vault === "function" ? vault : () => vault ?? null;
     this.state = load(path);
+    this.adoptSecrets();
+  }
+
+  private adoptSecrets(): void {
+    const telegram = this.state.telegram;
+    if (!telegram?.token) return;
+    const vault = this.vault();
+    if (!vault) return;
+    if (isVaultRef(telegram.token)) telegram.token = vault.resolve(telegram.token);
+    else this.write();
   }
 
   get(): ChannelsState {
@@ -65,9 +80,24 @@ export class ChannelsStore {
 
   update(change: (state: ChannelsState) => void): void {
     change(this.state);
+    this.write();
+  }
+
+  private write(): void {
     mkdirSync(dirname(this.path), { recursive: true });
-    writeFileAtomic(this.path, JSON.stringify(this.state, null, 2) + "\n");
+    writeFileAtomic(this.path, JSON.stringify(this.serialized(), null, 2) + "\n");
     if (process.platform !== "win32") chmodSync(this.path, 0o600);
+  }
+
+  private serialized(): ChannelsState {
+    const token = this.state.telegram?.token;
+    if (!token || isVaultRef(token)) return this.state;
+    const vault = this.vault();
+    if (!vault) return this.state;
+    if (vault.get(TOKEN_SECRET) !== token) vault.set(TOKEN_SECRET, token);
+    const copy = structuredClone(this.state);
+    copy.telegram!.token = vaultRef(TOKEN_SECRET);
+    return copy;
   }
 
   describe(): { telegram: { enabled: boolean; tokenSet: boolean } | null; bindings: number; paired: number } {
@@ -85,6 +115,7 @@ export class ChannelsStore {
 
   reload(): void {
     this.state = load(this.path);
+    this.adoptSecrets();
   }
 }
 

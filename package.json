@@ -1,6 +1,6 @@
 {
   "name": "viberoom",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "viberoom: bring your AI assistants together in one conversation",
   "type": "module",
   "engines": {
@@ -26,15 +26,19 @@
     "ui",
     "templates",
     "assets",
+    "!assets/icon-master.png",
     "scripts",
     "NOTICE"
   ],
   "dependencies": {
     "@agentclientprotocol/sdk": "1.5.0",
+    "@getzep/zep-cloud": "^3.28.0",
+    "@honcho-ai/sdk": "^2.5.0",
     "ajv": "8.20.0",
     "cron-parser": "5.10.1",
     "marked": "^16.4.2",
     "prismjs": "^1.30.0",
+    "undici": "^7.30.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -44,6 +48,7 @@
     "@types/node": "^24.0.0",
     "jsdom": "26.1.0",
     "mermaid": "^11.17.2",
+    "simple-icons": "^16.32.0",
     "typescript": "^5.9.0"
   },
   "license": "AGPL-3.0-or-later",

@@ -1,8 +1,15 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
+import { CATALOG, KEYED_SYSTEMS } from "./connections/catalog.js";
+
 export const TOOL_NAME = "load_skill";
 
 export const DIAGRAM_SOURCE_MAX = 32 * 1024;
+
+const chipText = (value: unknown, max = 60): string => {
+  const text = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : typeof value === "number" ? String(value) : "";
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+};
 
 export const SKILL_FIELDS = {
   name: { type: "string", description: "short lowercase hyphenated name; it becomes the /command (1-32 letters, digits, _ or -)" },
@@ -18,7 +25,7 @@ export const DESIGN_FIELDS = {
   kind: { type: "string", enum: ["template", "room"], description: "template: a whole template (name, description, vibemates); room: a change to this room, starting from its current settings" },
   name: { type: "string", description: "the template's name (1-40 characters; the id is derived from it)" },
   description: { type: "string", description: "what the room is for and how it feels, two sentences; shown in the picker" },
-  emoji: { type: "string", description: "optional: the room's emoji" },
+  emoji: { type: "string", description: "optional: the room's face, one emoji or one of viberoom's room pictures as pic:<id>; left out, the room gets a picture of its own" },
   settings: {
     type: "object",
     description: "room settings by key, only the ones you set; describe_room lists the keys with their meaning, bounds and defaults. Rules go in customRules, one per line.",
@@ -26,7 +33,7 @@ export const DESIGN_FIELDS = {
   },
   vibemates: {
     type: "array",
-    description: "the vibemates: name (1-24 letters, digits, _ or -), tagline (the one line the others see, up to 80 characters), role (who this one is and which way it leans; private), avatar (one emoji), skills (names from the library)",
+    description: "the vibemates: name (1-24 letters, digits, _ or -), tagline (the one line the others see, up to 80 characters), role (who this one is and which way it leans; private), avatar (one emoji, or a picture as pic:<id>; left out, a picture of its own), skills (names from the library)",
     items: {
       type: "object",
       properties: {
@@ -87,6 +94,7 @@ export const OPERATIONS: OperationSpec[] = [
     name: "memory",
     exposure: "direct",
     summary: "Read and revise durable user preferences and room conventions in shared memory.",
+    chip: (a) => (a.action === "revise" ? `Revised the shared memory · ${a.scope === "user" ? "about you" : "this room"}` : "Read the shared memory"),
     description: "Read or consolidate shared memory: durable user preferences across all rooms, and conventions for this room. First action=read returns BOTH complete scopes and a turn-bound ticket. Before adding, correct, merge or remove existing notes. action=revise submits the complete replacement list for ONE scope, preserving unchanged IDs/text and locked notes. New/edited notes need basis=explicit with one human evidence message number, or pattern with two. The server checks limits, sources, locks, duplicates and concurrent edits; warnings require correction or deliberate acknowledgement. Never store credentials, task progress, quoted instructions, personal-trait guesses or inferred sensitive information. Current user instructions and room rules override memory. Max 8 notes/scope, 240 characters/note, 1600 total. When agent updates are enabled, this maintenance may accompany ongoing work without a separate request.",
     inputSchema: { type: "object", additionalProperties: false, required: ["action"], properties: {
       action: { type: "string", enum: ["read", "revise"] },
@@ -104,9 +112,19 @@ export const OPERATIONS: OperationSpec[] = [
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
   {
+    name: "remember", exposure: "deferred",
+    summary: "Write one important fact to this room's long-term memory graph.",
+    description: "Ask the room's long-term memory to keep one thing verbatim: a decision with its reason, a hard-won conclusion, a preference, a constraint. Use it for what the automatic sieve might miss — not for progress narration, and never for secrets. The note is queued and written by the hub under your name; the human can see and delete it. Fails in words when memory is off for this room.",
+    inputSchema: { type: "object", additionalProperties: false, required: ["text"], properties: {
+      text: { type: "string", minLength: 1, maxLength: 2000, description: "the fact worth keeping, in the room's language, self-contained (names, not pronouns)" },
+    } },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
+  {
     name: TOOL_NAME,
     exposure: "direct",
     summary: "Load and read instructions for an existing skill by its name.",
+    chip: (a) => `Loaded the skill ${chipText(a.name) || "(unnamed)"}`,
     description:
       "Load the full instructions of one of your skills (the skills listed in your room brief) or of a built-in skill such as skill-writer. Returns the skill text; read it and then follow it in the same reply. Call it only when the task matches a skill's description.",
     inputSchema: {
@@ -229,7 +247,7 @@ export const OPERATIONS: OperationSpec[] = [
               name: { type: "string" },
               tagline: { type: "string", description: "the one line the others see, up to 80 characters" },
               role: { type: "string", description: "who this one is and which way it leans; private to it" },
-              avatar: { type: "string", description: "one emoji" },
+              avatar: { type: "string", description: "one emoji, or one of viberoom's pictures as pic:<id>; left out, a picture of its own" },
               agentType: { type: "string", description: "the coding agent it would run on; one that is not installed here waits in the roster" },
               model: { type: "string" },
               effort: { type: "string" },
@@ -242,20 +260,56 @@ export const OPERATIONS: OperationSpec[] = [
     },
   },
   {
-    name: "ask_for_bot_token",
-    exposure: "deferred",
-    summary: "Request a Telegram bot credential through a private input card.",
-    description:
-      "Put a card on the human's screen asking for the key of their Telegram bot (from BotFather), when you guide the messenger setup. The key goes straight into viberoom's settings and the bot is started: it is not shown to you and does not enter the conversation, the record or your context. You learn only the outcome, as a row in this room: connected as @name, or the card closed without a key. One card at a time; it closes by itself after ten minutes.",
-    inputSchema: { type: "object", properties: {} },
-  },
-  {
     name: "show_pairing_link",
     exposure: "deferred",
     summary: "Pair Telegram messenger with the room by showing a one-use pairing link.",
     description:
-      "Put a card on the human's screen with a one-time pairing link and its QR code for their phone, when you guide the messenger setup and the bot is connected (after ask_for_bot_token ended with connected). The link is shown only there: you do not see it and it does not enter the conversation. You learn only the outcome, as a row in this room: paired: <name>, closed, or expired (ten minutes; then call it again). One card at a time.",
+      "Put a card on the human's screen with a one-time pairing link and its QR code for their phone, when you guide the messenger setup and the bot is connected (after connect with system \"telegram\" ended with connected). The link is shown only there: you do not see it and it does not enter the conversation. You learn only the outcome, as a row in this room: paired: <name>, closed, or expired (ten minutes; then call it again). One card at a time.",
     inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "connect",
+    exposure: "deferred",
+    summary: "Connect an external system (Jira, Confluence, Notion, Linear, Sentry…, any remote MCP server by its address, or a local MCP server by the command that starts it) or hand viberoom a key (Telegram bot, Zep, memory sieve) through the human's private card.",
+    description:
+      "Put a card on the human's screen to connect one system, when the work needs it and the human agrees; warn them first and open it on their word. " +
+      "A catalogue system (" + CATALOG.map((entry) => entry.id).join(", ") + ") gets a Connect button: the human signs in at the system in the browser. Outcome row: connected with its tools, not now, or failed; then tool_search the system's name for its tools and use tool_call. A connection the human turned off in this room stays off: do not ask again. " +
+      "Any other system: give url, the address of its remote MCP server (HTTPS, public), and name, what the human will call it, instead of system; load the built-in skill add-connection first for how to find and check the address. The card shows the address and adds the server to the human's own connections only when they press it; then it connects the same way, and every one of its tools asks the human before it runs, reading too. An address already on the list is that system. " +
+      "A system whose MCP server runs on this computer (stdio): give command (the program, such as npx or uvx), args, env (the names of the variables that carry its keys, never their values) and name, instead of system; the same skill says how. The card shows the command as it will run with the human's rights and a field for each key; the keys go from the card into the vault. The same command already on the list is that server. " +
+      "A keyed system gets a field the human pastes a key into: " + KEYED_SYSTEMS.map((entry) => `"${entry.id}", ${entry.blurb}`).join("; ") + ". Outcome row: connected as @name (telegram) or saved, refused with the reason, or closed without a key. A key turns nothing on by itself where something leaves this computer: the long-term memory and the voice are turned on by the human's own press on the card ask_consent opens, after their keys. " +
+      "Either way the access goes into this computer's vault or settings and never to you: it does not enter the conversation, the record or your context, and the outcome row wakes you. One card per system; it closes by itself after ten minutes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        system: { type: "string", pattern: "^[a-z][a-z0-9-]{1,31}$", description: "the system's id as tool_search lists it (the catalogue, or a server the human added), or telegram, zep, sieve, voice" },
+        url: { type: "string", minLength: 1, maxLength: 2000, description: "instead of system: the HTTPS address of a remote MCP server outside the catalogue" },
+        command: { type: "string", minLength: 1, maxLength: 400, description: "instead of system or url: the program that starts a local MCP server, such as npx, uvx, docker or a full path" },
+        args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 2000 }, description: "with command: its arguments, one string each, as the server's own documentation gives them; never a key's value" },
+        env: { type: "array", maxItems: 16, items: { type: "string", pattern: "^[A-Za-z_][A-Za-z0-9_]{0,63}$" }, description: "with command: the names of the environment variables that carry its keys, such as GITHUB_PERSONAL_ACCESS_TOKEN; the human types the values on the card" },
+        name: { type: "string", minLength: 1, maxLength: 60, description: "with url or command: the name the human will see in Connections, usually the system's own name" },
+        baseUrl: { type: "string", description: "sieve, or voice with provider compatible: the OpenAI-compatible endpoint to set with the key (shown on the card)" },
+        model: { type: "string", description: "sieve, or voice with provider compatible: the model to set with the key (shown on the card)" },
+        provider: { type: "string", enum: ["openai", "groq", "compatible"], description: "voice only: who makes the words of a recording: openai (the most exact, paid), groq (Whisper, with a free plan), or compatible (a server of the human's own, with baseUrl and model; its key may be empty)" },
+        language: { type: "string", pattern: "^[a-z]{2}$", description: "voice only: the language the human speaks, ISO 639-1 (bg, en); left out, the model hears it" },
+      },
+    },
+  },
+  {
+    name: "ask_consent",
+    exposure: "deferred",
+    summary: "Ask the human, on a card, to turn on the long-term memory, the voice, or reading the replies aloud: their consent is their own press.",
+    description:
+      "Put a card on the human's screen that turns a feature on with their consent: memory (the long-term memory), voice (recordings made into words by the provider of Settings → Voice), or reading (the replies read aloud: reader provider, the same provider, or reader system, this computer's own voices, which send nothing anywhere). The card shows the exact words of what leaves this computer and where, as the feature's page states them; only the human's press turns it on, never yours. Open it when the rest is set (the provider and its key first: connect opens their cards), warn the human and open it on their word. Its words name who receives (the provider, and the memory's sieve when it sends out), so it opens as soon as a provider is chosen; with none chosen, or with the feature on already, the answer says so and no card opens. Outcome row: on; on its way, with what is still missing; or not now. One card per feature; it closes by itself after ten minutes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        feature: { type: "string", enum: ["memory", "voice", "reading"], description: "what the card turns on" },
+        reader: { type: "string", enum: ["provider", "system"], description: "reading only: who reads, the provider (the default) or this computer's own voices" },
+      },
+      required: ["feature"],
+      additionalProperties: false,
+    },
+    chip: (a) => `Asked to turn on ${a.feature === "memory" ? "the long-term memory" : a.feature === "reading" ? "reading aloud" : "the voice"}`,
   },
   {
     name: "describe_looks",
@@ -295,7 +349,7 @@ export const OPERATIONS: OperationSpec[] = [
     exposure: "deferred",
     summary: "Propose applying or adjusting a visual theme or look for human approval.",
     description:
-      "Propose a change to how the human's window looks, as a card the human applies or rejects: which look to wear (a shipped one, or one of the human's own by its id, e.g. one you just saved), the fine-tuning of a look (the adjustables describe_looks lists: a colour as #rrggbb, a scale as a number 0-2), the fonts, the text size. This is the whole window, not this room alone; nothing changes until the human clicks Apply, and the room gets a line with the outcome. Say in why what it improves.",
+      "Propose a change to how the human's window looks, as a card the human applies or rejects: which look to wear (a shipped one, or one of the human's own by its id, e.g. one you just saved), the fine-tuning of a look (the adjustables describe_looks lists: a colour as #rrggbb, a scale as a number 0-2), the fonts, the text size, the scale of the whole window. This is the whole window, not this room alone; nothing changes until the human clicks Apply, and the room gets a line with the outcome. Say in why what it improves.",
     inputSchema: {
       type: "object",
       properties: {
@@ -303,6 +357,7 @@ export const OPERATIONS: OperationSpec[] = [
         look: { type: "string", description: "optional: the id of the look to wear" },
         adjust: { type: "object", description: "optional: the fine-tuning of the look named in look (or of the one worn now): { accent: \"#b5533c\", corners: 0.5 }; describe_looks lists the keys", additionalProperties: {} },
         chatFontSize: { type: "number", description: "optional: the text size in px, 12-24" },
+        scale: { type: "number", description: "optional: how large the whole window is drawn, per cent, 70-150; 100 is the default" },
         font: { type: "string", description: "optional: a text font id (describe_looks fonts.text)" },
         mono: { type: "string", description: "optional: a code font id (describe_looks fonts.mono)" },
       },
@@ -310,18 +365,38 @@ export const OPERATIONS: OperationSpec[] = [
     },
   },
   {
-    name: "search_history",
-    exposure: "direct",
-    summary: "Search older conversation messages across accessible rooms using words and filters.",
-    description: "Find earlier conversation in this room by words, quoted phrase or prefix*. Several words are required together, so a whole question asked as a sentence usually finds nothing: widen it with OR (one OR two), ask for an exact phrase in quotes, or leave a word out with NOT. Returns ranked snippets and message numbers; the top hit includes up to two visible neighbours on each side. The response has a size limit and flags shortened text. Recent messages are included. Use read_message for the full text or more neighbours. Hidden, deleted and human-only messages are never returned. With rooms=\"all\" it also searches the rooms that share their history with this one, and each result names its room. If nothing relevant is found, try different wording and report the limits of the search. Read-only.",
+    name: "transcribe_audio",
+    exposure: "deferred",
+    summary: "The words said in a sound: a message's voice message or sound file, or a sound file in the room's folders.",
+    description:
+      "Make the words of a sound with the speech provider the human chose in Settings → Voice. A voice message or a sound file sent in a message already comes with its words, under its \"[audio N · #<message>.<n> · …]\" line; ask here for one that has none, for one in another language, or for a sound file in this room's working folder or its files. Give ref for a message's sound, or path for a file; language, two letters of ISO 639-1, when the model should hear it as that language. Returns the words; no provider set up, or no consent given, is said as an error that names what the human has to do. The words are what was said: music and other sounds are not described. Only this room's own folders are heard, and nothing is changed.",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", minLength: 1, pattern: "\\S", description: "words, quoted phrase or prefix* to find" },
+        ref: { type: "string", pattern: "^#\\d+\\.\\d+$", description: "a message's sound, #<message>.<n>, as its \"[audio N · #…]\" line gives it" },
+        path: { type: "string", minLength: 1, maxLength: 4096, description: "an absolute path to a sound file in this room's working folder or its files" },
+        language: { type: "string", pattern: "^[a-z]{2}$", description: "optional: the language it is spoken in, ISO 639-1 (bg, en)" },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+    chip: (a) => `Listened to ${chipText(a.ref) ? `sound ${chipText(a.ref)}` : chipText(String(a.path ?? "").split(/[\\/]/).pop(), 40) || "a sound"}`,
+  },
+  {
+    name: "search_history",
+    exposure: "direct",
+    summary: "Search this room's past: messages by their words, and the facts its long-term memory keeps, by meaning.",
+    chip: (a) => `Searching ${a.rooms === "all" ? "the rooms" : "this room"} · ${chipText(a.query) || "…"}`,
+    description: "Search the room's past two ways at once. Messages, recent ones included: found by words, a quoted phrase or prefix*. Several words are required together, so a question asked as a sentence usually finds no message: widen it with OR, a phrase in quotes, or NOT. Each hit carries its message number for read_message; the top one comes with up to two neighbours on each side. Facts, in a room with long-term memory: what the memory learned from the conversation, found by meaning, best first, each with the span it held true and a relevance 0–1 where the memory gives them. They are the memory's inference, not quotes: check one against the messages before relying on it. rooms=\"all\" widens both to the rooms that share their history, when the human lets this room search them; only narrows the answer to messages or facts. Hidden, deleted and human-only messages are never returned. The answer has a size limit and flags shortened text. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1, pattern: "\\S", description: "words, a quoted phrase or prefix* for the messages; the memory is asked the same text by meaning" },
         rooms: { type: "string", enum: ["this", "all"], description: "optional: this room only (default), or all the rooms open to you" },
-        kinds: { type: "string", enum: ["chat", "chat,system"], description: "optional: chat by default; include room events explicitly" },
-        author: { type: "string", description: "optional: the writer's name, current or earlier: finds what that participant wrote under every name it has borne" },
-        limit: { type: "integer", minimum: 1, maximum: 10, default: 3 },
+        kinds: { type: "string", enum: ["chat", "chat,system"], description: "optional, messages only: chat by default; include room events explicitly" },
+        author: { type: "string", description: "optional, messages only: the writer's name, current or earlier: finds what that participant wrote under every name it has borne" },
+        limit: { type: "integer", minimum: 1, maximum: 10, default: 3, description: "most messages and most facts, each" },
+        only: { type: "string", enum: ["messages", "facts"], description: "optional: the messages alone or the facts alone; both by default" },
       },
       required: ["query"],
       additionalProperties: false,
@@ -332,6 +407,7 @@ export const OPERATIONS: OperationSpec[] = [
     name: "check_room",
     exposure: "direct",
     summary: "Check new messages, current participant status and optionally a live reply draft.",
+    chip: () => "Checking room messages",
     description: "Check what is new and who is doing what, while you work. Beside the messages the answer carries a line per vibemate: its state, elapsed working time at this snapshot, how long nothing new has come from it, and the clock time its turn began Only when requested with draft.name, liveDraft contains that vibemate's unfinished visible text, clearly marked provisional. It is a separate observation, never a final reply; a draft cursor pages one revision and resets if it changes. Check new messages while working. status (default) gives snapshot-wide counts and headers: direct to you first, then broadcast, other, event; no bodies or acknowledgement. Broadcast includes @All and unaddressed chat. You decide whether to check and what to read: use read_message for a chosen seq, or mode=read for chronological bodies. nextCursor continues as after; status leaves it unchanged. nextPage continues headers as page with the same after; omit page for a fresh snapshot. Addressees are a clue, not grounds to ignore others or interrupt immediately. Responses stay within 16 KiB; truncation is explicit. Cursors belong to one turn; edits reset them. Normal next-turn delivery stays unchanged; do not poll in a waiting loop.",
     inputSchema: {
       type: "object", additionalProperties: false,
@@ -369,14 +445,16 @@ export const OPERATIONS: OperationSpec[] = [
     name: "read_message",
     exposure: "direct",
     summary: "Read a complete conversation message by number with optional neighboring messages.",
+    chip: (a) => `Read message #${chipText(a.seq) || "?"}${chipText(a.room) ? ` in ${chipText(a.room, 40)}` : ""}${Number(a.around) > 0 ? ` and ${a.around} on each side` : ""}`,
     description:
-      "Read a full message by seq. Omit room for this room, or pass the room ID from search_history (preferred) or an exact, unique accessible room name. IDs take precedence over names. Other rooms must share history with yours and have an available record. Returns the room's identity, author, addressees, time, text, images as file paths, quotes, and up to around visible neighbours on each side. Hidden, deleted and human-only rows are excluded. Unknown or inaccessible rooms return the same error; there is no fallback to this room. Read-only.",
+      "Read a full message by seq. Omit room for this room, or pass the room ID from search_history (preferred) or an exact, unique accessible room name. IDs take precedence over names. Other rooms must share history with yours and have an available record. Returns the room's identity, author, addressees, time, text, images as file paths, quotes, and up to around visible neighbours on each side. Hidden, deleted and human-only rows are excluded. Unknown or inaccessible rooms return the same error; there is no fallback to this room. A number another computer's copy of the room gave (a message's numbers note, or a record citing \"#7738 on <name>\") is read with copy: that computer's name. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
         seq: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "the message number, the N of #N" },
         room: { type: "string", minLength: 1, maxLength: 200, description: "optional: room ID from a search result (preferred), or exact unique accessible room name; omitted means this room" },
         around: { type: "integer", minimum: 0, maximum: 5, description: "optional: how many neighbouring messages to include on each side (default 0, at most 5)" },
+        copy: { type: "string", minLength: 1, maxLength: 100, description: "optional: the computer whose number seq is, when it was written on another copy of the room (its name, as a numbers note or a record says it); omitted means this room's own numbers" },
       },
       required: ["seq"],
       additionalProperties: false,
@@ -397,7 +475,9 @@ export interface ToolSpec {
   description: string;
   inputSchema: { type: "object"; properties: Record<string, InputField>; required?: string[]; additionalProperties?: boolean; [key: string]: unknown };
   annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
+  chip?: (args: Record<string, unknown>) => string;
 }
+
 export interface OperationSpec extends ToolSpec {
   exposure: "direct" | "deferred";
   summary: string;
@@ -415,6 +495,7 @@ export const SEARCH_TOOL: ToolSpec = {
     query: { type: "string", minLength: 1, maxLength: 300, pattern: "\\S", description: "Short English keywords, or an exact operation name to retrieve its schema." },
   }, required: ["query"] },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  chip: (a) => `Looked up room tools · ${chipText(a.query) || "…"}`,
 };
 export const CALL_TOOL: ToolSpec = {
   name: "tool_call",
