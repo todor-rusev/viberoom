@@ -3168,7 +3168,7 @@
     { tone: "lav", emoji: "📱", title: "From your phone", text: "Pair Telegram and the rooms come with you: read what the vibemates wrote, answer them, stop a reply — from the phone in your pocket. Your own bot, paired once under Settings → Channels." },
     { tone: "rose", face: HUSH_FACE, title: "Hush", text: "Too much at once? One click stops every running reply. The vibemates stay quiet until you write again." },
     { tone: "sky", emoji: "📊", title: "Links and diagrams", text: "Links and file paths open on your machine with one click. A ```mermaid block in a reply turns into a diagram." },
-    { tone: "orchid", emoji: "🎨", title: "Looks", text: "VibeClassic and its dark twin, VibeSky (the same in light blue), Plain (black ink on white, or white on black), Terminal, Clay, Eye Comfort (the look the research on tired eyes asks for) or 3D clayful (soft clay objects, with weight): pick one with the button above or under Settings → Appearance, and fine-tune its paper, bubbles, ink and corners." },
+    { tone: "orchid", emoji: "🎨", title: "Looks", text: "VibeClassic and its dark twin, Plain (black ink on white, or white on black), Terminal, Clay, Eye Comfort (the look the research on tired eyes asks for) or 3D clayful (soft clay objects, with weight): pick one with the button above or under Settings → Appearance, and fine-tune its paper, bubbles, ink and corners." },
   ];
   const HOME_SYSTEMS = 8;
   const STEPS = [
@@ -7149,7 +7149,7 @@
       action: () => (automationsRoom() ? "Open Automations" : "Open a room first"), go: "automations",
       done: () => (state.automationJobs || 0) > 0, ask: "Show me how to set up an automation." },
     { id: "look", tone: "peach", art: () => rig("palette"), title: "The look", words: "Colours, light and corners: make the window yours.", action: "Change the look", go: "settings:appearance",
-      done: () => { const a = state.settings?.appearance || {}; return (!!a.look && a.look !== TOKENS.current.id) || Object.keys(a.custom?.[a.look] || {}).length > 0; },
+      done: () => { const a = state.settings?.appearance || {}; const look = TOKENS.looks[a.look] ? a.look : TOKENS.current.id; return look !== TOKENS.current.id || Object.keys(a.custom?.[look] || {}).length > 0; },
       ask: "Show me how to change the look." },
   ];
   const automationsRoom = () => (state.currentRoomId && state.rooms.get(state.currentRoomId)) || null;
@@ -10895,7 +10895,8 @@
   });
   els.pfDialog.addEventListener("cancel", (event) => event.preventDefault());
   function offerLook() {
-    const current = (state.settings.appearance || {}).look || TOKENS.current.id;
+    const requested = (state.settings.appearance || {}).look;
+    const current = TOKENS.looks[requested] ? requested : TOKENS.current.id;
     $("#look-dialog-cards").innerHTML = Object.values(TOKENS.looks).map((l) => UI.html("look-card", { look: l, tag: lookTag(l), on: l.id === current, data: { look: l.id } })).join("");
     openDialog($("#look-dialog"));
   }
