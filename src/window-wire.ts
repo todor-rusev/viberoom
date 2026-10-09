@@ -25,10 +25,34 @@ export function bodyPageForWindow(messages: ChatMessage[], revision: string, lim
   }
   return page;
 }
+function isSpace(code: number): boolean {
+  return code === 32 || (code >= 9 && code <= 13) || code === 0xa0 || code === 0x1680 || (code >= 0x2000 && code <= 0x200a)
+    || code === 0x2028 || code === 0x2029 || code === 0x202f || code === 0x205f || code === 0x3000 || code === 0xfeff;
+}
+
+export function previewText(text: string, limit = 240): string {
+  const words: string[] = [];
+  let length = 0;
+  let start = -1;
+  for (let i = 0; i <= text.length && length < limit; i++) {
+    if (i < text.length && !isSpace(text.charCodeAt(i))) {
+      if (start < 0) start = i;
+      if (length + (words.length ? 1 : 0) + (i + 1 - start) < limit) continue;
+      i++;
+    }
+    if (start >= 0) {
+      length += (words.length ? 1 : 0) + (i - start);
+      words.push(text.slice(start, i));
+      start = -1;
+    }
+  }
+  return words.join(" ").slice(0, limit);
+}
+
 export function messageIndexEntry(message: ChatMessage): unknown {
   return { id: message.id, seq: message.seq, displayOrder: message.displayOrder, kind: message.kind,
     from: message.from, fromName: message.fromName, to: message.to, toNames: message.toNames,
-    ts: message.ts, pinned: message.pinned, streaming: message.streaming, text: message.text.trim().replace(/\s+/g, " ").slice(0, 240),
+    ts: message.ts, pinned: message.pinned, pinLabel: message.pinLabel, streaming: message.streaming, text: previewText(message.text),
     bodyMissing: true, bodyChars: message.text.length };
 }
 export function roomForWindow(value: unknown, options: { index?: boolean; keepRange?: boolean } = {}): unknown {

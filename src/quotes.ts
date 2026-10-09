@@ -1,6 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-export const QUOTES_PER_MESSAGE = 6;
+export const QUOTES_PER_MESSAGE = 20;
 export const QUOTE_MAX_CHARS = 4000;
 export const READ_AROUND_MAX = 5;
 

@@ -1,8 +1,36 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
+import { ConnectionError } from "./errors.js";
 import { declined, McpError, McpSession, parseMessage, type JsonRpcResponse } from "./mcp-session.js";
 import { parseChallenge } from "./oauth.js";
 import { OutboundRefused } from "./outbound.js";
+
+const RESERVED_HEADERS = new Set(["accept", "accept-encoding", "connection", "content-encoding", "content-length", "content-type", "cookie", "expect",
+  "host", "keep-alive", "origin", "proxy-authorization", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade"]);
+const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,64}$/;
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+export function keysMayGoTo(address: string | URL): boolean {
+  const url = typeof address === "string" ? new URL(address) : address;
+  return url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK.has(url.hostname));
+}
+
+export function checkHeaderNames(raw: unknown): string[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw) || raw.some((name) => typeof name !== "string")) throw new ConnectionError("headers are names, one string each", "failed");
+  const names = raw.map((name: string) => name.trim()).filter(Boolean);
+  if (names.length > 8) throw new ConnectionError("a server takes up to 8 headers for its keys", "failed");
+  const seen = new Set<string>();
+  for (const name of names) {
+    const lower = name.toLowerCase();
+    if (!TOKEN.test(name)) throw new ConnectionError(`"${name.slice(0, 64)}" is not a header name: letters, digits and - only, as the server's docs give it`, "failed");
+    if (RESERVED_HEADERS.has(lower) || lower.startsWith("mcp-")) throw new ConnectionError(`${name} is a header of the request itself, not one for a key`, "failed");
+    if (seen.has(lower)) throw new ConnectionError(`${name} is named twice`, "failed");
+    seen.add(lower);
+  }
+  return names;
+}
 
 export class McpAuthRequired extends Error {
   constructor(readonly challenge: { resourceMetadata?: string; scope?: string }, readonly insufficientScope = false) {
@@ -46,6 +74,7 @@ export interface McpRemoteOptions {
   token: () => Promise<string | null>;
   refused: (challenge: { resourceMetadata?: string; scope?: string }, token: string | null) => Promise<boolean>;
   clientVersion: string;
+  headers?: Record<string, string>;
 }
 
 export class McpRemote extends McpSession {
@@ -54,10 +83,18 @@ export class McpRemote extends McpSession {
 
   constructor(readonly url: string, private readonly options: McpRemoteOptions) {
     super(options.clientVersion);
+    if (Object.keys(options.headers ?? {}).length && !keysMayGoTo(url)) {
+      throw new ConnectionError("a key goes to a server over HTTPS only, or to this machine", "failed");
+    }
+  }
+
+  private redact(text: string): string {
+    return Object.values(this.options.headers ?? {}).filter((value) => value.length >= 4).reduce((said, value) => said.split(value).join("<key>"), text);
   }
 
   private async post(message: Record<string, unknown>, timeoutMs: number, retried = { auth: false, session: false }): Promise<Response> {
     const headers: Record<string, string> = {
+      ...this.options.headers,
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
       "mcp-protocol-version": this.protocolVersion,
@@ -67,7 +104,7 @@ export class McpRemote extends McpSession {
     if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
     let res: Response;
     try {
-      res = await this.options.fetch(this.url, { method: "POST", headers, body: JSON.stringify(message), signal: AbortSignal.timeout(timeoutMs) });
+      res = await this.options.fetch(this.url, { method: "POST", headers, body: JSON.stringify(message), redirect: "manual", signal: AbortSignal.timeout(timeoutMs) });
     } catch (error) {
       if ((error as Error).name === "TimeoutError") throw new McpError(`no answer within ${Math.round(timeoutMs / 1000)} s`, "unreachable");
       throw error instanceof OutboundRefused ? error : new McpError("the server could not be reached", "unreachable");
@@ -93,6 +130,12 @@ export class McpRemote extends McpSession {
   protected async request(method: string, params: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
     const id = this.nextId++;
     const res = await this.post({ jsonrpc: "2.0", id, method, params }, timeoutMs);
+    if (res.status >= 300 && res.status < 400) {
+      await res.body?.cancel();
+      let to = "another address";
+      try { to = new URL(res.headers.get("location") ?? "", this.url).host || to; } catch { }
+      throw new McpError(`the server sent the request on to ${to} (${res.status}); viberoom follows no redirect, so add the server by the address it moves to, if that is its own`, "server");
+    }
     if (!res.ok) {
       await res.body?.cancel();
       throw new McpError(`the server answered ${res.status}`, res.status >= 500 ? "unreachable" : "server");
@@ -113,7 +156,7 @@ export class McpRemote extends McpSession {
       await res.body?.cancel();
       throw new McpError(`the server answered with ${type || "no content type"}`, "protocol");
     }
-    if (answer.error) throw new McpError(`the server refused: ${String(answer.error.message ?? answer.error.code)}`, "server");
+    if (answer.error) throw new McpError(`the server refused: ${this.redact(String(answer.error.message ?? answer.error.code))}`, "server");
     return answer.result;
   }
 
@@ -131,13 +174,13 @@ export class McpRemote extends McpSession {
 
   async close(): Promise<void> {
     if (!this.sessionId) return;
-    const headers: Record<string, string> = { "mcp-session-id": this.sessionId, "mcp-protocol-version": this.protocolVersion };
+    const headers: Record<string, string> = { ...this.options.headers, "mcp-session-id": this.sessionId, "mcp-protocol-version": this.protocolVersion };
     this.sessionId = null;
     this.forget();
     try {
       const token = await this.options.token();
       if (token) headers.authorization = `Bearer ${token}`;
-      const res = await this.options.fetch(this.url, { method: "DELETE", headers, signal: AbortSignal.timeout(5_000) });
+      const res = await this.options.fetch(this.url, { method: "DELETE", headers, redirect: "manual", signal: AbortSignal.timeout(5_000) });
       await res.body?.cancel();
     } catch { }
   }

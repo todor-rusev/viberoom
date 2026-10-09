@@ -425,9 +425,10 @@ function componentRows(buttons: Button[][]): unknown[] {
 export function messageToInbound(m: DiscordMessage, account: string): InboundMessage | null {
   if (!m || m.guild_id || !m.author || m.author.bot) return null;
   const first = m.attachments?.[0];
+  const type = first?.content_type ?? "";
   const file: InboundFile | undefined = first
     ? {
-        kind: first.content_type?.startsWith("image/") ? "photo" : first.content_type?.startsWith("audio/") ? "sound" : "document",
+        kind: type.startsWith("image/") ? "photo" : type.startsWith("audio/") ? "sound" : type.startsWith("video/") ? "video" : "document",
         fileId: first.url, name: first.filename, mime: first.content_type, size: first.size,
         ...((m.flags ?? 0) & IS_VOICE_MESSAGE ? { voice: true } : {}),
         ...(first.duration_secs ? { seconds: first.duration_secs } : {}),

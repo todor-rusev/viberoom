@@ -1,7 +1,8 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
 import { ConnectionError, Honcho, HonchoError, RateLimitError, ServerError, TimeoutError, type Session } from "@honcho-ai/sdk";
-import { MemoryProviderError, type MemoryCapabilities, type MemoryEpisode, type MemoryFact, type MemoryProvider, type MemoryRoom, type RecalledFact } from "./provider.js";
+import { MemoryProviderError, MemoryWriteCancelled, SEARCH_GIVE_UP_MS, type MemoryCapabilities, type MemoryEpisode, type MemoryFact, type MemoryProvider, type MemoryRoom, type RecalledFact, type SearchOptions } from "./provider.js";
+import type { IngestionObserver } from "./ingestion-debug.js";
 
 export const honchoSessionId = (roomUuid: string) => `viberoom-${roomUuid}`;
 
@@ -27,14 +28,14 @@ export class HonchoProvider implements MemoryProvider {
   readonly capabilities = CAPABILITIES;
   readonly editWindowMs = 10 * 60_000;
   private readonly client: Honcho;
+  private readonly reader: Honcho;
   private readonly sessions = new Map<string, { session: Session; peers: Set<string> }>();
+  private readonly readerSessions = new Map<string, Promise<Session>>();
 
   constructor(settings: HonchoSettings) {
-    this.client = new Honcho({
-      apiKey: settings.apiKey,
-      workspaceId: settings.workspaceId,
-      ...(settings.baseUrl ? { baseURL: settings.baseUrl } : {}),
-    });
+    const where = { apiKey: settings.apiKey, workspaceId: settings.workspaceId, ...(settings.baseUrl ? { baseURL: settings.baseUrl } : {}) };
+    this.client = new Honcho(where);
+    this.reader = new Honcho({ ...where, timeout: SEARCH_GIVE_UP_MS, maxRetries: 0 });
   }
 
   async verify(): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -49,8 +50,9 @@ export class HonchoProvider implements MemoryProvider {
     }
   }
 
-  async ensureRoom(room: MemoryRoom): Promise<void> {
+  async ensureRoom(room: MemoryRoom, beforeWrite?: () => void): Promise<void> {
     if (this.sessions.has(room.uuid)) return;
+    beforeWrite?.();
     try {
       const session = await this.client.session(honchoSessionId(room.uuid), { metadata: { room: room.name, source: "viberoom" } });
       this.sessions.set(room.uuid, { session, peers: new Set() });
@@ -59,18 +61,21 @@ export class HonchoProvider implements MemoryProvider {
     }
   }
 
-  private async sessionOf(room: MemoryRoom): Promise<{ session: Session; peers: Set<string> }> {
-    await this.ensureRoom(room);
+  private async sessionOf(room: MemoryRoom, beforeWrite?: () => void): Promise<{ session: Session; peers: Set<string> }> {
+    await this.ensureRoom(room, beforeWrite);
+    beforeWrite?.();
     return this.sessions.get(room.uuid)!;
   }
 
-  async addEpisode(room: MemoryRoom, episode: MemoryEpisode): Promise<{ externalId: string | null; credits: number }> {
+  async addEpisode(room: MemoryRoom, episode: MemoryEpisode, _observer?: IngestionObserver, beforeWrite?: () => void): Promise<{ externalId: string | null; credits: number }> {
     try {
-      const { session, peers } = await this.sessionOf(room);
+      const { session, peers } = await this.sessionOf(room, beforeWrite);
       if (!peers.has(episode.authorId)) {
+        beforeWrite?.();
         await session.addPeers([episode.authorId]);
         peers.add(episode.authorId);
       }
+      beforeWrite?.();
       const added = await session.addMessages({
         peerId: episode.authorId,
         content: episode.text,
@@ -80,6 +85,7 @@ export class HonchoProvider implements MemoryProvider {
       const credits = added.reduce((sum, m) => sum + (m.tokenCount || 0), 0);
       return { externalId: added[0]?.id ?? null, credits };
     } catch (error) {
+      if (error instanceof MemoryWriteCancelled) throw error;
       throw classify(error, `adding message ${episode.seq ?? episode.sourceId} of room "${room.name}"`);
     }
   }
@@ -97,19 +103,43 @@ export class HonchoProvider implements MemoryProvider {
       const { session } = await this.sessionOf(room);
       await session.delete();
       this.sessions.delete(room.uuid);
+      this.readerSessions.delete(room.uuid);
     } catch (error) {
-      if (error instanceof HonchoError && error.status === 404) { this.sessions.delete(room.uuid); return; }
+      if (error instanceof HonchoError && error.status === 404) { this.sessions.delete(room.uuid); this.readerSessions.delete(room.uuid); return; }
       throw classify(error, `forgetting room "${room.name}"`);
     }
   }
 
-  async search(room: MemoryRoom, query: string, limit = 12): Promise<RecalledFact[]> {
+  async search(room: MemoryRoom, query: string, limit = 12, options: SearchOptions = {}): Promise<RecalledFact[]> {
     try {
-      const { session } = await this.sessionOf(room);
-      const messages = await session.search(query, { limit: Math.min(limit, HONCHO_SEARCH_MAX_LIMIT) });
+      const searching = (async () => (await this.readerSession(room)).search(query, { limit: Math.min(limit, HONCHO_SEARCH_MAX_LIMIT) }))();
+      const messages = await (options.signal ? untilGivenUp(searching, options.signal) : searching);
       return messages.map((m) => ({ fact: m.content }));
     } catch (error) {
+      if (options.signal?.aborted && error === options.signal.reason) throw error;
       throw classify(error, `searching the memory of room "${room.name}"`);
     }
   }
+
+  private readerSession(room: MemoryRoom): Promise<Session> {
+    let opening = this.readerSessions.get(room.uuid);
+    if (!opening) {
+      opening = this.reader.session(honchoSessionId(room.uuid), { metadata: { room: room.name, source: "viberoom" } });
+      opening.catch(() => this.readerSessions.delete(room.uuid));
+      this.readerSessions.set(room.uuid, opening);
+    }
+    return opening;
+  }
+}
+
+function untilGivenUp<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) { work.catch(() => {}); return Promise.reject(signal.reason); }
+  return new Promise<T>((resolve, reject) => {
+    const giveUp = () => { work.catch(() => {}); reject(signal.reason); };
+    signal.addEventListener("abort", giveUp, { once: true });
+    work.then(
+      (value) => { signal.removeEventListener("abort", giveUp); resolve(value); },
+      (error) => { signal.removeEventListener("abort", giveUp); reject(error); },
+    );
+  });
 }

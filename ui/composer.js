@@ -218,14 +218,17 @@
     blur() { this.el.blur(); }
     get disabled() { return this.el.getAttribute("aria-disabled") === "true"; }
     set disabled(on) {
+      if (this.disabled === !!on && this.el.getAttribute("contenteditable") === (on ? "false" : "true")) return;
       this.el.setAttribute("contenteditable", on ? "false" : "true");
       this.el.setAttribute("aria-disabled", on ? "true" : "false");
       this.el.classList.toggle("is-disabled", !!on);
     }
     get placeholder() { return this.el.dataset.placeholder || ""; }
     set placeholder(text) {
-      this.el.dataset.placeholder = String(text ?? "");
-      this.el.setAttribute("aria-placeholder", String(text ?? ""));
+      const value = String(text ?? "");
+      if (this.el.dataset.placeholder === value && this.el.getAttribute("aria-placeholder") === value) return;
+      this.el.dataset.placeholder = value;
+      this.el.setAttribute("aria-placeholder", value);
     }
     addEventListener(...args) { this.el.addEventListener(...args); }
     removeEventListener(...args) { this.el.removeEventListener(...args); }

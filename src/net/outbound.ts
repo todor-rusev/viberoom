@@ -2,9 +2,10 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { promises as dns, type LookupAddress } from "node:dns";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { writeFileAtomic, type RenameOptions } from "../atomic.js";
 import { isIP, type LookupFunction } from "node:net";
-import { Agent, buildConnector, getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from "undici";
+import { Agent, EnvHttpProxyAgent, buildConnector, getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from "undici";
 import { z } from "zod";
 
 export const KEEP_ALIVE_MS = 60_000;
@@ -278,12 +279,43 @@ function nodeProxy(dispatcher: Dispatcher): boolean {
   return dispatcher.constructor.name === "EnvHttpProxyAgent";
 }
 
-export function installOutbound(log: OutboundLog, options: { system?: SystemLookup; store?: NameStore } = {}): Dispatcher {
+export interface EnvironmentProxy {
+  httpProxy?: string;
+  httpsProxy?: string;
+  noProxy: string;
+}
+
+export function environmentProxy(env: NodeJS.ProcessEnv): EnvironmentProxy | null {
+  const said = (name: string): string | undefined => (env[name] || env[name.toLowerCase()] || undefined)?.trim() || undefined;
+  const httpsProxy = said("HTTPS_PROXY"), httpProxy = said("HTTP_PROXY");
+  if (!httpsProxy && !httpProxy) return null;
+  const noProxy = [said("NO_PROXY"), "localhost", "127.0.0.1", "::1"].filter(Boolean).join(",");
+  return { ...(httpProxy ? { httpProxy } : {}), ...(httpsProxy ? { httpsProxy } : {}), noProxy };
+}
+
+export function proxyShown(address: string): string {
+  try {
+    const url = new URL(address);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return "an address the environment names";
+  }
+}
+
+export function installOutbound(log: OutboundLog, options: { system?: SystemLookup; store?: NameStore; env?: NodeJS.ProcessEnv } = {}): Dispatcher {
   const current = getGlobalDispatcher();
   if (ours.has(current)) return current;
   if (nodeProxy(current)) {
     log.info("requests go out through the proxy Node set up from the environment (NODE_USE_ENV_PROXY); the proxy looks the names up");
     return current;
+  }
+  const proxy = environmentProxy(options.env ?? process.env);
+  if (proxy) {
+    const through = new EnvHttpProxyAgent({ ...proxy, keepAliveTimeout: KEEP_ALIVE_MS });
+    ours.add(through);
+    log.info(`requests go out through the proxy the environment names (${proxyShown(proxy.httpsProxy ?? proxy.httpProxy ?? "")}); the proxy looks the names up, and NO_PROXY and this machine are reached directly`);
+    setGlobalDispatcher(through);
+    return through;
   }
   const hosts = new HostCache(log, options);
   const dispatcher = outboundDispatcher(hosts);
@@ -307,7 +339,7 @@ const STORED = z.object({
   })),
 });
 
-export function fileNameStore(path: string): NameStore {
+export function fileNameStore(path: string, options: RenameOptions = {}): NameStore {
   return {
     load() {
       let text: string;
@@ -316,9 +348,7 @@ export function fileNameStore(path: string): NameStore {
       return STORED.parse(JSON.parse(text)).names.map(({ hints, ...name }) => ({ ...name, ...(hints !== undefined ? { hints } : {}) }));
     },
     save(names) {
-      const next = `${path}.next`;
-      writeFileSync(next, `${JSON.stringify({ version: 1, names }, null, 1)}\n`, { mode: 0o600 });
-      renameSync(next, path);
+      writeFileAtomic(path, `${JSON.stringify({ version: 1, names }, null, 1)}\n`, { ...options, mode: 0o600 });
     },
   };
 }

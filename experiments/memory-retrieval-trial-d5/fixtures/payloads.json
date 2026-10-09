@@ -1,0 +1,2495 @@
+{
+  "schema": "viberoom-retrieval-offline-payload-plan-v1",
+  "corpusSha256": "8c9a6fcf6b6130addbea20cde5708201322577ad0a473d81de01e03d641e60b2",
+  "runId": "d2-loopback-fixture-20261006",
+  "variants": [
+    {
+      "name": "excerpts-profile",
+      "memoryInput": "excerpts",
+      "title": "Икономично: the sieve's excerpts, the whole message when they cannot stand for it"
+    },
+    {
+      "name": "original-profile",
+      "memoryInput": "whole",
+      "title": "Най-точно: the whole message"
+    }
+  ],
+  "dropped": [],
+  "physicalAddresses": [
+    {
+      "logicalRoom": "garden",
+      "variant": "excerpts-profile",
+      "room": {
+        "uuid": "689848e2-c6b5-4d60-8707-76f0f6702759",
+        "name": "D trial d2-loopback-fixture-20261006: garden (excerpts-profile)"
+      },
+      "plannedGraphId": "viberoom-689848e2-c6b5-4d60-8707-76f0f6702759"
+    },
+    {
+      "logicalRoom": "library",
+      "variant": "excerpts-profile",
+      "room": {
+        "uuid": "b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+        "name": "D trial d2-loopback-fixture-20261006: library (excerpts-profile)"
+      },
+      "plannedGraphId": "viberoom-b7cfe62b-8176-40ce-8bec-86a2a373b1a4"
+    },
+    {
+      "logicalRoom": "museum",
+      "variant": "excerpts-profile",
+      "room": {
+        "uuid": "acbbc90d-1791-40df-8cbf-e207294bb6c8",
+        "name": "D trial d2-loopback-fixture-20261006: museum (excerpts-profile)"
+      },
+      "plannedGraphId": "viberoom-acbbc90d-1791-40df-8cbf-e207294bb6c8"
+    },
+    {
+      "logicalRoom": "recipe",
+      "variant": "excerpts-profile",
+      "room": {
+        "uuid": "3bfc4cc4-7806-4f4a-8641-7e394db776af",
+        "name": "D trial d2-loopback-fixture-20261006: recipe (excerpts-profile)"
+      },
+      "plannedGraphId": "viberoom-3bfc4cc4-7806-4f4a-8641-7e394db776af"
+    },
+    {
+      "logicalRoom": "makerspace",
+      "variant": "excerpts-profile",
+      "room": {
+        "uuid": "ed8f1790-c484-4b10-8d63-988c7eeca8b3",
+        "name": "D trial d2-loopback-fixture-20261006: makerspace (excerpts-profile)"
+      },
+      "plannedGraphId": "viberoom-ed8f1790-c484-4b10-8d63-988c7eeca8b3"
+    },
+    {
+      "logicalRoom": "travel",
+      "variant": "excerpts-profile",
+      "room": {
+        "uuid": "e3784fd4-b679-4f7e-823c-18e79610e4c3",
+        "name": "D trial d2-loopback-fixture-20261006: travel (excerpts-profile)"
+      },
+      "plannedGraphId": "viberoom-e3784fd4-b679-4f7e-823c-18e79610e4c3"
+    },
+    {
+      "logicalRoom": "release",
+      "variant": "excerpts-profile",
+      "room": {
+        "uuid": "0bbf29a4-946c-4dc1-8290-d2d2f436e75d",
+        "name": "D trial d2-loopback-fixture-20261006: release (excerpts-profile)"
+      },
+      "plannedGraphId": "viberoom-0bbf29a4-946c-4dc1-8290-d2d2f436e75d"
+    },
+    {
+      "logicalRoom": "game",
+      "variant": "excerpts-profile",
+      "room": {
+        "uuid": "1362f13b-ac02-420b-85cc-aec4ae92b54a",
+        "name": "D trial d2-loopback-fixture-20261006: game (excerpts-profile)"
+      },
+      "plannedGraphId": "viberoom-1362f13b-ac02-420b-85cc-aec4ae92b54a"
+    },
+    {
+      "logicalRoom": "music",
+      "variant": "excerpts-profile",
+      "room": {
+        "uuid": "f98aedc2-e9c0-44d6-8519-e87400bdbffb",
+        "name": "D trial d2-loopback-fixture-20261006: music (excerpts-profile)"
+      },
+      "plannedGraphId": "viberoom-f98aedc2-e9c0-44d6-8519-e87400bdbffb"
+    },
+    {
+      "logicalRoom": "workshop",
+      "variant": "excerpts-profile",
+      "room": {
+        "uuid": "b6d766d0-9fb2-4443-84f5-bc8846309392",
+        "name": "D trial d2-loopback-fixture-20261006: workshop (excerpts-profile)"
+      },
+      "plannedGraphId": "viberoom-b6d766d0-9fb2-4443-84f5-bc8846309392"
+    },
+    {
+      "logicalRoom": "garden",
+      "variant": "original-profile",
+      "room": {
+        "uuid": "de02862a-7551-4ece-8b99-98e79b103b80",
+        "name": "D trial d2-loopback-fixture-20261006: garden (original-profile)"
+      },
+      "plannedGraphId": "viberoom-de02862a-7551-4ece-8b99-98e79b103b80"
+    },
+    {
+      "logicalRoom": "library",
+      "variant": "original-profile",
+      "room": {
+        "uuid": "a931aa0b-d629-4248-852f-8d435f9e3c9c",
+        "name": "D trial d2-loopback-fixture-20261006: library (original-profile)"
+      },
+      "plannedGraphId": "viberoom-a931aa0b-d629-4248-852f-8d435f9e3c9c"
+    },
+    {
+      "logicalRoom": "museum",
+      "variant": "original-profile",
+      "room": {
+        "uuid": "88e1e9e9-0911-4f4d-8251-c0060e3ca787",
+        "name": "D trial d2-loopback-fixture-20261006: museum (original-profile)"
+      },
+      "plannedGraphId": "viberoom-88e1e9e9-0911-4f4d-8251-c0060e3ca787"
+    },
+    {
+      "logicalRoom": "recipe",
+      "variant": "original-profile",
+      "room": {
+        "uuid": "b26e3293-215e-415f-8c39-a475fc893103",
+        "name": "D trial d2-loopback-fixture-20261006: recipe (original-profile)"
+      },
+      "plannedGraphId": "viberoom-b26e3293-215e-415f-8c39-a475fc893103"
+    },
+    {
+      "logicalRoom": "makerspace",
+      "variant": "original-profile",
+      "room": {
+        "uuid": "5f23d282-816f-4f82-891f-a8af21f9dd9d",
+        "name": "D trial d2-loopback-fixture-20261006: makerspace (original-profile)"
+      },
+      "plannedGraphId": "viberoom-5f23d282-816f-4f82-891f-a8af21f9dd9d"
+    },
+    {
+      "logicalRoom": "travel",
+      "variant": "original-profile",
+      "room": {
+        "uuid": "7b62915d-e8bb-4cdb-87de-c0c92c56e07d",
+        "name": "D trial d2-loopback-fixture-20261006: travel (original-profile)"
+      },
+      "plannedGraphId": "viberoom-7b62915d-e8bb-4cdb-87de-c0c92c56e07d"
+    },
+    {
+      "logicalRoom": "release",
+      "variant": "original-profile",
+      "room": {
+        "uuid": "2ae5076f-85a3-4425-8d21-2ddbd445107c",
+        "name": "D trial d2-loopback-fixture-20261006: release (original-profile)"
+      },
+      "plannedGraphId": "viberoom-2ae5076f-85a3-4425-8d21-2ddbd445107c"
+    },
+    {
+      "logicalRoom": "game",
+      "variant": "original-profile",
+      "room": {
+        "uuid": "3717b37a-b50d-4eda-8ac8-7d4110196f95",
+        "name": "D trial d2-loopback-fixture-20261006: game (original-profile)"
+      },
+      "plannedGraphId": "viberoom-3717b37a-b50d-4eda-8ac8-7d4110196f95"
+    },
+    {
+      "logicalRoom": "music",
+      "variant": "original-profile",
+      "room": {
+        "uuid": "35d762c8-42dc-4748-8ca7-f9af97219003",
+        "name": "D trial d2-loopback-fixture-20261006: music (original-profile)"
+      },
+      "plannedGraphId": "viberoom-35d762c8-42dc-4748-8ca7-f9af97219003"
+    },
+    {
+      "logicalRoom": "workshop",
+      "variant": "original-profile",
+      "room": {
+        "uuid": "184cabcc-4654-48f1-8329-eaacc01b8b0f",
+        "name": "D trial d2-loopback-fixture-20261006: workshop (original-profile)"
+      },
+      "plannedGraphId": "viberoom-184cabcc-4654-48f1-8329-eaacc01b8b0f"
+    }
+  ],
+  "rows": [
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s01",
+      "logicalRoom": "garden",
+      "room": {
+        "uuid": "689848e2-c6b5-4d60-8707-76f0f6702759",
+        "name": "D trial d2-loopback-fixture-20261006: garden (excerpts-profile)"
+      },
+      "sourceBodySha256": "f3582c5bd069cfdbd6ff21cff4146e538f97e36d695f138e3acdbe01faa58a79",
+      "sourceVersion": "sha256:0c0ad4b6d690f2763f38b5a77853a0fd4c226d30962c242303ef049a24563dc4",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 138,
+      "preparedCodePoints": 138,
+      "members": [
+        {
+          "opId": "42440e84-3afe-4638-8490-e6595c0a9e71",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-garden",
+            "roomUuid": "689848e2-c6b5-4d60-8707-76f0f6702759",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s01",
+            "version": "sha256:0c0ad4b6d690f2763f38b5a77853a0fd4c226d30962c242303ef049a24563dc4",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-689848e2-c6b5-4d60-8707-76f0f6702759",
+              "type": "message",
+              "data": "Mira [Mira]: Градинският клуб избра леха Север за босилека и леха Юг за ментата. Алекс полива във вторник в 18:00. Неда носи шест нови саксии в събота.",
+              "createdAt": "2026-09-01T09:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: garden (excerpts-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "42440e84-3afe-4638-8490-e6595c0a9e71",
+                "source_id": "s01",
+                "version": "sha256:0c0ad4b6d690f2763f38b5a77853a0fd4c226d30962c242303ef049a24563dc4",
+                "room_id": "689848e2-c6b5-4d60-8707-76f0f6702759",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-01T09:00:00.000Z",
+                "origin": [
+                  "Mira",
+                  "message"
+                ],
+                "carry_hash": "sha256:4a1a9a9803780477a977700c3e237371e15ed90c4467f9e506c67ae4ce85f6b8"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s02",
+      "logicalRoom": "garden",
+      "room": {
+        "uuid": "689848e2-c6b5-4d60-8707-76f0f6702759",
+        "name": "D trial d2-loopback-fixture-20261006: garden (excerpts-profile)"
+      },
+      "sourceBodySha256": "f2dec6f1e19e28382254fe2f5565db0e415df5284e0375a6eb5d940bd1299288",
+      "sourceVersion": "sha256:fc65cb8542e6b53843995a8e6d6c51ecf7b693dd470f589dadc904eed6dd5188",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 111,
+      "preparedCodePoints": 111,
+      "members": [
+        {
+          "opId": "98e1d88c-49f9-4fca-82ab-4d9cffecd1d8",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-garden",
+            "roomUuid": "689848e2-c6b5-4d60-8707-76f0f6702759",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s02",
+            "version": "sha256:fc65cb8542e6b53843995a8e6d6c51ecf7b693dd470f589dadc904eed6dd5188",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-689848e2-c6b5-4d60-8707-76f0f6702759",
+              "type": "message",
+              "data": "Alex [Alex]: При дъжд над 5 mm пропускаме поливането във вторник. Това условие не променя съботната доставка на шест саксии.",
+              "createdAt": "2026-09-04T09:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: garden (excerpts-profile)\", message 2",
+              "metadata": {
+                "schema": 4,
+                "op_id": "98e1d88c-49f9-4fca-82ab-4d9cffecd1d8",
+                "source_id": "s02",
+                "version": "sha256:fc65cb8542e6b53843995a8e6d6c51ecf7b693dd470f589dadc904eed6dd5188",
+                "room_id": "689848e2-c6b5-4d60-8707-76f0f6702759",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-04T09:00:00.000Z",
+                "origin": [
+                  "Alex",
+                  "message"
+                ],
+                "carry_hash": "sha256:e4855230b6a6a016d1bc38db0cb45c2210054d0cbed00281af48c2240b26529d"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s03",
+      "logicalRoom": "library",
+      "room": {
+        "uuid": "b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+        "name": "D trial d2-loopback-fixture-20261006: library (excerpts-profile)"
+      },
+      "sourceBodySha256": "349db3cadc5909524dbabaccea09afc4f96b9b76e3659c927582674e9b8d1884",
+      "sourceVersion": "sha256:4c064c2974052eced563d7de455173e2be22fcd9b581cd4fda4d33b3d418fdb8",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 149,
+      "preparedCodePoints": 149,
+      "members": [
+        {
+          "opId": "2f5fc54c-8757-4794-8d53-ff3dd32c5400",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-library",
+            "roomUuid": "b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s03",
+            "version": "sha256:4c064c2974052eced563d7de455173e2be22fcd9b581cd4fda4d33b3d418fdb8",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+              "type": "message",
+              "data": "Lina [Lina]: От 1 септември библиотека Орех работи от 10:00 до 18:00. През август затваряше в 16:00. Клубът за четене е в четвъртък в зала Три. Входът е свободен.",
+              "createdAt": "2026-09-01T10:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: library (excerpts-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "2f5fc54c-8757-4794-8d53-ff3dd32c5400",
+                "source_id": "s03",
+                "version": "sha256:4c064c2974052eced563d7de455173e2be22fcd9b581cd4fda4d33b3d418fdb8",
+                "room_id": "b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-01T10:00:00.000Z",
+                "origin": [
+                  "Lina",
+                  "message"
+                ],
+                "carry_hash": "sha256:4c707d579c1dfb27e4032fbee72da4464cb3e32d5649cc28d35f2cd3243f704d"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s04",
+      "logicalRoom": "library",
+      "room": {
+        "uuid": "b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+        "name": "D trial d2-loopback-fixture-20261006: library (excerpts-profile)"
+      },
+      "sourceBodySha256": "3b440b473bfd66d4ac4cabfb90354c46cb44463ae4358770a001e59b22ef2a3a",
+      "sourceVersion": "sha256:0687669af59d6a846f59011b2c856a23f485139471a2868eaa97c6e4e502cd35",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 143,
+      "preparedCodePoints": 143,
+      "members": [
+        {
+          "opId": "9bcea9da-6dc5-48a4-8a04-61c6ce59fc01",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-library",
+            "roomUuid": "b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s04",
+            "version": "sha256:0687669af59d6a846f59011b2c856a23f485139471a2868eaa97c6e4e502cd35",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+              "type": "message",
+              "data": "Ivo [Ivo]: За септемврийския клуб избрахме книгата „Пътеката“. Предложението за „Островът“ остана за октомври; не е взето решение за октомврийската книга.",
+              "createdAt": "2026-09-02T10:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: library (excerpts-profile)\", message 2",
+              "metadata": {
+                "schema": 4,
+                "op_id": "9bcea9da-6dc5-48a4-8a04-61c6ce59fc01",
+                "source_id": "s04",
+                "version": "sha256:0687669af59d6a846f59011b2c856a23f485139471a2868eaa97c6e4e502cd35",
+                "room_id": "b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-02T10:00:00.000Z",
+                "origin": [
+                  "Ivo",
+                  "message"
+                ],
+                "carry_hash": "sha256:edd638570ae915032f5617b94b4448c3dfa747ee34d72e4c2779cd4b59e16ac0"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s05",
+      "logicalRoom": "museum",
+      "room": {
+        "uuid": "acbbc90d-1791-40df-8cbf-e207294bb6c8",
+        "name": "D trial d2-loopback-fixture-20261006: museum (excerpts-profile)"
+      },
+      "sourceBodySha256": "bf7a1c7767b854d408aa153786ce7947036a47c09b88196e03d5032fa1295400",
+      "sourceVersion": "sha256:da83d4493238ecee8a0e42780116a7484b5428cbc8e9e1c549885d9083c8cdad",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 187,
+      "preparedCodePoints": 187,
+      "members": [
+        {
+          "opId": "c82ab224-909a-4212-8f32-16aa35852310",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-museum",
+            "roomUuid": "acbbc90d-1791-40df-8cbf-e207294bb6c8",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s05",
+            "version": "sha256:da83d4493238ecee8a0e42780116a7484b5428cbc8e9e1c549885d9083c8cdad",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-acbbc90d-1791-40df-8cbf-e207294bb6c8",
+              "type": "message",
+              "data": "Eva [Eva]: Групата за музейния ден се среща в 09:30 пред западния вход. Маршрутът е керамика, после фотография. Сам предложи нощна обиколка, но организаторите я отказаха. Потвърденият водач е Борис.",
+              "createdAt": "2026-09-03T09:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: museum (excerpts-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "c82ab224-909a-4212-8f32-16aa35852310",
+                "source_id": "s05",
+                "version": "sha256:da83d4493238ecee8a0e42780116a7484b5428cbc8e9e1c549885d9083c8cdad",
+                "room_id": "acbbc90d-1791-40df-8cbf-e207294bb6c8",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-03T09:00:00.000Z",
+                "origin": [
+                  "Eva",
+                  "message"
+                ],
+                "carry_hash": "sha256:42fc6253d6dea7c12cf571b770097967a47029c33d12de41da68be686ef62697"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s06",
+      "logicalRoom": "recipe",
+      "room": {
+        "uuid": "3bfc4cc4-7806-4f4a-8641-7e394db776af",
+        "name": "D trial d2-loopback-fixture-20261006: recipe (excerpts-profile)"
+      },
+      "sourceBodySha256": "c9a3fc510e93ab848301550ac380cdc13288c15d906d69a2452651118f9a85b7",
+      "sourceVersion": "sha256:0ef50ee54eb96fac5d159363a298f619a4f94c88f123cdb7d31ecbfed6541f62",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 176,
+      "preparedCodePoints": 176,
+      "members": [
+        {
+          "opId": "f226c94d-8e33-4fd7-8a5e-062ffc814e82",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-recipe",
+            "roomUuid": "3bfc4cc4-7806-4f4a-8641-7e394db776af",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s06",
+            "version": "sha256:0ef50ee54eb96fac5d159363a298f619a4f94c88f123cdb7d31ecbfed6541f62",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-3bfc4cc4-7806-4f4a-8641-7e394db776af",
+              "type": "message",
+              "data": "Dana [Dana]: Нашият запис за лимоновия сладкиш: 200 g брашно, 80 g захар и кора от два лимона. Печем 35 минути на 170 °C. Не добавяме портокалова кора. Размерът на формата още не е уточнен.",
+              "createdAt": "2026-09-03T11:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: recipe (excerpts-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "f226c94d-8e33-4fd7-8a5e-062ffc814e82",
+                "source_id": "s06",
+                "version": "sha256:0ef50ee54eb96fac5d159363a298f619a4f94c88f123cdb7d31ecbfed6541f62",
+                "room_id": "3bfc4cc4-7806-4f4a-8641-7e394db776af",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-03T11:00:00.000Z",
+                "origin": [
+                  "Dana",
+                  "message"
+                ],
+                "carry_hash": "sha256:ca27fec566f74c221743aa037173b9aa920e6436d420342aeca303327c09c795"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s07",
+      "logicalRoom": "makerspace",
+      "room": {
+        "uuid": "ed8f1790-c484-4b10-8d63-988c7eeca8b3",
+        "name": "D trial d2-loopback-fixture-20261006: makerspace (excerpts-profile)"
+      },
+      "sourceBodySha256": "e06332e6697eba1ebdd4fa0b5f08d6c82de5ef622c42f85b8f3404930c7a940c",
+      "sourceVersion": "sha256:616442b25fab6a66f29e0dbaa3b8790b91dc50ecaef1295e0264c251a6c584de",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 164,
+      "preparedCodePoints": 164,
+      "members": [
+        {
+          "opId": "c63c6e49-9cdf-494d-87ec-47fa705eecbf",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-makerspace",
+            "roomUuid": "ed8f1790-c484-4b10-8d63-988c7eeca8b3",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s07",
+            "version": "sha256:616442b25fab6a66f29e0dbaa3b8790b91dc50ecaef1295e0264c251a6c584de",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-ed8f1790-c484-4b10-8d63-988c7eeca8b3",
+              "type": "message",
+              "data": "Niko [Niko]: Работилницата за дървени играчки е на 12 септември от 14:00. Рени води занятието, Петър подготвя масите. Имаме 8 комплекта за 12 записани души; липсват 4 комплекта.",
+              "createdAt": "2026-09-05T08:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: makerspace (excerpts-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "c63c6e49-9cdf-494d-87ec-47fa705eecbf",
+                "source_id": "s07",
+                "version": "sha256:616442b25fab6a66f29e0dbaa3b8790b91dc50ecaef1295e0264c251a6c584de",
+                "room_id": "ed8f1790-c484-4b10-8d63-988c7eeca8b3",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-05T08:00:00.000Z",
+                "origin": [
+                  "Niko",
+                  "message"
+                ],
+                "carry_hash": "sha256:d222b6baa58b1ef4ffdcac4bc3d39827ed3a5097d8bb3f3094fb1b2087fd121d"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s09",
+      "logicalRoom": "travel",
+      "room": {
+        "uuid": "e3784fd4-b679-4f7e-823c-18e79610e4c3",
+        "name": "D trial d2-loopback-fixture-20261006: travel (excerpts-profile)"
+      },
+      "sourceBodySha256": "56ebea90c52f4b266235830b3d21cb4d5b91d467f1ccce2951a10d8dba9fe908",
+      "sourceVersion": "sha256:09c83c2fbc8b20944d0b1a16741850cf1ecbd7030228feb4fee7e999482e8687",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 176,
+      "preparedCodePoints": 176,
+      "members": [
+        {
+          "opId": "49743243-730b-43b9-88b7-820262d7ed97",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-travel",
+            "roomUuid": "e3784fd4-b679-4f7e-823c-18e79610e4c3",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s09",
+            "version": "sha256:09c83c2fbc8b20944d0b1a16741850cf1ecbd7030228feb4fee7e999482e8687",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-e3784fd4-b679-4f7e-823c-18e79610e4c3",
+              "type": "message",
+              "data": "Sia [Sia]: В нашия измислен маршрут влак R7 тръгва от Борова в 08:15 и пристига в Липа в 09:05. Сборният пункт е източната платформа. Билетите още не са купени. Не е записан обратен влак.",
+              "createdAt": "2026-09-06T09:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: travel (excerpts-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "49743243-730b-43b9-88b7-820262d7ed97",
+                "source_id": "s09",
+                "version": "sha256:09c83c2fbc8b20944d0b1a16741850cf1ecbd7030228feb4fee7e999482e8687",
+                "room_id": "e3784fd4-b679-4f7e-823c-18e79610e4c3",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-06T09:00:00.000Z",
+                "origin": [
+                  "Sia",
+                  "message"
+                ],
+                "carry_hash": "sha256:2bc858dc8dbc829f65fe9914f5acc571bea241c7420b59a1746a3488b628d763"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s10",
+      "logicalRoom": "release",
+      "room": {
+        "uuid": "0bbf29a4-946c-4dc1-8290-d2d2f436e75d",
+        "name": "D trial d2-loopback-fixture-20261006: release (excerpts-profile)"
+      },
+      "sourceBodySha256": "031ad7716f1230f49c5c52c7b3ceccfa50f6297abefcc720c55c270f8cf12670",
+      "sourceVersion": "sha256:58e1891b398fe48c897afa6814c99f0ac66e7e61fb505060fe9974e4645e8832",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 135,
+      "preparedCodePoints": 135,
+      "members": [
+        {
+          "opId": "d3700df7-d56f-42ac-80e2-ed4264d77c7e",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-release",
+            "roomUuid": "0bbf29a4-946c-4dc1-8290-d2d2f436e75d",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s10",
+            "version": "sha256:58e1891b398fe48c897afa6814c99f0ac66e7e61fb505060fe9974e4645e8832",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-0bbf29a4-946c-4dc1-8290-d2d2f436e75d",
+              "type": "message",
+              "data": "Jo [Jo]: Проектът Sprout вече се казва Fern. Приета е версия 2.1.0. Patch 2.1.1 е само предложен; няма release. Ролята на тестов водач е на Lee.",
+              "createdAt": "2026-09-07T09:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: release (excerpts-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "d3700df7-d56f-42ac-80e2-ed4264d77c7e",
+                "source_id": "s10",
+                "version": "sha256:58e1891b398fe48c897afa6814c99f0ac66e7e61fb505060fe9974e4645e8832",
+                "room_id": "0bbf29a4-946c-4dc1-8290-d2d2f436e75d",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-07T09:00:00.000Z",
+                "origin": [
+                  "Jo",
+                  "message"
+                ],
+                "carry_hash": "sha256:3a2d552e4144ecb7f7e110a53da996fc8804fc6449f8df15da5557e17d7c5b30"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s11",
+      "logicalRoom": "release",
+      "room": {
+        "uuid": "0bbf29a4-946c-4dc1-8290-d2d2f436e75d",
+        "name": "D trial d2-loopback-fixture-20261006: release (excerpts-profile)"
+      },
+      "sourceBodySha256": "589317ea0aa9c60ae2a88fa887fd3c4ae31d95300b81b5ab75f05719db1e554d",
+      "sourceVersion": "sha256:aa31000642db9c787c6e1a1d51e9cd23cbf3e4ed749d419979c72d052c1f524a",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 154,
+      "preparedCodePoints": 154,
+      "members": [
+        {
+          "opId": "23e6404f-d3fe-4c78-8e30-805370e03512",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-release",
+            "roomUuid": "0bbf29a4-946c-4dc1-8290-d2d2f436e75d",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s11",
+            "version": "sha256:aa31000642db9c787c6e1a1d51e9cd23cbf3e4ed749d419979c72d052c1f524a",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-0bbf29a4-946c-4dc1-8290-d2d2f436e75d",
+              "type": "message",
+              "data": "Lee [Lee]: Свереният пример е:\n```js\nconst label = 'Fern';\nconst retries = 0;\n```\nСтойността 0 не означава безкрайни повторения. Тестовият резултат за 2.1.0 е зелен.",
+              "createdAt": "2026-09-07T10:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: release (excerpts-profile)\", message 2",
+              "metadata": {
+                "schema": 4,
+                "op_id": "23e6404f-d3fe-4c78-8e30-805370e03512",
+                "source_id": "s11",
+                "version": "sha256:aa31000642db9c787c6e1a1d51e9cd23cbf3e4ed749d419979c72d052c1f524a",
+                "room_id": "0bbf29a4-946c-4dc1-8290-d2d2f436e75d",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-07T10:00:00.000Z",
+                "origin": [
+                  "Lee",
+                  "message"
+                ],
+                "carry_hash": "sha256:e29aa439bab9130d2ceb511985baef7977317a85a1eb3be799b9c8d46d912ebe"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s13",
+      "logicalRoom": "game",
+      "room": {
+        "uuid": "1362f13b-ac02-420b-85cc-aec4ae92b54a",
+        "name": "D trial d2-loopback-fixture-20261006: game (excerpts-profile)"
+      },
+      "sourceBodySha256": "dda7169fd7784ae911c30bb81ad29c68cd99a203becf103ecddb9fa0de424755",
+      "sourceVersion": "sha256:872f7186759009f13105516926c32c9bd6b800e9847d2d620149721db81799b2",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 229,
+      "preparedCodePoints": 229,
+      "members": [
+        {
+          "opId": "30f00b52-56b1-43b0-8ada-2647e1aa5b9b",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-game",
+            "roomUuid": "1362f13b-ac02-420b-85cc-aec4ae92b54a",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s13",
+            "version": "sha256:872f7186759009f13105516926c32c9bd6b800e9847d2d620149721db81799b2",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-1362f13b-ac02-420b-85cc-aec4ae92b54a",
+              "type": "message",
+              "data": "Orin [Orin]: В измислената кампания Нора предава картата на Илан. Илан пази ключа; Нора пази компаса. Обещанието „Таро ще стане капитан“ е реплика на герой, а не избран капитан. В отбора има две лица с име Мая и не е записано кое носи фенера.",
+              "createdAt": "2026-09-08T10:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: game (excerpts-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "30f00b52-56b1-43b0-8ada-2647e1aa5b9b",
+                "source_id": "s13",
+                "version": "sha256:872f7186759009f13105516926c32c9bd6b800e9847d2d620149721db81799b2",
+                "room_id": "1362f13b-ac02-420b-85cc-aec4ae92b54a",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-08T10:00:00.000Z",
+                "origin": [
+                  "Orin",
+                  "message"
+                ],
+                "carry_hash": "sha256:4d543957cfa33009dc82a295dd91f3b55b05c3bead5361d05862cb84285f3ac2"
+              }
+            },
+            "estimatedCredits": 2
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 2
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s14",
+      "logicalRoom": "music",
+      "room": {
+        "uuid": "f98aedc2-e9c0-44d6-8519-e87400bdbffb",
+        "name": "D trial d2-loopback-fixture-20261006: music (excerpts-profile)"
+      },
+      "sourceBodySha256": "26204cbd2bf5a825174eee721df7093ed2b8538791a10e60d48d7e8e9ca2dca3",
+      "sourceVersion": "sha256:7bd70244f567887ae90faac1ef2774b18617fee9c7c042d2e763df88da1ed1fa",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 200,
+      "preparedCodePoints": 200,
+      "members": [
+        {
+          "opId": "6a8f541b-2ef8-47c4-8086-e005eb4dfe3b",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-music",
+            "roomUuid": "f98aedc2-e9c0-44d6-8519-e87400bdbffb",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s14",
+            "version": "sha256:7bd70244f567887ae90faac1ef2774b18617fee9c7c042d2e763df88da1ed1fa",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-f98aedc2-e9c0-44d6-8519-e87400bdbffb",
+              "type": "message",
+              "data": "Ada [Ada]: Репетицията е в понеделник в 19:00, студио Бреза. Квартетът използва две цигулки, виола и виолончело. Иво е сценичното име на участник с ID musician-17; днес то се сменя на Рио, ID остава musician-17.",
+              "createdAt": "2026-09-09T08:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: music (excerpts-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "6a8f541b-2ef8-47c4-8086-e005eb4dfe3b",
+                "source_id": "s14",
+                "version": "sha256:7bd70244f567887ae90faac1ef2774b18617fee9c7c042d2e763df88da1ed1fa",
+                "room_id": "f98aedc2-e9c0-44d6-8519-e87400bdbffb",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-09T08:00:00.000Z",
+                "origin": [
+                  "Ada",
+                  "message"
+                ],
+                "carry_hash": "sha256:43394f0d5b73381a972f99ac3a95a80fec2b9c9502a64b80d4c1e8b9e7f57a33"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s15",
+      "logicalRoom": "music",
+      "room": {
+        "uuid": "f98aedc2-e9c0-44d6-8519-e87400bdbffb",
+        "name": "D trial d2-loopback-fixture-20261006: music (excerpts-profile)"
+      },
+      "sourceBodySha256": "44e5f371f767e0179edaea4a302a0af6de8e11aab82a29484f44aa6c94676975",
+      "sourceVersion": "sha256:94054611e8984cc096fcbd85f73b0b674297162e8bd29e3a0ca46d364ddaa103",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 126,
+      "preparedCodePoints": 126,
+      "members": [
+        {
+          "opId": "cc952fba-79d8-4d55-853d-7b64d6c32497",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-music",
+            "roomUuid": "f98aedc2-e9c0-44d6-8519-e87400bdbffb",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s15",
+            "version": "sha256:94054611e8984cc096fcbd85f73b0b674297162e8bd29e3a0ca46d364ddaa103",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-f98aedc2-e9c0-44d6-8519-e87400bdbffb",
+              "type": "message",
+              "data": "Ada [Ada]: От 10 септември репетицията се мести във вторник в 18:30. Студиото остава Бреза. Понеделнишкият час важеше преди тази промяна.",
+              "createdAt": "2026-09-10T08:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: music (excerpts-profile)\", message 2",
+              "metadata": {
+                "schema": 4,
+                "op_id": "cc952fba-79d8-4d55-853d-7b64d6c32497",
+                "source_id": "s15",
+                "version": "sha256:94054611e8984cc096fcbd85f73b0b674297162e8bd29e3a0ca46d364ddaa103",
+                "room_id": "f98aedc2-e9c0-44d6-8519-e87400bdbffb",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-10T08:00:00.000Z",
+                "origin": [
+                  "Ada",
+                  "message"
+                ],
+                "carry_hash": "sha256:f29ccdd62d629b2feb35cd0ba7729841a05bdd0dba4276b1bf4c494f4f1ebfde"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s16",
+      "logicalRoom": "workshop",
+      "room": {
+        "uuid": "b6d766d0-9fb2-4443-84f5-bc8846309392",
+        "name": "D trial d2-loopback-fixture-20261006: workshop (excerpts-profile)"
+      },
+      "sourceBodySha256": "313a123af866fd5c5ebb0815b75878569890596df0dddfe9dba907534d9f322f",
+      "sourceVersion": "sha256:86e2f15575495c7e6484f965c7dc355840b79fa1668868f0d9d0f1c64470f793",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 198,
+      "preparedCodePoints": 198,
+      "members": [
+        {
+          "opId": "eaa91703-a5fe-4f6d-8167-1c2c13575ef2",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-workshop",
+            "roomUuid": "b6d766d0-9fb2-4443-84f5-bc8846309392",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s16",
+            "version": "sha256:86e2f15575495c7e6484f965c7dc355840b79fa1668868f0d9d0f1c64470f793",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-b6d766d0-9fb2-4443-84f5-bc8846309392",
+              "type": "message",
+              "data": "Emil [Emil]: Инвентар: 3 сини чаши и 5 зелени чинии. Сините чаши са подарени от Зоя; зелените чинии са купени от клуба. Емил записва решението „ремонт на шкафа през ноември“ като предложение; гласуване още няма.",
+              "createdAt": "2026-09-11T09:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: workshop (excerpts-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "eaa91703-a5fe-4f6d-8167-1c2c13575ef2",
+                "source_id": "s16",
+                "version": "sha256:86e2f15575495c7e6484f965c7dc355840b79fa1668868f0d9d0f1c64470f793",
+                "room_id": "b6d766d0-9fb2-4443-84f5-bc8846309392",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-11T09:00:00.000Z",
+                "origin": [
+                  "Emil",
+                  "message"
+                ],
+                "carry_hash": "sha256:1bea085f53fc4b6d14d88d151b9284432004e0403f47f291d9afd8228c12f7f7"
+              }
+            },
+            "estimatedCredits": 2
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 2
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s17",
+      "logicalRoom": "workshop",
+      "room": {
+        "uuid": "b6d766d0-9fb2-4443-84f5-bc8846309392",
+        "name": "D trial d2-loopback-fixture-20261006: workshop (excerpts-profile)"
+      },
+      "sourceBodySha256": "305b1d43cc3c96f062443d4f6cfa03e46a74041d476402369a92119ba9a45f45",
+      "sourceVersion": "sha256:3dd49bb894c352fff7b7263497f3c81ba42edbad10e7bb8f39c89b20d01ae562",
+      "sieve": {
+        "keep": true,
+        "long": false
+      },
+      "originalCodePoints": 158,
+      "preparedCodePoints": 158,
+      "members": [
+        {
+          "opId": "35089dc4-4098-481b-8fa5-500ea4a739eb",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-workshop",
+            "roomUuid": "b6d766d0-9fb2-4443-84f5-bc8846309392",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s17",
+            "version": "sha256:3dd49bb894c352fff7b7263497f3c81ba42edbad10e7bb8f39c89b20d01ae562",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-b6d766d0-9fb2-4443-84f5-bc8846309392",
+              "type": "message",
+              "data": "Zoya [Zoya]: Емил цитира стария текст „ще купим три червени чаши“. Това не е текущото решение. В текущия инвентар червени чаши няма. Надписът на сините чаши е „茶 / Чай ☕“.",
+              "createdAt": "2026-09-11T10:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: workshop (excerpts-profile)\", message 2",
+              "metadata": {
+                "schema": 4,
+                "op_id": "35089dc4-4098-481b-8fa5-500ea4a739eb",
+                "source_id": "s17",
+                "version": "sha256:3dd49bb894c352fff7b7263497f3c81ba42edbad10e7bb8f39c89b20d01ae562",
+                "room_id": "b6d766d0-9fb2-4443-84f5-bc8846309392",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-11T10:00:00.000Z",
+                "origin": [
+                  "Zoya",
+                  "message"
+                ],
+                "carry_hash": "sha256:5973d353607a59b9354ccc76c95419971eabb73f5f17deb48455dfa65f1acd76"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s18",
+      "logicalRoom": "library",
+      "room": {
+        "uuid": "b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+        "name": "D trial d2-loopback-fixture-20261006: library (excerpts-profile)"
+      },
+      "sourceBodySha256": "8a7a15404e95dbc9b6c3a027e4778c46ef76ee053c064f4732aabf2ba1974b58",
+      "sourceVersion": "sha256:785ef68218902882c549258fb388499c16e60564a3af7d968254860a25c1c037",
+      "sieve": {
+        "keep": true,
+        "long": true,
+        "excerpts": {
+          "kind": "excerpts",
+          "coverage": 0.05975308641975308,
+          "accepted": 2
+        }
+      },
+      "originalCodePoints": 2025,
+      "preparedCodePoints": 134,
+      "members": [
+        {
+          "opId": "780c1a76-95cb-4eb4-84a9-556a3d943f47",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-library",
+            "roomUuid": "b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s18",
+            "version": "sha256:785ef68218902882c549258fb388499c16e60564a3af7d968254860a25c1c037",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+              "type": "message",
+              "data": "Lina [Lina]: […] За срещата на 1 октомври решихме да запазим зала Три и началния час 18:00. […] Книгата за октомврийския клуб още не е избрана. […]",
+              "createdAt": "2026-09-19T11:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: library (excerpts-profile)\", message 3",
+              "metadata": {
+                "schema": 4,
+                "op_id": "780c1a76-95cb-4eb4-84a9-556a3d943f47",
+                "source_id": "s18",
+                "version": "sha256:785ef68218902882c549258fb388499c16e60564a3af7d968254860a25c1c037",
+                "room_id": "b7cfe62b-8176-40ce-8bec-86a2a373b1a4",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-19T11:00:00.000Z",
+                "origin": [
+                  "Lina",
+                  "message"
+                ],
+                "carry_hash": "sha256:d972b7f49360b62255d774616c2404e5ed21c570f781da17333f055e1760d488"
+              }
+            },
+            "estimatedCredits": 1
+          }
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "excerpts-profile",
+      "input": "excerpts",
+      "sourceId": "s19",
+      "logicalRoom": "game",
+      "room": {
+        "uuid": "1362f13b-ac02-420b-85cc-aec4ae92b54a",
+        "name": "D trial d2-loopback-fixture-20261006: game (excerpts-profile)"
+      },
+      "sourceBodySha256": "68752394a2b13fd4b32124a54b139f46eac41e68d1040efcce47b646942e6113",
+      "sourceVersion": "sha256:7cb4a7c0fbc2f7fc6513ce6ce58390a270ef21832b91253b4184fbad87f09b75",
+      "representationFingerprint": "sha256:68752394a2b13fd4b32124a54b139f46eac41e68d1040efcce47b646942e6113",
+      "planFingerprint": "sha256:749229670fee9b94ff3bd15aa6cadbaff01c378a20f1da999c2b332e0a775490",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 2038,
+      "originalCodePoints": 2038,
+      "members": [
+        {
+          "opId": "a3a800a8-0e6f-4c34-8f4f-71d6257eceb5",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-excerpts-profile-game",
+            "roomUuid": "1362f13b-ac02-420b-85cc-aec4ae92b54a",
+            "copyId": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+            "sourceId": "s19",
+            "version": "sha256:7cb4a7c0fbc2f7fc6513ce6ce58390a270ef21832b91253b4184fbad87f09b75",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-1362f13b-ac02-420b-85cc-aec4ae92b54a",
+              "type": "message",
+              "data": "Orin [Orin]: Запис от подготовката на малкия прототип за измислената кампания, 22 септември. Решихме първо да покажем само предаването на картата. Панелът трябва да различава действие, предложение и избор на роля; иначе реплика на герой лесно се прочита като решение на целия отбор. Не променяме притежателите на ключа и компаса от предишния запис.\r\n\r\nНа хартия нарисувахме две имена и стрелка между тях. Стрелката сочи от човека, който предава предмета, към получателя. Надписът след двоеточието е предметът, а не име на сцена. За теста използваме следния пример; това е локален илюстративен код, не отчет за публикувана игра:\r\n\r\n```js\r\nconst transfer = { from: \"Нора\", to: \"Илан\", item: \"карта\" };\r\nconst captain = { proposal: \"Таро\", chosen: false };\r\nfunction handoff(entry) {\r\n  return `${entry.from} → ${entry.to}: ${entry.item}`;\r\n}\r\n```\r\n\r\nПримерният изход е „Нора → Илан: карта“. Той означава, че Нора предава картата на Илан, а не обратното. Полето chosen: false означава, че Таро не е избран капитан; записаното име е предложение. Няма автоматично превръщане на proposal в потвърдена роля при рисуването на панела.\r\n\r\nПърво проверяваме реда на имената с празен фон, после пробваме по-тесен прозорец. Дългите имена трябва да останат четими; ако не се събират, панелът може да стане по-висок. Не съкращаваме името до една буква, защото в кампанията вече има две лица с еднакво име. Този прототип не решава кое от тях носи фенера.\r\n\r\nЗа прегледа ще пазим една снимка на тесния вариант и една на широкия. Под всяка записваме ширината и точния текст на надписа, за да не сравняваме случайно различни действия. Орин предложи стрелката да пулсира, но отложихме движението: първо искаме статичният панел да казва правилно кой на кого предава предмета.\r\n\r\nПрегледът на прототипа е насрочен за 28 септември в 15:00. За него е решено да използваме статичния панел без озвучаване. Озвучаването остава предложение за по-късно, не обещана част от този преглед. Този запис насрочва работа и не твърди, че прегледът вече е проведен или че е избран капитан.",
+              "createdAt": "2026-09-22T11:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: game (excerpts-profile)\", message 2",
+              "metadata": {
+                "schema": 4,
+                "op_id": "a3a800a8-0e6f-4c34-8f4f-71d6257eceb5",
+                "source_id": "s19",
+                "version": "sha256:7cb4a7c0fbc2f7fc6513ce6ce58390a270ef21832b91253b4184fbad87f09b75",
+                "room_id": "1362f13b-ac02-420b-85cc-aec4ae92b54a",
+                "copy_id": "890b9630-6be0-46be-8d9d-f161e4e4e25c",
+                "part": "1/1",
+                "source_at": "2026-09-22T11:00:00.000Z",
+                "origin": [
+                  "Orin",
+                  "message"
+                ],
+                "carry_hash": "sha256:c0f6289e2cdd5b1e5aca44a85afedf82d0c22512745276a6cd329876a1ebc466"
+              }
+            },
+            "estimatedCredits": 11
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 2038
+          },
+          "dataUtf8Bytes": 3516
+        }
+      ],
+      "estimatedIngestionCredits": 11,
+      "sieve": {
+        "keep": true,
+        "long": true,
+        "excerpts": {
+          "kind": "whole",
+          "reason": "rejected",
+          "rejected": [
+            {
+              "text": "Панелът трябва да различава дейст",
+              "reason": "partial_sentence"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s01",
+      "logicalRoom": "garden",
+      "room": {
+        "uuid": "de02862a-7551-4ece-8b99-98e79b103b80",
+        "name": "D trial d2-loopback-fixture-20261006: garden (original-profile)"
+      },
+      "sourceBodySha256": "f3582c5bd069cfdbd6ff21cff4146e538f97e36d695f138e3acdbe01faa58a79",
+      "sourceVersion": "sha256:0c0ad4b6d690f2763f38b5a77853a0fd4c226d30962c242303ef049a24563dc4",
+      "representationFingerprint": "sha256:f3582c5bd069cfdbd6ff21cff4146e538f97e36d695f138e3acdbe01faa58a79",
+      "planFingerprint": "sha256:980048abdad200834f010916d909dfcf917f4c0315a250c1c85193b0d66662c6",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 138,
+      "originalCodePoints": 138,
+      "members": [
+        {
+          "opId": "46bcbb35-8709-4e06-8a4f-74890fcb13a5",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-garden",
+            "roomUuid": "de02862a-7551-4ece-8b99-98e79b103b80",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s01",
+            "version": "sha256:0c0ad4b6d690f2763f38b5a77853a0fd4c226d30962c242303ef049a24563dc4",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-de02862a-7551-4ece-8b99-98e79b103b80",
+              "type": "message",
+              "data": "Mira [Mira]: Градинският клуб избра леха Север за босилека и леха Юг за ментата. Алекс полива във вторник в 18:00. Неда носи шест нови саксии в събота.",
+              "createdAt": "2026-09-01T09:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: garden (original-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "46bcbb35-8709-4e06-8a4f-74890fcb13a5",
+                "source_id": "s01",
+                "version": "sha256:0c0ad4b6d690f2763f38b5a77853a0fd4c226d30962c242303ef049a24563dc4",
+                "room_id": "de02862a-7551-4ece-8b99-98e79b103b80",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-01T09:00:00.000Z",
+                "origin": [
+                  "Mira",
+                  "message"
+                ],
+                "carry_hash": "sha256:4a1a9a9803780477a977700c3e237371e15ed90c4467f9e506c67ae4ce85f6b8"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 138
+          },
+          "dataUtf8Bytes": 257
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s02",
+      "logicalRoom": "garden",
+      "room": {
+        "uuid": "de02862a-7551-4ece-8b99-98e79b103b80",
+        "name": "D trial d2-loopback-fixture-20261006: garden (original-profile)"
+      },
+      "sourceBodySha256": "f2dec6f1e19e28382254fe2f5565db0e415df5284e0375a6eb5d940bd1299288",
+      "sourceVersion": "sha256:fc65cb8542e6b53843995a8e6d6c51ecf7b693dd470f589dadc904eed6dd5188",
+      "representationFingerprint": "sha256:f2dec6f1e19e28382254fe2f5565db0e415df5284e0375a6eb5d940bd1299288",
+      "planFingerprint": "sha256:aaa6ed107dc221c1513e89650527b472f7be512af0b7a58986f3ef8aaa7af4e5",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 111,
+      "originalCodePoints": 111,
+      "members": [
+        {
+          "opId": "db7666f2-bc51-40b1-8736-4cbb1629d726",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-garden",
+            "roomUuid": "de02862a-7551-4ece-8b99-98e79b103b80",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s02",
+            "version": "sha256:fc65cb8542e6b53843995a8e6d6c51ecf7b693dd470f589dadc904eed6dd5188",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-de02862a-7551-4ece-8b99-98e79b103b80",
+              "type": "message",
+              "data": "Alex [Alex]: При дъжд над 5 mm пропускаме поливането във вторник. Това условие не променя съботната доставка на шест саксии.",
+              "createdAt": "2026-09-04T09:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: garden (original-profile)\", message 2",
+              "metadata": {
+                "schema": 4,
+                "op_id": "db7666f2-bc51-40b1-8736-4cbb1629d726",
+                "source_id": "s02",
+                "version": "sha256:fc65cb8542e6b53843995a8e6d6c51ecf7b693dd470f589dadc904eed6dd5188",
+                "room_id": "de02862a-7551-4ece-8b99-98e79b103b80",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-04T09:00:00.000Z",
+                "origin": [
+                  "Alex",
+                  "message"
+                ],
+                "carry_hash": "sha256:e4855230b6a6a016d1bc38db0cb45c2210054d0cbed00281af48c2240b26529d"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 111
+          },
+          "dataUtf8Bytes": 213
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s03",
+      "logicalRoom": "library",
+      "room": {
+        "uuid": "a931aa0b-d629-4248-852f-8d435f9e3c9c",
+        "name": "D trial d2-loopback-fixture-20261006: library (original-profile)"
+      },
+      "sourceBodySha256": "349db3cadc5909524dbabaccea09afc4f96b9b76e3659c927582674e9b8d1884",
+      "sourceVersion": "sha256:4c064c2974052eced563d7de455173e2be22fcd9b581cd4fda4d33b3d418fdb8",
+      "representationFingerprint": "sha256:349db3cadc5909524dbabaccea09afc4f96b9b76e3659c927582674e9b8d1884",
+      "planFingerprint": "sha256:fb763a0d3cd12d31083bf497212a4be706e14bec1ca5b0e50b793e3d154ac42f",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 149,
+      "originalCodePoints": 149,
+      "members": [
+        {
+          "opId": "ed17411a-d6f3-4bac-88aa-0da8f9ecc68e",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-library",
+            "roomUuid": "a931aa0b-d629-4248-852f-8d435f9e3c9c",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s03",
+            "version": "sha256:4c064c2974052eced563d7de455173e2be22fcd9b581cd4fda4d33b3d418fdb8",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-a931aa0b-d629-4248-852f-8d435f9e3c9c",
+              "type": "message",
+              "data": "Lina [Lina]: От 1 септември библиотека Орех работи от 10:00 до 18:00. През август затваряше в 16:00. Клубът за четене е в четвъртък в зала Три. Входът е свободен.",
+              "createdAt": "2026-09-01T10:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: library (original-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "ed17411a-d6f3-4bac-88aa-0da8f9ecc68e",
+                "source_id": "s03",
+                "version": "sha256:4c064c2974052eced563d7de455173e2be22fcd9b581cd4fda4d33b3d418fdb8",
+                "room_id": "a931aa0b-d629-4248-852f-8d435f9e3c9c",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-01T10:00:00.000Z",
+                "origin": [
+                  "Lina",
+                  "message"
+                ],
+                "carry_hash": "sha256:4c707d579c1dfb27e4032fbee72da4464cb3e32d5649cc28d35f2cd3243f704d"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 149
+          },
+          "dataUtf8Bytes": 265
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s04",
+      "logicalRoom": "library",
+      "room": {
+        "uuid": "a931aa0b-d629-4248-852f-8d435f9e3c9c",
+        "name": "D trial d2-loopback-fixture-20261006: library (original-profile)"
+      },
+      "sourceBodySha256": "3b440b473bfd66d4ac4cabfb90354c46cb44463ae4358770a001e59b22ef2a3a",
+      "sourceVersion": "sha256:0687669af59d6a846f59011b2c856a23f485139471a2868eaa97c6e4e502cd35",
+      "representationFingerprint": "sha256:3b440b473bfd66d4ac4cabfb90354c46cb44463ae4358770a001e59b22ef2a3a",
+      "planFingerprint": "sha256:c21b35bf9b552e2fb6ea2423f84bc60942d88b95d07b6d8bf0811efc5e6e8d30",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 143,
+      "originalCodePoints": 143,
+      "members": [
+        {
+          "opId": "a9b4cfaf-cea0-42b9-8990-60537e39c2a2",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-library",
+            "roomUuid": "a931aa0b-d629-4248-852f-8d435f9e3c9c",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s04",
+            "version": "sha256:0687669af59d6a846f59011b2c856a23f485139471a2868eaa97c6e4e502cd35",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-a931aa0b-d629-4248-852f-8d435f9e3c9c",
+              "type": "message",
+              "data": "Ivo [Ivo]: За септемврийския клуб избрахме книгата „Пътеката“. Предложението за „Островът“ остана за октомври; не е взето решение за октомврийската книга.",
+              "createdAt": "2026-09-02T10:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: library (original-profile)\", message 2",
+              "metadata": {
+                "schema": 4,
+                "op_id": "a9b4cfaf-cea0-42b9-8990-60537e39c2a2",
+                "source_id": "s04",
+                "version": "sha256:0687669af59d6a846f59011b2c856a23f485139471a2868eaa97c6e4e502cd35",
+                "room_id": "a931aa0b-d629-4248-852f-8d435f9e3c9c",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-02T10:00:00.000Z",
+                "origin": [
+                  "Ivo",
+                  "message"
+                ],
+                "carry_hash": "sha256:edd638570ae915032f5617b94b4448c3dfa747ee34d72e4c2779cd4b59e16ac0"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 143
+          },
+          "dataUtf8Bytes": 280
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s05",
+      "logicalRoom": "museum",
+      "room": {
+        "uuid": "88e1e9e9-0911-4f4d-8251-c0060e3ca787",
+        "name": "D trial d2-loopback-fixture-20261006: museum (original-profile)"
+      },
+      "sourceBodySha256": "bf7a1c7767b854d408aa153786ce7947036a47c09b88196e03d5032fa1295400",
+      "sourceVersion": "sha256:da83d4493238ecee8a0e42780116a7484b5428cbc8e9e1c549885d9083c8cdad",
+      "representationFingerprint": "sha256:bf7a1c7767b854d408aa153786ce7947036a47c09b88196e03d5032fa1295400",
+      "planFingerprint": "sha256:2e016a3b9d9b8a19172d32129eca19cd58f3db987ee1488038d7d2ea4a7a93bb",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 187,
+      "originalCodePoints": 187,
+      "members": [
+        {
+          "opId": "1d9fb815-2855-46b0-88b6-861cb3c14b3d",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-museum",
+            "roomUuid": "88e1e9e9-0911-4f4d-8251-c0060e3ca787",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s05",
+            "version": "sha256:da83d4493238ecee8a0e42780116a7484b5428cbc8e9e1c549885d9083c8cdad",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-88e1e9e9-0911-4f4d-8251-c0060e3ca787",
+              "type": "message",
+              "data": "Eva [Eva]: Групата за музейния ден се среща в 09:30 пред западния вход. Маршрутът е керамика, после фотография. Сам предложи нощна обиколка, но организаторите я отказаха. Потвърденият водач е Борис.",
+              "createdAt": "2026-09-03T09:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: museum (original-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "1d9fb815-2855-46b0-88b6-861cb3c14b3d",
+                "source_id": "s05",
+                "version": "sha256:da83d4493238ecee8a0e42780116a7484b5428cbc8e9e1c549885d9083c8cdad",
+                "room_id": "88e1e9e9-0911-4f4d-8251-c0060e3ca787",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-03T09:00:00.000Z",
+                "origin": [
+                  "Eva",
+                  "message"
+                ],
+                "carry_hash": "sha256:42fc6253d6dea7c12cf571b770097967a47029c33d12de41da68be686ef62697"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 187
+          },
+          "dataUtf8Bytes": 347
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s06",
+      "logicalRoom": "recipe",
+      "room": {
+        "uuid": "b26e3293-215e-415f-8c39-a475fc893103",
+        "name": "D trial d2-loopback-fixture-20261006: recipe (original-profile)"
+      },
+      "sourceBodySha256": "c9a3fc510e93ab848301550ac380cdc13288c15d906d69a2452651118f9a85b7",
+      "sourceVersion": "sha256:0ef50ee54eb96fac5d159363a298f619a4f94c88f123cdb7d31ecbfed6541f62",
+      "representationFingerprint": "sha256:c9a3fc510e93ab848301550ac380cdc13288c15d906d69a2452651118f9a85b7",
+      "planFingerprint": "sha256:e49de246b9de0c1c1d9b8185c88055275ceeb363f2ce7f246906bf63f1961ea1",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 176,
+      "originalCodePoints": 176,
+      "members": [
+        {
+          "opId": "1050d3c1-042e-41ab-8213-74c284e5c2be",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-recipe",
+            "roomUuid": "b26e3293-215e-415f-8c39-a475fc893103",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s06",
+            "version": "sha256:0ef50ee54eb96fac5d159363a298f619a4f94c88f123cdb7d31ecbfed6541f62",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-b26e3293-215e-415f-8c39-a475fc893103",
+              "type": "message",
+              "data": "Dana [Dana]: Нашият запис за лимоновия сладкиш: 200 g брашно, 80 g захар и кора от два лимона. Печем 35 минути на 170 °C. Не добавяме портокалова кора. Размерът на формата още не е уточнен.",
+              "createdAt": "2026-09-03T11:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: recipe (original-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "1050d3c1-042e-41ab-8213-74c284e5c2be",
+                "source_id": "s06",
+                "version": "sha256:0ef50ee54eb96fac5d159363a298f619a4f94c88f123cdb7d31ecbfed6541f62",
+                "room_id": "b26e3293-215e-415f-8c39-a475fc893103",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-03T11:00:00.000Z",
+                "origin": [
+                  "Dana",
+                  "message"
+                ],
+                "carry_hash": "sha256:ca27fec566f74c221743aa037173b9aa920e6436d420342aeca303327c09c795"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 176
+          },
+          "dataUtf8Bytes": 314
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s07",
+      "logicalRoom": "makerspace",
+      "room": {
+        "uuid": "5f23d282-816f-4f82-891f-a8af21f9dd9d",
+        "name": "D trial d2-loopback-fixture-20261006: makerspace (original-profile)"
+      },
+      "sourceBodySha256": "e06332e6697eba1ebdd4fa0b5f08d6c82de5ef622c42f85b8f3404930c7a940c",
+      "sourceVersion": "sha256:616442b25fab6a66f29e0dbaa3b8790b91dc50ecaef1295e0264c251a6c584de",
+      "representationFingerprint": "sha256:e06332e6697eba1ebdd4fa0b5f08d6c82de5ef622c42f85b8f3404930c7a940c",
+      "planFingerprint": "sha256:a738f04e68e4a61e9ff2d017742dc8c4e11a802b10f4d17990744fa79746693d",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 164,
+      "originalCodePoints": 164,
+      "members": [
+        {
+          "opId": "1a6082f1-eb7e-4a0f-8c76-43571723b25b",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-makerspace",
+            "roomUuid": "5f23d282-816f-4f82-891f-a8af21f9dd9d",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s07",
+            "version": "sha256:616442b25fab6a66f29e0dbaa3b8790b91dc50ecaef1295e0264c251a6c584de",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-5f23d282-816f-4f82-891f-a8af21f9dd9d",
+              "type": "message",
+              "data": "Niko [Niko]: Работилницата за дървени играчки е на 12 септември от 14:00. Рени води занятието, Петър подготвя масите. Имаме 8 комплекта за 12 записани души; липсват 4 комплекта.",
+              "createdAt": "2026-09-05T08:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: makerspace (original-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "1a6082f1-eb7e-4a0f-8c76-43571723b25b",
+                "source_id": "s07",
+                "version": "sha256:616442b25fab6a66f29e0dbaa3b8790b91dc50ecaef1295e0264c251a6c584de",
+                "room_id": "5f23d282-816f-4f82-891f-a8af21f9dd9d",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-05T08:00:00.000Z",
+                "origin": [
+                  "Niko",
+                  "message"
+                ],
+                "carry_hash": "sha256:d222b6baa58b1ef4ffdcac4bc3d39827ed3a5097d8bb3f3094fb1b2087fd121d"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 164
+          },
+          "dataUtf8Bytes": 300
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s09",
+      "logicalRoom": "travel",
+      "room": {
+        "uuid": "7b62915d-e8bb-4cdb-87de-c0c92c56e07d",
+        "name": "D trial d2-loopback-fixture-20261006: travel (original-profile)"
+      },
+      "sourceBodySha256": "56ebea90c52f4b266235830b3d21cb4d5b91d467f1ccce2951a10d8dba9fe908",
+      "sourceVersion": "sha256:09c83c2fbc8b20944d0b1a16741850cf1ecbd7030228feb4fee7e999482e8687",
+      "representationFingerprint": "sha256:56ebea90c52f4b266235830b3d21cb4d5b91d467f1ccce2951a10d8dba9fe908",
+      "planFingerprint": "sha256:c814d87c7dc7ed28ba4c84b5544dc474d0f803c7c81de05b7d2b8af1d7db100a",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 176,
+      "originalCodePoints": 176,
+      "members": [
+        {
+          "opId": "03e7339a-9296-4130-8111-24917e714602",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-travel",
+            "roomUuid": "7b62915d-e8bb-4cdb-87de-c0c92c56e07d",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s09",
+            "version": "sha256:09c83c2fbc8b20944d0b1a16741850cf1ecbd7030228feb4fee7e999482e8687",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-7b62915d-e8bb-4cdb-87de-c0c92c56e07d",
+              "type": "message",
+              "data": "Sia [Sia]: В нашия измислен маршрут влак R7 тръгва от Борова в 08:15 и пристига в Липа в 09:05. Сборният пункт е източната платформа. Билетите още не са купени. Не е записан обратен влак.",
+              "createdAt": "2026-09-06T09:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: travel (original-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "03e7339a-9296-4130-8111-24917e714602",
+                "source_id": "s09",
+                "version": "sha256:09c83c2fbc8b20944d0b1a16741850cf1ecbd7030228feb4fee7e999482e8687",
+                "room_id": "7b62915d-e8bb-4cdb-87de-c0c92c56e07d",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-06T09:00:00.000Z",
+                "origin": [
+                  "Sia",
+                  "message"
+                ],
+                "carry_hash": "sha256:2bc858dc8dbc829f65fe9914f5acc571bea241c7420b59a1746a3488b628d763"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 176
+          },
+          "dataUtf8Bytes": 316
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s10",
+      "logicalRoom": "release",
+      "room": {
+        "uuid": "2ae5076f-85a3-4425-8d21-2ddbd445107c",
+        "name": "D trial d2-loopback-fixture-20261006: release (original-profile)"
+      },
+      "sourceBodySha256": "031ad7716f1230f49c5c52c7b3ceccfa50f6297abefcc720c55c270f8cf12670",
+      "sourceVersion": "sha256:58e1891b398fe48c897afa6814c99f0ac66e7e61fb505060fe9974e4645e8832",
+      "representationFingerprint": "sha256:031ad7716f1230f49c5c52c7b3ceccfa50f6297abefcc720c55c270f8cf12670",
+      "planFingerprint": "sha256:1803aa67f3989f111ba47f42e4ac9c9b0c0635c069b49fa5b64aebd6c2d13789",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 135,
+      "originalCodePoints": 135,
+      "members": [
+        {
+          "opId": "45a87f67-ac38-4755-862d-49565108598b",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-release",
+            "roomUuid": "2ae5076f-85a3-4425-8d21-2ddbd445107c",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s10",
+            "version": "sha256:58e1891b398fe48c897afa6814c99f0ac66e7e61fb505060fe9974e4645e8832",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-2ae5076f-85a3-4425-8d21-2ddbd445107c",
+              "type": "message",
+              "data": "Jo [Jo]: Проектът Sprout вече се казва Fern. Приета е версия 2.1.0. Patch 2.1.1 е само предложен; няма release. Ролята на тестов водач е на Lee.",
+              "createdAt": "2026-09-07T09:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: release (original-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "45a87f67-ac38-4755-862d-49565108598b",
+                "source_id": "s10",
+                "version": "sha256:58e1891b398fe48c897afa6814c99f0ac66e7e61fb505060fe9974e4645e8832",
+                "room_id": "2ae5076f-85a3-4425-8d21-2ddbd445107c",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-07T09:00:00.000Z",
+                "origin": [
+                  "Jo",
+                  "message"
+                ],
+                "carry_hash": "sha256:3a2d552e4144ecb7f7e110a53da996fc8804fc6449f8df15da5557e17d7c5b30"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 135
+          },
+          "dataUtf8Bytes": 216
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s11",
+      "logicalRoom": "release",
+      "room": {
+        "uuid": "2ae5076f-85a3-4425-8d21-2ddbd445107c",
+        "name": "D trial d2-loopback-fixture-20261006: release (original-profile)"
+      },
+      "sourceBodySha256": "589317ea0aa9c60ae2a88fa887fd3c4ae31d95300b81b5ab75f05719db1e554d",
+      "sourceVersion": "sha256:aa31000642db9c787c6e1a1d51e9cd23cbf3e4ed749d419979c72d052c1f524a",
+      "representationFingerprint": "sha256:589317ea0aa9c60ae2a88fa887fd3c4ae31d95300b81b5ab75f05719db1e554d",
+      "planFingerprint": "sha256:a51ab05c2e5479a1ebcec57fb07d729c55615475ee948193f8dac9aae3ecfcd7",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 154,
+      "originalCodePoints": 154,
+      "members": [
+        {
+          "opId": "b4eeb8c6-0218-4426-8c9e-7d4e59e2f72c",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-release",
+            "roomUuid": "2ae5076f-85a3-4425-8d21-2ddbd445107c",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s11",
+            "version": "sha256:aa31000642db9c787c6e1a1d51e9cd23cbf3e4ed749d419979c72d052c1f524a",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-2ae5076f-85a3-4425-8d21-2ddbd445107c",
+              "type": "message",
+              "data": "Lee [Lee]: Свереният пример е:\n```js\nconst label = 'Fern';\nconst retries = 0;\n```\nСтойността 0 не означава безкрайни повторения. Тестовият резултат за 2.1.0 е зелен.",
+              "createdAt": "2026-09-07T10:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: release (original-profile)\", message 2",
+              "metadata": {
+                "schema": 4,
+                "op_id": "b4eeb8c6-0218-4426-8c9e-7d4e59e2f72c",
+                "source_id": "s11",
+                "version": "sha256:aa31000642db9c787c6e1a1d51e9cd23cbf3e4ed749d419979c72d052c1f524a",
+                "room_id": "2ae5076f-85a3-4425-8d21-2ddbd445107c",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-07T10:00:00.000Z",
+                "origin": [
+                  "Lee",
+                  "message"
+                ],
+                "carry_hash": "sha256:e29aa439bab9130d2ceb511985baef7977317a85a1eb3be799b9c8d46d912ebe"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 154
+          },
+          "dataUtf8Bytes": 245
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s13",
+      "logicalRoom": "game",
+      "room": {
+        "uuid": "3717b37a-b50d-4eda-8ac8-7d4110196f95",
+        "name": "D trial d2-loopback-fixture-20261006: game (original-profile)"
+      },
+      "sourceBodySha256": "dda7169fd7784ae911c30bb81ad29c68cd99a203becf103ecddb9fa0de424755",
+      "sourceVersion": "sha256:872f7186759009f13105516926c32c9bd6b800e9847d2d620149721db81799b2",
+      "representationFingerprint": "sha256:dda7169fd7784ae911c30bb81ad29c68cd99a203becf103ecddb9fa0de424755",
+      "planFingerprint": "sha256:3ca30356a841522d5e021a2f6b5cb508e81e60444e6ee67af433036e1fe005a2",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 229,
+      "originalCodePoints": 229,
+      "members": [
+        {
+          "opId": "a185ecae-8a2a-4285-8826-96fb45669677",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-game",
+            "roomUuid": "3717b37a-b50d-4eda-8ac8-7d4110196f95",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s13",
+            "version": "sha256:872f7186759009f13105516926c32c9bd6b800e9847d2d620149721db81799b2",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-3717b37a-b50d-4eda-8ac8-7d4110196f95",
+              "type": "message",
+              "data": "Orin [Orin]: В измислената кампания Нора предава картата на Илан. Илан пази ключа; Нора пази компаса. Обещанието „Таро ще стане капитан“ е реплика на герой, а не избран капитан. В отбора има две лица с име Мая и не е записано кое носи фенера.",
+              "createdAt": "2026-09-08T10:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: game (original-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "a185ecae-8a2a-4285-8826-96fb45669677",
+                "source_id": "s13",
+                "version": "sha256:872f7186759009f13105516926c32c9bd6b800e9847d2d620149721db81799b2",
+                "room_id": "3717b37a-b50d-4eda-8ac8-7d4110196f95",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-08T10:00:00.000Z",
+                "origin": [
+                  "Orin",
+                  "message"
+                ],
+                "carry_hash": "sha256:4d543957cfa33009dc82a295dd91f3b55b05c3bead5361d05862cb84285f3ac2"
+              }
+            },
+            "estimatedCredits": 2
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 229
+          },
+          "dataUtf8Bytes": 426
+        }
+      ],
+      "estimatedIngestionCredits": 2
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s14",
+      "logicalRoom": "music",
+      "room": {
+        "uuid": "35d762c8-42dc-4748-8ca7-f9af97219003",
+        "name": "D trial d2-loopback-fixture-20261006: music (original-profile)"
+      },
+      "sourceBodySha256": "26204cbd2bf5a825174eee721df7093ed2b8538791a10e60d48d7e8e9ca2dca3",
+      "sourceVersion": "sha256:7bd70244f567887ae90faac1ef2774b18617fee9c7c042d2e763df88da1ed1fa",
+      "representationFingerprint": "sha256:26204cbd2bf5a825174eee721df7093ed2b8538791a10e60d48d7e8e9ca2dca3",
+      "planFingerprint": "sha256:6d319b931328a28721aaaa7e99a4a422ddea76a8576540061d4530a1b3824c2f",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 200,
+      "originalCodePoints": 200,
+      "members": [
+        {
+          "opId": "8b1bc219-4dfb-4837-81d1-82e4e082d441",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-music",
+            "roomUuid": "35d762c8-42dc-4748-8ca7-f9af97219003",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s14",
+            "version": "sha256:7bd70244f567887ae90faac1ef2774b18617fee9c7c042d2e763df88da1ed1fa",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-35d762c8-42dc-4748-8ca7-f9af97219003",
+              "type": "message",
+              "data": "Ada [Ada]: Репетицията е в понеделник в 19:00, студио Бреза. Квартетът използва две цигулки, виола и виолончело. Иво е сценичното име на участник с ID musician-17; днес то се сменя на Рио, ID остава musician-17.",
+              "createdAt": "2026-09-09T08:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: music (original-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "8b1bc219-4dfb-4837-81d1-82e4e082d441",
+                "source_id": "s14",
+                "version": "sha256:7bd70244f567887ae90faac1ef2774b18617fee9c7c042d2e763df88da1ed1fa",
+                "room_id": "35d762c8-42dc-4748-8ca7-f9af97219003",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-09T08:00:00.000Z",
+                "origin": [
+                  "Ada",
+                  "message"
+                ],
+                "carry_hash": "sha256:43394f0d5b73381a972f99ac3a95a80fec2b9c9502a64b80d4c1e8b9e7f57a33"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 200
+          },
+          "dataUtf8Bytes": 341
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s15",
+      "logicalRoom": "music",
+      "room": {
+        "uuid": "35d762c8-42dc-4748-8ca7-f9af97219003",
+        "name": "D trial d2-loopback-fixture-20261006: music (original-profile)"
+      },
+      "sourceBodySha256": "44e5f371f767e0179edaea4a302a0af6de8e11aab82a29484f44aa6c94676975",
+      "sourceVersion": "sha256:94054611e8984cc096fcbd85f73b0b674297162e8bd29e3a0ca46d364ddaa103",
+      "representationFingerprint": "sha256:44e5f371f767e0179edaea4a302a0af6de8e11aab82a29484f44aa6c94676975",
+      "planFingerprint": "sha256:36d4096155ec6f00a0d96c97e38298e54e427e52582b9bb6f1b61533e91266e0",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 126,
+      "originalCodePoints": 126,
+      "members": [
+        {
+          "opId": "7fd13f67-ed75-494f-83b6-548639263cfa",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-music",
+            "roomUuid": "35d762c8-42dc-4748-8ca7-f9af97219003",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s15",
+            "version": "sha256:94054611e8984cc096fcbd85f73b0b674297162e8bd29e3a0ca46d364ddaa103",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-35d762c8-42dc-4748-8ca7-f9af97219003",
+              "type": "message",
+              "data": "Ada [Ada]: От 10 септември репетицията се мести във вторник в 18:30. Студиото остава Бреза. Понеделнишкият час важеше преди тази промяна.",
+              "createdAt": "2026-09-10T08:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: music (original-profile)\", message 2",
+              "metadata": {
+                "schema": 4,
+                "op_id": "7fd13f67-ed75-494f-83b6-548639263cfa",
+                "source_id": "s15",
+                "version": "sha256:94054611e8984cc096fcbd85f73b0b674297162e8bd29e3a0ca46d364ddaa103",
+                "room_id": "35d762c8-42dc-4748-8ca7-f9af97219003",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-10T08:00:00.000Z",
+                "origin": [
+                  "Ada",
+                  "message"
+                ],
+                "carry_hash": "sha256:f29ccdd62d629b2feb35cd0ba7729841a05bdd0dba4276b1bf4c494f4f1ebfde"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 126
+          },
+          "dataUtf8Bytes": 235
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s16",
+      "logicalRoom": "workshop",
+      "room": {
+        "uuid": "184cabcc-4654-48f1-8329-eaacc01b8b0f",
+        "name": "D trial d2-loopback-fixture-20261006: workshop (original-profile)"
+      },
+      "sourceBodySha256": "313a123af866fd5c5ebb0815b75878569890596df0dddfe9dba907534d9f322f",
+      "sourceVersion": "sha256:86e2f15575495c7e6484f965c7dc355840b79fa1668868f0d9d0f1c64470f793",
+      "representationFingerprint": "sha256:313a123af866fd5c5ebb0815b75878569890596df0dddfe9dba907534d9f322f",
+      "planFingerprint": "sha256:70996d711684bbe57fff0eda7cfcc8d2964a7ae7f7383004750df1c1498fe713",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 198,
+      "originalCodePoints": 198,
+      "members": [
+        {
+          "opId": "c86a9032-95c3-4302-8fd9-850e45aff11d",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-workshop",
+            "roomUuid": "184cabcc-4654-48f1-8329-eaacc01b8b0f",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s16",
+            "version": "sha256:86e2f15575495c7e6484f965c7dc355840b79fa1668868f0d9d0f1c64470f793",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-184cabcc-4654-48f1-8329-eaacc01b8b0f",
+              "type": "message",
+              "data": "Emil [Emil]: Инвентар: 3 сини чаши и 5 зелени чинии. Сините чаши са подарени от Зоя; зелените чинии са купени от клуба. Емил записва решението „ремонт на шкафа през ноември“ като предложение; гласуване още няма.",
+              "createdAt": "2026-09-11T09:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: workshop (original-profile)\", message 1",
+              "metadata": {
+                "schema": 4,
+                "op_id": "c86a9032-95c3-4302-8fd9-850e45aff11d",
+                "source_id": "s16",
+                "version": "sha256:86e2f15575495c7e6484f965c7dc355840b79fa1668868f0d9d0f1c64470f793",
+                "room_id": "184cabcc-4654-48f1-8329-eaacc01b8b0f",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-11T09:00:00.000Z",
+                "origin": [
+                  "Emil",
+                  "message"
+                ],
+                "carry_hash": "sha256:1bea085f53fc4b6d14d88d151b9284432004e0403f47f291d9afd8228c12f7f7"
+              }
+            },
+            "estimatedCredits": 2
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 198
+          },
+          "dataUtf8Bytes": 371
+        }
+      ],
+      "estimatedIngestionCredits": 2
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s17",
+      "logicalRoom": "workshop",
+      "room": {
+        "uuid": "184cabcc-4654-48f1-8329-eaacc01b8b0f",
+        "name": "D trial d2-loopback-fixture-20261006: workshop (original-profile)"
+      },
+      "sourceBodySha256": "305b1d43cc3c96f062443d4f6cfa03e46a74041d476402369a92119ba9a45f45",
+      "sourceVersion": "sha256:3dd49bb894c352fff7b7263497f3c81ba42edbad10e7bb8f39c89b20d01ae562",
+      "representationFingerprint": "sha256:305b1d43cc3c96f062443d4f6cfa03e46a74041d476402369a92119ba9a45f45",
+      "planFingerprint": "sha256:b33e2e04fac01f701102cfc3a8ef3a02f5255a2d4b899147bc4363d73633074e",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 158,
+      "originalCodePoints": 158,
+      "members": [
+        {
+          "opId": "6982b340-1bf6-45b9-8a6a-3e22d0967d26",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-workshop",
+            "roomUuid": "184cabcc-4654-48f1-8329-eaacc01b8b0f",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s17",
+            "version": "sha256:3dd49bb894c352fff7b7263497f3c81ba42edbad10e7bb8f39c89b20d01ae562",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-184cabcc-4654-48f1-8329-eaacc01b8b0f",
+              "type": "message",
+              "data": "Zoya [Zoya]: Емил цитира стария текст „ще купим три червени чаши“. Това не е текущото решение. В текущия инвентар червени чаши няма. Надписът на сините чаши е „茶 / Чай ☕“.",
+              "createdAt": "2026-09-11T10:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: workshop (original-profile)\", message 2",
+              "metadata": {
+                "schema": 4,
+                "op_id": "6982b340-1bf6-45b9-8a6a-3e22d0967d26",
+                "source_id": "s17",
+                "version": "sha256:3dd49bb894c352fff7b7263497f3c81ba42edbad10e7bb8f39c89b20d01ae562",
+                "room_id": "184cabcc-4654-48f1-8329-eaacc01b8b0f",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-11T10:00:00.000Z",
+                "origin": [
+                  "Zoya",
+                  "message"
+                ],
+                "carry_hash": "sha256:5973d353607a59b9354ccc76c95419971eabb73f5f17deb48455dfa65f1acd76"
+              }
+            },
+            "estimatedCredits": 1
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 158
+          },
+          "dataUtf8Bytes": 302
+        }
+      ],
+      "estimatedIngestionCredits": 1
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s18",
+      "logicalRoom": "library",
+      "room": {
+        "uuid": "a931aa0b-d629-4248-852f-8d435f9e3c9c",
+        "name": "D trial d2-loopback-fixture-20261006: library (original-profile)"
+      },
+      "sourceBodySha256": "8a7a15404e95dbc9b6c3a027e4778c46ef76ee053c064f4732aabf2ba1974b58",
+      "sourceVersion": "sha256:785ef68218902882c549258fb388499c16e60564a3af7d968254860a25c1c037",
+      "representationFingerprint": "sha256:8a7a15404e95dbc9b6c3a027e4778c46ef76ee053c064f4732aabf2ba1974b58",
+      "planFingerprint": "sha256:2c366e773bd2f86bf59b4ddd5417a610c7a7bf749cf5a7a36ef7bc3b1ea3684b",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 2025,
+      "originalCodePoints": 2025,
+      "members": [
+        {
+          "opId": "50912b37-49a9-42c6-8837-b901206401a9",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-library",
+            "roomUuid": "a931aa0b-d629-4248-852f-8d435f9e3c9c",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s18",
+            "version": "sha256:785ef68218902882c549258fb388499c16e60564a3af7d968254860a25c1c037",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-a931aa0b-d629-4248-852f-8d435f9e3c9c",
+              "type": "message",
+              "data": "Lina [Lina]: Бележки от организационния разговор на библиотека Орех, 19 септември. За срещата на 1 октомври решихме да запазим зала Три и началния час 18:00. Иво предложи вместо това да седим на терасата вечерта, но предложението не беше прието: осветлението там не е проверено и няма обещан резервен вариант при дъжд.\n\nКнигата за октомврийския клуб още не е избрана. В този разговор обсъждахме организацията, а не заглавията. Септемврийският избор „Пътеката“ остава записан отделно; не трябва да превръщаме старото предложение за „Островът“ в ново решение само защото се появява в списъка с идеи.\n\nЗа новите участници ще сложим лист с кратко обяснение как протича срещата. Първите десет минути са за представяне, после всеки може да прочете откъс или да слуша. Не събираме оценки на читателите и никой не е длъжен да говори. Табелата за входа ще указва зала Три, без да променя обичайните работни часове на библиотеката.\n\nЛина предава списъка със записаните участници на Иво до 25 септември в 16:00. Това е срок за организационния списък, не за връщане на книги. Иво ще провери колко места са нужни и ще отбележи само броя; имената няма да се отпечатват върху табелата за вратата.\n\nМасите ще останат до стената, за да има свободен проход между входа и местата за слушане. Пробвахме два варианта с хартиени правоъгълници върху план на залата. Избраният вариант не мести рафтовете и не изисква нови мебели. Ако дойдат повече хора от наличните столове, първо ще попитаме дежурния, а няма да обещаваме допълнителни места предварително.\n\nКъм материалите ще има празна карта за бележка: тема, откъс и въпрос към групата. Картите не са анкета и няма да се пазят като постоянен читателски профил. За следващото обсъждане оставяме идеята за обмен на препоръки; днес не определяме правила за такъв обмен.\n\nНакрая уточнихме отговорността за печатните материали: Иво подготвя 18 карти за бележки до 1 октомври в 17:30. Лина проверява табелата за залата. Това не разменя задачите им: списъкът идва от Лина към Иво, а печатните карти са работа на Иво.",
+              "createdAt": "2026-09-19T11:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: library (original-profile)\", message 3",
+              "metadata": {
+                "schema": 4,
+                "op_id": "50912b37-49a9-42c6-8837-b901206401a9",
+                "source_id": "s18",
+                "version": "sha256:785ef68218902882c549258fb388499c16e60564a3af7d968254860a25c1c037",
+                "room_id": "a931aa0b-d629-4248-852f-8d435f9e3c9c",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-19T11:00:00.000Z",
+                "origin": [
+                  "Lina",
+                  "message"
+                ],
+                "carry_hash": "sha256:d972b7f49360b62255d774616c2404e5ed21c570f781da17333f055e1760d488"
+              }
+            },
+            "estimatedCredits": 11
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 2025
+          },
+          "dataUtf8Bytes": 3672
+        }
+      ],
+      "estimatedIngestionCredits": 11
+    },
+    {
+      "variant": "original-profile",
+      "input": "whole",
+      "sourceId": "s19",
+      "logicalRoom": "game",
+      "room": {
+        "uuid": "3717b37a-b50d-4eda-8ac8-7d4110196f95",
+        "name": "D trial d2-loopback-fixture-20261006: game (original-profile)"
+      },
+      "sourceBodySha256": "68752394a2b13fd4b32124a54b139f46eac41e68d1040efcce47b646942e6113",
+      "sourceVersion": "sha256:7cb4a7c0fbc2f7fc6513ce6ce58390a270ef21832b91253b4184fbad87f09b75",
+      "representationFingerprint": "sha256:68752394a2b13fd4b32124a54b139f46eac41e68d1040efcce47b646942e6113",
+      "planFingerprint": "sha256:7e542decc20271356656434a6d8330ae2f3f964aa1eab7d247d26faf5195c124",
+      "profile": {
+        "policyId": "zep-chat-attachments-v1-8000cp-32000bytes-64parts",
+        "representation": "memory-text-v1",
+        "input": {
+          "maxBodyCodePoints": 8000,
+          "maxDataUtf8Bytes": 32000,
+          "bytesPerCredit": 350,
+          "maxParts": 64
+        }
+      },
+      "preparedCodePoints": 2038,
+      "originalCodePoints": 2038,
+      "members": [
+        {
+          "opId": "a5cf6ec4-71de-48eb-8a83-6cab07e8bb78",
+          "identity": {
+            "provider": "zep",
+            "roomId": "d2-original-profile-game",
+            "roomUuid": "3717b37a-b50d-4eda-8ac8-7d4110196f95",
+            "copyId": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+            "sourceId": "s19",
+            "version": "sha256:7cb4a7c0fbc2f7fc6513ce6ce58390a270ef21832b91253b4184fbad87f09b75",
+            "kind": "episode",
+            "part": "1/1"
+          },
+          "payload": {
+            "format": "zep-episode-v1",
+            "request": {
+              "graphId": "viberoom-3717b37a-b50d-4eda-8ac8-7d4110196f95",
+              "type": "message",
+              "data": "Orin [Orin]: Запис от подготовката на малкия прототип за измислената кампания, 22 септември. Решихме първо да покажем само предаването на картата. Панелът трябва да различава действие, предложение и избор на роля; иначе реплика на герой лесно се прочита като решение на целия отбор. Не променяме притежателите на ключа и компаса от предишния запис.\r\n\r\nНа хартия нарисувахме две имена и стрелка между тях. Стрелката сочи от човека, който предава предмета, към получателя. Надписът след двоеточието е предметът, а не име на сцена. За теста използваме следния пример; това е локален илюстративен код, не отчет за публикувана игра:\r\n\r\n```js\r\nconst transfer = { from: \"Нора\", to: \"Илан\", item: \"карта\" };\r\nconst captain = { proposal: \"Таро\", chosen: false };\r\nfunction handoff(entry) {\r\n  return `${entry.from} → ${entry.to}: ${entry.item}`;\r\n}\r\n```\r\n\r\nПримерният изход е „Нора → Илан: карта“. Той означава, че Нора предава картата на Илан, а не обратното. Полето chosen: false означава, че Таро не е избран капитан; записаното име е предложение. Няма автоматично превръщане на proposal в потвърдена роля при рисуването на панела.\r\n\r\nПърво проверяваме реда на имената с празен фон, после пробваме по-тесен прозорец. Дългите имена трябва да останат четими; ако не се събират, панелът може да стане по-висок. Не съкращаваме името до една буква, защото в кампанията вече има две лица с еднакво име. Този прототип не решава кое от тях носи фенера.\r\n\r\nЗа прегледа ще пазим една снимка на тесния вариант и една на широкия. Под всяка записваме ширината и точния текст на надписа, за да не сравняваме случайно различни действия. Орин предложи стрелката да пулсира, но отложихме движението: първо искаме статичният панел да казва правилно кой на кого предава предмета.\r\n\r\nПрегледът на прототипа е насрочен за 28 септември в 15:00. За него е решено да използваме статичния панел без озвучаване. Озвучаването остава предложение за по-късно, не обещана част от този преглед. Този запис насрочва работа и не твърди, че прегледът вече е проведен или че е избран капитан.",
+              "createdAt": "2026-09-22T11:00:00.000Z",
+              "sourceDescription": "viberoom room \"D trial d2-loopback-fixture-20261006: game (original-profile)\", message 2",
+              "metadata": {
+                "schema": 4,
+                "op_id": "a5cf6ec4-71de-48eb-8a83-6cab07e8bb78",
+                "source_id": "s19",
+                "version": "sha256:7cb4a7c0fbc2f7fc6513ce6ce58390a270ef21832b91253b4184fbad87f09b75",
+                "room_id": "3717b37a-b50d-4eda-8ac8-7d4110196f95",
+                "copy_id": "4ca1e10b-73d9-464e-8e9f-efd191bca19f",
+                "part": "1/1",
+                "source_at": "2026-09-22T11:00:00.000Z",
+                "origin": [
+                  "Orin",
+                  "message"
+                ],
+                "carry_hash": "sha256:c0f6289e2cdd5b1e5aca44a85afedf82d0c22512745276a6cd329876a1ebc466"
+              }
+            },
+            "estimatedCredits": 11
+          },
+          "sourceOffsets": {
+            "start": 0,
+            "end": 2038
+          },
+          "dataUtf8Bytes": 3516
+        }
+      ],
+      "estimatedIngestionCredits": 11
+    }
+  ]
+}

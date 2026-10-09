@@ -12,6 +12,7 @@ export interface FakeSystemOptions {
   issParameter?: boolean;
   claimedIssuer?: string;
   open?: boolean;
+  apiKey?: { header: string; value: string };
 }
 
 export class FakeSystem {
@@ -28,6 +29,9 @@ export class FakeSystem {
   tools: McpTool[];
   forgeIss: string | null = null;
   open: boolean;
+  readonly keysSeen: (string | null)[] = [];
+  redirectTo: string | null = null;
+  echoKey = false;
 
   constructor(private readonly options: FakeSystemOptions = {}) {
     this.open = options.open ?? false;
@@ -160,9 +164,21 @@ export class FakeSystem {
   }
 
   private async mcp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (this.redirectTo) {
+      await this.body(req);
+      res.writeHead(307, { location: this.redirectTo });
+      return void res.end();
+    }
     const token = (req.headers.authorization ?? "").replace(/^Bearer /, "");
-    const expiry = this.access.get(token);
-    if (!this.open && (expiry === undefined || expiry < Date.now())) {
+    const key = this.options.apiKey;
+    if (key) {
+      const sent = req.headers[key.header.toLowerCase()];
+      this.keysSeen.push(typeof sent === "string" ? sent : null);
+      if (sent !== key.value) {
+        await this.body(req);
+        return this.json(res, 401, { error: "invalid api key" });
+      }
+    } else if (!this.open && (this.access.get(token) === undefined || this.access.get(token)! < Date.now())) {
       await this.body(req);
       res.writeHead(401, { "www-authenticate": `Bearer resource_metadata="${this.origin}/.well-known/oauth-protected-resource/mcp", scope="read write"` });
       return void res.end();
@@ -187,6 +203,7 @@ export class FakeSystem {
     if (message.method === "tools/list") return this.answer(res, message.id, { tools: this.tools });
     if (message.method === "tools/call") {
       this.calls.push({ name: message.params.name, arguments: message.params.arguments, token });
+      if (key && this.echoKey) return this.answer(res, message.id, undefined, {}, { code: -32000, message: `nothing for the key ${key.value} here` });
       return this.answer(res, message.id, { content: [{ type: "text", text: `ran ${message.params.name}` }] });
     }
     return this.answer(res, message.id, undefined, {}, { code: -32601, message: "no such method" });

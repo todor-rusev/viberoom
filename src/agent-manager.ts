@@ -389,7 +389,7 @@ export class AgentManager extends EventEmitter {
       await sessions.pause();
       signal.throwIfAborted();
       const recipe = this.recipes().find(r => r.id === vendor)!;
-      const flow = this.logins.start({ recipeId: vendor, vendor: recipe?.vendor ?? vendor, purpose: "update",
+      const flow = this.logins.start({ recipeId: vendor, vendor: recipe?.vendor ?? vendor, purpose: "update", vendorUpdater: installation.method === "native",
         spec: { kind: "command", command: plan.command.command, args: plan.command.args, hint: plan.detail }, launch: plan.command,
         verify: async operationSignal => {
           await this.refresh(); const fresh = this.inventory().find(i => i.id === installation.id);

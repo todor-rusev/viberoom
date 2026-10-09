@@ -7,7 +7,7 @@ import { existsSync, readFileSync, realpathSync, statSync, type Dirent } from "n
 import { readdir } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { AUDIO_KIND, saveDocument, takesType, type AudioAttachment, type AudioInput, type HeardSound, type ImageInput } from "../files.js";
+import { AUDIO_KIND, VIDEO_KIND, saveDocument, takesType, type AudioAttachment, type AudioInput, type HeardSound, type ImageInput, type VideoAttachment, type VideoInput } from "../files.js";
 import { AUDIO_MARKER_PATTERN, VIDEO_MARKER_PATTERN } from "../persona.js";
 import { splitLocation } from "../open.js";
 import type { ChatMessage, ExternalReceipt, Participant, ParticipantStatus, PendingPermission, QuietTurn, ReconnectOptions, Room, RoomEvent } from "../room.js";
@@ -38,6 +38,7 @@ export interface RouterHost {
 }
 
 export interface ChannelsView {
+  storageProblem?: string | null;
   telegram: { enabled: boolean; tokenSet: boolean; account: string | null; state: AdapterStatus["state"]; detail?: string; name?: string; wantedName?: string } | null;
   machine: string;
   pairings: Pairing[];
@@ -234,6 +235,7 @@ export class ChannelRouter {
     const telegram = this.adapters.get(`telegram:${[...this.adapters.values()].find((a) => a.platform === "telegram")?.account ?? ""}`);
     const status = this.statuses.get("telegram");
     return {
+      storageProblem: this.store.storageProblem,
       telegram: state.telegram
         ? { enabled: state.telegram.enabled, tokenSet: !!state.telegram.token, account: telegram?.account ?? null, state: status?.state ?? "disconnected", detail: status?.detail, name: status?.name || undefined, wantedName: state.telegram.name }
         : null,
@@ -411,6 +413,7 @@ export class ChannelRouter {
     if (addressed?.kind === "agent" && addressed.status !== "left" && !mentions(spokenText(text), addressed.name)) text = `@${addressed.name} ${text}`;
     let images: ImageInput[] = [];
     let sounds: AudioInput[] = [];
+    let clips: VideoInput[] = [];
     const what = m.file ? fileNoun(m.file) : "message";
     if (m.file) {
       if (m.file.size !== undefined && m.file.size > adapter.limits.download) {
@@ -431,6 +434,8 @@ export class ChannelRouter {
           if (m.file.kind === "photo") images = [{ name: fetched.name, mimeType: fetched.mime ?? "image/jpeg", data: fetched.data.toString("base64") }];
           else if (m.file.kind === "sound" && takesType(AUDIO_KIND, mimeType)) {
             sounds = [{ name: m.file.voice ? "voice message" : fetched.name ?? m.file.name, mimeType, data: fetched.data.toString("base64"), ...(m.file.seconds ? { seconds: m.file.seconds } : {}) }];
+          } else if (m.file.kind === "video" && takesType(VIDEO_KIND, mimeType)) {
+            clips = [{ name: fetched.name ?? m.file.name, mimeType, data: fetched.data.toString("base64"), ...(m.file.seconds ? { seconds: m.file.seconds } : {}) }];
           } else {
             const saved = saveDocument(room.filesDir(), fetched.name ?? m.file.name, fetched.data);
             text = `${text.trim()}${text.trim() ? "\n" : ""}📎 ${basename(saved.path)} — ${saved.path}`;
@@ -438,7 +443,7 @@ export class ChannelRouter {
         }
       }
     } else if (!m.text.trim() && m.attachment) {
-      await this.reply(adapter, m.ref, "Only text, photos, voice messages and files reach the room; that kind of message does not.");
+      await this.reply(adapter, m.ref, "Only text, photos, videos, voice messages and files reach the room; that kind of message does not.");
       return "done";
     }
     const heard = sounds.length ? await this.hear(room, sounds) : [];
@@ -450,6 +455,7 @@ export class ChannelRouter {
         text,
         ...(images.length ? { images } : {}),
         ...(heard.length ? { audio: heard } : {}),
+        ...(clips.length ? { video: clips } : {}),
       });
     } catch (error) {
       await this.pause(adapter, m.ref, `the room could not take the message: ${describe(error)}`, "unavailable");
@@ -1703,7 +1709,7 @@ export function renderForPhone(message: ChatMessage): Rendered | null {
   const attachments = message.images?.length ? (message.text.trim() ? " [image]" : "[image]") : "";
   const sounds = new Map((message.audio ?? []).map((sound, i) => [sound.n ?? i + 1, sound]));
   const videos = new Map((message.video ?? []).map((video, i) => [video.n ?? i + 1, video]));
-  const placed = new Set<number>();
+  const placed = new Set<number>(), placedVideos = new Set<number>();
   const text = markdownToTelegramHtml(message.text).replace(AUDIO_AT, (_marker, n: string) => {
     const sound = sounds.get(Number(n));
     if (!sound) return "";
@@ -1711,9 +1717,14 @@ export function renderForPhone(message: ChatMessage): Rendered | null {
     return soundForPhone(sound);
   }).replace(VIDEO_AT, (_marker, n: string) => {
     const video = videos.get(Number(n));
-    return video ? `🎬 ${escapeHtml(video.name)}` : "";
+    if (!video) return "";
+    placedVideos.add(Number(n));
+    return videoForPhone(video);
   });
-  const unplaced = [...sounds].filter(([n]) => !placed.has(n)).map(([, sound]) => soundForPhone(sound));
+  const unplaced = [
+    ...[...sounds].filter(([n]) => !placed.has(n)).map(([, sound]) => soundForPhone(sound)),
+    ...[...videos].filter(([n]) => !placedVideos.has(n)).map(([, video]) => videoForPhone(video)),
+  ];
   const body = [text + attachments, ...unplaced].filter((part) => part.trim()).join("\n");
   if (!body.trim()) return null;
   return { prefix: authorPrefix(message.fromName), body, italic: false };
@@ -1725,6 +1736,10 @@ const VIDEO_AT = new RegExp(VIDEO_MARKER_PATTERN.source, "gi");
 function soundForPhone(sound: AudioAttachment): string {
   const words = sound.words?.trim();
   return `🎤 ${words ? `<i>${defuseMentions(escapeHtml(words))}</i>` : escapeHtml(sound.name)}`;
+}
+
+function videoForPhone(video: VideoAttachment): string {
+  return `🎬 ${escapeHtml(video.name)}`;
 }
 
 interface LiveRow {
@@ -1847,7 +1862,7 @@ function pickRoom(reachable: Room[], all: Room[], query: string): Room | "hidden
   return null;
 }
 
-export const STATUS_WORDS: Record<ParticipantStatus | "working" | "writing" | "notes", string> = {
+export const STATUS_WORDS: Record<ParticipantStatus | "working" | "writing" | "notes" | "asking", string> = {
   unstaffed: "not summoned yet",
   starting: "starting",
   idle: "listening",
@@ -1856,6 +1871,7 @@ export const STATUS_WORDS: Record<ParticipantStatus | "working" | "writing" | "n
   working: "vibing",
   writing: "vibing",
   notes: "taking notes",
+  asking: "waiting for you",
   error: "in trouble",
   offline: "offline",
   left: "left",

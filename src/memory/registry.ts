@@ -21,8 +21,10 @@ export interface ProviderEntry {
   label: string;
   blurb: string;
   consentText: string;
+  roomForget?: { description: string; completed: string };
   capabilities: MemoryCapabilities;
   costUnit: string;
+  dashboard?: { label: string; url: string };
   editWindowMs: number;
   fields: ProviderField[];
   load(settings: Record<string, unknown>): Promise<MemoryProvider>;
@@ -33,14 +35,16 @@ export const MEMORY_PROVIDERS: ProviderEntry[] = [
     id: "zep",
     label: "Zep Cloud",
     blurb: "Hosted temporal knowledge graph: facts with the span they held true.",
-    consentText: "What passes is sent to Zep Software, Inc. (US, SOC 2 Type II) and processed there by LLMs to extract facts. Deleting a message or a room deletes what it taught the graph.",
+    consentText: "What passes is sent to Zep Software, Inc. (US, SOC 2 Type II) and processed there by LLMs to extract facts. Deleting a message requests removal of its episodes; facts associated with other episodes may remain. Closing a local room copy keeps its cloud memory. Forget cloud memory is a separate action that deletes the room's graph. Other copies that still remember can write to it again.",
+    roomForget: { description: "Deletes this room's graph in Zep Cloud, shared by all copies. Other copies that still remember can create it again.", completed: "Zep confirmed deletion of this room's graph. Other copies that still remember can create it again." },
     capabilities: { graph: true, profile: false, forgetEpisode: true, factValidity: true, addFact: true, relevance: true },
     costUnit: "credits",
+    dashboard: { label: "Zep dashboard", url: "https://app.getzep.com" },
     editWindowMs: 0,
     fields: [
       { key: "apiKey", kind: "secret", label: "Zep API key", hint: "Per project, from the Zep dashboard. Kept encrypted in this computer's vault, never shown again.", placeholder: "paste the project API key" },
       { key: "monthlyCreditCap", kind: "number", label: "Monthly ceiling, credits", min: 0, max: 100_000_000, default: 9000, hint: "One credit per started 350 bytes sent (Cyrillic is two bytes a letter). Reached, memory pauses honestly; 0 means no ceiling. Zep's free plan gives 10 000 a month." },
-      { key: "relevanceFloor", kind: "number", label: "Relevance threshold", min: 0, max: 1, step: 0.01, default: MIN_RELEVANCE, hint: "Zep scores each fact it finds from 0 to 1 against the search, and a turn's block leaves out the facts under this. 0.01 drops a third of the unrelated facts and keeps the useful ones; higher starts to drop useful ones too." },
+      { key: "relevanceFloor", kind: "number", label: "Relevance threshold", min: 0, max: 1, step: 0.01, default: MIN_RELEVANCE, hint: "Zep scores each fact it finds from 0 to 1 against the search. Facts from the other rooms under this are left out; the room's own memory keeps Zep's whole selection, which kept the most original messages in the measurements." },
     ],
     load: async (settings) => {
       const { ZepProvider } = await import("./zep.js");
@@ -51,9 +55,11 @@ export const MEMORY_PROVIDERS: ProviderEntry[] = [
     id: "honcho",
     label: "Honcho Cloud",
     blurb: "Hosted memory of who each participant is: conclusions, cards, session summaries.",
-    consentText: "What passes is sent to Plastic Labs, Inc. (Honcho, US) and processed there by LLMs to derive conclusions about the participants. Honcho cannot delete what one message taught it; deleting a room deletes its session, but derived conclusions may outlive it.",
+    consentText: "What passes is sent to Plastic Labs, Inc. (Honcho, US) and processed there by LLMs to derive conclusions about the participants. Honcho cannot delete what one message taught it. Closing a local room copy keeps its cloud memory. Forget cloud memory is a separate action that deletes the room's session, but derived conclusions may outlive it. Other copies that still remember can write to it again.",
+    roomForget: { description: "Deletes this room's session in Honcho. Derived conclusions about participants may remain. Other copies that still remember can create the session again.", completed: "Honcho confirmed deletion of this room's session. Derived conclusions may remain; other copies can create the session again." },
     capabilities: { graph: false, profile: true, forgetEpisode: false, factValidity: false, addFact: false, relevance: false },
     costUnit: "tokens",
+    dashboard: { label: "Honcho dashboard", url: "https://app.honcho.dev" },
     editWindowMs: 10 * 60_000,
     fields: [
       { key: "apiKey", kind: "secret", label: "Honcho API key", hint: "From app.honcho.dev (hch-…). Kept encrypted in this computer's vault, never shown again.", placeholder: "paste the API key" },

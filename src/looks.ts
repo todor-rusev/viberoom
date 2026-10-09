@@ -33,6 +33,7 @@ export interface BuiltLook extends LookData {
   custom: boolean;
   extends: string;
   author: string;
+  retired?: { key: string; reason: string }[];
 }
 
 export interface LookTokens {
@@ -96,7 +97,9 @@ export async function checkLookSpec(raw: unknown): Promise<LookCheck> {
   const tokens = await loadTokens();
   const spec = cleanLookSpec(raw);
   const look = tokens.make(spec as unknown as Record<string, unknown>);
-  return { spec, look, lint: lintLook(look) };
+  const lint = lintLook(look);
+  for (const { key, reason } of look.retired ?? []) lint.warnings.push({ level: "warning", key, message: `${key}: ${reason}` });
+  return { spec, look, lint };
 }
 
 export class LookLibrary {

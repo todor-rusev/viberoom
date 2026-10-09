@@ -50,6 +50,24 @@ export async function executeOperation(name: string, args: Record<string, unknow
     if (!res.ok) return errorResult(`skill "${skill}" could not be loaded`, res);
     return { content: [{ type: "text", text: String(res.body.text ?? "") }] };
   }
+  if (name === "post_message") {
+    const res = await hub("/api/mcp/post-message", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...args, token: TOKEN }),
+    });
+    if (!res.ok) return errorResult("the message could not be posted", res);
+    return jsonResult(res.body);
+  }
+  if (name === "register_background_task" || name === "list_background_tasks" || name === "get_background_task" || name === "cancel_background_task") {
+    const res = name === "list_background_tasks"
+      ? await hub(`/api/mcp/background-tasks?token=${encodeURIComponent(TOKEN)}`)
+      : name === "get_background_task"
+      ? await hub(`/api/mcp/background-tasks/task?token=${encodeURIComponent(TOKEN)}&taskId=${encodeURIComponent(String(args.taskId))}`)
+      : await hub(`/api/mcp/background-tasks/${name === "register_background_task" ? "register" : "cancel"}`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...args, token: TOKEN }),
+      });
+    if (!res.ok) return errorResult("the background task request could not be confirmed", res);
+    return jsonResult(res.body);
+  }
   if (name === "list_automations" || name === "propose_automation") {
     const res = name === "list_automations"
       ? await hub(`/api/mcp/automations?token=${encodeURIComponent(TOKEN)}`)
@@ -86,7 +104,8 @@ export async function executeOperation(name: string, args: Record<string, unknow
     return { content: [{ type: "text", text: String(res.body.message ?? "queued") }] };
   }
   if (name === "describe_room") {
-    const res = await hub(`/api/mcp/room?token=${encodeURIComponent(TOKEN)}`);
+    const room = typeof args.room === "string" && args.room.trim() ? `&room=${encodeURIComponent(args.room.trim())}` : "";
+    const res = await hub(`/api/mcp/room?token=${encodeURIComponent(TOKEN)}${room}`);
     if (!res.ok) return errorResult("the room could not be described", res);
     return { content: [{ type: "text", text: JSON.stringify(res.body, null, 2) }] };
   }
@@ -108,6 +127,19 @@ export async function executeOperation(name: string, args: Record<string, unknow
     if (!res.ok) return errorResult("the template could not be saved", res);
     return { content: [{ type: "text", text: String(res.body.message ?? "saved") }] };
   }
+  if (name === "restart_viberoom") {
+    const res = await hub("/api/mcp/restart", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ when: args.when === "now" ? "now" : "idle", token: TOKEN }),
+    });
+    if (!res.ok) return errorResult("viberoom could not be restarted", res);
+    const restart = res.body.restart as { waitingFor?: unknown } | undefined;
+    const waiting = Array.isArray(restart?.waitingFor) ? restart.waitingFor.map(String) : [];
+    return { content: [{ type: "text", text: waiting.length
+      ? `Restart asked for: viberoom restarts when ${waiting.join(", ")} ${waiting.length > 1 ? "finish" : "finishes"}; every room is told. The rooms set to wake after a restart get their restart message.`
+      : "Restart asked for: viberoom restarts now; every room is told. The rooms set to wake after a restart get their restart message." }] };
+  }
   if (name === "propose_room_changes") {
     const res = await hub("/api/mcp/propose", {
       method: "POST",
@@ -127,7 +159,7 @@ export async function executeOperation(name: string, args: Record<string, unknow
     return { content: [{ type: "text", text: String(res.body.message ?? "proposed") }] };
   }
   if (name === "connect") {
-    const res = await hub("/api/mcp/connect", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN, system: args.system, url: args.url, command: args.command, args: args.args, env: args.env, name: args.name, baseUrl: args.baseUrl, model: args.model, provider: args.provider, language: args.language }) });
+    const res = await hub("/api/mcp/connect", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN, system: args.system, url: args.url, headers: args.headers, command: args.command, args: args.args, env: args.env, name: args.name, baseUrl: args.baseUrl, model: args.model, provider: args.provider, language: args.language }) });
     if (!res.ok) return errorResult("the connection card could not be opened", res);
     return { content: [{ type: "text", text: String(res.body.message ?? "asked") }] };
   }
@@ -195,7 +227,10 @@ export async function executeOperation(name: string, args: Record<string, unknow
     let parsed: ReturnType<typeof parseReadMessageArgs>;
     try { parsed = parseReadMessageArgs(args); }
     catch { throw new OperationArgumentError(); }
-    const query = new URLSearchParams({ token: TOKEN, seq: String(parsed.seq) });
+    const query = new URLSearchParams({ token: TOKEN });
+    if (parsed.seq !== undefined) query.set("seq", String(parsed.seq));
+    if (parsed.message_id !== undefined) query.set("message_id", parsed.message_id);
+    if (parsed.version !== undefined) query.set("version", parsed.version);
     if (parsed.around > 0) query.set("around", String(parsed.around));
     if (parsed.room !== undefined) query.set("room", parsed.room);
     if (parsed.copy !== undefined) query.set("copy", parsed.copy);

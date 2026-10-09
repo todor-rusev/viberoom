@@ -8,6 +8,7 @@
   const icon = name => window.Icons?.svg?.(name) ?? "";
   const safeColor = value => /^#[0-9a-f]{3,8}$/i.test(String(value ?? "")) ? value : "var(--primary)";
   const facePic = value => window.Avatars ? window.Avatars.faceUrl(value) : "";
+  const roomFace = value => facePic(value) ? `<img src="${facePic(value)}" alt="">` : esc(value || "💬");
   const art = (name, cls = "") => `<div class="cx-art scene-art ${cls}" aria-hidden="true">${window.Icons?.scene?.(name) ?? ""}</div>`;
   const button = (action, label, kind = "ghost", extra = "") => `<button type="button" data-ui="button" data-kind="${kind}" data-carry-act="${action}"${extra}>${label}</button>`;
   const PARTS = [
@@ -120,7 +121,7 @@
       const label = newLabel ?? (catalog.source.label || catalog.source.suggested);
       show("export", "Take rooms with you", `<form class="cx-form" data-export-form>
         <section class="cx-section"><div class="cx-section-head"><h4>Which rooms?</h4><span class="cx-mini">${button("rooms-all", "All")}${button("rooms-none", "None")}</span></div>
-          <div class="cx-tiles cx-room-tiles">${catalog.rooms.map(r => { const e = estimateOf(r.id); return `<label class="choice cx-tile cx-room-tile"><input type="checkbox" data-export-room value="${esc(r.id)}"${exportSelection.has(r.id) ? " checked" : ""}><span class="cx-emoji">${esc(r.emoji || "💬")}</span><span class="cx-tile-text"><strong>${esc(r.name)}</strong><small>${e ? `${count(e.messages ?? 0, "message")} · ${bytes(e.conversationBytes + e.settingsBytes + e.resourceBytes)}` : "measuring…"}</small></span><span class="cx-tick">${icon("check")}</span></label>`; }).join("") || '<p class="cx-hint">There are no rooms here yet.</p>'}</div></section>
+          <div class="cx-tiles cx-room-tiles">${catalog.rooms.map(r => { const e = estimateOf(r.id); return `<label class="choice cx-tile cx-room-tile"><input type="checkbox" data-export-room value="${esc(r.id)}"${exportSelection.has(r.id) ? " checked" : ""}><span class="cx-emoji">${roomFace(r.emoji)}</span><span class="cx-tile-text"><strong>${esc(r.name)}</strong><small>${e ? `${count(e.messages ?? 0, "message")} · ${bytes(e.conversationBytes + e.settingsBytes + e.resourceBytes)}` : "measuring…"}</small></span><span class="cx-tick">${icon("check")}</span></label>`; }).join("") || '<p class="cx-hint">There are no rooms here yet.</p>'}</div></section>
         <section class="cx-section"><h4>What goes in</h4>
           <div class="cx-chips">${PARTS.map(p => `<label class="choice cx-chip" title="${esc(p.hint)}"><input type="checkbox" data-export-part="${p.key}"${exportParts[p.key] ? " checked" : ""}><span class="cx-chip-icon">${icon(p.icon)}</span><span>${esc(p.label)}</span><small data-part-size="${p.key}"></small></label>`).join("")}</div>
           <p class="cx-hint">${icon("lock")} Sign-ins and running sessions never leave this computer.</p></section>
@@ -306,7 +307,7 @@
         ${r.resources.missing.length ? `<p class="cx-hint">Missing: ${r.resources.missing.map(esc).join(", ")}</p>` : ""}
         ${r.workspaceHint ? `<p class="cx-hint">On ${esc(sourceName())} the vibemates worked in ${esc(r.workspaceHint)}. Here the room keeps its own folder.</p>` : ""}</details>`;
       return `<article class="cx-room-card" data-review-room="${esc(r.uuid)}">
-        <header class="cx-room-head"><span class="cx-emoji is-big">${facePic(emoji) ? `<img src="${facePic(emoji)}" alt="">` : esc(emoji)}</span><div><h4>${esc(r.name)}</h4><p>${dest}</p></div>${inspected.rooms.length > 1 ? `<label class="check-row cx-include"><input type="checkbox" data-selected checked> Bring in</label>` : ""}</header>
+        <header class="cx-room-head"><span class="cx-emoji is-big">${roomFace(emoji)}</span><div><h4>${esc(r.name)}</h4><p>${dest}</p></div>${inspected.rooms.length > 1 ? `<label class="check-row cx-include"><input type="checkbox" data-selected checked> Bring in</label>` : ""}</header>
         ${choice.conversation ? story(r, r.branch ? choice.branch : null) : ""}
         ${facts.length ? `<ul class="cx-facts">${facts.map(f => `<li>${f}</li>`).join("")}</ul>` : ""}
         ${r.memory ? memoryDecision(r.memory, `memory-${r.uuid}`, "Room memory", "data-room-memory", r.made) : ""}

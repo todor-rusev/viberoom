@@ -1,17 +1,85 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { DatabaseSync, backup as sqliteBackup, type StatementSync } from "node:sqlite";
-import { CarryHistory } from "./carry-history.js";
+import { DatabaseSync, backup as sqliteBackup } from "node:sqlite";
+import { CarryHistory, carryHash, type CarryRevision } from "./carry-history.js";
+import type { PortableMemoryRepair } from "./memory/carry.js";
+import { memoryVersion } from "./memory/version.js";
+import { visibleToAgents } from "./quotes.js";
 import { SharedMemory } from "./shared-memory.js";
 import { MemoryOutbox } from "./memory/outbox.js";
+import { systemClock, type MemoryClock } from "./memory/clock.js";
+import { IngestionDebugStore } from "./memory/ingestion-debug.js";
 import { RoomCards } from "./room-cards.js";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { renameWithRetry } from "./atomic.js";
 import type { ChatMessage } from "./room.js";
 import { Logger } from "./log.js";
+import { TimedDatabase, type TimedStatement } from "./timed-db.js";
+import { openObservedTestDatabase } from "./owned-native-test-resources.js";
 import type { NameUse } from "./name-directory.js";
 
 export const HISTORY_DB_FILE = "history.db";
+
+export function storeOpenFailure(error: unknown): Error {
+  return new Error(`the conversation store could not be opened (${error instanceof Error ? error.message : String(error)}); viberoom needs Node 22.16 or newer with node:sqlite`);
+}
+
+export type HistoryUpgradeStep =
+  | { step: "copy"; file: string; bytes: number }
+  | { step: "upgrade" }
+  | { step: "fill"; done: number; total: number };
+
+export interface HistoryUpgradeWatch {
+  onStep?(step: HistoryUpgradeStep): void;
+}
+
+const HALF_COPY = ".partial";
+const FILL_STEP = 2_000;
+
+function storeBytes(path: string): number {
+  let bytes = 0;
+  for (const file of [path, `${path}-wal`]) {
+    try { bytes += statSync(file).size; } catch { }
+  }
+  return bytes;
+}
+
+const HALF_COPY_NAME = /^\d+-\d+\.bak\.partial(-journal|-wal|-shm)?$/;
+
+function removeHalfCopies(store: string): void {
+  const folder = dirname(store);
+  const prefix = `${basename(store)}.before-schema-`;
+  let names: string[];
+  try { names = readdirSync(folder); } catch { return; }
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !HALF_COPY_NAME.test(name.slice(prefix.length))) continue;
+    try { rmSync(join(folder, name), { force: true }); } catch { }
+  }
+}
 export const SCHEMA_VERSION = 2;
+
+export function newerFormatMessage(): string {
+  return [
+    "This viberoom is older than your rooms.",
+    "The rooms in this folder were last opened by a newer viberoom, and an older one cannot read them without damaging them. Nothing has been changed.",
+    "Open the newer viberoom instead, or update this one.",
+  ].join(String.fromCharCode(10));
+}
+
+export function readDataFormat(dataDir: string): number {
+  const path = join(dataDir, HISTORY_DB_FILE);
+  if (!existsSync(path)) return 0;
+  const db = openObservedTestDatabase(path, { readOnly: true });
+  try {
+    if (!db.prepare("select name from sqlite_master where type = 'table' and name = 'meta'").get()) return 0;
+    const row = db.prepare("select value from meta where key = 'schema_version'").get() as { value?: unknown } | undefined;
+    const version = Number(row?.value ?? 0);
+    return Number.isInteger(version) && version >= 0 ? version : 0;
+  } finally {
+    db.close();
+  }
+}
 
 const AGENT_VISIBLE_SQL = "m.deleted_at is null and m.kind in ('chat','system') and coalesce(json_extract(m.body, '$.audience'), '') != 'human'";
 
@@ -241,17 +309,19 @@ function placeholders(n: number): string {
 type Row = Record<string, unknown>;
 
 export class HistoryStore {
-  private readonly db: DatabaseSync;
-  private upsertStatement: StatementSync | undefined;
+  private readonly db: TimedDatabase;
+  private upsertStatement: TimedStatement | undefined;
+  private bodyStatement: TimedStatement | undefined;
   private readonly log: Logger;
   readonly carry: CarryHistory;
   readonly memory: SharedMemory;
   readonly memoryOutbox: MemoryOutbox;
+  readonly memoryDebug: IngestionDebugStore;
   readonly cards: RoomCards;
 
-  constructor(readonly path: string, log?: Logger) {
+  constructor(readonly path: string, log?: Logger, private readonly upgrade: HistoryUpgradeWatch = {}, clock: MemoryClock = systemClock) {
     this.log = log ?? new Logger("history");
-    this.db = new DatabaseSync(path);
+    this.db = TimedDatabase.open(path);
     this.db.function("unicode_lower", { deterministic: true }, (value) => typeof value === "string" ? value.toLowerCase() : null);
     this.db.exec("pragma journal_mode = wal");
     this.db.exec("pragma synchronous = full");
@@ -259,15 +329,30 @@ export class HistoryStore {
     this.db.exec("pragma busy_timeout = 5000");
     this.refuseIfNewer();
     this.backupBeforeUpgrade();
-    this.db.exec(SCHEMA);
-    this.db.exec("create table if not exists file_transactions(id text primary key)");
-    this.carry = new CarryHistory(this.db);
-    this.memory = new SharedMemory(this.db);
-    this.memoryOutbox = new MemoryOutbox(this.db);
-    this.cards = new RoomCards(this.db);
-    this.reconcileColumns();
-    const version = this.meta("schema_version");
-    if (version === null || Number(version) < SCHEMA_VERSION) this.setMeta("schema_version", String(SCHEMA_VERSION));
+    this.db.exec("begin immediate");
+    this.transactionDepth++;
+    try {
+      this.db.exec(SCHEMA);
+      this.db.exec("create table if not exists file_transactions(id text primary key)");
+      this.carry = new CarryHistory(this.db);
+      this.memory = new SharedMemory(this.db);
+      this.memoryOutbox = new MemoryOutbox(this.db, clock);
+      this.memoryDebug = new IngestionDebugStore(this.db, Date.now, (room, id) => {
+        const row = this.db.prepare("select body from messages where room=? and id=? and deleted_at is null").get(room, id);
+        return row ? { fingerprint: memoryVersion(JSON.parse(String(row.body)) as StoredMessage), revision: this.carry.head(room, id)?.revision ?? null } : null;
+      });
+      this.cards = new RoomCards(this.db);
+      this.reconcileColumns();
+      const version = this.meta("schema_version");
+      if (version === null || Number(version) < SCHEMA_VERSION) this.setMeta("schema_version", String(SCHEMA_VERSION));
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      this.db.close();
+      throw error;
+    } finally {
+      this.transactionDepth--;
+    }
   }
 
   private refuseIfNewer(): void {
@@ -278,11 +363,7 @@ export class HistoryStore {
     if (!(version > SCHEMA_VERSION)) return;
     this.log.error(`refusing ${this.path}: schema ${version}, this build knows ${SCHEMA_VERSION}`);
     this.db.close();
-    throw new Error([
-      "This viberoom is older than your rooms.",
-      "The rooms in this folder were last opened by a newer viberoom, and an older one cannot read them without damaging them. Nothing has been changed.",
-      "Open the newer viberoom instead, or update this one.",
-    ].join(String.fromCharCode(10)));
+    throw new Error(newerFormatMessage());
   }
 
   private backupBeforeUpgrade(): void {
@@ -290,9 +371,24 @@ export class HistoryStore {
     const row = this.db.prepare("select value from meta where key = 'schema_version'").get() as Row | undefined;
     if (!row || Number(row.value) >= SCHEMA_VERSION || this.path === ":memory:") return;
     const destination = `${this.path}.before-schema-${SCHEMA_VERSION}-${Date.now()}.bak`;
-    try { this.db.prepare("vacuum into ?").run(destination); }
-    catch (error) { this.db.close(); throw new Error("Could not back up the conversation store before upgrading it. The upgrade was not applied.", { cause: error }); }
+    const half = `${destination}${HALF_COPY}`;
+    removeHalfCopies(this.path);
+    this.upgrade.onStep?.({ step: "copy", file: half, bytes: storeBytes(this.path) });
+    try {
+      this.db.prepare("vacuum into ?").run(half);
+      if (!renameWithRetry(half, destination)) throw new Error(`the system kept ${basename(half)} from being named ${basename(destination)}`);
+    } catch (error) {
+      for (const file of [half, `${half}-journal`]) {
+        try { rmSync(file, { force: true }); } catch { }
+      }
+      this.db.close();
+      throw new Error("Could not back up the conversation store before upgrading it. The upgrade was not applied.", { cause: error });
+    }
+    this.upgradeBackup = basename(destination);
+    this.upgrade.onStep?.({ step: "upgrade" });
   }
+
+  upgradeBackup: string | null = null;
 
   private reconcileColumns(): void {
     const appliedHave = new Set((this.db.prepare("pragma table_info(applied_ops)").all() as Row[]).map((r) => String(r.name)));
@@ -303,10 +399,13 @@ export class HistoryStore {
     for (const [name, type] of added) this.db.exec(`alter table messages add column ${name} ${type}`);
     this.transaction(() => {
       const fill = this.db.prepare("update messages set features = ?, weight = ? where rowid = ?");
-      for (const row of this.db.prepare("select rowid, body from messages").all() as Row[]) {
+      const rows = this.db.prepare("select rowid, body from messages").all() as Row[];
+      this.upgrade.onStep?.({ step: "fill", done: 0, total: rows.length });
+      rows.forEach((row, at) => {
         const features = messageFeatures(this.decode(row));
         fill.run(JSON.stringify(features), messageWeight(features), row.rowid as number);
-      }
+        if ((at + 1) % FILL_STEP === 0 || at + 1 === rows.length) this.upgrade.onStep?.({ step: "fill", done: at + 1, total: rows.length });
+      });
     });
     this.log.info(`history.db: added ${added.map(([n]) => n).join(", ")} and filled the existing rows`);
   }
@@ -347,14 +446,43 @@ export class HistoryStore {
   }
 
 
+  importMemoryRepair(room: string, uuid: string, repair: PortableMemoryRepair | undefined,
+    states: readonly { message: StoredMessage; deletedAt: number | null; head: { revision: string } }[],
+    revisions: ReadonlyMap<string, CarryRevision>, aliases: readonly string[]): void {
+    if (repair) this.memoryOutbox.carry.merge(room, repair);
+    else {
+      const unknown = states.filter(s => {
+        if (s.message.kind !== "chat") return false;
+        const previous = this.getById(room, s.message.id, true);
+        if (previous) return memoryVersion(previous) !== memoryVersion(s.message) ||
+          (this.getById(room, s.message.id) === null) !== (s.deletedAt !== null);
+        return s.deletedAt !== null || !!s.message.edited || !!revisions.get(s.head.revision)?.parents.length;
+      }).map(s => s.message.id);
+      this.memoryOutbox.carry.rememberUnknown(room, unknown);
+    }
+    this.memoryOutbox.carry.activateKnown(room, uuid, aliases);
+  }
+
   upsert(roomId: string, message: StoredMessage, options: { track?: boolean } = {}): void {
     const write = () => {
+    const version = memoryVersion(message);
+    const before = (this.bodyStatement ??= this.db.prepare("select body,deleted_at from messages where room=? and id=?")).get(roomId, message.id);
+    const previous = before ? JSON.parse(String(before.body)) as StoredMessage : null;
+    if (previous) this.upgradeMemoryVersions(roomId, message.id);
+    const changed = !previous || before!.deleted_at !== null || memoryVersion(previous) !== version;
+    if (options.track === false) this.memoryOutbox.importSource(roomId, message.id, version);
+    else if (changed) {
+      this.memoryOutbox.localSource(roomId, message.id);
+      this.memoryOutbox.sourceChanged(roomId, message.id, version);
+    }
+    if (changed && this.memoryDebug.hasSource(roomId, message.id)) this.memoryDebug.forgetMessages(roomId, [message.id]);
     if (options.track !== false) {
-      if (!this.carry.head(roomId, message.id)) {
-        const before = this.db.prepare("select body,deleted_at from messages where room=? and id=?").get(roomId, message.id);
-        if (before) this.carry.ensure(roomId, JSON.parse(String(before.body)), before.deleted_at === null ? null : Number(before.deleted_at));
-      }
+      if (previous && !this.carry.head(roomId, message.id)) this.carry.ensure(roomId, previous, before!.deleted_at === null ? null : Number(before!.deleted_at));
       this.carry.record(roomId, message);
+      if (changed && message.kind === "chat") this.memoryOutbox.markOwnVersion(roomId, message.id, version);
+      if (changed && previous && message.kind === "chat" && !message.streaming && visibleToAgents(message)) this.memoryOutbox.localVersion(roomId, message.id, version, Date.now());
+    } else if (message.kind === "chat") {
+      this.memoryOutbox.queueVersionCheck(roomId, message.id, Date.now());
     }
     const features = messageFeatures(message);
     (this.upsertStatement ??= this.db.prepare(
@@ -383,6 +511,71 @@ export class HistoryStore {
     };
     if (this.transactionDepth) write();
     else this.transaction(write);
+  }
+
+  upgradeMemoryVersions(roomId?: string, sourceId?: string): void {
+    const write = () => {
+      const filter = roomId === undefined ? "" : " and m.room=? and m.id=?";
+      const args = roomId === undefined ? [] : [roomId, sourceId!];
+      const rows = this.db.prepare(`select d.op_id,d.identity,m.body from memory_delivery d join messages m
+        on m.room=json_extract(d.identity,'$.roomId') and m.id=d.source_id
+        where d.provider='zep' and d.retired_at is null and d.source_version is null and m.deleted_at is null
+          and json_extract(d.identity,'$.kind')='episode' and json_extract(d.payload,'$.request.metadata.schema')=2
+          and json_extract(d.payload,'$.binding.source.kind')='message'${filter}`).all(...args);
+      const project = this.db.prepare("update memory_delivery set source_version=? where op_id=? and source_version is null");
+      for (const row of rows) {
+        const message = JSON.parse(String(row.body)) as StoredMessage, identity = JSON.parse(String(row.identity)) as { version: string };
+        if (`sha256:${carryHash(message)}` === identity.version) project.run(memoryVersion(message), String(row.op_id));
+      }
+      const bindings = this.db.prepare(`select s.provider,s.room,s.source_id,s.external_id,s.source,m.body from memory_episode_source s join messages m
+        on m.room=s.room and m.id=s.source_id where s.provider='zep' and m.deleted_at is null
+          and json_extract(s.source,'$.kind')='message'${filter}`).all(...args);
+      const projectBinding = this.db.prepare("update memory_episode_source set source=json_set(source,'$.version',?) where provider=? and room=? and source_id=? and external_id=?");
+      for (const row of bindings) {
+        const message = JSON.parse(String(row.body)) as StoredMessage, source = JSON.parse(String(row.source)) as { version?: string };
+        if (`sha256:${carryHash(message)}` === source.version) projectBinding.run(memoryVersion(message), String(row.provider), String(row.room), String(row.source_id), String(row.external_id));
+      }
+    };
+    if (this.transactionDepth) write();
+    else this.transaction(write);
+  }
+
+  markOwnVersionsOnce(folderId: string): void {
+    if (this.meta("memory_own_versions") !== null) return;
+    this.transaction(() => {
+      const page = this.db.prepare("select rowid, room, body from messages where rowid > ? and deleted_at is null and kind = 'chat' order by rowid limit 1000");
+      for (let after = 0; ;) {
+        const rows = page.all(after) as Row[];
+        if (!rows.length) break;
+        for (const row of rows) {
+          const message = JSON.parse(String(row.body)) as StoredMessage;
+          if ((message.numbering ?? message.origin) === folderId) this.memoryOutbox.markOwnVersion(String(row.room), message.id, memoryVersion(message));
+        }
+        after = Number(rows.at(-1)!.rowid);
+      }
+      this.setMeta("memory_own_versions", "1");
+    });
+  }
+
+  knowsCarried(roomId: string, id: string, carryHash: string): boolean {
+    return carryHash.startsWith("sha256:") && this.carry.knows(roomId, id, carryHash.slice("sha256:".length));
+  }
+
+  carriedRelation(roomId: string, id: string, hash: string): "current" | "ancestor" | "unknown" {
+    const head = this.carry.head(roomId, id);
+    if (!head || !hash.startsWith("sha256:")) return "unknown";
+    if (head.hash === hash.slice(7)) return "current";
+    return this.knowsCarried(roomId, id, hash) ? "ancestor" : "unknown";
+  }
+
+  carriedRevision(roomId: string, id: string): string | null { return this.carry.head(roomId, id)?.revision ?? null; }
+
+  earliestRemembered(roomId: string, provider: string, folderId: string): number | null {
+    const row = this.db.prepare(`select min(m.ts) as ts from messages m where m.room = ? and json_extract(m.body, '$.origin') = ?
+      and (exists (select 1 from memory_episode_map e where e.provider = ? and e.room = m.room and e.source_id = m.id)
+        or exists (select 1 from memory_delivery d where d.provider = ? and d.source_id = m.id and json_extract(d.identity, '$.roomId') = m.room))`)
+      .get(roomId, folderId, provider, provider) as Row | undefined;
+    return row?.ts === null || row?.ts === undefined ? null : Number(row.ts);
   }
 
   upsertMany(roomId: string, messages: StoredMessage[]): void {
@@ -426,6 +619,17 @@ export class HistoryStore {
   markDeleted(roomId: string, ids: string[], deletedAt = Date.now(), options: { track?: boolean } = {}): number {
     if (!ids.length) return 0;
     return this.transaction(() => {
+      this.memoryDebug.forgetMessages(roomId, ids);
+      for (const id of ids) {
+        if (options.track === false) {
+          const imported = this.getById(roomId, id, true);
+          if (imported) this.memoryOutbox.importSource(roomId, id, memoryVersion(imported));
+        }
+        else {
+          this.memoryOutbox.localSource(roomId, id);
+          this.memoryOutbox.sourceChanged(roomId, id);
+        }
+      }
       let changed = 0;
       for (let start = 0; start < ids.length; start += 500) {
         const batch = ids.slice(start, start + 500);
@@ -441,13 +645,20 @@ export class HistoryStore {
   }
 
   dropRoomPortion(roomId: string, limit: number): number {
+    this.memoryDebug.forgetRoom(roomId);
+    this.memoryOutbox.episodeIndex.dropRoom(roomId);
+    this.memoryOutbox.deliveries.detachLocal(roomId);
     return this.transaction(() => Number(this.db.prepare("delete from messages where rowid in (select rowid from messages where room = ? limit ?)").run(roomId, limit).changes));
   }
 
   dropRoom(roomId: string): void {
     this.transaction(() => {
+      this.memoryOutbox.episodeIndex.dropRoom(roomId);
+      this.memoryOutbox.deliveries.detachLocal(roomId);
+      this.memoryDebug.forgetRoom(roomId);
       this.db.prepare("delete from messages where room = ?").run(roomId);
       this.carry.drop(roomId);
+      this.memoryOutbox.carry.dropRoom(roomId);
       this.cards.drop(roomId);
     });
   }
@@ -503,8 +714,38 @@ export class HistoryStore {
     return (this.db.prepare("select distinct room from messages order by room").all() as Row[]).map((r) => String(r.room));
   }
 
+  privateTrialNamespaceUnused(identities: readonly string[]): boolean {
+    if (!identities.length || new Set(identities).size !== identities.length || identities.some(id => !id || /[\u0000-\u001f]/u.test(id))) return false;
+    const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+    const tables = this.db.prepare("select name from sqlite_schema where type='table' and name not like 'sqlite_%'").all();
+    for (const table of tables) {
+      const name = String(table.name), columns = this.db.prepare(`pragma table_xinfo(${quote(name)})`).all()
+        .filter(column => Number(column.hidden) === 0).map(column => quote(String(column.name)));
+      if (!columns.length) continue;
+      const cells = columns.map(column => `coalesce(cast(${column} as text),'')`).join(" || char(0) || ");
+      if (this.db.prepare(`select 1 from ${quote(name)} where ${identities.map(() => `instr((${cells}),?)>0`).join(" or ")} limit 1`).get(...identities)) return false;
+    }
+    return true;
+  }
+
   get(roomId: string, seq: number): StoredMessage | null {
     const row = this.db.prepare("select body from messages where room = ? and seq = ? and deleted_at is null").get(roomId, seq) as Row | undefined;
+    return row ? this.decode(row) : null;
+  }
+
+  hasMessageId(roomId: string, id: string): boolean {
+    return !!this.db.prepare("select 1 from messages where room = ? and id = ?").get(roomId, id);
+  }
+
+  agentMessageReceipt(roomId: string, id: string): { seq: number; kind: string; deleted: boolean; hash: string | null } | null {
+    const row = this.db.prepare("select seq, kind, deleted_at, json_extract(body, '$.details.reportHash') as report_hash from messages where room = ? and id = ?")
+      .get(roomId, id) as Row | undefined;
+    return row ? { seq: Number(row.seq), kind: String(row.kind), deleted: row.deleted_at !== null,
+      hash: typeof row.report_hash === "string" ? row.report_hash : null } : null;
+  }
+
+  getById(roomId: string, id: string, includeDeleted = false): StoredMessage | null {
+    const row = this.db.prepare(`select body from messages where room=? and id=?${includeDeleted ? "" : " and deleted_at is null"}`).get(roomId, id) as Row | undefined;
     return row ? this.decode(row) : null;
   }
 
@@ -839,11 +1080,12 @@ export class HistoryStore {
 
 
   async backup(toPath: string, options: { recorded?: boolean } = {}): Promise<void> {
-    await sqliteBackup(this.db, toPath);
+    await sqliteBackup(this.db.raw, toPath);
     if (options.recorded !== false) this.setMeta("last_backup_at", String(Date.now()));
   }
 
   close(): void {
+    this.memoryDebug.close();
     try {
       this.db.close();
     } catch (error) {

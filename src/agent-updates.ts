@@ -83,7 +83,7 @@ export class AgentUpdateProviders {
     if (result.cancelled) throw new Error("Check cancelled");
     if (result.timedOut) throw new Error("The agent's update check timed out");
     if (result.error || result.code !== 0) throw new Error(`Update check command did not complete (exit ${result.code ?? "unknown"}). Use the vendor's installer or try again.`);
-    return stripAnsi(result.output).trim();
+    return stripAnsi(result.stdout).trim();
   }
   private cli(installation: AgentInstallation, args: string[]): AgentCommand {
     return { ...installation.cli, args: [...installation.cli.args, ...args] };
@@ -240,7 +240,6 @@ export class AgentUpdateProviders {
     const branch = await git(["symbolic-ref", "--quiet", "--short", "HEAD"]);
     const remote = await git(["remote", "get-url", "origin"]);
     if (branch !== "main" || !/^(?:https:\/\/github\.com\/|git@github\.com:)NousResearch\/hermes-agent(?:\.git)?\/?$/i.test(remote)) throw new Error("This Hermes checkout uses a custom branch or remote. Update it with its owner’s workflow.");
-    if (await git(["status", "--porcelain", "--untracked-files=no"])) throw new Error("Hermes has local tracked changes. Review them before updating; viberoom will not stash or overwrite them.");
     const tip = (await git(["ls-remote", "origin", "refs/heads/main"])).split(/\s+/)[0];
     if (!fullSha.test(tip)) throw new Error("Hermes returned no upstream commit");
     state.channel = "main";

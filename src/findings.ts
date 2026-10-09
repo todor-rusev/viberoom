@@ -1,8 +1,10 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
-import { readFileSync, writeFileSync } from "node:fs";
-import { writeFileAtomic } from "./atomic.js";
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { writeFileAtomicAsync } from "./atomic.js";
 import { join } from "node:path";
 import { asRecord, type Shape, type Value } from "./record-fields.js";
+import { timedIo, timedIoAsync } from "./slow-io.js";
 
 export const FINDINGS_FILE = "findings.jsonl";
 
@@ -20,7 +22,7 @@ export function findingsPath(dataDir: string): string {
 
 const WITNESS_KINDS = new Set(["blank-fragment", "held-live", "end-jump"]);
 
-export function recordWitness(dataDir: string, witness: { kind: string; key: string; ours: Record<string, Value>; shape: Shape; said: unknown }, keep = FINDINGS_KEPT): Finding {
+export async function recordWitness(dataDir: string, witness: { kind: string; key: string; ours: Record<string, Value>; shape: Shape; said: unknown }, keep = FINDINGS_KEPT): Promise<Finding> {
   if (!WITNESS_KINDS.has(witness.kind)) throw new Error(`"${witness.kind}" is not a witness: an instrument kept for everybody waits for a known fault, and this one is on no list`);
   const finding: Finding = {
     ...asRecord(witness.shape, witness.said),
@@ -29,17 +31,11 @@ export function recordWitness(dataDir: string, witness: { kind: string; key: str
     at: new Date().toISOString(),
     ...witness.ours,
   };
-  recordFinding(dataDir, finding, keep);
+  await recordFinding(dataDir, finding, keep);
   return finding;
 }
 
-export function readFindings(dataDir: string): Finding[] {
-  let text = "";
-  try {
-    text = readFileSync(findingsPath(dataDir), "utf8");
-  } catch {
-    return [];
-  }
+function parseFindings(text: string): Finding[] {
   const out: Finding[] = [];
   for (const line of text.split(String.fromCharCode(10))) {
     if (!line.trim()) continue;
@@ -51,12 +47,42 @@ export function readFindings(dataDir: string): Finding[] {
   return out;
 }
 
-export function recordFinding(dataDir: string, finding: Finding, keep = FINDINGS_KEPT): Finding[] {
-  const kept = readFindings(dataDir).filter((one) => one.key !== finding.key);
+export function readFindings(dataDir: string): Finding[] {
+  const path = findingsPath(dataDir);
+  let text = "";
+  try {
+    text = timedIo("read", path, () => readFileSync(path, "utf8"));
+  } catch {
+    return [];
+  }
+  return parseFindings(text);
+}
+
+async function readFindingsLater(path: string): Promise<Finding[]> {
+  try {
+    return parseFindings(await readFile(path, "utf8"));
+  } catch {
+    return [];
+  }
+}
+
+const writing = new Map<string, Promise<unknown>>();
+
+export function recordFinding(dataDir: string, finding: Finding, keep = FINDINGS_KEPT): Promise<Finding[]> {
+  const path = findingsPath(dataDir);
+  const before = writing.get(path) ?? Promise.resolve();
+  const mine = before.catch(() => {}).then(() => timedIoAsync("record a finding", path, () => writeFinding(path, finding, keep)));
+  writing.set(path, mine);
+  void mine.then(() => {}, () => {}).then(() => { if (writing.get(path) === mine) writing.delete(path); });
+  return mine;
+}
+
+async function writeFinding(path: string, finding: Finding, keep: number): Promise<Finding[]> {
+  const kept = (await readFindingsLater(path)).filter((one) => one.key !== finding.key);
   kept.push(finding);
   const lines = kept.slice(-keep);
   const text = lines.map((one) => JSON.stringify(one)).join(String.fromCharCode(10)) + String.fromCharCode(10);
-  writeFileAtomic(findingsPath(dataDir), text, { write: (path, data) => writeFileSync(path, data as string, { mode: 0o600 }) });
+  await writeFileAtomicAsync(path, text, { mode: 0o600 });
   return lines;
 }
 

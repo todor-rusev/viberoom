@@ -1,6 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { createHash, randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { TimedDatabase } from "./timed-db.js";
 
 export const MEMORY_LIMITS = { notes: 8, noteChars: 240, scopeChars: 1600, revisions: 20 };
 export type MemoryScope = "user" | "room";
@@ -68,7 +68,7 @@ export function lintMemory(raw: unknown, other: MemoryNote[] = []): { notes: Mem
 }
 
 export class SharedMemory {
-  constructor(private readonly db: DatabaseSync) {
+  constructor(private readonly db: TimedDatabase) {
     db.exec(`create table if not exists shared_memory(scope text primary key, revision integer not null, enabled integer not null, notes text not null);
       create table if not exists memory_changes(scope text not null, revision integer not null, at text not null, actor text not null, reason text not null, snapshot text not null, primary key(scope,revision));`);
   }

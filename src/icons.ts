@@ -122,6 +122,29 @@ function crc32(buf: Buffer): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
+export function resizeRgba(img: Rgba, width: number, height: number): Rgba {
+  const data = Buffer.alloc(width * height * 4);
+  const sx = img.width / width, sy = img.height / height;
+  for (let y = 0; y < height; y++) {
+    const y0 = y * sy, y1 = y0 + sy;
+    for (let x = 0; x < width; x++) {
+      const x0 = x * sx, x1 = x0 + sx;
+      let r = 0, g = 0, b = 0, a = 0, area = 0;
+      for (let py = Math.floor(y0); py < Math.ceil(y1); py++) {
+        const wy = Math.min(y1, py + 1) - Math.max(y0, py);
+        for (let px = Math.floor(x0); px < Math.ceil(x1); px++) {
+          const w = (Math.min(x1, px + 1) - Math.max(x0, px)) * wy, o = (py * img.width + px) * 4, alpha = img.data[o + 3] * w;
+          r += img.data[o] * alpha; g += img.data[o + 1] * alpha; b += img.data[o + 2] * alpha; a += alpha; area += w;
+        }
+      }
+      const o = (y * width + x) * 4;
+      if (a > 0) { data[o] = Math.round(r / a); data[o + 1] = Math.round(g / a); data[o + 2] = Math.round(b / a); }
+      data[o + 3] = Math.round(a / area);
+    }
+  }
+  return { width, height, data };
+}
+
 export function encodePng(img: Rgba): Buffer {
   const { width, height, data } = img;
   const rowLen = width * 4 + 1;
@@ -201,20 +224,22 @@ export function packIco(icons: PngIcon[]): Buffer {
   return Buffer.concat([header, ...entries, ...payloads]);
 }
 
-const ICNS_TYPES: Record<number, string> = { 16: "icp4", 32: "icp5", 64: "icp6", 128: "ic07", 256: "ic08", 512: "ic09", 1024: "ic10" };
+const ICNS_TYPES: Record<number, string[]> = { 32: ["ic11"], 64: ["ic12"], 128: ["ic07"], 256: ["ic08", "ic13"], 512: ["ic09", "ic14"], 1024: ["ic10"] };
 
 export function packIcns(icons: PngIcon[]): Buffer {
   const chunks: Buffer[] = [];
   for (const icon of [...icons].sort((a, b) => a.size - b.size)) {
-    const type = ICNS_TYPES[icon.size];
-    if (!type) continue;
+    const types = ICNS_TYPES[icon.size];
+    if (!types) continue;
     assertPng(icon);
-    const head = Buffer.alloc(8);
-    head.write(type, 0, 4, "ascii");
-    head.writeUInt32BE(icon.data.length + 8, 4);
-    chunks.push(head, icon.data);
+    for (const type of types) {
+      const head = Buffer.alloc(8);
+      head.write(type, 0, 4, "ascii");
+      head.writeUInt32BE(icon.data.length + 8, 4);
+      chunks.push(head, icon.data);
+    }
   }
-  if (!chunks.length) throw new Error("no icon sizes usable for icns (16, 32, 64, 128, 256, 512, 1024)");
+  if (!chunks.length) throw new Error("no icon sizes usable for icns (32, 64, 128, 256, 512, 1024)");
   const total = chunks.reduce((n, c) => n + c.length, 0) + 8;
   const header = Buffer.alloc(8);
   header.write("icns", 0, 4, "ascii");

@@ -68,6 +68,7 @@
     roomList: $("#room-list"),
     backToRooms: $("#back-to-rooms"),
     sideRoomName: $("#side-room-name"),
+    chatRoomName: $("#chat-room-name"),
     inviteBtn: $("#invite-btn"),
     roster: $("#roster"),
     participantsMe: $("#participants-me"),
@@ -336,13 +337,17 @@
   } catch {
   }
   function heldBy(entry) {
-    const script = [...(entry.scripts || [])].sort((a, b) => b.duration - a.duration)[0];
+    const scripts = [...(entry.scripts || [])];
+    const script = [...scripts].sort((a, b) => b.duration - a.duration)[0];
     const before = entry.renderStart ? Math.max(0, Math.round(entry.renderStart - entry.startTime)) : Math.round(entry.duration);
     const after = Math.max(0, Math.round(entry.duration) - before);
     const named = script ? [script.sourceFunctionName || script.invoker, String(script.sourceURL || "").split(/[/\\]/).pop()].filter(Boolean).join(" in ") : "";
-    const forced = Math.round([...(entry.scripts || [])].reduce((sum, s) => sum + (s.forcedStyleAndLayoutDuration || 0), 0));
-    const blocking = entry.blockingDuration >= 1 ? `, ${Math.round(entry.blockingDuration)} ms blocking` : "";
-    return ` · ${before} ms script${named ? ` in ${named}` : ""}${forced >= 1 ? ` (${forced} ms of it forced layout)` : ""}, ${after} ms style & paint${blocking}`;
+    const forced = Math.round(scripts.reduce((sum, s) => sum + (s.forcedStyleAndLayoutDuration || 0), 0));
+    const layout = forced >= 1 ? `, ${forced} ms of it forced layout` : "";
+    const blocked = Math.round(entry.blockingDuration || 0);
+    if (blocked >= 1) return ` · ${blocked} ms blocking: ${before} ms before drawing${named ? `, the longest script ${named}` : ""}${layout}, ${after} ms style & paint`;
+    const own = Math.round(scripts.reduce((sum, s) => sum + (s.duration || 0), 0));
+    return ` · no task over 50 ms: the frame waited ${before} ms to be drawn${own ? `; its scripts ${own} ms${named ? `, the longest ${named}` : ""}${layout}` : ""}, ${after} ms style & paint`;
   }
 
   const bursts = new Map();
@@ -364,8 +369,8 @@
   }
 
   const FONTS = globalThis.VIBEROOM_TOKENS.fonts;
-  const STATUS_LABEL = { unstaffed: "needs a coding agent", starting: "starting…", idle: "ready", queued: "waiting…", thinking: "thinking…", working: "vibing…", writing: "vibing…", notes: "taking notes…", error: "needs you", offline: "offline", left: "left" };
-  const STATUS_TONE = { idle: "ready", queued: "waiting", starting: "waiting", thinking: "thinking", working: "writing", writing: "writing", notes: "outline", error: "attention", offline: "asleep", left: "asleep", unstaffed: "attention" };
+  const STATUS_LABEL = { unstaffed: "needs a coding agent", starting: "starting…", idle: "ready", queued: "waiting…", thinking: "thinking…", working: "vibing…", writing: "vibing…", notes: "taking notes…", asking: "waiting for you", error: "needs you", offline: "offline", left: "left" };
+  const STATUS_TONE = { idle: "ready", queued: "waiting", starting: "waiting", thinking: "thinking", working: "writing", writing: "writing", notes: "outline", asking: "attention", error: "attention", offline: "asleep", left: "asleep", unstaffed: "attention" };
   const TOOL_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
   const TOKENS = globalThis.VIBEROOM_TOKENS;
   const FALLBACK_COLOR = () => TOKENS.active().elements.face.fallback;
@@ -382,6 +387,7 @@
   function rawShownStatus(room, p) {
     if (p.status !== "thinking") return p.status;
     if (p.notesTurn) return "notes";
+    if ((room.permissions || []).some((perm) => perm.participantId === p.id)) return "asking";
     const draft = room.messages.find((m) => m.streaming && m.from === p.id);
     if (!draft) return "thinking";
     if ((draft.toolCalls || []).some((c) => c.status === "pending" || c.status === "in_progress")) return "working";
@@ -496,7 +502,11 @@
     }
     return new Error("The room did not answer in time, so this window stopped waiting and read the room again. If what you asked for went through, it is already here.");
   }
+  function heldByShell() {
+    if (state.awaitingShell) throw new Error("The room is restarting; the application brings this window back when it is ready.");
+  }
   async function post(path, body, options) {
+    heldByShell();
     let res;
     try {
       res = await stallWatch(fetch(path, { method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(body || {}), signal: deadline(options && options.deadline) }));
@@ -504,10 +514,11 @@
       throw stoppedWaiting(error);
     }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { status: res.status });
     return data;
   }
   async function get(path, options) {
+    heldByShell();
     let res;
     try {
       res = await fetch(path, { signal: deadline(options && options.deadline) });
@@ -519,6 +530,7 @@
       const error = new Error(data.error || `HTTP ${res.status}`);
       error.status = res.status;
       error.code = data.code;
+      error.data = data;
       throw error;
     }
     return data;
@@ -648,7 +660,7 @@
       const lower = name.toLowerCase();
       const meant = addressed.length ? room.participants.find((x) => addressed.includes(x.id) && [x.name, ...(x.formerNames || [])].some((n) => n.toLowerCase() === lower)) : null;
       const p = meant || findByName(room, name);
-      return p ? `<span class="mention" style="color:${colourOf(p)}">@${esc(name)}</span>` : m;
+      return p ? `<span class="mention" style="--who:${colourOf(p)}">@${esc(name)}</span>` : m;
     });
   }
   const md = window.marked ? new window.marked.Marked({ gfm: true, breaks: true }) : null;
@@ -1414,7 +1426,13 @@
     ".edgeLabel, .edgeLabel p { font-weight: 700; }",
     ".cluster rect { stroke-dasharray: 4 3; stroke-width: 1.5px; }",
     ".cluster-label, .cluster-label p { font-weight: 800; }",
+    "foreignObject > div { display: block !important; width: max-content !important; max-width: 200px !important; white-space: normal !important; overflow-wrap: break-word; }",
   ].join(" ");
+  const DIAGRAM_WEIGHTS = ["400", "700", "800"];
+  function diagramFonts(vars, text) {
+    const loads = DIAGRAM_WEIGHTS.map((w) => document.fonts.load(`${w} ${vars.fontSize} ${vars.fontFamily}`, text || "A").catch(() => []));
+    return Promise.race([Promise.all(loads), new Promise((done) => setTimeout(done, 3000))]);
+  }
   function paintDiagram(root, palette, ink = TOKENS.active().elements.diagram.nodeInk) {
     const byKey = new Map();
     const pick = (key) => {
@@ -1443,16 +1461,7 @@
   }
   let mermaidLoading = null;
   function loadMermaid() {
-    if (window.mermaid) return Promise.resolve(window.mermaid);
-    if (!mermaidLoading) {
-      mermaidLoading = new Promise((resolve, reject) => {
-        const s = document.createElement("script");
-        s.src = "/vendor/mermaid.min.js";
-        s.onload = () => resolve(window.mermaid);
-        s.onerror = () => reject(new Error("could not load Mermaid from the room"));
-        document.head.appendChild(s);
-      });
-    }
+    mermaidLoading ??= import("/vendor/mermaid/mermaid.esm.min.mjs").then((module) => module.default, () => { throw new Error("could not load Mermaid from the room"); });
     return mermaidLoading;
   }
   let mermaidSeq = 0;
@@ -1477,11 +1486,13 @@
   }
   async function drawDiagrams(mermaid, blocks, d) {
     const palette = diagramPalette(d);
+    const themeVariables = mermaidThemeVariables(d);
+    await diagramFonts(themeVariables, blocks.map((b) => b.dataset.src || "").join("\n"));
     mermaid.initialize({
       startOnLoad: false,
       theme: "base",
       securityLevel: "strict",
-      themeVariables: mermaidThemeVariables(d),
+      themeVariables,
       themeCSS: mermaidCss(),
       htmlLabels: true,
       flowchart: { htmlLabels: true, curve: "basis", padding: 14, nodeSpacing: 44, rankSpacing: 52 },
@@ -1674,9 +1685,10 @@
   let settling = 0;
   let settled = 0;
   const endJumps = [];
-  function noteJump(why, byHand) {
+  function noteJump(why, byHand, viewport) {
     const el = els.messages;
-    const entry = { at: Date.now(), why: why || "(unnamed)", byHand, following: stuck, readingAway, streaming: replyStreaming(), from: Math.round(el.scrollTop), fromEnd: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight) };
+    const top = viewport?.beforeTop ?? el.scrollTop;
+    const entry = { at: Date.now(), why: why || "(unnamed)", byHand, following: stuck, readingAway, streaming: replyStreaming(), from: Math.round(top), fromEnd: Math.round(viewport ? viewport.total - top - viewport.height : el.scrollHeight - top - el.clientHeight) };
     endJumps.push(entry);
     if (endJumps.length > 30) endJumps.splice(0, endJumps.length - 20);
     if (!byHand && !stuck && entry.fromEnd > 12) reportJump(entry);
@@ -1719,11 +1731,11 @@
       into: anchor ? Math.round(anchor.into) : 0,
     }).catch(() => {});
   }
-  function scrollToBottom(why, { byHand = false } = {}) {
+  function scrollToBottom(why, { byHand = false, viewport } = {}) {
     calmRelease();
     glideStop("the list went to its end");
-    noteJump(why, byHand);
-    els.messages.scrollTop = els.messages.scrollHeight;
+    noteJump(why, byHand, viewport);
+    els.messages.scrollTop = viewport?.total ?? els.messages.scrollHeight;
     els.jumpLatest.hidden = true;
     stuck = true;
     readingAway = false;
@@ -1932,9 +1944,13 @@
     return now ? `Use the app setting (now: ${now})` : "Use the app setting";
   }
   const SHARES_HISTORY_HINT = "Vibemates of the other rooms may find messages written here, and their memory may read what this room's memory learned. Hidden and deleted messages are never shared. Off: this room is searched only from inside it.";
+  const REMEMBERS_HINT = "A room feeds the long-term memory: its messages, sifted, become facts the vibemates recall later. On for a new room; each room keeps its own switch. Does nothing until the memory is set up and agreed to.";
   const READS_OTHER_ROOMS = [["off", "No"], ["on-search", "When a vibemate searches"], ["every-turn", "Also in each turn's memory block"]];
+  const MEMORY_INPUT = [["excerpts", "Economical: the message's own excerpts"], ["whole", "Most accurate: the whole message"]];
+  const MEMORY_INPUT_HINT = "What a kept message becomes in the long-term memory. Economical: the sieve names the sentences that carry the information and the code checks them letter for letter against the message; nothing is retold. Most accurate: the whole message, with Zep; it may cost more.";
+  const MEMORY_INPUT_GEEK = "Short kept messages go whole in every mode. In the economical mode a long message goes as its excerpts, in the message's order with a mark where something was left out; an excerpt the message does not contain, out of order, or more than two thirds of the message sends the message's own first lines instead, never a retelling. The Memory button on a bubble (Settings → Development) shows the excerpts and their check.";
   const READS_OTHER_ROOMS_HINT = "Vibemates here may search the rooms that share their history: their messages, and what their memory learned. With the last, in a room that remembers, each turn's memory block reads those rooms too.";
-  const READS_OTHER_ROOMS_GEEK = "Only a room that shares its history can be searched, and only a room that remembers has a memory to read; each borrowed fact names the room it was heard in. In a turn's block the other rooms' facts are mostly noise where the rooms talk of different things: in 46 of your messages judged blind, 4.3 of the 9.0 unrelated facts a message came from the other rooms, and 0.1 of the useful ones. So a vibemate's own search is the usual way to them.";
+  const READS_OTHER_ROOMS_GEEK = "Only a room that shares its history can be searched, and only a room that remembers has a memory to read; each borrowed fact names the room it was heard in. Where the rooms talk of different things, the other rooms' facts in a turn's block are mostly noise and seldom useful, so a vibemate's own search is the usual way to them.";
   const DIAGNOSTIC_LOG_HELP = "Save details to help investigate problems with a vibemate. Choose All activity while checking a reply that gets stuck. Diagnostic files keep up to 64 MB across rooms, 5 MB per file, for up to seven days. Older details are removed and unusually large entries are shortened. Conversations are saved separately and are not shortened.";
   function geekTip(text) {
     return `<button type="button" class="geek-tip" title="For geeks">${ic("geek")}for geeks</button><span class="geek-text" hidden>${text}</span>`;
@@ -1991,6 +2007,31 @@
   function endJumpsText() {
     return [...endJumps].reverse().map((j) => `${new Date(j.at).toLocaleTimeString()} - ${j.held ? "held: " : ""}${j.why} - ${j.following ? "following the end" : `${j.fromEnd} px above the end`}${j.streaming ? " - a reply was streaming" : ""}`).join("\n");
   }
+  let boxTrace = { state: "idle" };
+  const boxTraceStatus = () => ({
+    idle: "Not recorded yet. Press Record, then do what lags (type, scroll, let a vibemate answer) for the next 15 s.",
+    recording: "Recording for 15 s: do what lags now.",
+    done: `${boxTrace.summary}\n${boxTrace.file}`,
+    failed: `The trace was not recorded: ${boxTrace.error}`,
+  })[boxTrace.state];
+  function boxTraceHtml() {
+    if (!(window.ViberoomDesktop && window.ViberoomDesktop.can("trace"))) return "";
+    return settingRow({ label: "Trace of the whole app", hint: "Every process of this app for 15 s, the graphics card's included, for a moment when the window lags or stutters: press Record, then do what lags. The file stays on this computer; copy the summary into the room.", status: boxTraceStatus(), statusId: "sp-trace-status",
+      control: UI.raw(UI.html("button", { label: "Record 15 s", kind: "secondary", size: "sm", id: "sp-trace-record", disabled: boxTrace.state === "recording" }) + UI.html("button", { label: "Copy the summary", kind: "secondary", size: "sm", id: "sp-trace-copy" })) });
+  }
+  function paintBoxTrace() {
+    const status = $("#sp-trace-status");
+    if (status) status.textContent = boxTraceStatus();
+    const record = $("#sp-trace-record");
+    if (record) record.disabled = boxTrace.state === "recording";
+  }
+  window.addEventListener("message", (event) => {
+    const answer = event.data;
+    if (event.source !== window || event.origin !== location.origin || !["done", "failed"].includes(answer?.viberoomTrace)) return;
+    boxTrace = answer.viberoomTrace === "done" ? { state: "done", file: String(answer.file), summary: String(answer.summary) } : { state: "failed", error: String(answer.error) };
+    paintBoxTrace();
+  });
+
   function slowTasksText() {
     return [...slowTasks].reverse().map((t) => `${new Date(t.at).toLocaleTimeString()} - ${t.ms ? `${t.ms} ms - ` : ""}${t.name}${t.busy ? ` - ${t.busy}` : ""}`).join("\n");
   }
@@ -2041,8 +2082,8 @@
   function settingRow(props) {
     return UI.html("setting", props);
   }
-  function selectHtml(id, options, value) {
-    return `<select class="select" id="${id}">${options.map(([v, label]) => `<option value="${esc(v)}"${v === value ? " selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
+  function selectHtml(id, options, value, label) {
+    return `<select class="select" id="${id}"${label ? ` aria-label="${esc(label)}"` : ""}>${options.map(([v, label]) => `<option value="${esc(v)}"${v === value ? " selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
   }
   function numberHtml(props) {
     return UI.raw(UI.html("number-field", props));
@@ -2158,14 +2199,14 @@
     const lead = withIcon[0] || state.recipes[0];
     const sam = { name: "Sam", kind: "agent", color: TOKENS.active().elements.face.avatarDefault, avatar: "🦊", agentType: lead ? lead.id : "", agentLabel: lead ? lead.vendor : "" };
     const marks = (withIcon.length ? withIcon : state.recipes).slice(0, 3).map((r) => vendorLogo(r, "sm")).join("");
-    return `<div class="msg agent"><div class="bubble-col"><div class="head"><span class="head-av">${avatar(sam, 32, { vendor: true })}</span><span class="name" style="color:${sam.color}">Sam</span><span class="time">16:21</span></div><div class="bubble">A reply, on this look's paper, in its ink, with <code>code</code> a step smaller.</div><div class="meta"><span>seen</span></div></div></div>
+    return `<div class="msg agent"><div class="bubble-col"><div class="msg-head"><span class="head-av">${avatar(sam, 32, { vendor: true })}</span><span class="name" style="--who:${sam.color}">Sam</span><span class="time">16:21</span></div><div class="bubble">A reply, on this look's paper, in its ink, with <code>code</code> a step smaller.</div><div class="meta"><span>seen</span></div></div></div>
       <div class="msg mine"><div class="bubble-col"><div class="bubble">Your message.</div></div></div>
       <div class="sample-row">${UI.html("hub-row", { text: "Sam finished the reply started at 16:21 · 2m 30s", ref: "sample", title: "a row the room writes", face: UI.raw(avatar(sam, 20, {})) })}</div>
       <div class="sample-row">${UI.html("room-mark", { hue: 200, letter: "V", title: "a room" })}${UI.html("room-mark", { hue: 40, emoji: "🎭", title: "a room with an emoji" })}${marks}${UI.html("button", { label: "Send", kind: "primary", size: "sm" })}</div>`;
   }
   function roomTitle(room) {
     const emoji = (room.settings && room.settings.emoji) || "";
-    return emoji ? `${room.name} ${emoji}` : room.name;
+    return emoji && !window.Avatars.faceUrl(emoji) ? `${room.name} ${emoji}` : room.name;
   }
   function flash(id) {
     const s = document.getElementById(id);
@@ -2294,18 +2335,6 @@
     }
     if (!dialog.dataset.sized) {
       dialog.dataset.sized = "1";
-      dialog.addEventListener("pointerdown", (e) => {
-        const r = Layout.rect(dialog);
-        if (Layout.length(e.clientX) > r.right - 22 && Layout.length(e.clientY) > r.bottom - 22 && !dialog.style.width) {
-          dialog.style.width = `${Math.round(r.width)}px`;
-          dialog.style.height = `${Math.round(r.height)}px`;
-          dialog.classList.add("sized");
-        }
-      });
-      dialog.addEventListener("dblclick", (e) => {
-        const r = Layout.rect(dialog);
-        if (Layout.length(e.clientX) > r.right - 22 && Layout.length(e.clientY) > r.bottom - 22) resetDialogSize(dialog);
-      });
       dialogSizes.observe(dialog);
     }
   }
@@ -2317,6 +2346,72 @@
       dialog.style.height = `${size.h}px`;
     }
   });
+  const DIALOG_CORNER = 22;
+  function dialogCornerAt(e) {
+    const dialog = e.target instanceof Element ? e.target.closest("dialog.dialog[open]") : null;
+    if (!dialog || dialog.classList.contains("closing")) return null;
+    const r = Layout.rect(dialog);
+    const right = r.left + dialog.clientLeft + dialog.clientWidth;
+    const bottom = r.top + dialog.clientTop + dialog.clientHeight;
+    const x = Layout.length(e.clientX), y = Layout.length(e.clientY);
+    return x > right - DIALOG_CORNER && x <= right && y > bottom - DIALOG_CORNER && y <= bottom ? dialog : null;
+  }
+  let cornerDrag = null;
+  let cornerShown = null;
+  function showDialogCorner(dialog) {
+    if (cornerShown === dialog) return;
+    cornerShown?.classList.remove("at-corner");
+    cornerShown = dialog;
+    dialog?.classList.add("at-corner");
+  }
+  document.addEventListener("pointerdown", (e) => {
+    const dialog = e.button === 0 ? dialogCornerAt(e) : null;
+    if (!dialog) return;
+    const r = Layout.rect(dialog);
+    const centred = (before, after) => Math.abs(before - after) < 2;
+    cornerDrag = {
+      dialog, pointer: e.pointerId, x: Layout.length(e.clientX), y: Layout.length(e.clientY), w: r.width, h: r.height,
+      kx: centred(r.left, Layout.length(window.innerWidth) - r.right) ? 2 : 1,
+      ky: centred(r.top, Layout.length(window.innerHeight) - r.bottom) ? 2 : 1,
+    };
+    dialog.setPointerCapture(e.pointerId);
+    dialog.classList.add("resizing");
+    e.preventDefault();
+  }, true);
+  document.addEventListener("pointermove", (e) => {
+    if (!cornerDrag) return showDialogCorner(dialogCornerAt(e));
+    if (e.pointerId !== cornerDrag.pointer) return;
+    const d = cornerDrag;
+    const size = dialogFits(Math.round(d.w + d.kx * (Layout.length(e.clientX) - d.x)), Math.round(d.h + d.ky * (Layout.length(e.clientY) - d.y)));
+    d.dialog.style.width = `${size.w}px`;
+    d.dialog.style.height = `${size.h}px`;
+    d.dialog.classList.add("sized");
+  });
+  function endCornerDrag(e) {
+    if (!cornerDrag || e.pointerId !== cornerDrag.pointer) return;
+    cornerDrag.dialog.classList.remove("resizing");
+    cornerDrag = null;
+  }
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) document.addEventListener(type, endCornerDrag, true);
+  document.addEventListener("close", (e) => {
+    if (e.target === cornerShown) showDialogCorner(null);
+  }, true);
+  document.addEventListener("dblclick", (e) => {
+    const dialog = dialogCornerAt(e);
+    if (dialog) resetDialogSize(dialog);
+  });
+  const holdCornerTouch = (e) => {
+    if (e.touches.length === 1 && dialogCornerAt(e.touches[0])) e.preventDefault();
+  };
+  function wireCornerTouch(dialog) {
+    if (dialog.cornerTouch) return;
+    dialog.cornerTouch = true;
+    dialog.addEventListener("touchstart", holdCornerTouch, { passive: false });
+  }
+  document.querySelectorAll("dialog.dialog").forEach(wireCornerTouch);
+  new MutationObserver((changes) => {
+    for (const change of changes) for (const node of change.addedNodes) if (node instanceof HTMLDialogElement && node.classList.contains("dialog")) wireCornerTouch(node);
+  }).observe(document.body, { childList: true });
   function closeDialog(dialog) {
     if (!dialog.open) return;
     dialog.classList.add("closing");
@@ -2408,20 +2503,24 @@
 
   function setView(view) {
     if (view !== "room") clearConversationSelection();
-    if (state.view === "room" && view !== "room") rememberReader();
+    if (state.view === "room" && view !== "room") {
+      glideStop("the conversation was left");
+      keepReturnPlace(state.currentRoomId);
+    }
+    if (view === "room" && state.view !== "room") prepareRoomPlace(state.currentRoomId);
     if (view !== "room") toolDetailsCache.clear();
     if (state.view === "settings" && view !== "settings") dropPairLink(true);
     const arriving = view !== state.view;
     state.view = view;
-    els.app.classList.remove("view-home", "view-rooms", "view-room", "view-skills", "view-settings", "view-connections", "view-me");
+    els.app.classList.remove("view-home", "view-rooms", "view-room", "view-skills", "view-settings", "view-connections", "view-onboarding", "view-me");
     els.app.classList.add(`view-${view}`);
     els.homeView.hidden = view !== "home";
     els.roomsView.hidden = view !== "rooms";
     els.chatView.hidden = view !== "room";
-    els.pageView.hidden = !(view === "skills" || view === "settings" || view === "connections" || view === "me");
+    els.pageView.hidden = !(view === "skills" || view === "settings" || view === "connections" || view === "onboarding" || view === "me");
     els.sideRooms.hidden = view === "room";
     els.sideRoom.hidden = view !== "room";
-    if (view !== "room") closeDetails();
+    if (view !== "room") { closeDetails(); hideEmptyGuide(); }
     renderRail();
     if (view === "home") {
       renderSideRooms();
@@ -2443,6 +2542,9 @@
     } else if (view === "connections") {
       renderSideRooms();
       renderConnectionsPage();
+    } else if (view === "onboarding") {
+      renderSideRooms();
+      renderOnboardingPage();
     } else if (view === "me") {
       renderSideRooms();
       renderMePage();
@@ -2466,16 +2568,14 @@
     const switching = state.currentRoomId !== id;
     const panelWas = state.detailsOpen ? state.selection.kind : null;
     if (state.currentRoomId !== id) {
-      clearShots();
+      glideStop("the room changed");
       doneNotes.length = 0;
       renderDoneNotes();
       keepReturnPlace(state.currentRoomId);
-      const back = returnPlaces.get(id) || null;
-      returnTo = back ? { roomId: id, anchor: back } : null;
-      stuck = !back;
-      readingAway = !!back;
+      prepareRoomPlace(id);
     }
     state.currentRoomId = id;
+    if (draftRoomId !== id) bringDraft(id);
     state.unread.delete(id);
     unseenHere = 0;
     showAttention();
@@ -2537,10 +2637,13 @@
     pop.className = "update-pop";
     pop.dataset.version = u.latest;
     pop.dataset.stage = stage;
-    const words = stage === "downloading" ? `<b>viberoom ${esc(u.latest)}</b> is out, and on its way: <span class="up-progress">${u.progress ?? 0} %</span>. You have ${esc(u.current)}.`
-      : stage === "ready" ? `<b>viberoom ${esc(u.latest)}</b> is ready. You have ${esc(u.current)}.`
-      : `<b>viberoom ${esc(u.latest)}</b> is out. You have ${esc(u.current)}.`;
-    const go = stage === "downloading" ? "" : UI.html("button", { label: stage === "ready" ? "Restart to update" : "Update now and restart", kind: "primary", size: "sm", hook: "up-go" });
+    const acts = u.parts ? u.parts.acts : null;
+    const name = acts === "application" ? "The viberoom application" : "viberoom";
+    const words = stage === "downloading" ? `<b>${name} ${esc(u.latest)}</b> is out, and on its way: <span class="up-progress">${u.progress ?? 0} %</span>. You have ${esc(u.current)}.`
+      : stage === "ready" ? `<b>${name} ${esc(u.latest)}</b> is ready. You have ${esc(u.current)}.`
+      : `<b>${name} ${esc(u.latest)}</b> is out. You have ${esc(u.current)}.`;
+    const ready = acts === "product" ? "Update now" : "Restart to update";
+    const go = stage === "downloading" ? "" : UI.html("button", { label: stage === "ready" ? ready : "Update now and restart", kind: "primary", size: "sm", hook: "up-go", ...(acts === "product" ? { title: "The room restarts into the new version; the application stays open" } : {}) });
     pop.innerHTML = `<div class="up-main"><div class="up-text">${words}</div>${go}</div>
       <div class="up-side">${UI.html("icon-button", { icon: "close", title: "Not now", size: "sm", hook: "up-x" })}${UI.html("icon-button", { icon: "settings", title: "Update settings", size: "sm", hook: "up-settings" })}</div>`;
     pop.querySelector(".up-x").addEventListener("click", () => {
@@ -2548,7 +2651,7 @@
       pop.remove();
     });
     pop.querySelector(".up-settings").addEventListener("click", () => openSettings("system"));
-    pop.querySelector(".up-go")?.addEventListener("click", () => installUpdate(pop, u.latest));
+    pop.querySelector(".up-go")?.addEventListener("click", () => installUpdate(pop, u.latest, acts === "application" ? "the viberoom application" : "viberoom"));
     $("#rail-pops").appendChild(pop);
     closesWhenSeen(pop, () => {
       if (pop.dataset.busy) return;
@@ -2666,17 +2769,17 @@
     const m = Math.round(s / 60);
     return m === 1 ? "a minute" : `${m} minutes`;
   }
-  async function installUpdate(pop, version) {
+  async function installUpdate(pop, version, name = "viberoom") {
     const go = pop.querySelector(".up-go");
     const text = pop.querySelector(".up-text");
     pop.dataset.busy = "1";
     go.disabled = true;
     UI.setState(go, "loading");
-    text.innerHTML = `Installing <b>viberoom ${esc(version)}</b>… this takes a moment.`;
+    text.innerHTML = `Installing <b>${esc(name)} ${esc(version)}</b>… this takes a moment.`;
     try {
       await post("/api/update/install", {}, { deadline: 10 * 60000 });
       UI.setState(go, null);
-      text.innerHTML = `<b>viberoom ${esc(version)}</b> is installed. Restarting…`;
+      text.innerHTML = `<b>${esc(name)} ${esc(version)}</b> is installed. Restarting…`;
       go.hidden = true;
     } catch (e) {
       delete pop.dataset.busy;
@@ -2745,7 +2848,9 @@
     if (reply && room.id !== state.currentRoomId) state.unread.set(room.id, (state.unread.get(room.id) || 0) + 1);
     else if (reply && !looking) unseenHere++;
     showAttention();
-    if (!looking && Date.now() - (m.ts || 0) < ARRIVAL_FRESH_MS) knock(room, m, needsYou);
+    const fresh = Date.now() - (m.ts || 0) < ARRIVAL_FRESH_MS;
+    if (!looking && fresh) knock(room, m, needsYou);
+    if (reply && fresh && (m.to || []).includes("human")) offerKnock(room, m);
     if (reply) readArrival(room, m);
   }
 
@@ -2780,7 +2885,7 @@
   function drawReadingOn(el, st) {
     const on = st === "loading" || st === "reading";
     el.classList.toggle("reading", on);
-    const button = el.querySelector('.head [data-act="read"]');
+    const button = el.querySelector('.msg-head [data-act="read"]');
     if (!button) return;
     button.innerHTML = ic(on ? "stop" : "speaker");
     UI.setState(button, on ? "on" : null);
@@ -2792,29 +2897,80 @@
   }
   function knock(room, m, needsYou) {
     const mode = (state.settings || {}).notifyReplies || "every";
-    if (mode === "off" || typeof Notification === "undefined" || Notification.permission !== "granted") return;
     if (mode === "to-me" && !needsYou && !(m.to || []).includes("human")) return;
     const words = String(m.text || "").replace(/```[\s\S]*?```/g, " [code] ").replace(/[*_`>#|]/g, "").replace(/\s+/g, " ").trim();
+    ring(room, needsYou ? room.name : `${m.fromName} · ${room.name}`, words);
+  }
+  function knockAsked(room, perm) {
+    if (room.id === state.currentRoomId && attending()) return;
+    const p = findById(room, perm.participantId);
+    const tc = perm.toolCall || {};
+    ring(room, `${p ? p.name : "A vibemate"} is waiting for you · ${room.name}`, `Asks for permission: ${tc.title || tc.toolCallId || "a tool call"}`);
+  }
+  function ring(room, title, words) {
+    const mode = (state.settings || {}).notifyReplies || "every";
+    if (mode === "off" || typeof Notification === "undefined" || Notification.permission !== "granted") return;
     try {
-      const note = new Notification(needsYou ? room.name : `${m.fromName} · ${room.name}`, {
+      const note = new Notification(title, {
         body: words.length > 180 ? `${words.slice(0, 179)}…` : words,
         tag: `viberoom-room-${room.id}`, renotify: true, icon: "/icon-256.png?v=12",
       });
       note.onclick = () => { window.focus(); selectRoom(room.id); note.close(); };
     } catch { }
   }
-  function askToKnock(again = false) {
+  function askToKnock() {
     if (typeof Notification === "undefined" || Notification.permission !== "default") return Promise.resolve();
-    if ((state.settings || {}).notifyReplies === "off" || (!again && recall("notify-asked"))) return Promise.resolve();
+    if ((state.settings || {}).notifyReplies === "off") return Promise.resolve();
     remember("notify-asked", "1");
     return Notification.requestPermission().catch(() => {});
+  }
+
+  let knockOffer = null;
+  function knockAskable() {
+    return typeof Notification !== "undefined" && Notification.permission === "default"
+      && (state.settings || {}).notifyReplies !== "off" && !recall("notify-asked");
+  }
+  function offerKnock(room, m) {
+    if (knockOffer || !knockAskable()) return;
+    knockOffer = { roomId: room.id, afterSeq: m.seq };
+    if (room.id === state.currentRoomId && state.view === "room") syncKnockOffer(room);
+  }
+  function syncKnockOffer(room) {
+    const stale = els.messages.querySelector('[data-ui="ask-card"][data-kind="notify"]');
+    if (knockOffer && !knockOffer.outcome && !knockAskable()) knockOffer = null;
+    if (!knockOffer || knockOffer.roomId !== room.id) return void (stale && stale.remove());
+    const card = UI.el("ask-card", {
+      kind: "notify", who: "viberoom",
+      body: '<div class="prop-why">Turn it on, and your system asks you once whether to allow it.</div>',
+      outcome: knockOffer.outcome,
+      choices: [{ label: "Turn on", tone: "ok", act: "knock", data: { answer: "on" } }, { label: "Not now", act: "knock", data: { answer: "later" } }],
+      data: { key: "notify" },
+    });
+    if (stale) stale.replaceWith(card);
+    else placeCard(card, room, { afterSeq: knockOffer.afterSeq });
+  }
+  async function answerKnockOffer(answer) {
+    if (!knockOffer || knockOffer.outcome) return;
+    const offer = knockOffer;
+    if (answer === "on") {
+      await askToKnock();
+      const allowed = typeof Notification === "undefined" ? "default" : Notification.permission;
+      offer.outcome = allowed === "granted" ? "Notifications are on."
+        : allowed === "denied" ? "Your system said no. Settings → Notifications says how to allow them later."
+        : "Nothing was decided. Settings → Notifications can ask again.";
+    } else {
+      remember("notify-asked", "1");
+      offer.outcome = "Not now. Settings → Notifications can turn them on.";
+    }
+    const room = state.rooms.get(offer.roomId);
+    if (knockOffer === offer && room && room.id === state.currentRoomId && state.view === "room") syncKnockOffer(room);
   }
   function notifyPermissionRow(row) {
     const allowed = typeof Notification === "undefined" ? "none" : Notification.permission;
     if (allowed === "granted") return "";
     if (allowed === "none") return row({ label: "Not on this system", status: "This window cannot show notifications of the system. The count on the icon still works.", statusTone: "warn" });
     if (allowed === "denied") return row({ label: "Blocked on this computer", status: "The system or the browser was told no. Allow notifications for viberoom in the browser's site settings (the icon left of the address) or in the system's settings.", statusTone: "warn" });
-    return row({ label: "Not allowed yet", hint: "The system asks once, the first time you send a message; or ask it now.", control: actHtml({ label: "Allow…", id: "sp-notify-allow" }) });
+    return row({ label: "Not allowed yet", hint: "viberoom offers it once, under the first reply a vibemate gives you; or ask now.", control: actHtml({ label: "Allow…", id: "sp-notify-allow" }) });
   }
 
   function renderRailRooms() {
@@ -3012,7 +3168,7 @@
     { tone: "lav", emoji: "📱", title: "From your phone", text: "Pair Telegram and the rooms come with you: read what the vibemates wrote, answer them, stop a reply — from the phone in your pocket. Your own bot, paired once under Settings → Channels." },
     { tone: "rose", face: HUSH_FACE, title: "Hush", text: "Too much at once? One click stops every running reply. The vibemates stay quiet until you write again." },
     { tone: "sky", emoji: "📊", title: "Links and diagrams", text: "Links and file paths open on your machine with one click. A ```mermaid block in a reply turns into a diagram." },
-    { tone: "orchid", emoji: "🎨", title: "Looks", text: "VibeClassic and its dark twin, Terminal, Clay, Eye Comfort (the look the research on tired eyes asks for) or 3D clayful (soft clay objects, with weight): pick one with the button above or under Settings → Appearance, and fine-tune its paper, bubbles, ink and corners." },
+    { tone: "orchid", emoji: "🎨", title: "Looks", text: "VibeClassic and its dark twin, VibeSky (the same in light blue), Plain (black ink on white, or white on black), Terminal, Clay, Eye Comfort (the look the research on tired eyes asks for) or 3D clayful (soft clay objects, with weight): pick one with the button above or under Settings → Appearance, and fine-tune its paper, bubbles, ink and corners." },
   ];
   const HOME_SYSTEMS = 8;
   const STEPS = [
@@ -3030,6 +3186,7 @@
             <h1></h1>
             <p>One chat, many coding agents. Summon your vibemates into a room, talk to all of them at once, and let them talk to each other.</p>
             <div class="hero-actions">
+              <span class="hero-lead-wrap">${UI.html("button", { label: "Onboarding", icon: "ship", size: "cta", id: "home-onboarding", hook: "hero-cta hero-lead", title: "Set viberoom up and get the most out of it" })}<svg class="hero-nudge" viewBox="0 0 120 36" aria-hidden="true"><path class="drawn-line" pathLength="1" d="M114 31C96 31 82 30 72 27C60 23 55 15 61 10.5C67 6 75 11 72 18.5C69.5 25 60 30 47 30C32 30 21 20 20 5"/><path class="drawn-head" d="M15.5 10L20 4L24.5 10"/></svg></span>
               ${UI.html("button", { label: "Open room", icon: "rooms", size: "cta", id: "home-open-room", hook: "hero-cta" })}
               ${UI.html("button", { label: "Change the look", icon: "eye", size: "cta", id: "home-change-look", hook: "hero-cta", title: "Settings → Appearance: the looks and their fine-tuning" })}
             </div>
@@ -3075,6 +3232,7 @@
       remember("view", "rooms");
     });
     $("#home-change-look").addEventListener("click", () => openSettings("appearance"));
+    $("#home-onboarding").addEventListener("click", () => { setView("onboarding"); remember("view", "onboarding"); });
     const allRooms = $("#home-all-rooms");
     allRooms.addEventListener("click", () => setView("rooms"));
     const rooms = els.homeView.querySelector(".home-rooms");
@@ -3172,8 +3330,8 @@
   }
 
 
-  function offlineAgents(room, includeMuted = false) {
-    return room ? room.participants.filter((p) => p.kind === "agent" && p.status === "offline" && (includeMuted || !p.muted)) : [];
+  function offlineAgents(room, includeChosen = false) {
+    return room ? room.participants.filter((p) => p.kind === "agent" && p.status === "offline" && (includeChosen || (!p.muted && !p.asleep))) : [];
   }
 
   function renderSideRoom() {
@@ -3182,6 +3340,7 @@
     const room = currentRoom();
     if (!room) return;
     els.sideRoomName.textContent = room.name;
+    els.chatRoomName.textContent = room.name;
     const roomFace = room.settings.emoji || "", roomPicture = window.Avatars.faceUrl(roomFace);
     if (roomPicture) els.sideRoomEmoji.innerHTML = `<img class="room-pic" src="${roomPicture}" alt="">`;
     else els.sideRoomEmoji.textContent = roomFace;
@@ -3198,12 +3357,12 @@
         const unstaffed = p.kind === "agent" && p.status === "unstaffed";
         const shown = shownStatus(room, p);
         const className = (p.kind === "human" ? "me" : "") + (selected ? " selected" : "") + (asleep ? " offline" : "") + (unstaffed ? " unstaffed" : "");
-        const sub = p.kind === "human" ? "you, the human" : [p.tagline ? `"${p.tagline}"` : "", p.agentVendor || p.agentLabel, p.model].filter(Boolean).join(" · ");
+        const subHtml = p.kind === "human" ? "you, the human" : [p.tagline ? `<span class="p-vibe">${esc(p.tagline)}</span>` : "", esc([p.agentVendor || p.agentLabel, p.model].filter(Boolean).join(" · "))].filter(Boolean).join(" · ");
         const working = p.kind === "agent" && (p.status === "thinking" || p.status === "queued");
         const troubled = p.kind === "agent" && !working && p.trouble && (p.status === "error" || p.trouble.stage === "turn" || (p.trouble.actions && p.trouble.actions.length > 0));
         const unplugged = vendorLoggedOut(p);
         const loginRow = unplugged && p.status === "offline" && !troubled ? `<div class="p-fix">${UI.html("button", { label: "Log in", kind: "primary", size: "xs", act: "open-login-dialog", icon: "lock", title: `${p.agentVendor || "The vendor"} is not logged in: log in, and ${p.name} comes back`, data: { recipe: p.agentType, purpose: "login" } })}</div>` : "";
-        const warn = mutedStartup ? `<div class="p-warn muted-start" title="Unmute and reconnect when you want this vibemate to return">${esc(p.statusDetail || "Not summoned — muted")}</div>` : troubled ? troubleHtml(p) : working ? "" : p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>${loginRow}` : loginRow;
+        const warn = mutedStartup ? `<div class="p-warn muted-start" title="Unmute and wake it up when you want this vibemate to return">${esc(p.statusDetail || "Not summoned — muted")}</div>` : p.status === "offline" && p.asleep ? `<div class="p-warn muted-start" title="Wake it up when you want it back">${esc(p.statusDetail || "Asleep")}</div>` : troubled ? troubleHtml(p) : working ? "" : p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<div class="p-warn" title="${esc(p.statusDetail)}">${esc(p.statusDetail)}</div>${loginRow}` : loginRow;
         const status = unstaffed
           ? UI.html("badge", { label: "summon", tone: "attention", title: "Click to summon this vibemate: pick the coding agent that runs it" })
           : asleep
@@ -3213,11 +3372,11 @@
         const statusValue = p.kind === "agent" ? (shown === "working" ? "writing" : shown) || "idle" : "";
         const bodyHtml = `<div class="p-body">
             <div class="p-name"><span>${esc(p.name)}</span>${p.muted ? UI.html("badge", { label: "muted", tone: "muted" }) : ""}${status}</div>
-            <div class="p-sub">${esc(sub)}</div>
+            <div class="p-sub">${subHtml}</div>
             ${warn}
           </div>
           <div class="p-actions">
-            ${p.kind === "agent" && p.status === "offline" && !unplugged ? UI.html("row-button", { icon: "refresh", title: `Wake ${p.name} up: reconnect it to the room`, act: "wake" }) : ""}
+            ${p.kind === "agent" && p.status === "offline" && !unplugged ? UI.html("row-button", { icon: wakeWord(p) === "Wake up" ? "sun" : "refresh", title: wakeWord(p) === "Wake up" ? `Wake ${p.name} up` : `Reconnect ${p.name}: it fell`, act: "wake" }) : ""}
           </div>`;
         if (fresh) {
           li.innerHTML = avatarHtml + bodyHtml + (p.kind === "agent" ? UI.html("row-button", { icon: "settings", title: `Open ${p.name}'s panel`, act: "panel" }) + UI.html("row-button", { icon: "go-to-message", title: `Go to ${p.name}'s last reply`, act: "last-reply" }) : "");
@@ -3313,9 +3472,9 @@
 
   function refreshNowNames(room, p) {
     for (const el of els.messages.querySelectorAll(`.msg.agent[data-from="${cssEscape(p.id)}"]`)) {
-      const name = el.querySelector(".head .name");
+      const name = el.querySelector(".msg-head .name");
       if (!name) continue;
-      el.querySelector(".head .now-name")?.remove();
+      el.querySelector(".msg-head .now-name")?.remove();
       const html = nowNameHtml({ fromName: name.textContent }, p);
       if (html) name.insertAdjacentHTML("afterend", html);
     }
@@ -3394,7 +3553,7 @@
     el.className = "msg " + (mine ? "mine" : "agent");
     el.innerHTML = `
       <div class="bubble-col">
-        <div class="head"><span class="head-av">${avatar(mine ? Object.assign(meAvatarData(), { color: colourOf(p) }) : p, 32, { vendor: true, me: mine })}</span><span class="name" style="color:${p.color}">${esc(m.fromName)}</span>${nowNameHtml(m, p)}<span class="edited" hidden></span>${mine ? UI.html("icon-button", { icon: "pencil", title: "Edit this message", kind: "ghost", size: "xs", act: "edit" }) : UI.html("icon-button", { icon: "speaker", title: "Read it aloud", kind: "ghost", size: "xs", act: "read" })}${UI.html("icon-button", { icon: "quote", title: "Quote this message in your next one", kind: "ghost", size: "xs", act: "quote" })}${UI.html("icon-button", { icon: "pin", title: "Pin this message", kind: "ghost", size: "xs", act: "pin" })}${UI.html("icon-button", { icon: "copy", title: "Copy this message, formatted; the tool calls stay here", kind: "ghost", size: "xs", act: "copy" })}${UI.html("icon-button", { icon: "arrow-up", title: "Go to their previous message", kind: "ghost", size: "xs", act: "up" })}${UI.html("icon-button", { icon: "arrow-down", title: "Go to their next message", kind: "ghost", size: "xs", act: "down" })}<span class="time" title="${esc(fullTime(m.ts))}">${time(m.ts)}</span></div>
+        <div class="msg-head"><span class="head-av">${avatar(mine ? meAvatarData() : p, 32, { vendor: true, me: mine })}</span><span class="name" style="--who:${p.color}">${esc(m.fromName)}</span>${nowNameHtml(m, p)}<span class="edited" hidden></span>${mine ? UI.html("icon-button", { icon: "pencil", title: "Edit this message", kind: "ghost", size: "xs", act: "edit" }) : UI.html("icon-button", { icon: "speaker", title: "Read it aloud", kind: "ghost", size: "xs", act: "read" })}${UI.html("icon-button", { icon: "quote", title: "Quote this message in your next one", kind: "ghost", size: "xs", act: "quote" })}${UI.html("icon-button", { icon: "pin", title: "Pin this message", kind: "ghost", size: "xs", act: "pin" })}${UI.html("icon-button", { icon: "copy", title: "Copy this message, formatted; the tool calls stay here", kind: "ghost", size: "xs", act: "copy" })}${UI.html("icon-button", { icon: "arrow-up", title: "Go to their previous message", kind: "ghost", size: "xs", act: "up" })}${UI.html("icon-button", { icon: "arrow-down", title: "Go to their next message", kind: "ghost", size: "xs", act: "down" })}<span class="time" title="${esc(fullTime(m.ts))}">${time(m.ts)}</span></div>
         <div class="bubble">
           ${m.skill ? `<div class="skill-invoke" title="skill invocation: the vibemates that have this skill got its instructions with this message">${ic("skills")} skill <b>${esc(m.skill.name)}</b></div>` : ""}
           <div class="edit-box" hidden></div>
@@ -3420,6 +3579,50 @@
   }
 
   const devPromptsOn = () => devBuild() && state.settings?.devShowPrompts === true;
+  const devMemoryIngestionOn = () => devBuild() && state.settings?.devShowMemoryIngestion === true;
+  function placeDevMemoryIngestion(el) {
+    const line = el.querySelector(".bubble .tools-line");
+    if (!line) return;
+    const button = line.querySelector(":scope > .dev-memory-open");
+    if (devMemoryIngestionOn()) {
+      if (!button) line.insertAdjacentHTML("beforeend", UI.html("button", { label: "Memory", icon: "code", kind: "ghost", size: "xs", hook: "dev-memory-open", title: "The recorded sieve exchange and the episode sent to memory" }));
+    } else {
+      button?.remove();
+      line.querySelector(".dev-memory")?.remove();
+    }
+  }
+  function devMemoryIngestionHtml(record) {
+    if (!record.runs?.length) return '<p class="hint">No ingestion recording for this message. It may still be waiting, memory may be off, or the recording was disabled, expired or removed with a source. Opening this view does not replay it.</p>';
+    const labels = { "batch.input": "Messages before the sieve", "screen.dropped": "Screen: not sent", "version.check": "Another copy wrote it: checked against the graph first", "sieve.mapping": "Message IDs in this model call", "sieve.request": "Exact sieve request body", "sieve.response": "Raw sieve response", "sieve.error": "Sieve transport failure", "sieve.invalid": "Sieve answer could not be used", "filter.verdict": "Decision used by the code", "excerpts.checked": "Excerpts checked against the message", "excerpts.whole": "Excerpts could not stand for it: the whole message", "provider.episode": "Episode passed to the adapter", "provider.request": "Exact provider SDK arguments", "provider.accepted": "Accepted by the provider", "provider.error": "Provider error", "provider.failed": "No acceptance receipt", "batch.finished": "Batch finished", "batch.failed": "Batch failed", "diagnostic.omitted": "Diagnostic recording limit reached" };
+    return record.runs.map((run) => {
+      const sources = run.sources.map(s => `#${s.seq} (${s.role})`).join(", ");
+      const events = run.events.filter(e => !e.sourceId || e.sourceId === record.messageId);
+      const parts = events.map(e => `<details class="dp-part"><summary><code>${esc(labels[e.kind] || (e.kind === "provider.bookkeeping-failed" ? "Accepted; local bookkeeping failed" : e.kind))}</code><span class="dp-size">${esc(new Date(e.at).toLocaleTimeString())}</span></summary><pre>${esc(JSON.stringify(e.data, null, 2))}</pre></details>`).join("");
+      return `<section><p class="hint">${esc(run.provider)} · ${esc(new Date(run.startedAt).toLocaleString())} · ${esc(run.id)}${run.recording ? '<br>Recording in memory; saved when the batch and its responses finish.' : ''}<br>Batch sources: ${esc(sources)}</p>${parts}</section>`;
+    }).join("");
+  }
+  els.messages.addEventListener("click", async (e) => {
+    const open = e.target.closest(".dev-memory-open, .dev-memory-refresh");
+    if (!open || !devMemoryIngestionOn()) return;
+    const msg = open.closest(".msg[data-id]");
+    const ownerRoom = state.currentRoomId;
+    let panel = msg.querySelector(".dev-memory");
+    if (panel && open.matches(".dev-memory-open")) { panel.remove(); return; }
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.className = "dev-prompt dev-memory";
+      open.after(panel);
+    }
+    panel.innerHTML = '<p class="hint">Reading the recorded memory exchange…</p>';
+    try {
+      const record = await get(roomApi(`/messages/${encodeURIComponent(msg.dataset.id)}/memory-ingestion`));
+      if (!panel.isConnected || !devMemoryIngestionOn() || state.currentRoomId !== ownerRoom) return;
+      panel.innerHTML = `<div class="dp-head"><span>Recorded ingestion · transport credentials are omitted or redacted</span>${UI.html("button", { label: "Refresh", kind: "ghost", size: "xs", hook: "dev-memory-refresh" })}${UI.html("button", { label: "Copy it all", kind: "ghost", size: "xs", hook: "dev-memory-copy" })}</div>${devMemoryIngestionHtml(record)}`;
+      bindCopy(panel.querySelector(".dev-memory-copy"), () => JSON.stringify(record, null, 2), "");
+    } catch (error) {
+      if (panel.isConnected) panel.innerHTML = `<p class="hint">${esc(error.message || String(error))}</p>`;
+    }
+  });
   function placeDevPrompt(el) {
     const wanted = devPromptsOn() && el.classList.contains("agent");
     const line = el.querySelector(".bubble .tools-line");
@@ -3429,11 +3632,11 @@
       if (!button) line.insertAdjacentHTML(leading ? "afterbegin" : "beforeend", UI.html("button", { label: "Prompt", icon: "code", kind: "ghost", size: "xs", hook: "dev-prompt-open", title: "What viberoom sent this vibemate for this turn, exactly as it went" }));
       else if (leading && button !== line.firstElementChild) line.prepend(button);
       else if (!leading && button === line.firstElementChild) line.append(button);
-      const panel = line?.querySelector(":scope > .dev-prompt");
+      const panel = line?.querySelector(":scope > .dev-prompt:not(.dev-memory)");
       if (button && panel && button.nextElementSibling !== panel) button.after(panel);
     } else if (!wanted && button) {
       button.remove();
-      el.querySelector(".bubble .dev-prompt")?.remove();
+      el.querySelector(".bubble .dev-prompt:not(.dev-memory)")?.remove();
     }
   }
   function promptSections(text) {
@@ -3497,7 +3700,7 @@
     const open = e.target.closest(".dev-prompt-open");
     if (!open) return;
     const msg = open.closest(".msg[data-id]");
-    let panel = msg.querySelector(".bubble .dev-prompt");
+    let panel = msg.querySelector(".bubble .dev-prompt:not(.dev-memory)");
     if (panel) {
       panel.hidden = !panel.hidden;
       return;
@@ -3517,9 +3720,15 @@
   });
 
   function setExpanded(el, roomId, m, open) {
+    const anchor = open ? { id: m.id, into: Layout.rect(el).top - Layout.rect(els.messages).top } : null;
+    if (open) leaveTheEnd();
     if (open) state.expanded.add(m.id);
     else state.expanded.delete(m.id);
     updateMessageElement(el, state.rooms.get(roomId), m);
+    if (anchor) {
+      restoreReader(anchor);
+      rememberReader();
+    }
   }
   const OWN_CLICKS = 'a, button, summary, input, textarea, select, label, [contenteditable="true"], [role="button"], .shot, [data-ui="tool-call"], .edit-box, .perms';
   function clickShowsMore(e, el) {
@@ -3551,7 +3760,7 @@
     });
     const editBtn = el.querySelector('[data-act="edit"]');
     if (editBtn) editBtn.addEventListener("click", () => { const now = asItIsNow(); if (now) openInlineEditor(el, state.rooms.get(roomId), now); });
-    const readBtn = el.querySelector('.head [data-act="read"]');
+    const readBtn = el.querySelector('.msg-head [data-act="read"]');
     if (readBtn) readBtn.addEventListener("click", () => { const now = asItIsNow(); if (now) readAloud(now); });
     el.querySelector('[data-act="quote"]').addEventListener("click", () => { const now = asItIsNow(); if (now) addQuote(now, ""); });
     el.querySelector('[data-act="copy"]').addEventListener("click", () => { const now = asItIsNow(); if (now) copyMessage(el, now); });
@@ -3566,14 +3775,14 @@
     });
     el.addEventListener("pointerenter", () => refreshWalkArrows(el));
     for (const [act, back] of [["up", true], ["down", false]]) {
-      el.querySelector(`.head [data-act="${act}"]`).addEventListener("click", async () => {
+      el.querySelector(`.msg-head [data-act="${act}"]`).addEventListener("click", async () => {
         const target = walkFrom(el, back);
         if (!target) return;
         if (!await jumpToId(target.id)) return;
         const landed = drawnRow(target.id);
         if (!landed) return;
         refreshWalkArrows(landed);
-        const next = landed.querySelector(`.head [data-act="${act}"]`);
+        const next = landed.querySelector(`.msg-head [data-act="${act}"]`);
         if (next && !next.hidden) next.focus();
       });
     }
@@ -3594,8 +3803,8 @@
   }
 
   function refreshWalkArrows(el) {
-    const up = el.querySelector('.head [data-act="up"]');
-    const down = el.querySelector('.head [data-act="down"]');
+    const up = el.querySelector('.msg-head [data-act="up"]');
+    const down = el.querySelector('.msg-head [data-act="down"]');
     if (up) up.hidden = !walkFrom(el, true);
     if (down) down.hidden = !walkFrom(el, false);
   }
@@ -3606,13 +3815,29 @@
     return `/api/rooms/${encodeURIComponent(roomId)}/files/${encodeURIComponent(image.file)}${version ? `?v=${encodeURIComponent(version)}` : ""}`;
   }
 
+  const pictureState = (roomId, file) => (roomId && file && state.pictures?.get(`${roomId}/${file}`)) || null;
+  function pictureMark(roomId, file) {
+    const s = pictureState(roomId, file);
+    if (!s) return "";
+    if (s.state === "failed") return `<span class="picture-mark failed" data-hint="${esc(`The vibemates will not see this picture: ${s.reason}`)}">!</span>`;
+    return '<span class="picture-mark" data-hint="Preparing for the vibemates…"><span class="picture-spin"></span></span>';
+  }
+  function refreshPictureMarks(roomId, file) {
+    if (currentRoom()?.id !== roomId) return;
+    for (const tile of document.querySelectorAll(`.bubble .shot[data-file="${CSS.escape(file)}"]`)) {
+      tile.querySelector(".picture-mark")?.remove();
+      tile.insertAdjacentHTML("beforeend", pictureMark(roomId, file));
+    }
+    if (pendingShots.some((shot) => shot.stored?.file === file)) renderShotsTray();
+  }
+
   function renderShots(box, room, m) {
     if (!box) return;
     const images = m.images || [];
     box.hidden = !images.length;
     if (!images.length) return void (box.innerHTML = "");
     box.innerHTML = images
-      .map((image, i) => `<button type="button" class="shot" data-n="${image.n || i + 1}" data-src="${esc(shotUrl(room.id, image))}" title="${esc(image.name)}"><img src="${esc(shotUrl(room.id, image))}" alt="${esc(image.name)}"><span class="shot-n">${image.n || i + 1}</span></button>`)
+      .map((image, i) => `<button type="button" class="shot" data-n="${image.n || i + 1}" data-file="${esc(image.file || "")}" data-src="${esc(shotUrl(room.id, image))}" title="${esc(image.name)}"><img src="${esc(shotUrl(room.id, image))}" alt="${esc(image.name)}">${pictureMark(room.id, image.file)}<span class="shot-n">${image.n || i + 1}</span></button>`)
       .join("");
   }
 
@@ -3821,16 +4046,17 @@
     el.classList.toggle("waiting", agents.length > 0);
     box.hidden = !agents.length;
     if (!agents.length) { if (box.innerHTML) box.innerHTML = ""; box.waitingKey = null; return; }
+    const list = (people) => people.length === 1 ? people[0] : `${people.slice(0, -1).join(", ")} and ${people[people.length - 1]}`;
     const names = agents.map((p) => p.name);
-    const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
     const checking = agents.filter(p => p.skillChannel === "tool");
-    const hint = !checking.length ? "" : checking.length === agents.length ? " They can check while working."
-      : ` ${checking.map(p => p.name).join(", ")} can check while working.`;
+    const hint = !checking.length ? "" : checking.length === agents.length ? `${names.length === 1 ? names[0] : "They"} can already read it while working.`
+      : `${list(checking.map(p => p.name))} can already read it while working.`;
     const bodyVersion = m.bodyDelivery?.version;
     const stoppable = agents.filter(p => p.activeTurnId && bodyVersion).map(p => ({ id: p.id, name: p.name, turnId: p.activeTurnId }));
     const stopLabel = stoppable.length === 1 ? `Stop ${stoppable[0].name}'s reply` : "Stop these replies";
-    const html = `<span class="waiting-text">${ic("clock")} Not yet sent to ${esc(who)} — still working.${esc(hint)}</span>` +
-      (stoppable.length ? UI.html("button", { label: stopLabel, kind: "inverse", size: "sm", act: "stop-waiting" }) : "");
+    const stopTitle = stoppable.length === 1 ? "Your message is sent as soon as the reply stops" : "Your message is sent as soon as the replies stop";
+    const html = `<span class="waiting-text"${hint ? ` title="${esc(hint)}"` : ""}>${ic("clock")} Sends when ${esc(list(names))} ${names.length === 1 ? "finishes" : "finish"}</span>` +
+      (stoppable.length ? UI.html("button", { label: stopLabel, kind: "inverse", size: "sm", act: "stop-waiting", title: stopTitle }) : "");
     const waitingKey = JSON.stringify([html, bodyVersion, stoppable.map(p => p.turnId)]);
     if (box.waitingKey !== waitingKey) { box.innerHTML = html; box.waitingKey = waitingKey; }
     const button = box.querySelector('[data-act="stop-waiting"]');
@@ -3904,10 +4130,14 @@
     const choice = e.target.closest('[data-ui="ask-card"] [data-ui="button"][data-act]');
     if (choice) {
       const card = choice.closest('[data-ui="ask-card"]');
-      if (choice.dataset.act === "permit") post(roomApi(`/permissions/${encodeURIComponent(card.dataset.key)}`), { optionId: choice.dataset.option || null }).catch(showError);
+      if (choice.dataset.act === "permit") post(roomApi(`/permissions/${encodeURIComponent(card.dataset.key)}`), { optionId: choice.dataset.option || null }).catch((error) => {
+        if (error.status === 410) resolvePermissionCard(card.dataset.key, null, "already ended");
+        else showError(error);
+      });
       else if (choice.dataset.act === "decide") post(roomApi(`/proposals/${encodeURIComponent(card.dataset.key)}`), { accept: choice.dataset.answer === "apply" }).catch(showError);
       else if (choice.dataset.act === "make-room") post(roomApi(`/new-rooms/${encodeURIComponent(card.dataset.key)}`), { create: choice.dataset.answer === "create" }).catch(showError);
       else if (choice.dataset.act === "try-look") tryLook(choice.dataset.look);
+      else if (choice.dataset.act === "knock") void answerKnockOffer(choice.dataset.answer);
       else if (choice.dataset.act === "adopt-copy") {
         choice.disabled = true;
         const roomId = state.currentRoomId;
@@ -3938,8 +4168,8 @@
   }
   function applyMessageElement(el, room, m, parts, toolIds) {
     let branch = el.querySelector(".carry-branch");
-    if (m.branch && el.querySelector(".head")) {
-      if (!branch) { branch = document.createElement("span"); branch.className = "carry-branch"; el.querySelector(".head .name")?.after(branch); }
+    if (m.branch && el.querySelector(".msg-head")) {
+      if (!branch) { branch = document.createElement("span"); branch.className = "carry-branch"; el.querySelector(".msg-head .name")?.after(branch); }
       const label = (room.sources || []).find(source => source.uuid === m.branch.source)?.label || "another copy";
       branch.textContent = `branch · ${label}`;
       branch.title = "This part of the conversation was kept from a parallel branch.";
@@ -3949,7 +4179,7 @@
     el.classList.toggle("hidden-by-search", !messageMatches(m));
     const wasPinned = el.classList.contains("pinned");
     el.classList.toggle("pinned", !!m.pinned);
-    const pinBtn = el.querySelector('.head [data-act="pin"]');
+    const pinBtn = el.querySelector('.msg-head [data-act="pin"]');
     if (pinBtn) pinBtn.title = m.pinned ? "Unpin this message" : "Pin this message";
     if (wasPinned !== !!m.pinned) renderTimeline(true);
     const editedEl = el.querySelector(".edited");
@@ -4015,6 +4245,7 @@
     renderVideos(el.querySelector(".videos"), room, m);
     renderWaiting(el, room, m);
     placeDevPrompt(el);
+    placeDevMemoryIngestion(el);
     const thought = el.querySelector(".thought");
     if (m.thought && want("thought") && canPaintMessagePart(el, "thought")) {
       thought.hidden = false;
@@ -4136,7 +4367,7 @@
     if (!present.length) return "";
     const seen = present.filter((p) => bodySupplied(p, m));
     if (m.from === "human" && m.bodyDelivery) {
-      return seen.length ? `<span class="ticks">✓✓</span> sent to ${esc(seen.map(p => p.name).join(", "))}` : `<span class="ticks">✓</span> sent`;
+      return seen.length ? `<span class="ticks">✓✓</span> sent · seen by ${esc(seen.map(p => p.name).join(", "))}` : `<span class="ticks">✓</span> sent`;
     }
     if (seen.length === present.length) return "";
     const you = m.from !== "human";
@@ -4161,7 +4392,7 @@
         meta.appendChild(span);
       }
       if (span) {
-        span.innerHTML = html;
+        if (span.innerHTML !== html) span.innerHTML = html;
         span.hidden = !html;
       }
     }
@@ -4169,11 +4400,10 @@
   function refreshSeen(room) {
     const present = room.participants.filter((p) => p.kind === "agent" && p.status !== "left" && p.status !== "offline");
     const floor = present.length ? Math.min(...present.map((p) => (p.lastSeenSeq == null ? 0 : p.lastSeenSeq))) : Infinity;
-    const byId = new Map(HistoryWindow.knownMessages(room).map((m) => [m.id, m]));
     for (const el of els.messages.querySelectorAll(".msg.mine, .msg.agent")) {
       const seq = Number(el.dataset.seq);
       const hasLabel = el.querySelector(".meta.seen, .seen-by:not([hidden])");
-      const m = byId.get(el.dataset.id);
+      const m = HistoryWindow.messageById(room, el.dataset.id);
       if (!m) continue;
       if (!m.bodyDelivery && seq <= floor && !hasLabel && !el.classList.contains("waiting")) continue;
       fillSeen(el, room, m);
@@ -4239,9 +4469,9 @@
     return page.offsetTop + (page.offsetHeight * i) / page.childElementCount;
   }
 
-  function readerAnchor() {
+  function readerAnchor(scrollTop) {
     const m = els.messages;
-    const top = m.scrollTop;
+    const top = scrollTop ?? m.scrollTop;
     let previous = null;
     for (const el of m.querySelectorAll(".msg[data-id]")) {
       const y = topInList(el);
@@ -4251,9 +4481,11 @@
     return previous ? { id: previous.el.dataset.id, into: previous.y - top } : null;
   }
   let settledReader = null;
-  function rememberReader() {
+  function rememberReader(viewport) {
     if (state.view !== "room" || !currentRoom()) return;
-    settledReader = { roomId: state.currentRoomId, anchor: stuck ? null : readerAnchor(), stamp: pricesStamp(), following: stuck };
+    const anchor = stuck ? null : readerAnchor(viewport?.beforeTop);
+    if (anchor && viewport) anchor.into += viewport.aboveDelta - (viewport.top - viewport.beforeTop);
+    settledReader = { roomId: state.currentRoomId, anchor, stamp: pricesStamp(viewport?.width), following: stuck };
   }
   let readerRestoreCleanup = null;
   function restoreReader(anchor) {
@@ -4313,6 +4545,16 @@
   let listRoomId = null;
   const returnPlaces = new Map();
   let returnTo = null;
+  function prepareRoomPlace(roomId) {
+    const back = returnPlaces.get(roomId) || null;
+    returnTo = back ? { roomId, anchor: back } : null;
+    stuck = !back;
+    readingAway = !!back;
+    lastScrollTop = 0;
+    lastUserScrollAt = 0;
+    wheelGesture.lastAt = 0;
+    wheelGesture.beganAtEnd = false;
+  }
   function keepReturnPlace(roomId) {
     if (!roomId) return;
     if (state.view === "room" && state.currentRoomId === roomId) rememberReader();
@@ -4329,8 +4571,10 @@
       stuck = true;
       readingAway = false;
     }
-    if (room?.history?.bodyProtocol && !room.history.indexed && !room.historyRestoring) void refreshHeld(room.id, back ? { reader: back, returning: true } : {});
     if (room?.restoreFrom && !room.historyRestoring) void refreshHeld(room.id, back ? { ...room.restoreFrom, reader: back, returning: true } : room.restoreFrom);
+    else if (room?.history?.bodyProtocol && !room.history.indexed && !room.historyRestoring && !room.historyIndexLoading) {
+      void refreshHeld(room.id, { indexOnly: true });
+    }
     if (room?.historyRestoring) return renderMessages(why);
     return renderMessages(why, back || undefined);
   }
@@ -4403,34 +4647,52 @@
     WindowBodies.trim(room, protectedIds);
   }
   function fillBodyPlaceholder(el, room, m) {
-    el.className = "msg history-placeholder";
+    el.className = `msg history-placeholder ${m.from === "human" ? "mine" : "agent"}`;
     const size = measuredRows.get(m.id) ?? (rowPrices.fallback ? priceItem({ kind: "msg", m }) : 100);
     el.style.minHeight = `${Math.max(64, size)}px`;
+    el.style.setProperty("--dummy-w", `${Math.round(Math.min(86, 30 + 2.2 * Math.sqrt(m.bodyChars || String(m.text || "").length || 1)))}%`);
     el.setAttribute("aria-busy", m.bodyError ? "false" : "true");
     const label = m.bodyError ? "This message could not be loaded." : "Loading message…";
     if (el.dataset.loadLabel === label) return;
     el.dataset.loadLabel = label;
-    el.innerHTML = `${m.bodyError ? "" : UI.html("skeleton", { lines: 2, shape: "bubble" })}<span class="placeholder-label">${esc(m.fromName || "Room")} · ${esc(label)}</span>${m.bodyError ? '<button class="linklike">Try again</button>' : ""}`;
+    el.innerHTML = m.bodyError
+      ? `<span class="placeholder-label">${esc(m.fromName || "Room")} · ${esc(label)}</span><button class="linklike">Try again</button>`
+      : `${UI.html("skeleton", { lines: 0, shape: "bubble", still: true })}<span class="placeholder-label for-readers">${esc(m.fromName || "Room")} · ${esc(label)}</span>`;
     el.querySelector("button")?.addEventListener("click", () => {
       const visible = [...els.messages.querySelectorAll(".msg[data-id]")].map(node => node.dataset.id);
       void loadBodies(room, [...new Set([m.id, ...visible])], true);
+    });
+  }
+  const CATCH_UP_MS = 2000;
+  const CATCH_UPS = 4;
+  function caughtUp(room, epoch, revision, waitMs = CATCH_UP_MS) {
+    if (!epoch || epoch !== room.history?.epoch || !Number.isFinite(revision)) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const until = Date.now() + waitMs;
+      const look = () => {
+        if (state.rooms.get(room.id) !== room || room.history?.epoch !== epoch) return resolve(false);
+        if ((room.history?.revision ?? -1) >= revision) return resolve(true);
+        if (Date.now() >= until) return resolve(false);
+        setTimeout(look, 20);
+      };
+      look();
     });
   }
   async function loadBodies(room, ids, retry = false) {
     if (!room.history?.indexed || state.rooms.get(room.id) !== room) return false;
     while (room.bodyFlight) { await room.bodyFlight; if (state.rooms.get(room.id) !== room) return false; }
     const wanted = new Set(ids);
-    const missing = room.messages.filter(m => wanted.has(m.id) && m.bodyMissing && (retry || !m.bodyError)).slice(0, 64);
-    if (!missing.length) return ids.every(id => room.messages.some(m => m.id === id && !m.bodyMissing));
+    const missing = [...wanted].map(id => HistoryWindow.heldMessageById(room, id)).filter(m => m?.bodyMissing && (retry || !m.bodyError)).slice(0, 64);
+    const loaded = id => { const m = HistoryWindow.heldMessageById(room, id); return !!m && !m.bodyMissing; };
+    if (!missing.length) return ids.every(loaded);
     for (const m of missing) delete m.bodyError;
     const requested = missing.map(m => m.id);
     const flight = (async () => {
       try {
-        let races = 0;
+        let races = 0, catchUps = 0;
         for (let part = 0; part < requested.length + 2; part++) {
-          const known = new Map(room.messages.map(m => [m.id, m]));
-          const remaining = requested.filter(id => known.get(id)?.bodyMissing);
-          if (!remaining.length) return requested.every(id => known.has(id));
+          const remaining = requested.filter(id => HistoryWindow.heldMessageById(room, id)?.bodyMissing);
+          if (!remaining.length) return requested.every(id => !!HistoryWindow.heldMessageById(room, id));
           const generation = room.historyGeneration;
           const q = new URLSearchParams({ version: room.history.version });
           for (const id of remaining) q.append("id", id);
@@ -4438,23 +4700,35 @@
             const page = await get(`/api/rooms/${encodeURIComponent(room.id)}/history/bodies?${q}`);
             if (state.rooms.get(room.id) !== room) return false;
             if (!WindowBodies.merge(room, page, generation)) {
+              if (catchUps < CATCH_UPS && page.revision > (room.history?.revision ?? Infinity) && await caughtUp(room, page.epoch, page.revision)) {
+                catchUps++;
+                continue;
+              }
               if (++races > 1) break;
               continue;
             }
-            const arrived = page.messages.filter(body => room.messages.some(m => m.id === body.id && !m.bodyMissing));
+            const arrived = page.messages.filter(body => loaded(body.id));
             if (!arrived.length) { if (++races > 1) break; continue; }
             trimBodyCache(room, requested);
-            if (currentRoom() === room && state.view === "room") renderMessagesSoon("message bodies arrived");
-            if (requested.every(id => room.messages.some(m => m.id === id && !m.bodyMissing))) return true;
+            if (currentRoom() === room && state.view === "room") {
+              const drawn = new Set([...els.messages.querySelectorAll(".msg[data-id]")].map((el) => el.dataset.id));
+              if (arrived.some((body) => drawn.has(body.id))) renderMessagesSoon("message bodies arrived");
+            }
+            if (requested.every(loaded)) return true;
           } catch (error) {
-            if (error.code !== "history_changed" || ++races > 1) throw error;
+            if (error.code !== "history_changed") throw error;
+            if (catchUps < CATCH_UPS && await caughtUp(room, error.data?.epoch, error.data?.revision)) {
+              catchUps++;
+              continue;
+            }
+            if (++races > 1) throw error;
             if (!await refreshHeld(room.id)) throw error;
           }
         }
         throw new Error("The conversation changed while these messages loaded. Try again.");
       } catch (error) {
         if (state.rooms.get(room.id) === room) {
-          for (const m of room.messages) if (wanted.has(m.id) && m.bodyMissing) m.bodyError = error.message;
+          for (const id of wanted) { const m = HistoryWindow.heldMessageById(room, id); if (m?.bodyMissing) m.bodyError = error.message; }
           if (currentRoom() === room && state.view === "room") renderMessagesSoon("message loading failed");
         }
         return false;
@@ -4463,8 +4737,24 @@
     room.bodyFlight = flight;
     try { return await flight; } finally { if (room.bodyFlight === flight) room.bodyFlight = null; }
   }
+  function wantBodies(room) {
+    if (room.bodiesWanted) return;
+    room.bodiesWanted = true;
+    void (async () => {
+      while (room.bodyFlight) await room.bodyFlight;
+      room.bodiesWanted = false;
+      if (currentRoom() !== room || state.view !== "room") return;
+      const drawn = [...els.messages.querySelectorAll(".msg[data-id]")].map((el) => el.dataset.id);
+      if (drawn.length) await loadBodies(room, drawn);
+    })();
+  }
   function syncHistoryCount(room) {
     if (room.history?.total === undefined) return;
+    if (room.history.indexed) {
+      room.history.hidden = 0;
+      room.history.oldest = null;
+      return;
+    }
     room.history.hidden = Math.max(0, room.history.total - room.messages.filter(m => m.seq > 0 && !m.streaming).length);
     room.history.oldest = room.history.hidden && room.messages.length ? cursorOf(room.messages[0]) : null;
   }
@@ -4507,13 +4797,16 @@
   async function refreshHeld(roomId, wanted = {}) {
     const room = state.rooms.get(roomId);
     if (!room) return false;
+    const indexOnly = !!wanted.indexOnly && !!room.history?.bodyProtocol && !room.history.indexed
+      && !room.restoreFrom && !wanted.from && !wanted.all && wanted.seq === undefined && !wanted.messageId;
     const request = Symbol("history request");
     room.historyRequest = request;
     room.historyGeneration = (room.historyGeneration || 0) + 1;
     room.loadingOlder = false;
-    room.historyRestoring = true;
+    room.historyRestoring = !indexOnly;
+    room.historyIndexLoading = indexOnly ? request : false;
     room.historyEvents = [];
-    const reader = wanted.reader !== undefined ? wanted.reader : (roomId === state.currentRoomId && !stuck ? readerAnchor() : null);
+    const reader = indexOnly ? null : wanted.reader !== undefined ? wanted.reader : (roomId === state.currentRoomId && !stuck ? readerAnchor() : null);
     const oldMessage = reader && HistoryWindow.knownMessages(room).find(m => m.id === reader.id);
     const from = wanted.from || (room.messages[0] && cursorOf(room.messages[0]));
     try {
@@ -4529,6 +4822,8 @@
         const fresh = await get(`/api/rooms/${encodeURIComponent(roomId)}?${q}`);
         if (state.rooms.get(roomId) !== room || room.historyRequest !== request) return false;
         if (!HistoryWindow.acceptSnapshot(room, fresh, ticket)) continue;
+        const liveReader = indexOnly ? (roomId === state.currentRoomId && state.view === "room" && !stuck ? readerAnchor() : null) : reader;
+        const oldReaderMessage = indexOnly ? liveReader && HistoryWindow.messageById(room, liveReader.id) : oldMessage;
         if (fresh.history?.indexed) WindowBodies.retain(room, fresh);
         room.messages = (fresh.messages || []).sort(HistoryWindow.compareMessages);
         room.history = fresh.history;
@@ -4540,8 +4835,9 @@
         for (const event of arrived) if (event.streamSequence > (fresh.history?.streamSequence ?? Infinity)) onRoomEvent(roomId, event);
         room.restoreFrom = null;
         room.historyRestoring = false;
+        room.historyIndexLoading = false;
         room.historyGeneration = (room.historyGeneration || 0) + 1;
-        let anchor = reader;
+        let anchor = liveReader;
         const targetIndex = wanted.messageId ? room.messages.findIndex(m => m.id === wanted.messageId)
           : wanted.seq !== undefined ? room.messages.findIndex(m => m.seq === wanted.seq) : -1;
         if (targetIndex >= 0) {
@@ -4549,7 +4845,7 @@
           anchor = { id: room.messages[targetIndex].id, into: 12 };
         }
         if (anchor && !HistoryWindow.knownMessages(room).some(m => m.id === anchor.id)) {
-          const replacement = oldMessage && room.messages.find(m => !before(cursorOf(m), cursorOf(oldMessage)));
+          const replacement = oldReaderMessage && room.messages.find(m => !before(cursorOf(m), cursorOf(oldReaderMessage)));
           anchor = replacement ? { ...anchor, id: replacement.id } : null;
         }
         if (wanted.returning && !anchor && roomId === state.currentRoomId) {
@@ -4576,6 +4872,10 @@
         const resumeDrawing = room.historyRestoring;
         room.historyEvents = null;
         room.historyRestoring = false;
+        room.historyIndexLoading = false;
+        if (indexOnly && state.rooms.get(roomId) === room && roomId === state.currentRoomId && state.view === "room") {
+          updateHistoryLoading(room, els.messages.querySelector(".history-load"));
+        }
         if (resumeDrawing && state.rooms.get(roomId) === room) {
           if (roomId === state.currentRoomId && state.view === "room") {
             renderMessages("history loading stopped");
@@ -4588,7 +4888,7 @@
   const ARRIVE_STAGGER_CAP = 8;
   async function growFold(more, why, roomId) {
     const room = state.rooms.get(roomId);
-    if (!room || !foldHidden(room) || room.loadingOlder || room.historyRestoring) return;
+    if (!room || !foldHidden(room) || room.loadingOlder || room.historyRestoring || room.historyIndexLoading) return;
     const generation = room.historyGeneration || 0;
     let oldIndex = foldIndex(room);
     if (remoteHidden(room) && (more === "all" || oldIndex < more)) {
@@ -4847,7 +5147,7 @@
   }
   function updateHistoryLoading(room, controls) {
     if (!controls) return;
-    const busy = !!room.historyLoadAction || !!room.loadingOlder || !!room.historyRestoring;
+    const busy = !!room.historyLoadAction || !!room.loadingOlder || !!room.historyRestoring || !!room.historyIndexLoading;
     const all = controls.querySelector('[data-act="fold-all"]');
     controls.setAttribute("aria-busy", String(busy));
     all.disabled = busy;
@@ -4868,7 +5168,7 @@
     });
   }
   async function requestOlder(room, more, why) {
-    if (currentRoom() !== room || state.view !== "room" || room.historyLoadAction || room.loadingOlder || room.historyRestoring) return;
+    if (currentRoom() !== room || state.view !== "room" || room.historyLoadAction || room.loadingOlder || room.historyRestoring || room.historyIndexLoading) return;
     const controls = els.messages.querySelector(".history-load");
     if (!controls || controls.getAttribute("aria-busy") === "true") return;
     const action = { more };
@@ -5025,7 +5325,11 @@
   }
 
   function fillListRow(room, node, item, fresh) {
-    if (item.kind === "space") { node.style.height = `${Math.max(0, Math.round(item.px))}px`; return; }
+    if (item.kind === "space") {
+      const height = `${Math.max(0, Math.round(item.px))}px`;
+      if (node.style.height !== height) node.style.height = height;
+      return;
+    }
     if (item.kind === "pins") return fillPins(room, node, item.above);
     if (fresh) return;
     switch (item.kind) {
@@ -5105,8 +5409,8 @@
     }
     return rowPrices.middle;
   }
-  const pricesStamp = () =>
-    `${els.messages.clientWidth}|${document.documentElement.dataset.look || ""}|${document.documentElement.style.getPropertyValue("--chat-fs")}`;
+  const pricesStamp = (width = els.messages.clientWidth) =>
+    `${width}|${document.documentElement.dataset.look || ""}|${document.documentElement.style.getPropertyValue("--chat-fs")}`;
 
   function priceRows(room, items) {
     const stamp = pricesStamp();
@@ -5179,9 +5483,7 @@
 
   const MARGIN_SCREENS = 1;
   let keepingScroll = null;
-  let followTimer = 0;
   function followWindow() {
-    followTimer = 0;
     const room = currentRoom();
     if (!room || state.view !== "room" || !drawnWindow || room.historyRestoring) return;
     if (rowPrices.stamp !== pricesStamp()) { repriceSoon(); return; }
@@ -5206,29 +5508,46 @@
     }
     return null;
   }
-  function holdTheEye(eye) {
-    if (!eye) return;
+  function eyeMovement(eye) {
+    if (!eye) return null;
     const row = els.messages.querySelector(`.msg[data-id="${CSS.escape(eye.id)}"]`);
-    if (!row) return;
+    if (!row) return null;
     const box = Layout.rect(els.messages);
     const target = eye.part ? row.querySelector(eye.part) || row : row;
-    const moved = Layout.rect(target).top - box.top - eye.at;
+    return Layout.rect(target).top - box.top - eye.at;
+  }
+  function holdTheEye(eye) {
+    const moved = eyeMovement(eye);
+    if (moved === null) return;
     if (Math.abs(moved) > 0.5) els.messages.scrollTop += moved;
   }
 
-  function settleSpacers() {
-    if (!drawnWindow || !listAccount) return;
+  function settleSpacers(eye, beforeCommit) {
+    if (!drawnWindow || !listAccount) return false;
     const above = els.messages.querySelector('.msgs-space[data-id="space:above"]');
     const belowNode = els.messages.querySelector('.msgs-space[data-id="space:below"]');
     const opening = listAccount.before ? listAccount.before(0) : 0;
     const want = Math.max(0, ListIndex.topOf(listAccount, drawnWindow.from) - opening - listAccount.gap);
     const below = Math.max(0, ListIndex.total(listAccount) - ListIndex.topOf(listAccount, drawnWindow.to));
-    if (belowNode) belowNode.style.height = `${Math.round(below)}px`;
-    if (above) above.style.height = `${Math.round(want)}px`;
+    const aboveHeight = Math.round(want), belowHeight = Math.round(below);
+    const moved = eyeMovement(eye);
+    const top = moved === null ? null : els.messages.scrollTop + moved + (above ? aboveHeight - (parseFloat(above.style.height) || 0) : 0);
+    if (beforeCommit) {
+      const beforeTop = els.messages.scrollTop, height = els.messages.clientHeight;
+      const aboveDelta = above ? aboveHeight - (parseFloat(above.style.height) || 0) : 0;
+      const belowDelta = belowNode ? belowHeight - (parseFloat(belowNode.style.height) || 0) : 0;
+      const total = Math.max(height, els.messages.scrollHeight + aboveDelta + belowDelta);
+      beforeCommit({ beforeTop, aboveDelta, total, height, width: els.messages.clientWidth,
+        top: Math.max(0, Math.min(total - height, top ?? (stuck && !humanHoldsText() ? total - height : beforeTop))) });
+    }
+    if (belowNode && belowNode.style.height !== `${belowHeight}px`) belowNode.style.height = `${belowHeight}px`;
+    if (above && above.style.height !== `${aboveHeight}px`) above.style.height = `${aboveHeight}px`;
+    if (top !== null) els.messages.scrollTop = top;
+    return top !== null;
   }
   function followWindowSoon() {
-    if (followTimer || !drawnWindow) return;
-    followTimer = requestAnimationFrame(followWindow);
+    if (!drawnWindow) return;
+    requestViewportWork({ follow: true });
   }
 
 
@@ -5327,6 +5646,9 @@
   const observedRows = new Set();
   let measuredIndexes = new Map();
   const rowSizeObserver = new ResizeObserver((entries) => {
+    requestViewportWork({ rows: entries.map(entry => ({ target: entry.target, borderSize: entry.borderBoxSize?.[0]?.blockSize })) });
+  });
+  function applyObservedRows(entries) {
     if (!drawnWindow || !listAccount || state.view !== "room") return;
     if (rowPrices.stamp !== pricesStamp()) { repriceSoon(); return; }
     const eye = stuck ? null : eyeRow();
@@ -5337,20 +5659,29 @@
       const at = measuredIndexes.get(node.dataset.id);
       if (at === undefined) continue;
       if (listAccount.items[at]?.m?.bodyMissing) continue;
-      const measured = rowFlowBox(node, entry.borderBoxSize?.[0]?.blockSize);
+      const measured = rowFlowBox(node, entry.borderSize);
       const px = measured.height;
       rowInsets.set(itemKind(listAccount.items[at]), measured.inset);
       if (!(px > 0)) continue;
       if (ListIndex.heightAt(listAccount, at) !== px) changed = ListIndex.measured(listAccount, at, px) || changed;
       measuredRows.set(node.dataset.id, px);
     }
-    if (!changed) return;
-    settleSpacers();
-    if (stuck && !humanHoldsText()) scrollToBottom("visible message size changed");
-    else holdTheEye(eye);
+    return changed ? { eye } : null;
+  }
+  function commitObservedRows(eye) {
+    if (stuck && !humanHoldsText()) calmRelease();
+    const plans = prepareTimelineFrame(viewportRunning?.full);
+    let viewport;
+    const held = settleSpacers(eye, measured => {
+      viewport = measured;
+      measureTimelineFrame(plans, viewport);
+      rememberReader(viewport);
+    });
+    if (stuck && !humanHoldsText()) scrollToBottom("visible message size changed", { viewport });
+    else if (!held) holdTheEye(eye);
+    renderTimelineAfterList();
     followWindowSoon();
-    renderTimelineSoon(false);
-  });
+  }
   function observeDrawnRows() {
     const rows = new Set([...els.messages.querySelectorAll(":scope > .msgs-page > [data-id]")].filter(row => !row.classList.contains("msgs-space")));
     for (const row of observedRows) if (!rows.has(row)) { rowSizeObserver.unobserve(row); observedRows.delete(row); }
@@ -5398,17 +5729,20 @@
     let at = offset;
     for (const page of els.messages.children) {
       if (!page.classList.contains("msgs-page")) continue;
+      let anyReal = false;
+      for (let i = 0; i < page.childElementCount && !anyReal; i++) anyReal = !listAccount.items[at + i]?.m?.bodyMissing;
+      if (!anyReal) { at += page.childElementCount; continue; }
       const first = page.firstElementChild;
       const drawn = !first || typeof first.checkVisibility !== "function" || first.checkVisibility({ contentVisibilityAuto: true });
       if (!drawn) { at += page.childElementCount; continue; }
       for (const row of page.children) {
         if (row.classList.contains("msgs-space")) continue;
+        if (listAccount.items[at]?.m?.bodyMissing) { at++; continue; }
         const itself = typeof row.checkVisibility !== "function" || row.checkVisibility({ contentVisibilityAuto: true });
         if (!itself) { at++; continue; }
         const measured = rowFlowBox(row);
         const real = measured.height;
         const item = listAccount.items[at];
-        if (item?.m?.bodyMissing) { at++; continue; }
         if (item) rowInsets.set(itemKind(item), measured.inset);
         if (item && real > 0) measuredRows.set(item.name, real);
         missed.push(Math.abs(ListIndex.heightAt(listAccount, at) - real));
@@ -5469,14 +5803,160 @@
   let afterRender = [];
   function afterListRender(fn) { afterRender.push(fn); }
   let listPaintFrame = 0;
-  function renderMessagesSoon(why) {
-    if (listPaintFrame) return;
+  let viewportFrame = 0;
+  let viewportWork = null;
+  let viewportRunning = null;
+  function requestViewportWork(change) {
     const roomId = state.currentRoomId;
-    listPaintFrame = requestAnimationFrame(() => {
-      listPaintFrame = 0;
-      if (state.view === "room" && state.currentRoomId === roomId) renderMessages(why);
-    });
+    if (!viewportWork || viewportWork.roomId !== roomId) viewportWork = { roomId, rows: new Map() };
+    if (change.list && !viewportWork.list) viewportWork.list = change.list;
+    for (const flag of ["follow", "timeline", "full", "view", "resize", "composer"]) if (change[flag]) viewportWork[flag] = true;
+    for (const entry of change.rows || []) viewportWork.rows.set(entry.target, entry);
+    if (!viewportFrame) viewportFrame = requestAnimationFrame(flushViewportWork);
+    return viewportFrame;
   }
+  function flushViewportWork() {
+    viewportFrame = 0;
+    const work = viewportWork;
+    viewportWork = null;
+    listPaintFrame = 0;
+    if (!work || state.view !== "room" || state.currentRoomId !== work.roomId) return;
+    viewportRunning = work;
+    try {
+      const resized = work.rows.size ? applyObservedRows([...work.rows.values()]) : null;
+      const composerHeight = work.composer ? `${els.composer.offsetHeight}px` : null;
+      if (work.list) renderMessages(work.list);
+      else if (work.follow || resized) followWindow();
+      if (resized && !work.drawn) commitObservedRows(resized.eye);
+      else if (!work.drawn) {
+        if (work.timeline) renderTimeline(work.full);
+        else if (work.view) updateTimelineView();
+      }
+      if (composerHeight !== null) {
+        for (const el of composerFollowers) if (el.style.getPropertyValue("--composer-h") !== composerHeight) el.style.setProperty("--composer-h", composerHeight);
+      }
+      if (work.resize) repriceSoon();
+      els.jumpLatest.hidden = stuck;
+      updateWorkingNow();
+    } finally {
+      viewportRunning = null;
+    }
+  }
+  function renderMessagesSoon(why) {
+    listPaintFrame = requestViewportWork({ list: why });
+  }
+  const EMPTY_GUIDE = [
+    { id: "summon", target: "#invite-btn", words: "Start here: summon your first vibemate" },
+    { id: "automations", target: "#automations-btn", words: "Reminders and tasks, on time" },
+    { id: "settings", target: "#chat-info-btn", words: "The room's rules and settings" },
+  ];
+  function drawnArrow(from, out, to, into) {
+    const dist = Math.hypot(to.x - from.x, to.y - from.y);
+    const reach = 0.55 * dist;
+    const c1 = { x: from.x + out.x * reach, y: from.y + out.y * reach };
+    const c2 = { x: to.x - into.x * reach, y: to.y - into.y * reach };
+    const mid = { x: (from.x + 3 * c1.x + 3 * c2.x + to.x) / 8, y: (from.y + 3 * c1.y + 3 * c2.y + to.y) / 8 };
+    const tx = c2.x + to.x - from.x - c1.x, ty = c2.y + to.y - from.y - c1.y, tl = Math.hypot(tx, ty) || 1;
+    const course = { x: tx / tl, y: ty / tl };
+    const k = Math.max(0.75, Math.min(1.2, dist / 70));
+    const side = { x: course.y, y: -course.x };
+    const at = ([u, v]) => ({ x: mid.x + (course.x * u + side.x * v) * k, y: mid.y + (course.y * u + side.y * v) * k });
+    const way = ([u, v]) => { const x = course.x * u + side.x * v, y = course.y * u + side.y * v, l = Math.hypot(x, y) || 1; return { x: x / l, y: y / l }; };
+    const inDir = way(CURL.points[0]), outDir = way([CURL.points[5][0] - CURL.points[4][0], CURL.points[5][1] - CURL.points[4][1]]);
+    const start = at([0, 0]), end = at(CURL.points[5]);
+    const lead = 0.3 * dist, bend = 0.2 * dist;
+    const n = (v) => v.toFixed(1);
+    const pt = (p) => `${n(p.x)},${n(p.y)}`;
+    const a = Math.atan2(into.y, into.x) + Math.PI;
+    const wing = (turn) => `${n(to.x + Math.cos(a + turn) * 7)},${n(to.y + Math.sin(a + turn) * 7)}`;
+    const [p1, p2, p3, p4, p5, p6] = CURL.points.map(at).map(pt);
+    const d = `M${pt(from)} C${pt({ x: from.x + out.x * lead, y: from.y + out.y * lead })} ${pt({ x: start.x - inDir.x * bend, y: start.y - inDir.y * bend })} ${pt(start)}`
+      + ` C${p1} ${p2} ${p3} C${p4} ${p5} ${p6}`
+      + ` C${pt({ x: end.x + outDir.x * bend, y: end.y + outDir.y * bend })} ${pt({ x: to.x - into.x * lead, y: to.y - into.y * lead })} ${pt(to)}`;
+    return { d, head: `M${wing(0.6)} L${n(to.x)},${n(to.y)} L${wing(-0.6)}` };
+  }
+  const CURL = { points: [[6, 5], [2, 12], [-4, 10], [-10, 8], [-6, -2], [4, -6]] };
+  function quietRoom(room) {
+    if (room.messages.some((m) => m.kind !== "system" && m.kind !== "hidden")) return false;
+    return !room.messages.length || !room.history?.bodyProtocol || !!room.history.indexed;
+  }
+  const quietMates = (room) => room.participants.filter((p) => p.kind === "agent" && p.status !== "left" && p.status !== "unstaffed").length;
+  const quietKey = (room) => [room.id, room.name, quietMates(room), room.messages.map((m) => m.id).join(",")].join("|");
+  const QUIET_NOTES = 3;
+  function emptyRoomHtml(room) {
+    const notes = room.messages.filter((m) => m.kind === "system" && m.audience !== "agents").slice(-QUIET_NOTES).map((m) => `<div class="er-note">${esc(m.text || "")}</div>`).join("");
+    const next = quietMates(room) ? "Say hello: @Name speaks to one; without @, everyone hears you." : "Summon a vibemate, then say hello. @Name speaks to one; without @, everyone hears you.";
+    return `<div class="empty empty-room" data-quiet="${esc(quietKey(room))}">${notes ? `<div class="er-notes">${notes}</div>` : ""}<div class="art scene-art wb-scene sm-scene" role="img" aria-label="An empty seat, the outline of a vibemate: one is summoned into it, waves and starts to type">${window.Icons.scene("summon")}</div><strong>${esc(room.name)}</strong> is quiet, for now.<br>${next}</div>`;
+  }
+  let emptyGuideEl = null, emptyGuideFrame = 0, emptyGuideDrawn = false, emptyGuideKey = "";
+  function hideEmptyGuide() {
+    cancelAnimationFrame(emptyGuideFrame);
+    emptyGuideFrame = 0;
+    emptyGuideDrawn = false;
+    emptyGuideKey = "";
+    if (emptyGuideEl) emptyGuideEl.hidden = true;
+  }
+  function showEmptyGuide() {
+    cancelAnimationFrame(emptyGuideFrame);
+    emptyGuideFrame = requestAnimationFrame(() => { emptyGuideFrame = 0; drawEmptyGuide(); });
+  }
+  function drawEmptyGuide() {
+    const block = els.messages.querySelector(".empty-room");
+    if (!block || state.view !== "room") return hideEmptyGuide();
+    if (!emptyGuideEl) {
+      emptyGuideEl = document.createElement("div");
+      emptyGuideEl.className = "empty-guide";
+      emptyGuideEl.setAttribute("aria-hidden", "true");
+      document.body.appendChild(emptyGuideEl);
+      new ResizeObserver(() => { if (emptyGuideDrawn) showEmptyGuide(); }).observe(els.messages);
+    }
+    const replay = !emptyGuideDrawn;
+    const b = Layout.rect(block);
+    const viewW = Layout.length(innerWidth), viewH = Layout.length(innerHeight);
+    const seen = (el) => { if (!el) return null; const r = Layout.rect(el); return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < viewH && r.left < viewW ? r : null; };
+    const key = [b, ...EMPTY_GUIDE.map((g) => seen(document.querySelector(g.target)))].map((r) => (r ? `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}` : "-")).join("|") + `|${Math.round(viewW)}x${Math.round(viewH)}|${quietKey(currentRoom() || { id: "", name: "", participants: [], messages: [] })}`;
+    if (emptyGuideDrawn && key === emptyGuideKey && !emptyGuideEl.hidden) return;
+    emptyGuideKey = key;
+    const arrows = [];
+    const head = document.querySelector(".chat-head"), talk = document.querySelector(".chat-conversation");
+    const bannerOver = !!head && !!talk && Layout.rect(talk).top - Layout.rect(head).bottom > 2;
+    const items = bannerOver ? [] : EMPTY_GUIDE.map((g) => ({ ...g, rect: seen(document.querySelector(g.target)) })).filter((g) => g.rect);
+    const room = currentRoom(), mates = room ? quietMates(room) : 0;
+    const words = (g) => (g.id === "summon" && mates ? "Summon another vibemate" : g.words);
+    emptyGuideEl.innerHTML = items.map((g, i) => `<span class="eg-label" data-eg="${g.id}" style="--i:${i}">${esc(words(g))}</span>`).join("") + '<svg class="eg-arrows"></svg>';
+    emptyGuideEl.hidden = false;
+    const size = (id) => { const el = emptyGuideEl.querySelector(`[data-eg="${id}"]`); return { w: el.offsetWidth, h: el.offsetHeight }; };
+    const LEFT = { x: -1, y: 0 }, RIGHT = { x: 1, y: 0 }, UP = { x: 0, y: -1 };
+    const place = {};
+    for (const g of items) {
+      const t = g.rect, { w, h } = size(g.id);
+      if (g.id === "summon") {
+        const at = { x: t.right + 54, y: t.bottom + 18 };
+        place.summon = { at, from: { x: at.x - 8, y: at.y + h / 2 }, out: LEFT, to: { x: t.right + 7, y: t.top + t.height / 2 }, into: LEFT };
+      } else if (g.id === "settings") {
+        const at = { x: Math.min(viewW - 16, t.right) - w, y: t.bottom + 58 };
+        place.settings = { at, from: { x: at.x + w - 26, y: at.y - 6 }, out: UP, to: { x: t.left + t.width / 2, y: t.bottom + 5 }, into: UP };
+      } else {
+        const at = { x: t.left - 44 - w, y: t.bottom + 22 };
+        place[g.id] = { at, from: { x: at.x + w + 8, y: at.y + h / 2 }, out: RIGHT, to: { x: t.left + t.width / 2, y: t.bottom + 5 }, into: UP };
+      }
+    }
+    items.forEach((g, i) => {
+      const el = emptyGuideEl.querySelector(`[data-eg="${g.id}"]`);
+      const p = place[g.id];
+      el.style.left = `${Math.round(p.at.x)}px`;
+      el.style.top = `${Math.round(p.at.y)}px`;
+      const { d, head } = drawnArrow(p.from, p.out, p.to, p.into);
+      arrows.push(`<g class="eg-arrow" style="--arrow-lag:${(i * 0.35).toFixed(2)}s"><path class="eg-line drawn-line" pathLength="1" d="${d}"/><path class="eg-head drawn-head" d="${head}"/></g>`);
+    });
+    const svg = emptyGuideEl.querySelector(".eg-arrows");
+    svg.setAttribute("viewBox", `0 0 ${viewW} ${viewH}`);
+    svg.innerHTML = arrows.join("");
+    emptyGuideEl.classList.toggle("eg-replay", replay);
+    emptyGuideEl.hidden = !items.length;
+    emptyGuideDrawn = true;
+  }
+
   function renderMessages(why, savedAnchor) {
     const anotherRoom = listRoomId !== (currentRoom()?.id ?? null);
     if (anotherRoom) glideStop("another room");
@@ -5484,8 +5964,10 @@
     if (anotherRoom) lastScrollTop = els.messages.scrollTop;
   }
   function drawList(why, savedAnchor) {
+    if (viewportRunning) viewportRunning.drawn = true;
     lastListChange = { why, at: Date.now() };
-    if (listPaintFrame) { cancelAnimationFrame(listPaintFrame); listPaintFrame = 0; }
+    if (viewportWork?.roomId === state.currentRoomId) viewportWork.list = null;
+    listPaintFrame = 0;
     const t0 = performance.now();
     const room = currentRoom();
     if (room?.historyRestoring) {
@@ -5508,15 +5990,18 @@
     const eyeBefore = stuck || humanHoldsText() ? null : eyeRow();
     els.messages.classList.toggle("searching", !!state.search);
     if (!room) { els.messages.innerHTML = ""; return; }
-    if (room.history?.bodyProtocol && !room.history.indexed && room.indexError) {
+    if (room.history?.bodyProtocol && !room.history.indexed && room.indexError && !room.messages.length) {
       els.messages.innerHTML = `<div class="empty" role="status">The conversation could not be loaded. <button class="linklike">Try again</button></div>`;
       els.messages.querySelector("button").onclick = () => void refreshHeld(room.id);
       return;
     }
-    if (!room.messages.length) {
-      els.messages.innerHTML = `<div class="empty"><div class="art">${ic("chat")}</div><strong>${esc(room.name)}</strong> is quiet.<br>Summon a vibemate from the left, then say hello. Use @Name to address someone; without @ every vibemate hears you.</div>`;
+    if (quietRoom(room)) {
+      const shown = els.messages.querySelector(".empty-room");
+      if (!shown || shown.dataset.quiet !== quietKey(room)) els.messages.innerHTML = emptyRoomHtml(room);
+      showEmptyGuide();
       return;
     }
+    hideEmptyGuide();
     if (listSearch !== (state.search || "")) {
       listSearch = state.search || "";
       listGeneration++;
@@ -5575,32 +6060,40 @@
     }
     if (anchor) measureBornAbove(born, shown.findIndex((item) => item.kind === "msg" && item.name === anchor.id));
     if (!drawnWindow) guessPages(room, items);
-    takeRealHeights(drawnWindow ? drawnWindow.from : 0);
-    observeDrawnRows();
     for (const perm of room.permissions) renderPermission(room, perm);
     for (const prop of room.proposals || []) renderProposal(room, prop);
     for (const asked of room.newRooms || []) renderNewRoom(room, asked);
     syncRecovery(room);
+    syncKnockOffer(room);
     refreshSeen(room);
-    settleSpacers();
-    if (releasedEye) holdTheEye(releasedEye);
+    if (drawnWindow && readerRestoreCleanup) readerRestoreCleanup();
+    if (stuck && !humanHoldsText()) calmRelease();
+    const timelinePlans = prepareTimelineFrame(viewportRunning?.full);
+    takeRealHeights(drawnWindow ? drawnWindow.from : 0);
+    observeDrawnRows();
+    const place = releasedEye || keepingScroll?.eye || (!humanHoldsText() && (anchor ? { id: anchor.id, at: anchor.into } : eyeBefore));
+    let viewport;
+    const held = settleSpacers(place, measured => {
+      viewport = measured;
+      measureTimelineFrame(timelinePlans, viewport);
+      rememberReader(viewport);
+    });
+    if (releasedEye) { if (!held) holdTheEye(releasedEye); }
     else if (keepingScroll) {
-      if (keepingScroll.eye) holdTheEye(keepingScroll.eye);
+      if (keepingScroll.eye) { if (!held) holdTheEye(keepingScroll.eye); }
       else els.messages.scrollTop = keepingScroll.top;
-    } else if (!restoreReader(anchor) && !humanHoldsText()) {
-      if (stuck) scrollToBottom("the list was rebuilt");
+    } else if (!held && !restoreReader(anchor) && !humanHoldsText()) {
+      if (stuck) scrollToBottom("the list was rebuilt", { viewport });
       else {
         if (eyeBefore && els.messages.querySelector(`.msg[data-id="${CSS.escape(eyeBefore.id)}"]`)) holdTheEye(eyeBefore);
         noteHeldPlace(anchor ? "the list was rebuilt and the place was not found" : "the list was rebuilt without a place to return to");
       }
     }
     renderTimelineAfterList();
-    rememberReader();
+    if (!viewport) rememberReader();
     if (room.history?.indexed) {
-      const visibleIds = shown.filter(item => item.kind === "msg").map(item => item.name);
-      WindowBodies.touch(room, visibleIds);
-      trimBodyCache(room, visibleIds);
-      void loadBodies(room, visibleIds);
+      WindowBodies.touch(room, shown.filter(item => item.kind === "msg").map(item => item.name));
+      wantBodies(room);
     }
     followWindowSoon();
     const ready = afterRender;
@@ -5618,11 +6111,11 @@
   function upsertMessage(roomId, m) {
     const room = state.rooms.get(roomId);
     if (!room) return;
-    if (m.from === "human" && !m.pending && !room.messages.some((x) => x.id === m.id)) {
+    if (m.from === "human" && !m.pending && !HistoryWindow.heldMessageById(room, m.id)) {
       const local = room.messages.find((x) => x.pending && x.from === "human" && x.text === m.text);
       if (local) adoptLocalMessage(roomId, local.id, m.id);
     }
-    let idx = room.messages.findIndex((x) => x.id === m.id);
+    let idx = HistoryWindow.heldMessageIndex(room, m.id);
     if (idx < 0 && aboveHeld(room, m)) {
       room.pinnedOlder = (room.pinnedOlder || []).filter((p) => p.id !== m.id);
       if (m.pinned && m.kind === "chat") {
@@ -5635,19 +6128,23 @@
     }
     const wasFinal = idx >= 0 && !room.messages[idx].streaming;
     if (idx >= 0) {
+      const previousOrder = { id: m.id, seq: room.messages[idx].seq, displayOrder: room.messages[idx].displayOrder };
       if (!("pinned" in m)) delete room.messages[idx].pinned;
+      if (!("pinLabel" in m)) delete room.messages[idx].pinLabel;
       if (m.seq > 0 && !("displayOrder" in m)) delete room.messages[idx].displayOrder;
       Object.assign(room.messages[idx], m);
       if (room.history?.bodyProtocol && !m.bodyMissing) {
         delete room.messages[idx].bodyMissing;
         delete room.messages[idx].bodyChars;
         delete room.messages[idx].bodyError;
-        WindowBodies.invalidate(room.messages[idx]);
+        WindowBodies.changed(room, room.messages[idx]);
       }
       edited(room.messages[idx]);
-    } else room.messages.push(m);
-    room.messages.sort(HistoryWindow.compareMessages);
-    idx = room.messages.findIndex(x => x.id === m.id);
+      if (HistoryWindow.compareMessages(previousOrder, room.messages[idx]) !== 0) {
+        HistoryWindow.sortMessages(room);
+        idx = HistoryWindow.heldMessageIndex(room, m.id);
+      }
+    } else idx = HistoryWindow.insertMessage(room, m);
     syncHistoryCount(room);
     const inView = roomId === state.currentRoomId && state.view === "room";
     const existing = inView ? els.messages.querySelector(`.msg[data-id="${m.id}"]`) : null;
@@ -5667,7 +6164,7 @@
     if (existing) updateMessageElement(existing, room, room.messages[idx]);
     else {
       const mine = idx >= 0 ? room.messages[idx] : m;
-      const at = room.messages.indexOf(mine);
+      const at = idx;
       if (at >= 0 && at < foldIndex(room)) {
         if (mine.pinned && mine.kind === "chat") renderMessages("a folded message was pinned");
         return;
@@ -5745,10 +6242,11 @@
   function patchMessage(roomId, id, fn, part, toolId) {
     const room = state.rooms.get(roomId);
     if (!room) return;
-    const m = room.messages.find((x) => x.id === id);
+    const m = HistoryWindow.heldMessageById(room, id);
     if (!m || !m.streaming) return;
     const base = edits.get(m) || 0;
     fn(m);
+    if (room.history?.bodyProtocol) WindowBodies.invalidate(m);
     edited(m);
     if (roomId !== state.currentRoomId || state.view !== "room") return;
     if (part === "tools" && m.from !== "human") scheduleRosterRedraw(60);
@@ -5779,7 +6277,7 @@
     let touched = false;
     for (const [id, { room, parts, toolIds }] of batch) {
       if (state.rooms.get(room.id) !== room || room.historyRestoring || room.id !== state.currentRoomId || state.view !== "room") continue;
-      const m = room.messages.find((x) => x.id === id);
+      const m = HistoryWindow.heldMessageById(room, id);
       const el = m && els.messages.querySelector(`.msg[data-id="${id}"]`);
       if (!el) continue;
       updateMessageElement(el, room, m, parts, toolIds);
@@ -5802,12 +6300,20 @@
     const opening = !editors.has(m.id);
     const held = editors.get(m.id) || { roomId: room.id, text: m.text, start: m.text.length, end: m.text.length };
     editors.set(m.id, held);
-    box.innerHTML = `<textarea class="edit-area" rows="3"></textarea><div class="row-btns">${UI.html("button", { label: "Cancel", kind: "ghost", size: "sm", hook: "edit-cancel" })}${UI.html("button", { label: "Save", kind: "primary", size: "sm", hook: "edit-save" })}</div>`;
+    box.innerHTML = `<textarea class="edit-area" rows="1"></textarea><div class="row-btns">${UI.html("button", { label: "Cancel", kind: "ghost", size: "sm", hook: "edit-cancel" })}${UI.html("button", { label: "Save", kind: "primary", size: "sm", hook: "edit-save" })}</div>`;
     const area = box.querySelector(".edit-area");
     area.value = held.text;
+    const bubble = el.querySelector(".bubble");
+    el.style.setProperty("--edit-width", `${Math.round(bubble ? Layout.rect(bubble).width : 0)}px`);
     box.hidden = false;
     text.hidden = true;
     el.classList.add("editing");
+    const fit = () => {
+      area.style.height = "auto";
+      area.style.height = `${area.scrollHeight + area.offsetHeight - area.clientHeight}px`;
+    };
+    fit();
+    area.addEventListener("input", fit);
     const keep = () => { held.text = area.value; held.start = area.selectionStart; held.end = area.selectionEnd; };
     for (const kind of ["input", "select", "keyup", "pointerup"]) area.addEventListener(kind, keep);
     if (focus) {
@@ -5821,6 +6327,7 @@
       box.innerHTML = "";
       text.hidden = false;
       el.classList.remove("editing");
+      el.style.removeProperty("--edit-width");
       resumeAfterText();
     };
     box.querySelector(".edit-cancel").addEventListener("click", close);
@@ -5911,22 +6418,24 @@
     return found ? `⚠ ${found} invisible character${found === 1 ? "" : "s"}, shown as ⟦U+…⟧\n${shown}` : text;
   }
   function renderPermission(room, perm) {
+    const existing = els.messages.querySelector(`[data-ui="ask-card"][data-kind="permission"][data-key="${CSS.escape(perm.key)}"]`);
     const p = findById(room, perm.participantId);
     const tc = perm.toolCall || {};
     const choices = (perm.options || []).map((option) => ({ label: option.name, tone: OPTION_TONE[option.kind] || "plain", act: "permit", title: option.kind, data: { option: option.optionId } }));
     choices.push({ label: "Dismiss (cancelled)", act: "permit" });
     const card = UI.el("ask-card", { kind: "permission", who: p ? p.name : perm.participantId, subject: tc.title || tc.toolCallId || "tool call", subjectKind: tc.kind || undefined, input: tc.rawInput ? markInvisible(JSON.stringify(tc.rawInput, null, 1)) : undefined, choices, data: { key: perm.key } });
+    if (existing) return void existing.replaceWith(card);
     const draft = [...room.messages].reverse().find((m) => m.streaming && m.from === perm.participantId);
     const host = draft ? els.messages.querySelector(`.msg[data-id="${draft.id}"] .perms`) : null;
     if (host) host.appendChild(card);
     else placeCard(card, room, perm);
     followEnd("a permission card");
   }
-  function resolvePermissionCard(key, optionId) {
-    const card = document.querySelector(`[data-ui="ask-card"][data-kind="permission"][data-key="${CSS.escape(key)}"]`);
-    if (!card) return;
-    UI.setState(card, "resolved");
-    card.querySelector(".choices").replaceChildren(Object.assign(document.createElement("span"), { className: "outcome", textContent: optionId ? `chosen: ${optionId}` : "dismissed" }));
+  function resolvePermissionCard(key, optionId, outcome) {
+    for (const card of document.querySelectorAll(`[data-ui="ask-card"][data-kind="permission"][data-key="${CSS.escape(key)}"]`)) {
+      UI.setState(card, "resolved");
+      card.querySelector(".choices").replaceChildren(Object.assign(document.createElement("span"), { className: "outcome", textContent: outcome || (optionId ? `chosen: ${optionId}` : "dismissed") }));
+    }
   }
 
   function proposalValue(v) {
@@ -5997,14 +6506,17 @@
     const windowNote = p.appearance && p.appearance.length
       ? `<div class="prop-window"><span class="note">${ic("eye")} This changes the whole window, not this room alone.</span>${lookTarget ? `<div class="prop-look">${UI.html("look-card", { look: lookTarget, tag: lookTag(lookTarget), title: lookTarget.label })}${p.status === "pending" ? UI.html("button", { label: document.documentElement.dataset.tried === lookTarget.id ? "Back" : "Try it on", kind: "soft", size: "xs", act: "try-look", data: { look: lookTarget.id }, title: "This window only, until you apply or reject" }) : ""}</div>` : ""}</div>`
       : "";
+    const elsewhere = p.room ? (state.rooms.get(p.room.id)?.name || p.room.name) : null;
+    const roomNote = elsewhere ? `<div class="prop-window"><span class="note">${ic("info")} Apply changes the room ${esc(elsewhere)}, not this one.</span></div>` : "";
     const body =
       (p.why ? `<div class="prop-why">${esc(p.why)}</div>` : "") +
       `<div class="prop-diff">${proposalDiffHtml(p)}</div>` +
+      roomNote +
       windowNote +
       (p.warnings && p.warnings.length ? `<ul class="prop-warn">${p.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : "") +
       (p.touchesOwn ? `<div class="prop-own">${ic("info")} This changes the rules or ${esc(p.participantName)}'s own persona: it decides how ${esc(p.participantName)} itself will behave.</div>` : "");
     const outcome = p.status === "pending" ? undefined : p.status === "applied" ? `applied${p.skipped && p.skipped.length ? ` · not applied: ${p.skipped.join("; ")}` : ""}` : "rejected";
-    const card = UI.el("ask-card", { kind: "proposal", who: p.participantName, body, outcome, choices: [{ label: "Apply", tone: "ok", act: "decide", data: { answer: "apply" } }, { label: "Reject", tone: "no", act: "decide", data: { answer: "reject" } }], data: { key: p.key } });
+    const card = UI.el("ask-card", { kind: "proposal", who: p.participantName, ...(elsewhere ? { lead: "proposes changes to the room", subject: elsewhere } : {}), body, outcome, choices: [{ label: "Apply", tone: "ok", act: "decide", data: { answer: "apply" } }, { label: "Reject", tone: "no", act: "decide", data: { answer: "reject" } }], data: { key: p.key } });
     if (existing) existing.replaceWith(card);
     else {
       placeCard(card, room, p);
@@ -6125,7 +6637,11 @@
     if (header) header.innerHTML = profileHeader(p);
   }
   function panelTitle(title, sub) {
-    return `<div class="panel-title"><div><h3>${title}</h3>${sub ? `<div class="hint">${sub}</div>` : ""}</div>${UI.html("icon-button", { icon: "close", title: "Close", kind: "ghost", size: "sm", id: "details-close" })}</div>`;
+    const toward = panelSide() === "left" ? "collapse" : "expand";
+    return `<div class="panel-title"><div><h3>${title}</h3>${sub ? `<div class="hint">${sub}</div>` : ""}</div>${UI.html("icon-button", { icon: toward, title: "Close", kind: "ghost", size: "sm", id: "details-close" })}</div>`;
+  }
+  function panelFollows(p) {
+    return state.detailsOpen && state.selection?.kind === "participant" && state.selection.id !== p.id;
   }
   function wireDetailsClose() {
     const b = $("#details-close");
@@ -6365,10 +6881,16 @@
         </div>`;
   }
 
+  function wakeWord(p) {
+    return p.fell || p.status === "error" ? "Reconnect" : "Wake up";
+  }
+
   function renderAgentPanel(room, p) {
     const rec = state.recipes.find((r) => r.id === p.agentType);
     const offline = p.status === "offline";
     const mutedStartup = offline && p.muted && p.startupSkipped === "muted";
+    const byChoice = mutedStartup || (offline && !!p.asleep);
+    const wake = wakeWord(p);
     const roomDelay = room.settings.replyDelay ?? 4;
     const stat = (label, value) => settingRow({ label, control: value });
     const tiles = state.recipes.filter((r) => !r.unavailableReason || r.id === p.agentType).map((r) => `<button type="button" class="agent-tile${r.id === p.agentType ? " selected" : ""}" data-agent="${esc(r.id)}" title="${esc(r.label)}">${vendorLogo(r, "lg")}<span class="at-name">${esc(r.vendor)}</span></button>`).join("");
@@ -6417,12 +6939,12 @@
       <div class="action-row">
         <button class="action" data-act="mention"><span class="ico">${ic("at")}</span>Mention</button>
         <button class="action" data-act="${p.muted ? "unmute" : "mute"}"><span class="ico">${ic(p.muted ? "mute" : "unmute")}</span>${p.muted ? "Unmute" : "Mute"}</button>
-        ${offline ? `<button class="action" data-act="reconnect"><span class="ico">${ic("refresh")}</span>Reconnect</button>` : `<button class="action" data-act="cancel" ${p.status !== "thinking" && p.status !== "queued" ? "disabled" : ""}><span class="ico">${ic("stop")}</span>Stop</button>`}
+        ${offline ? `<button class="action" data-act="reconnect"><span class="ico">${ic(wake === "Wake up" ? "sun" : "refresh")}</span>${wake}</button>` : `<button class="action" data-act="sleep" ${p.status === "starting" || p.status === "unstaffed" ? "disabled" : ""} title="${p.status === "starting" ? "It is starting; put it to sleep once it is up" : "Stop its agent now and give its memory back; it starts again only when you wake it up"}"><span class="ico">${ic("moon")}</span>Sleep</button><button class="action" data-act="cancel" ${p.status !== "thinking" && p.status !== "queued" ? "disabled" : ""}><span class="ico">${ic("stop")}</span>Stop</button>`}
         <button class="action danger" data-act="remove"><span class="ico">${ic("trash")}</span>Remove</button>
       </div>
       ${p.quiet ? wedgeCardHtml(p, Date.now()) : ""}
       ${p.trouble && p.status !== "thinking" && p.status !== "queued" ? `<div class="trouble"><b>${esc(p.trouble.what)}</b><span>${esc(p.trouble.advice)}</span>${troubleActionsHtml(p)}</div>` : ""}
-      ${p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<p class="hint" style="color:var(${mutedStartup ? "--warm-ink" : "--danger"});margin:0 4px 10px">${esc(p.statusDetail)}</p>` : ""}
+      ${p.statusDetail && (p.status === "offline" || p.status === "error" || p.failedTurns) ? `<p class="hint" style="color:var(${byChoice ? "--warm-ink" : "--danger"});margin:0 4px 10px">${esc(p.statusDetail)}</p>` : ""}
       ${!mutedStartup && vendorLoggedOut(p) && p.trouble?.kind !== "login" ? `<div class="pp-login"><div class="row-btns">${UI.html("button", { label: `Log in to ${p.agentVendor || "the vendor"}`, icon: "lock", kind: "primary", size: "sm", act: "open-login-dialog", data: { recipe: p.agentType, purpose: "login" } })}</div><p class="hint">${esc(p.agentVendor || "The vendor")} is not logged in on this machine; log in, and ${esc(p.name)} comes back by itself.</p></div>` : ""}
       ${panelSearchHtml("vibemate", `Search ${p.name}'s settings`)}
       ${panelSectionsHtml("vibemate", sections, "pp-form")}`;
@@ -6611,6 +7133,95 @@
     }
   }
 
+  const ONBOARDING_CARDS = [
+    { id: "room", tone: "lav", art: () => rig("rooms"), title: "Your first room", words: "Summon your vibemates into a room and talk to all of them at once.", action: "Open a room", go: "new-room",
+      done: () => [...state.rooms.keys()].some((id) => id !== guideRoomId()), ask: "Show me how to make my first room." },
+    { id: "memory", tone: "mint", art: () => window.Icons.scene("memory-scribe"), title: "Long-term memory", words: "Your vibemates remember what the rooms said, across days and rooms.", action: "Set it up", go: "settings:memory",
+      done: () => !!state.memoryProvider?.view?.ready, ask: "Show me how to set up the long-term memory." },
+    { id: "messenger", tone: "sky", art: () => window.Icons.scene("rooms"), title: "Your phone", words: "Talk to your rooms from Telegram or Discord, wherever you are.", action: "Connect your phone", go: "settings:channels",
+      done: () => (state.channels?.pairings || []).some((p) => !p.unpairedAt), ask: "Show me how to connect my phone." },
+    { id: "voice", tone: "rose", art: () => ic("mic"), title: "Voice", words: "Speak to your rooms, and hear the replies read aloud.", action: "Set up the voice", go: "settings:voice",
+      done: () => !!state.voice?.ready, ask: "Show me how to set up the voice." },
+    { id: "connections", tone: "warm", art: () => window.Icons.scene("connect-plug"), title: "Connections", words: "Jira, Notion, Linear and the others, in every room.", action: "Connect a system", go: "connections",
+      done: () => (state.connections || []).some((c) => c.state === "connected"), ask: "Show me how to connect a system." },
+    { id: "automations", tone: "lav", art: () => window.Icons.scene("auto-task"), title: "Automations",
+      words: () => { const room = automationsRoom(); return room ? `Reminders and tasks your vibemates do on time, in a room of yours: these open for ${room.name}, the room you were in last.` : "Reminders and tasks your vibemates do on time. They live in a room: open one first."; },
+      action: () => (automationsRoom() ? "Open Automations" : "Open a room first"), go: "automations",
+      done: () => (state.automationJobs || 0) > 0, ask: "Show me how to set up an automation." },
+    { id: "look", tone: "peach", art: () => rig("palette"), title: "The look", words: "Colours, light and corners: make the window yours.", action: "Change the look", go: "settings:appearance",
+      done: () => { const a = state.settings?.appearance || {}; return (!!a.look && a.look !== TOKENS.current.id) || Object.keys(a.custom?.[a.look] || {}).length > 0; },
+      ask: "Show me how to change the look." },
+  ];
+  const automationsRoom = () => (state.currentRoomId && state.rooms.get(state.currentRoomId)) || null;
+  function onboardingCardHtml(c) {
+    const done = c.done();
+    return `<article class="ob-card" data-tone="${c.tone}" data-ob-card="${c.id}"${done ? " data-done" : ""}>
+        <div class="ob-art scene-art" aria-hidden="true">${c.art()}</div>
+        <h3>${esc(c.title)}${done ? UI.html("badge", { label: "done", tone: "ready", size: "xs" }) : ""}</h3>
+        <p>${esc(typeof c.words === "function" ? c.words() : c.words)}</p>
+        <div class="ob-acts">
+          ${UI.html("button", { label: typeof c.action === "function" ? c.action() : c.action, kind: done ? "secondary" : "primary", size: "sm", data: { obGo: c.go } })}
+          ${UI.html("button", { label: "Show me", kind: "link", size: "sm", data: { obAsk: c.id }, title: "The viberoom guide walks you through it in a room of its own, one step at a time; it runs on a coding agent of yours" })}
+        </div>
+      </article>`;
+  }
+  function markOnboardingCards() {
+    if (state.view !== "onboarding") return;
+    for (const c of ONBOARDING_CARDS) {
+      const el = els.pageInner.querySelector(`[data-ob-card="${c.id}"]`);
+      if (el && el.hasAttribute("data-done") !== c.done()) el.outerHTML = onboardingCardHtml(c);
+    }
+  }
+  function renderOnboardingPage() {
+    const card = onboardingCardHtml;
+    els.pageInner.innerHTML = `
+      <div class="page-hero ob-hero">
+        <span class="ob-ship" aria-hidden="true">${rig("ship")}</span>
+        <b class="page-hero-title">Get the most out of viberoom</b>
+        <p class="hint">A few steps, in any order. Each card takes you where it is done.</p>
+      </div>
+      <div class="ob-grid">${ONBOARDING_CARDS.map(card).join("")}</div>`;
+    const ship = els.pageInner.querySelector(".ob-ship .rig");
+    if (ship && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) requestAnimationFrame(() => window.Icons.play(ship));
+  }
+  function onboardingGo(go) {
+    if (go === "new-room") return openRoomDialog();
+    if (go === "automations") {
+      const room = automationsRoom();
+      if (!room) return openRoomDialog();
+      selectRoom(room.id);
+      return void window.ViberoomAutomations.open(room.id, (id) => currentRoom()?.id === room.id ? jumpToId(id).catch(showError) : false, confirmDialog);
+    }
+    if (go.startsWith("settings:")) return openSettings(go.slice("settings:".length));
+    setView(go);
+    remember("view", go);
+  }
+  const guideRoomId = () => { const id = recall("onboarding.guideRoom"); return id && state.rooms.has(id) ? id : null; };
+  let guideRoomMaking = null;
+  async function onboardingAsk(id) {
+    const card = ONBOARDING_CARDS.find((c) => c.id === id);
+    if (!card) return;
+    try {
+      let roomId = guideRoomId();
+      if (!roomId) {
+        guideRoomMaking ||= post("/api/rooms/from-template", { template: "viberoom-guide", name: "viberoom guide", dir: null, vibemates: [{ name: "Guide", agentType: "" }] })
+          .finally(() => (guideRoomMaking = null));
+        const res = await guideRoomMaking;
+        if (!res.room?.id) return;
+        state.rooms.set(res.room.id, res.room);
+        remember("onboarding.guideRoom", res.room.id);
+        roomId = res.room.id;
+        for (const n of res.notices || []) toast(n, "info");
+      }
+      selectRoom(roomId);
+      const value = composer.value;
+      if (!value.includes(card.ask)) composer.setRangeText(`${value && !/\s$/.test(value) ? " " : ""}${card.ask}`, value.length, value.length, "end");
+      composer.focus();
+    } catch (error) {
+      showError(error);
+    }
+  }
+
   function renderMePage() {
     const s = state.settings || {};
     els.pageInner.innerHTML = `
@@ -6646,6 +7257,9 @@
 
   function renderRoomPanel(room) {
     const rs = room.settings;
+    const memoryView = state.memoryProvider?.view;
+    const memoryProvider = memoryView?.providers.find(p => p.id === memoryView.provider);
+    const forget = memoryProvider?.roomForget;
     const lang = rs.language && rs.language.mode === "fixed" ? rs.language.language : "";
     const toggle = (label, id, on, hint, geekText) => settingRow({ label, for: id, kind: "switch", checked: !!on, hint, geek: geekText });
     const text = (id, value, props = "") => UI.raw(`<input type="text" class="input" id="${id}" value="${esc(value)}"${props}>`);
@@ -6663,7 +7277,11 @@
         ].join("")),
         settingsCard("rp-messengers", "", toggle("Reachable from messengers", "rp-reachable", rs.reachableFromMessengers !== false, "A phone paired to viberoom (Settings → Channels) can open this room, write to it and read its replies. Off: the phone neither sees nor reaches this room.")),
         settingsCard("rp-turn-this-room-into-a-template", "", settingRow({ label: "Turn this room into a template", hint: 'Its settings, rules, folder and vibemates (with the coding agent each runs on) become one of your templates, listed first under "Start from a template". You see everything it will contain, and can change any of it, before you create it.', control: UI.raw(UI.html("button", { label: "Preview and create…", icon: "rooms", kind: "secondary", size: "sm", id: "rp-template" })) })),
-        settingsCard("rp-danger-zone", "Danger zone", settingRow({ label: "Close this room for good", hint: "Closes every vibemate in this room and removes it from the list. Its history and files move to the trash folder of your viberoom data; a new room with the same name starts empty.", control: UI.raw(UI.html("button", { label: "Close the room", icon: "trash", kind: "danger", size: "sm", id: "rp-delete" })) }), "danger"),
+        settingsCard("rp-danger-zone", "Danger zone", [
+          settingRow({ label: "Close this local copy", hint: "Closes this room's vibemates on this computer and moves its history and files to your viberoom trash folder. Stops pending memory work here. Other copies and the shared cloud memory remain.", control: UI.raw(UI.html("button", { label: "Close this copy", icon: "trash", kind: "danger", size: "sm", id: "rp-delete" })) }),
+          settingRow({ label: "Forget cloud memory of this room", hint: forget ? `${forget.description} Stops remembering in this copy; your conversation and files stay. Turning remembering back on sends only new messages.` : "Choose a provider that supports room deletion in Settings → Long-term memory to forget its cloud memory.", control: forget ? UI.raw(UI.html("button", { label: `Forget in ${memoryProvider.label}…`, icon: "trash", kind: "danger", size: "sm", id: "rp-memory-forget" })) : undefined }),
+          forget ? '<p class="field-note" id="rp-memory-forget-status" role="status" aria-live="polite"></p>' : "",
+        ].join(""), "danger"),
       ].join(""),
       rules: settingsCard("rp-rules-section", "", [
         settingRow({ label: "Room rules", stacked: true, hint: UI.raw('How the team works together. Vibemates can propose changes for your approval. One rule per line; type @ to reference a participant.<span class="count" id="rp-rules-count"></span>'), geek: "References follow renames and note when a participant has left. Updated rules reach each vibemate on its next turn. Mentions here describe responsibilities; they do not send messages.", control: UI.raw('<div class="mention-host"><div id="rp-rules" class="rules-editor" contenteditable="true" spellcheck="true" data-placeholder="e.g. Everyone listens to @Pesho, he is the manager. Keep answers under 3 sentences."></div><div class="mention-menu inline" id="rp-rules-menu" hidden></div></div>') }),
@@ -6682,6 +7300,8 @@
         ].join("")),
         settingsCard("rp-conversation", "Memory", [
           toggle("This room remembers", "rp-remembers", rs.remembers === true, "The room feeds the long-term memory provider (Settings → Long-term memory): its messages, sifted by the sieve set there, become facts vibemates can recall later. Does nothing until a provider is on and consented there."),
+          settingRow({ label: "Memory input", for: "rp-memory-input", hint: MEMORY_INPUT_HINT, geek: MEMORY_INPUT_GEEK, control: UI.raw(selectHtml("rp-memory-input", MEMORY_INPUT, rs.memoryInput || "excerpts")) }),
+          settingRow({ label: "Recover room memory", hint: "Rebuild from eligible originals with your budget and review. The current memory stays active during preparation.", control: UI.raw(UI.html("button", { label: "Review rebuilds…", kind: "secondary", size: "sm", id: "rp-memory-recovery" })) }),
           toggle("Share this room's history with the other rooms", "rp-share-history", rs.sharesHistory !== false, SHARES_HISTORY_HINT),
           settingRow({ label: "Search the other rooms", for: "rp-reads-others", hint: READS_OTHER_ROOMS_HINT, geek: READS_OTHER_ROOMS_GEEK, control: UI.raw(selectHtml("rp-reads-others", READS_OTHER_ROOMS, rs.readsOtherRooms || "on-search")) }),
         ].join("")),
@@ -6689,7 +7309,7 @@
       start: settingsCard("rp-startup", "", [
         toggle("Start this room with viberoom", "rp-start-with-hub", rs.startWithHub, "Its vibemates are started when viberoom starts, one room after another. They pay nothing until the first turn; their processes and memory stay while they wait. With viberoom starting at sign-in, the phone reaches this room without a click."),
         settingRow({ label: "…and they come back", for: "rp-reconnect", hint: "Only for the start above: when this room brings its own vibemates back, it decides with how much memory.", geek: "A room that decides whether it starts also decides with how much memory its vibemates come back; the app-wide Welcome back setting is what a room follows when it has not chosen. It is not asked again in a dialog, because by the time a window could ask, the room has already begun.", control: UI.raw(selectHtml("rp-reconnect", [["inherit", "As Welcome back is set"], ["load", "Continuing their saved sessions"], ["replay", "Fresh, with the last messages replayed"]], rs.reconnectMode || "inherit")) }),
-        toggle("Wake vibemates after a restart", "rp-wake-restart", rs.wakeAfterRestart, "Off by default. After Restart finishes restoring this room, send the message below once. Requires Start this room with viberoom. Muted, stopped or unavailable vibemates stay quiet. Ordinary launches and sign-in do not send it."),
+        toggle("Wake vibemates after a restart", "rp-wake-restart", rs.wakeAfterRestart, "Off by default. After Restart finishes restoring this room, or the viberoom application takes it over from viberoom run with npm, send the message below once. Requires Start this room with viberoom. Muted, stopped or unavailable vibemates stay quiet. Ordinary launches and sign-in do not send it."),
         settingRow({ label: "Message after restart", for: "rp-restart-message", stacked: true, hint: "Your saved instruction appears as an automatic room event. Empty text starts no replies.", control: UI.raw(`<textarea class="textarea" id="rp-restart-message" rows="3" maxlength="8000" placeholder="Continue your tasks, if you have any.">${esc(rs.restartMessage || "")}</textarea>`) }),
         settingRow({ label: "Replay last N chat messages after a reconnect", for: "rp-replay", control: numberHtml({ id: "rp-replay", value: String(rs.replayAfterRestart), min: 0, max: 200 }) }),
       ].join("")),
@@ -6765,6 +7385,7 @@
           sharesHistory: $("#rp-share-history").checked,
           readsOtherRooms: $("#rp-reads-others").value,
           remembers: $("#rp-remembers").checked,
+          memoryInput: $("#rp-memory-input").value,
           reachableFromMessengers: $("#rp-reachable").checked,
           startWithHub: $("#rp-start-with-hub").checked,
           wakeAfterRestart: $("#rp-wake-restart").checked,
@@ -6775,14 +7396,68 @@
         });
     });
     $("#rp-delete").addEventListener("click", async () => {
-      if (!(await confirmDialog("Every vibemate in it is closed and the room leaves the list. The history file stays on disk.", { title: `Close "${room.name}" for good?`, okLabel: "Close the room", danger: true }))) return;
+      if (!(await confirmDialog("Closes this room's vibemates on this computer and moves its history and files to your viberoom trash folder. Stops pending memory work here. Other copies and the shared cloud memory remain.", { title: `Close this copy of "${room.name}"?`, okLabel: "Close this copy", danger: true }))) return;
       try {
         await post(roomApi("/delete"));
       } catch (e) {
         showError(e);
       }
     });
+    if (forget) wireRoomMemoryForget(room, memoryProvider);
+    $("#rp-memory-recovery")?.addEventListener("click", () => window.ViberoomRecovery.open(room.id, { openDialog, closeDialog, confirm: confirmDialog }));
     wirePanel();
+  }
+
+  function wireRoomMemoryForget(room, provider) {
+    const button = $("#rp-memory-forget"), status = $("#rp-memory-forget-status");
+    const url = `/api/rooms/${encodeURIComponent(room.id)}/memory-forget`;
+    const originalButton = button.innerHTML;
+    let timer, revision = 0;
+    const refresh = async () => {
+      clearTimeout(timer);
+      if (!status.isConnected) return;
+      const checking = ++revision;
+      try {
+        const result = await get(url);
+        if (!status.isConnected || checking !== revision) return;
+        if (result.provider !== provider.id) { button.disabled = true; status.textContent = "The memory provider changed. Reopen this panel."; return; }
+        const deletion = result.deletion;
+        button.disabled = deletion?.state === "pending";
+        if (deletion?.state === "failed") {
+          button.textContent = "Retry deletion…";
+          status.textContent = `Cloud deletion failed: ${deletion.reason || "No reason was recorded."} ${deletion.retryable ? "It will retry automatically; you can also retry now." : "Correct the problem and retry deletion."}`;
+          if (deletion.retryable) timer = setTimeout(refresh, 1500);
+        } else if (deletion?.state === "pending") {
+          button.innerHTML = originalButton;
+          status.textContent = "Cloud deletion pending. It waits for earlier requests from this copy and retries if the provider is unavailable.";
+          timer = setTimeout(refresh, 1500);
+        } else {
+          button.innerHTML = originalButton;
+          status.textContent = deletion?.state === "confirmed"
+            ? `${provider.roomForget.completed} Confirmed: ${new Date(deletion.updatedAt).toLocaleString()}.`
+            : "No recorded confirmation of deletion for this room.";
+        }
+      } catch (error) {
+        if (status.isConnected && checking === revision) {
+          status.textContent = `Could not check deletion: ${error.message}`;
+          timer = setTimeout(refresh, 1500);
+        }
+      }
+    };
+    button.addEventListener("click", async () => {
+      const words = `${provider.roomForget.description}\n\nThis turns off remembering in this copy and discards its pending memory writes. Your conversation and files stay. Turning remembering back on sends only new messages; older history is not sent again.`;
+      if (!(await confirmDialog(words, { title: `Forget cloud memory of "${room.name}"?`, okLabel: "Forget cloud memory", danger: true }))) return;
+      ++revision;
+      clearTimeout(timer);
+      button.disabled = true;
+      try {
+        await post(url, { provider: provider.id, confirm: true });
+        const remembers = $("#rp-remembers");
+        if (remembers && button.isConnected) remembers.checked = false;
+        await refresh();
+      } catch (error) { button.disabled = false; showError(error); }
+    });
+    void refresh();
   }
 
 
@@ -6808,6 +7483,7 @@
     if (!a) return "Not known yet.";
     const when = (ts) => (ts ? new Date(ts).toLocaleString() : "never");
     const parts = [];
+    if (a.unavailable) parts.push(a.unavailable);
     if (a.enabled) parts.push(`Set up on ${when(a.installedAt)}.`);
     if (a.foreign) parts.push("Another viberoom, with another data folder, starts at sign-in; switching this on takes its place.");
     parts.push(`Last automatic start: ${when(a.lastAutoStartAt)}.`);
@@ -6815,6 +7491,27 @@
     else if (a.stale) parts.push("The entry points at an older copy of viberoom; the next start fixes it.");
     if (a.note) parts.push(a.note);
     return esc(parts.join(" "));
+  }
+
+  const KEEP_AWAKE_CHOICES = [["always", "Always", "sun", "amber"], ["plugged-in", "When plugged in", "plug", "mint"], ["never", "Never", "moon", "violet"]];
+  function keepAwakeStatusText() {
+    const k = state.keepAwake;
+    if (!k) return "";
+    const names = (list) => (list.length < 2 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`);
+    const are = (list) => (list.length === 1 ? "is" : "are");
+    const alive = k.working.filter((name) => !k.quiet.includes(name));
+    if (k.means === null) return `This computer cannot be kept awake from here: ${k.missing}.`;
+    if (k.holding) return `Awake now: ${names(alive)} ${are(alive)} working.`;
+    if (k.missing && k.choice !== "never" && k.working.length) return `Not kept awake: ${k.missing}.`;
+    if (!k.working.length) return "No vibemate is working: the computer sleeps as usual.";
+    if (k.choice === "never") return `${names(k.working)} ${are(k.working)} working, and the computer sleeps as usual.`;
+    if (!alive.length) return `${names(k.quiet)} ${k.quiet.length === 1 ? "has" : "have"} been silent for over an hour: the computer may sleep.`;
+    if (k.onBattery) return "On its battery: the computer sleeps as usual until it is plugged in.";
+    return "";
+  }
+  function keepAwakeTone() {
+    const k = state.keepAwake;
+    return k && (k.means === null || (k.missing && !k.holding && k.choice !== "never" && k.working.length)) ? "warn" : "plain";
   }
 
   const SETTINGS_CATEGORIES = [
@@ -6827,13 +7524,13 @@
     { id: "memory", label: "Long-term memory", glyph: "graph", tone: "orchid", about: "Rooms that opt in feed a long-term memory: what was said becomes knowledge they can recall.", groups: ["sp-memory"] },
     { id: "carry", label: "Export / Import", glyph: "transfer", tone: "amber", about: "Rooms saved for another computer, copies brought in, and the versions you removed.", groups: ["sp-carrying"] },
     { id: "editor", label: "Editor", glyph: "code", tone: "mint", about: "What opens a file when you click a path like main.ts:375 in a message.", groups: ["sp-editor"] },
-    { id: "system", label: "System", glyph: "power", tone: "slate", about: "Updates, starting with the computer, and a clean restart.", groups: ["sp-update", "sp-autostart", "sp-folder", "sp-restart"] },
+    { id: "system", label: "System", glyph: "power", tone: "slate", about: "Updates, starting with the computer, its sleep while vibemates work, and a clean restart.", groups: ["sp-update", "sp-autostart", "sp-sleep", "sp-folder", "sp-restart"] },
     { id: "room-defaults", label: "Defaults for new rooms", glyph: "sliders", geek: true, about: "Where every new room starts; each room can change them in its own settings.", groups: ["sp-defaults-for-new-rooms"] },
     { id: "shared-memory", label: "Shared memory", glyph: "journal", geek: true, about: "What the rooms have learned about you: preferences, protected notes and their history.", groups: ["sp-shared-memory"] },
     { id: "skills", label: "Skills from vibemates", glyph: "skills", geek: true, about: "Whether a skill a vibemate writes is used at once or waits for you.", groups: ["sp-skills-from-vibemates"] },
     { id: "presets", label: "Presets per vibemate", glyph: "dial", geek: true, about: "The model, effort and mode a vibemate starts with when you summon one.", groups: ["sp-presets-per-vibemate"] },
     { id: "troubleshooting", label: "Troubleshooting", glyph: "pulse", geek: true, about: "Details to save when a vibemate fails or gets stuck, and the room they take on disk.", groups: ["sp-transcripts"] },
-    { id: "development", label: "Development", glyph: "tool", geek: true, dev: true, about: "For the people who build viberoom: how this window draws and scrolls, and what the vibemates are sent.", groups: ["sp-slow", "sp-wheel", "sp-dev-prompts"] },
+    { id: "development", label: "Development", glyph: "tool", geek: true, dev: true, about: "For the people who build viberoom: how this window draws and scrolls, and what the vibemates are sent.", groups: ["sp-slow", "sp-wheel", "sp-dev-prompts", "sp-dev-memory"] },
   ];
   const SETTINGS_PAGE_SHOWN = "settings-page-shown";
   function settingsCategories() {
@@ -6934,6 +7631,11 @@
     "sp-transcripts-mode": { key: "transcripts", kind: "select", options: [["inherit", "As set here"], ["off", "Off"], ["errors", "When something fails"], ["full", "All activity"]] },
     "sp-share-history": { key: "sharesHistory", kind: "switch" },
     "sp-reads-others": { key: "readsOtherRooms", kind: "select", options: [["off", "No"], ["on-search", "When searching"], ["every-turn", "Every turn"]] },
+    "sp-remembers": { key: "remembers", kind: "switch" },
+    "sp-mem-remembers": { key: "remembers", kind: "switch", column: "Remembers" },
+    "sp-mem-input": { key: "memoryInput", kind: "select", column: "Input", options: [["excerpts", "Economical"], ["whole", "Most accurate"]] },
+    "sp-mem-shares": { key: "sharesHistory", kind: "switch", column: "Shares its history" },
+    "sp-mem-reads": { key: "readsOtherRooms", kind: "select", column: "Searches the others", options: [["off", "No"], ["on-search", "When searching"], ["every-turn", "Every turn"]] },
   };
   function roomsByName() {
     return [...state.rooms.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -6965,39 +7667,57 @@
       fold: UI.raw(`<div class="room-values" ${attrs}>${rowsHtml}</div>`),
     };
   }
-  function roomValueHtml(spec, room) {
+  function roomValueHtml(rowId, room) {
+    return roomValueRow(room, `rv-${rowId}-${room.id}`, roomValueControl(rowId, room));
+  }
+  function roomValueControl(rowId, room, label) {
+    const spec = ROOM_VALUE_ROWS[rowId];
     const value = room.settings?.[spec.key];
-    const id = `rv-${spec.key}-${room.id}`;
-    const control = spec.kind === "switch" ? UI.html("switch", { id, checked: !!value })
-      : spec.kind === "select" ? selectHtml(id, spec.options, value)
-      : UI.html("number-field", { id, value: String(value ?? ""), min: spec.min, max: spec.max, step: spec.step });
-    return roomValueRow(room, id, control);
+    const id = `rv-${rowId}-${room.id}`;
+    if (spec.kind === "switch") return UI.html("switch", { id, checked: !!value, label });
+    if (spec.kind === "select") return selectHtml(id, spec.options, value, label);
+    return UI.html("number-field", { id, value: String(value ?? ""), min: spec.min, max: spec.max, step: spec.step });
   }
   function roomValues(rowId) {
     const spec = ROOM_VALUE_ROWS[rowId];
     const rooms = roomsByName();
     if (!spec || !rooms.length) return {};
-    return roomListFold(roomValuesSummary(spec, rooms), "Every room's own value; set any of them here", `data-own-save data-row="${rowId}"`, rooms.map((room) => roomValueHtml(spec, room)).join(""));
+    return roomListFold(roomValuesSummary(spec, rooms), "Every room's own value; set any of them here", `data-own-save data-row="${rowId}"`, rooms.map((room) => roomValueHtml(rowId, room)).join(""));
   }
   function roomValueOf(spec, control) {
     if (spec.kind === "switch") return control.checked;
     if (spec.kind === "select") return control.value;
     return Number(control.value);
   }
+  function showRoomValue(key, roomId, kept) {
+    for (const [rowId, spec] of Object.entries(ROOM_VALUE_ROWS)) {
+      if (spec.key !== key) continue;
+      const control = document.getElementById(`rv-${rowId}-${roomId}`);
+      if (control && control !== document.activeElement) { if (spec.kind === "switch") control.checked = !!kept; else control.value = String(kept); }
+      const opener = document.querySelector(`.room-values[data-row="${rowId}"]`)?.closest('[data-ui="setting"]')?.querySelector(".room-values-open .label");
+      for (const line of [opener, ...document.querySelectorAll(`[data-rv-summary="${rowId}"]`)]) if (line) line.textContent = roomValuesSummary(spec, roomsByName());
+    }
+  }
+  function showRoomValues(room) {
+    for (const key of new Set(Object.values(ROOM_VALUE_ROWS).map((spec) => spec.key))) {
+      if (room.settings?.[key] !== undefined) showRoomValue(key, room.id, room.settings[key]);
+    }
+  }
   document.addEventListener("change", async (e) => {
-    const list = e.target.closest?.(".room-values[data-own-save]");
-    if (!list || !e.target.id) return;
-    const spec = ROOM_VALUE_ROWS[list.dataset.row];
-    const roomId = e.target.closest(".room-value")?.dataset.room;
+    const cell = e.target.closest?.("[data-own-save][data-row], [data-own-save] [data-row]");
+    if (!cell || !e.target.id) return;
+    const spec = ROOM_VALUE_ROWS[cell.dataset.row];
+    const roomId = e.target.closest("[data-room]")?.dataset.room;
     if (!spec || !roomId) return;
     try {
       const answer = await post(`/api/rooms/${encodeURIComponent(roomId)}/settings`, { [spec.key]: roomValueOf(spec, e.target) });
       const room = state.rooms.get(roomId);
       if (room && answer?.settings) room.settings = answer.settings;
       const kept = answer?.settings?.[spec.key];
-      if (kept !== undefined) { if (spec.kind === "switch") e.target.checked = !!kept; else e.target.value = String(kept); }
-      const opener = list.closest('[data-ui="setting"]')?.querySelector(".room-values-open .label");
-      if (opener) opener.textContent = roomValuesSummary(spec, roomsByName());
+      if (kept !== undefined) {
+        if (spec.kind === "switch") e.target.checked = !!kept; else e.target.value = String(kept);
+        showRoomValue(spec.key, roomId, kept);
+      }
       markSaved(e.target.id);
     } catch (error) {
       showError(error);
@@ -7082,9 +7802,16 @@
           ${row({ label: "Version", status: updateStatusText(), statusId: "sp-update-status", control: actHtml({ label: "Check now", id: "sp-update-check" }) })}
           ${row({ label: "Check installed agents once a day", for: "sp-agent-updates", kind: "switch", checked: s.checkAgentUpdates !== false, hint: "Checks the existing installations and their release channels. Updates run only when you choose them." })}
           ${row({ label: "Installed agents", status: agentUpdates.status(), statusId: "sp-agent-update-status", control: actHtml({ label: "Agent updates…", id: "sp-agent-update-open" }) })}`),
-      "sp-autostart": card("sp-autostart", "Start with the computer", row({ label: "Start viberoom when you sign in to this computer", for: "sp-autostart-on", kind: "switch", checked: !!(state.autostart && state.autostart.enabled), disabled: !state.autostart, hint: 'A quiet start, without a window: the icon opens the window when you want it. Rooms with "Start this room with viberoom" bring their vibemates back by themselves, so a paired phone reaches them without a click. A viberoom already running is left alone. Switch this off before you remove or move viberoom.', status: UI.raw(autostartStatusText()), statusId: "sp-autostart-status" })),
+      "sp-autostart": card("sp-autostart", "Start with the computer", row({ label: "Start viberoom when you sign in to this computer", for: "sp-autostart-on", kind: "switch", checked: !!(state.autostart && state.autostart.enabled), disabled: !state.autostart || !!state.autostart.unavailable, hint: 'A quiet start, without a window: the icon opens the window when you want it. Rooms with "Start this room with viberoom" bring their vibemates back by themselves, so a paired phone reaches them without a click. A viberoom already running is left alone. Switch this off before you remove or move viberoom.', status: UI.raw(autostartStatusText()), statusId: "sp-autostart-status" })),
       "sp-folder": dataFolderRow(),
-      "sp-restart": card("sp-restart", "Restart", row({ label: "Restart viberoom", hint: "Starts the room again with what is on disk. The vibemates come back the way Welcome back is set to bring them, and this window reconnects on its own. Closing the window does not do this: the room keeps running in the background, which is why it can stay on an older build than the one you have.", status: staleNote ? UI.raw(staleNote) : "", statusTone: "warn", control: actHtml({ label: "Restart", id: "sp-restart-now" }) })),
+      "sp-sleep": card("sp-sleep", "Sleep", row({
+        label: "Keep the computer awake while vibemates work", for: "sp-keep-awake", stacked: true,
+        hint: "Only while a vibemate works, and only the computer: its screen still turns off and locks, and a closed lid still puts a laptop to sleep. When every vibemate is done, it sleeps as usual.",
+        geek: "The application asks Electron to hold the computer awake; viberoom from npm asks the system's own helper: caffeinate on a Mac, systemd-inhibit on Linux, a hidden PowerShell (SetThreadExecutionState) on Windows and in WSL. The hold ends with viberoom, however viberoom ends, and a vibemate silent for over an hour no longer holds it.",
+        control: UI.raw(`<div class="chips keep-awake-modes quiet-glyphs" role="group" aria-label="Keep the computer awake">${KEEP_AWAKE_CHOICES.map(([id, label, glyph, tone]) => UI.html("choice", { label, on: (s.keepAwake || "plugged-in") === id, data: { keepAwake: id }, lead: UI.raw(UI.html("settings-glyph", { glyph, tone, size: "xs" })) })).join("")}</div><input type="hidden" id="sp-keep-awake" value="${esc(s.keepAwake || "plugged-in")}">`),
+        status: keepAwakeStatusText(), statusId: "sp-keep-awake-status", statusTone: keepAwakeTone(),
+      })),
+      "sp-restart": card("sp-restart", "Restart",row({ label: "Restart viberoom", hint: "Starts the room again with what is on disk. The vibemates come back the way Welcome back is set to bring them, and this window reconnects on its own. Closing the window does not do this: the room keeps running in the background, which is why it can stay on an older build than the one you have.", status: staleNote ? UI.raw(staleNote) : "", statusTone: "warn", control: actHtml({ label: "Restart", id: "sp-restart-now" }) })),
       "sp-defaults-for-new-rooms": card("sp-defaults-for-new-rooms", "", `
           ${row({ label: "Hop limit", for: "sp-hops", ...roomValues("sp-hops"), hint: "How many vibemate-to-vibemate replies may follow one message of yours before the room waits for you again.", control: numberHtml({ id: "sp-hops", value: String(d.hopLimit), min: 0, max: 10000 }) })}
           ${row({ label: "Full brief every N turns", for: "sp-brief-turns", ...roomValues("sp-brief-turns"), hint: "How often a vibemate gets the whole room brief again instead of the short header.", control: numberHtml({ id: "sp-brief-turns", value: String(d.fullBriefEveryTurns), min: 1, max: 10000 }) })}
@@ -7093,7 +7820,8 @@
           ${row({ label: "Repeat core rules in every header", for: "sp-header-rules", ...roomValues("sp-header-rules"), kind: "switch", checked: !!d.headerRules, hint: "The short header before each turn repeats the room's core rules (who is here, how to address, how long to write)." })}
           ${row({ label: "Tools", for: "sp-tools", ...roomValues("sp-tools"), hint: "Whether vibemates may use their own tools (files, shell, web) without being asked to.", control: UI.raw(selectHtml("sp-tools", [["on-request", "Only when asked"], ["never", "Never"]], d.tools === "never" ? "never" : "on-request")) })}
           ${row({ label: "Share the room's history with the other rooms", for: "sp-share-history", ...roomValues("sp-share-history"), kind: "switch", checked: d.sharesHistory !== false, hint: SHARES_HISTORY_HINT })}
-          ${row({ label: "Search the other rooms", for: "sp-reads-others", ...roomValues("sp-reads-others"), hint: READS_OTHER_ROOMS_HINT, geek: READS_OTHER_ROOMS_GEEK, control: UI.raw(selectHtml("sp-reads-others", READS_OTHER_ROOMS, d.readsOtherRooms || "on-search")) })}`),
+          ${row({ label: "Search the other rooms", for: "sp-reads-others", ...roomValues("sp-reads-others"), hint: READS_OTHER_ROOMS_HINT, geek: READS_OTHER_ROOMS_GEEK, control: UI.raw(selectHtml("sp-reads-others", READS_OTHER_ROOMS, d.readsOtherRooms || "on-search")) })}
+          ${row({ label: "Rooms remember", for: "sp-remembers", ...roomValues("sp-remembers"), kind: "switch", checked: d.remembers !== false, hint: REMEMBERS_HINT })}`),
       "sp-shared-memory": card("sp-shared-memory", "", row({ label: "Shared memory about you", hint: "Review learned preferences, protected notes and their revision history.", control: actHtml({ label: "Open…", data: { memoryOpen: "user" } }) })),
       "sp-skills-from-vibemates": card("sp-skills-from-vibemates", "", row({ label: "Vibemate-created skills need my approval", for: "sp-skill-approval", kind: "switch", checked: !!s.agentSkillsNeedApproval, hint: 'Off: a skill a vibemate creates is usable at once and shows as "unreviewed" until you open it. On: it stays a draft (not delivered, not attachable) until you approve it under Skills.' })),
       "sp-presets-per-vibemate": card("sp-presets-per-vibemate", "", `
@@ -7102,7 +7830,8 @@
       "sp-transcripts": card("sp-transcripts", "", `
           ${row({ label: "Save diagnostic details", for: "sp-transcripts-mode", ...roomValues("sp-transcripts-mode"), hint: `${DIAGNOSTIC_LOG_HELP} You can choose a different setting for each room.`, control: UI.raw(selectHtml("sp-transcripts-mode", [["off", "Off (default)"], ["errors", "When something fails"], ["full", "All activity"]], s.transcripts || "off")) })}
           ${row({ label: "Saved details", hint: "Includes current and removed rooms. Clearing these details keeps your conversations and shared files. Recording can create new details while vibemates work.", status: "Checking saved diagnostic details…", statusId: "sp-log-size", control: UI.raw(UI.html("button", { label: "Check size", kind: "secondary", size: "sm", id: "sp-log-check" }) + UI.html("button", { label: "Clear diagnostic details", kind: "warn", size: "sm", id: "sp-log-clear", disabled: true })) })}
-          ${row({ label: "Tool connection details", hint: "Recent tool connection timings stay in memory. Copy them when reporting a connection problem; message text and access keys are not included.", control: actHtml({ label: "Copy tool connection details", id: "sp-connection-copy" }) })}`),
+          ${row({ label: "Tool connection details", hint: "Recent tool connection timings stay in memory. Copy them when reporting a connection problem; message text and access keys are not included.", control: actHtml({ label: "Copy tool connection details", id: "sp-connection-copy" }) })}
+          ${boxTraceHtml()}`),
       "sp-slow": devBuild() ? card("sp-slow", "", `
           <p class="hint">Only a viberoom run from its own sources shows this page: a copy installed from npm has no sources, so it never does. It measures this window, so a slow or choppy moment can be reported with the place it happened in.</p>
           ${row({ label: "Slow moments", hint: "Everything this window spent more than 8 ms on, newest first: the moment, the cost, what it was, and what the room was doing then. Anything over 50 ms the browser reports by itself, ours or not. When something feels slow, copy the list into the room: it says where to look, which a measurement from outside cannot.", control: actHtml({ label: "Copy the list", id: "sp-slow-copy" }) })}
@@ -7110,6 +7839,7 @@
           ${row({ label: "Jumps to the newest message", hint: "Every time the chat moved to the newest message by itself, and who asked for it. A move while you were reading higher up is the one to report." })}
           ${endJumpsHtml()}`) : "",
       "sp-dev-prompts": devBuild() ? card("sp-dev-prompts", "What the vibemates are sent", row({ label: "Show each reply's prompt", for: "sp-dev-prompts-on", kind: "switch", checked: !!s.devShowPrompts, hint: "On: every vibemate's reply gets a Prompt button beside its tool calls. It unfolds what viberoom sent that vibemate for the turn, block by block and exactly as it went: the brief, the rules, the vibio, the memory, the header, the messages. Kept from the moment this is on, beside each room's history, the newest 300 turns of a room." })) : "",
+      "sp-dev-memory": devBuild() ? card("sp-dev-memory", "What the memory receives", row({ label: "Record memory ingestion", for: "sp-dev-memory-on", kind: "switch", checked: !!s.devShowMemoryIngestion, hint: "Adds Memory to message bubbles: the actual sieve request, raw answer, applied decision and provider payload. Records new processing only, including shared batch context. Keeps up to 100 batches per room for 7 days, within a 16 MiB saved-payload budget and a separate 16 MiB active-buffer budget. Limits: 4 MiB per batch and 1 MiB per event; omissions are marked. Batches are saved on completion; unfinished recordings are lost on restart. Editing or deleting any source or context removes its recordings. Turning this off clears all recordings." })) : "",
       "sp-wheel": devBuild() ? card("sp-wheel", "The wheel", row({ label: "Wheel trace", hint: "Every wheel event on the chat in the last two minutes: its step, how long after the last one it came, how late this window heard it, and what the wheel made of it — a step, the glide, or the browser's own scroll; then the late frames and why the motion stopped. When the scroll feels choppy, scroll the same way again, then copy the trace into the room.", status: wheelTraceSummary(), control: actHtml({ label: "Copy the trace", id: "sp-wheel-copy" }) })) : "",
     };
     const categories = settingsCategories();
@@ -7149,6 +7879,18 @@
           command.focus();
           return;
         }
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }),
+    );
+    const sleepChoices = [...($("#sp-sleep")?.querySelectorAll('.keep-awake-modes [data-ui="choice"]') || [])];
+    sleepChoices.forEach((b) =>
+      b.addEventListener("click", () => {
+        sleepChoices.forEach((x) => UI.setState(x, x === b ? "on" : null));
+        const input = $("#sp-keep-awake");
+        if (input.value === b.dataset.keepAwake) return;
+        input.value = b.dataset.keepAwake;
+        const glyph = b.querySelector(".rig");
+        if (glyph && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) window.Icons.play(glyph);
         input.dispatchEvent(new Event("change", { bubbles: true }));
       }),
     );
@@ -7321,6 +8063,12 @@
     paintLookPreview();
     $("#sp-mono").addEventListener("change", () => sample.querySelectorAll("code").forEach((c) => (c.style.fontFamily = FONTS.mono[$("#sp-mono").value].stack)));
     bindCopy($("#sp-slow-copy"), slowTasksText, "nothing over 8 ms in this window");
+    $("#sp-trace-record")?.addEventListener("click", () => {
+      boxTrace = { state: "recording" };
+      paintBoxTrace();
+      window.postMessage({ viberoomTrace: "start" }, location.origin);
+    });
+    bindCopy($("#sp-trace-copy"), () => (boxTrace.state === "done" ? boxTraceStatus() : ""), "no trace recorded yet");
     bindCopy($("#sp-wheel-copy"), wheelTraceText, "no wheel on the chat in the last two minutes");
     $("#sp-restart-now").addEventListener("click", async () => {
       let once = null;
@@ -7391,7 +8139,7 @@
       UI.setState(narrowBtn, null);
     });
     $("#sp-notify-allow")?.addEventListener("click", async () => {
-      await askToKnock(true);
+      await askToKnock();
       renderSettingsPage();
     });
     $("#sp-update-check").addEventListener("click", async () => {
@@ -7427,7 +8175,9 @@
           wheelInertia: $("#sp-wheel-inertia").checked,
           notifyReplies: $("#sp-notify").value,
           appBadge: $("#sp-badge").checked,
+          keepAwake: $("#sp-keep-awake").value,
           devShowPrompts: $("#sp-dev-prompts-on")?.checked,
+          devShowMemoryIngestion: $("#sp-dev-memory-on")?.checked,
           checkForUpdates: $("#sp-updates").checked,
           checkAgentUpdates: $("#sp-agent-updates").checked,
           transcripts: $("#sp-transcripts-mode").value,
@@ -7445,14 +8195,42 @@
             tools: $("#sp-tools").value,
             sharesHistory: $("#sp-share-history").checked,
             readsOtherRooms: $("#sp-reads-others").value,
+            remembers: $("#sp-remembers").checked,
           },
           vendorPresets,
         });
     });
   }
 
+  function partsStatusText(u) {
+    const p = u.parts.product, a = u.parts.application;
+    let mine = `viberoom ${p.current}`;
+    if (p.stage === "downloading") mine += `: ${p.latest} is downloading, ${p.progress ?? 0} %`;
+    else if (p.stage === "ready") mine += `: ${p.latest} is downloaded and checked; Update now restarts the room into it`;
+    else if (p.stage === "waiting") mine += `: ${p.latest} is downloaded and checked, and can start after ${new Date(p.runnableAt).toLocaleString()}, once it has been out for a day`;
+    else if (p.checking) mine += ": checking now";
+    else if (p.outcome === "needs-application" || p.waitsForApplication) mine += `: viberoom ${p.waitsForApplication || "a newer version"} is out and needs a newer application`;
+    else if (p.outcome === "too-new") mine += ": a newer version is out, and is taken once it has been out for a day";
+    else if (p.outcome === "later") mine += ": could not check now; it tries again later";
+    else if (p.outcome === "refused") mine += ": a newer version could not be taken; the next one is waited for";
+    else if (p.outcome === "current" || p.outcome === "found") mine += ", the latest";
+    else mine += ", not checked yet";
+    let app = a ? `application ${a.current}` : "the application";
+    if (u.parts.byStore) app += ", which the store it came from keeps up to date";
+    else if (!a) app += ": not checked yet";
+    else if (a.available && a.stage === "downloading") app += `: ${a.latest} is downloading, ${a.progress ?? 0} %`;
+    else if (a.available && a.stage === "ready") app += `: ${a.latest} is ready; Restart to update`;
+    else if (a.available) app += `: ${a.latest} is out`;
+    else if (a.error) app += ": could not check now; it tries again later";
+    else app += ", the latest";
+    const when = u.checkedAt ? `; checked ${new Date(u.checkedAt).toLocaleString()}` : "";
+    return `${mine} · ${app}${when}.`;
+  }
+
+
   function updateStatusText() {
     const u = state.update;
+    if (u && u.parts) return partsStatusText(u);
     const v = state.version ? state.version.version : "?";
     if (!u || !u.checkedAt) return `This is viberoom ${v}; not checked yet.`;
     const when = new Date(u.checkedAt).toLocaleString();
@@ -7483,6 +8261,10 @@
         if (tg.detail) return { kind: "problem", mark: { label: "Not listening", tone: "error" }, line: `Not listening: ${tg.detail}.`, action: { label: "Replace the key…", act: "ch-replace-key" } };
         return { kind: "setting", mark: { label: "Starting…", tone: "waiting", dot: true }, line: "Connecting to Telegram…", action: null };
     }
+  }
+
+  function configurationProblemHtml(id, problem) {
+    return problem ? settingsCard(id, "", settingRow({ label: "Saved settings need attention", hint: problem, stacked: true, statusTone: "warn" })) : "";
   }
 
   function channelsSectionHtml() {
@@ -7541,7 +8323,7 @@
       }),
       UI.html("setting", { label: "Channel on", for: "sp-tg-enabled", kind: "switch", checked: !!(tg && tg.enabled), hint: "Off keeps the key and the paired accounts; the phone gets nothing until it is on again." }),
     ].join("") : "";
-    return `<div class="ch-card" data-state="${st.kind}">${head}${line}${facts}${acts.length ? `<div class="ch-acts">${acts.join("")}</div>` : ""}${groups}${geek}</div>${settings}`;
+    return `${configurationProblemHtml("channels-storage-problem", c.storageProblem)}<div class="ch-card" data-state="${st.kind}">${head}${line}${facts}${acts.length ? `<div class="ch-acts">${acts.join("")}</div>` : ""}${groups}${geek}</div>${settings}`;
   }
 
   const KEY_GEEK = "This field is write-only. The value goes from it straight into this computer's vault — sealed with Windows DPAPI, macOS Keychain or the Linux Secret Service — and the settings file keeps only a vault:… reference. It never comes back to this screen, never enters a room, a prompt, the record or a vibemate's context; they learn only that a key is set. As a second net, every line of the hub's log is scrubbed of the stored values and of key shapes.";
@@ -7726,18 +8508,38 @@
     });
   }
 
+  const MEMORY_ROOM_COLUMNS = ["sp-mem-remembers", "sp-mem-input", "sp-mem-shares", "sp-mem-reads"];
+  function memoryRoomsRow(row) {
+    const rooms = roomsByName();
+    if (!rooms.length) return "";
+    const head = MEMORY_ROOM_COLUMNS.map((rowId) => `<th scope="col">${esc(ROOM_VALUE_ROWS[rowId].column)}</th>`).join("");
+    const body = rooms.map((room) => `<tr class="room-value" data-room="${esc(room.id)}">
+        <th scope="row"><span class="mem-room-name">${roomMark(room, "sm")}<span class="rv-name" title="${esc(room.name)}">${esc(room.name)}</span></span></th>
+        ${MEMORY_ROOM_COLUMNS.map((rowId) => `<td data-row="${rowId}">${roomValueControl(rowId, room, `${room.name}: ${ROOM_VALUE_ROWS[rowId].column}`)}</td>`).join("")}
+        <td>${UI.html("button", { label: "Recover…", kind: "secondary", size: "sm", title: `Rebuild ${room.name}'s memory from eligible originals, with your budget and review`, data: { memRecover: room.id } })}</td>
+      </tr>`).join("");
+    return row({
+      label: "Rooms", id: "sp-mem-rooms", stacked: true,
+      hint: "Each room's own memory, the same settings as Memory in its settings. A room that does not remember sends nothing.",
+      status: UI.raw(`<span class="rv-summary" data-rv-summary="sp-mem-remembers">${esc(roomValuesSummary(ROOM_VALUE_ROWS["sp-mem-remembers"], rooms))}</span>`),
+      control: UI.raw(`<div class="mem-rooms-scroll"><table class="mem-rooms" data-own-save><thead><tr><th scope="col">Room</th>${head}<th scope="col" aria-label="Recover"></th></tr></thead><tbody>${body}</tbody></table></div>`),
+    });
+  }
   function memorySectionHtml() {
     const m = state.memoryProvider;
     if (!m) return '<p class="hint" id="sp-mem-loading">Loading…</p>';
     const v = m.view, st = m.status || {};
     const chosen = (v.providers || []).find((p) => p.id === v.provider) || null;
     const behind = (st.rooms || []).reduce((sum, r) => sum + (r.behind || 0), 0);
-    const spent = st.usage && chosen ? ` This month: ${st.usage.credits}${st.usage.cap ? ` of ${st.usage.cap}` : ""} ${chosen.costUnit}.` : "";
+    const rate = st.rateWindow, at = (ms) => new Date(ms).toLocaleTimeString();
+    const spent = (st.usage && chosen ? ` This month, by this copy's count: ${st.usage.credits}${st.usage.cap ? ` of ${st.usage.cap}` : ""} ${chosen.costUnit}.` : "")
+      + (rate && chosen ? ` ${chosen.label} at ${at(rate.at)}: ${rate.status === 429 ? "requests refused for now" : "answering"}${rate.remaining !== null || rate.limit !== null ? `, ${rate.remaining ?? "?"} of ${rate.limit ?? "?"} requests left this minute` : ""}${rate.resetAt !== null ? `, the window resets at ${at(rate.resetAt)}` : ""}${rate.retryAfterMs !== null ? `, asked to wait ${Math.round(rate.retryAfterMs / 1000)} s` : ""}.` : "");
+    const dashboard = chosen?.dashboard && st.usage ? ` The account's total: ${chosen.dashboard.label}, ${chosen.dashboard.url.replace(/^https?:\/\//, "")}.` : "";
     const status = (st.paused
       ? `Paused: ${st.paused.reason} The queue waits; nothing is lost.`
       : !chosen ? "Off. Nothing leaves this computer."
       : !chosen.consent ? "Waiting for your consent below before anything is sent."
-      : `On. ${st.pendingOps ? `${st.pendingOps} queued operation${st.pendingOps === 1 ? "" : "s"}, ` : ""}${behind ? `${behind} message${behind === 1 ? "" : "s"} not yet distilled.` : "caught up."}`) + spent;
+      : `On. ${st.pendingOps ? `${st.pendingOps} queued operation${st.pendingOps === 1 ? "" : "s"}, ` : ""}${behind ? `${behind} message${behind === 1 ? "" : "s"} not yet distilled.` : "caught up."}`) + spent + dashboard;
     const row = (props) => UI.html("setting", props);
     const options = [`<option value="off"${!chosen ? " selected" : ""}>Off</option>`]
       .concat((v.providers || []).map((p) => `<option value="${esc(p.id)}"${v.provider === p.id ? " selected" : ""}>${esc(p.label)}</option>`)).join("");
@@ -7749,23 +8551,25 @@
     const providerRows = chosen ? chosen.fields.map(fieldHtml).join("") : "";
     const llm = v.filter.mode === "llm";
     const rest = `${providerRows}
-      ${row({ label: "The sieve", for: "sp-mem-filter", geek: "What of the conversation reaches the provider. The model mode reads every message — the agents' reports included — and forwards a condensed episode of the salient ones, in the room's language; it needs the endpoint below. Everything sends each message whole (long ones cut at a line boundary): the fullest graph, the highest spend, watched by the monthly ceiling. Human-only stays within free plans but the graph misses the system's own story. The model mode also writes the questions each turn's search asks; without a model, the message is cut at its sentences.", control: UI.raw(`<select class="select" id="sp-mem-filter"><option value="llm"${llm ? " selected" : ""}>A small model keeps what matters (recommended)</option><option value="off"${v.filter.mode === "off" ? " selected" : ""}>Everything, mechanically capped (default)</option><option value="heuristic"${v.filter.mode === "heuristic" ? " selected" : ""}>Only the human's messages, whole</option></select>`) })}
+      ${row({ label: "The sieve", for: "sp-mem-filter", geek: "What of the conversation reaches the provider. The model mode reads every message — the agents' reports included — and forwards the salient ones, a long one as its own excerpts or whole, in the room's language; it needs the endpoint below. Everything sends each message whole: the fullest graph, the highest spend, watched by the monthly ceiling. Human-only stays within free plans but the graph misses the system's own story. The model mode also writes the questions each turn's search asks. No mode cuts a message: one too long for a single episode is held, not shortened.", control: UI.raw(`<select class="select" id="sp-mem-filter"><option value="llm"${llm ? " selected" : ""}>A small model keeps what matters (recommended)</option><option value="off"${v.filter.mode === "off" ? " selected" : ""}>Everything, whole (default)</option><option value="heuristic"${v.filter.mode === "heuristic" ? " selected" : ""}>Only the human's messages, whole</option></select>`) })}
       ${row({ label: "Sieve endpoint", for: "sp-mem-f-url", hidden: !llm, data: { memLlm: true, ...waitingOn(v, "sieve") }, hint: "Any OpenAI-compatible chat-completions endpoint: OpenAI, a local Ollama (http://localhost:11434/v1), Groq, OpenRouter…", control: UI.raw(`<input type="text" class="input" id="sp-mem-f-url" spellcheck="false" value="${esc(v.filter.baseUrl || "")}" placeholder="https://api.openai.com/v1">`) })}
       ${row({ label: "Sieve model", for: "sp-mem-f-model", hidden: !llm, data: { memLlm: true, ...waitingOn(v, "sieve") }, control: UI.raw(`<input type="text" class="input" id="sp-mem-f-model" spellcheck="false" value="${esc(v.filter.model || "")}" placeholder="a small, cheap model">`) })}
       ${row({ label: "Sieve API key", for: "sp-mem-f-key", hidden: !llm, data: { memLlm: true }, lead: UI.raw(noPeekHtml()), geek: KEY_GEEK, control: UI.raw(`<input type="password" class="input" id="sp-mem-f-key" autocomplete="off" spellcheck="false" placeholder="${v.filter.keySet ? "•••••• (set; paste to replace)" : "the endpoint's key; empty for a local one"}">`) })}
-      ${row({ label: "Search form", for: "sp-mem-f-form", hidden: !llm, data: { memLlm: true }, hint: "What the sieve's model writes to search the memory for your message.", geek: "Each form was judged blind on 46 messages. Per message, query decomposition found 5.8 useful facts against 9.0 unrelated, your words by topic 4.6 against 9.3, HyDE 5.5 against 11.5, its extra noise mostly from other rooms; so query decomposition is the default. Only the model writes these: without it, the message is cut at its sentences.", control: UI.raw(selectHtml("sp-mem-f-form", Object.entries(SEARCH_FORMS), v.filter.form || "question")) })}
-      ${row({ label: "Most characters of recalled facts in a turn", for: "sp-mem-block", hint: "The facts found for a turn go into each vibemate's prompt, the strongest first, until they reach this many characters. The default, 4 000, is about twenty facts.", geek: "How a turn's block is made. Before a vibemate answers your message, the sieve's model reads it and writes up to three short searches, one per topic, in the search form above. Each asks this room's graph, and the other rooms' when the room searches them in each turn's memory block (Search the other rooms, in its settings). The provider scores every fact from 0 to 1 against its search and leaves out those under its relevance threshold (0.01 by default, with the provider's settings above); the rest go in, the strongest first, until this size. Beyond about 4 000 characters mostly weaker facts come in. The Prompt view shows each turn's searches and facts.", control: UI.raw(UI.html("number-field", { id: "sp-mem-block", value: String(v.blockChars ?? 4000), min: 1000, max: 8000, step: 500 })) })}`;
+      ${row({ label: "Search form", for: "sp-mem-f-form", hidden: !llm, data: { memLlm: true }, hint: "What the sieve's model writes to search the memory for your message.", geek: "The forms were tried on the same messages, their facts judged blind: query decomposition found the most useful facts and the fewest unrelated ones, so it is the default; HyDE brought the most noise, mostly from other rooms. Only the model writes these: without it, the message is cut at its sentences.", control: UI.raw(selectHtml("sp-mem-f-form", Object.entries(SEARCH_FORMS), v.filter.form || "question")) })}
+      ${row({ label: "Most characters of recalled memory in a turn", for: "sp-mem-block", hint: "The recalled facts, messages and nodes go into each vibemate's prompt up to this character budget, including their source references. The default is 4 000 characters.", geek: "How a turn's block is made. Before a vibemate answers your message, the sieve's model reads it and writes up to three short searches, one per topic, in the search form above. Each asks this room's graph, and the other rooms' when the room searches them in each turn's memory block (Search the other rooms, in its settings). Each answer keeps the provider's selected order, with facts, messages and nodes together. This room's answers have no relevance threshold; only facts from other rooms use it (0.01 by default, with the provider's settings above). With relevance scores, answers compete by their next fact; scores equal to the same hundredth tie, with this room first. Without scores, this room's answers come first. A message or node travels with the fact before it; items before this room's first fact lead the list. The budget follows that order and stops at the first item that does not fit. An oversized first item's text is explicitly shortened if its required metadata fits within the budget. The Prompt view shows each turn's searches and recalled context.", control: UI.raw(UI.html("number-field", { id: "sp-mem-block", value: String(v.blockChars ?? 4000), min: 1000, max: 8000, step: 500 })) })}`;
     return `<div class="page-hero">
         <div class="mem-scene scene-art" role="img" aria-label="A vibemate at its desk, writing down what the room said">${window.Icons.scene("memory-scribe")}</div>
         <b class="page-hero-title">What is long-term memory</b>
         <div class="hero-notes">
-          <div class="hero-note is-what"><div class="hero-note-head">${ic("journal")}Rooms that remember</div><p>Rooms that opt in feed one long-term memory: what was said becomes facts your vibemates can recall in later conversations, each with the span it held true.</p><p>Each room has its own switch: "This room remembers", in the room's settings.</p></div>
+          <div class="hero-note is-what"><div class="hero-note-head">${ic("journal")}Rooms that remember</div><p>Rooms feed one long-term memory: what was said becomes facts your vibemates can recall in later conversations, each with the span it held true. A new room remembers from the start.</p><p>Each room has its own switch: "This room remembers", in the room's settings, and every room's below, under Rooms, with the rest of its memory; the rooms made before keep the choice they have.</p></div>
           <div class="hero-note is-how"><div class="hero-note-head">${ic("bot")}Set it up together</div><p>It is a rather geeky setup: a graph provider, a sieve, two API keys. <b>You do not have to do it alone</b> — in any room, write <code>/set-up-long-term-memory</code> and a vibemate walks you through it step by step. Keys go on write-only cards it never sees.</p><p>Feeling geeky yourself? Everything is below.</p></div>
         </div>
       </div>
       ${row({ label: "Provider", for: "sp-mem-provider", hint: chosen ? chosen.blurb : "The master switch of this page: choose a provider to unlock the rest.", status, statusId: "sp-mem-status", geek: "Every provider hides behind the same contract; switching later keeps the rooms' switches and the local bookkeeping. What each one can and cannot do (forget one message, keep fact validity spans) is declared, not assumed.", control: UI.raw(`<select class="select" id="sp-mem-provider">${options}</select>`) })}
       ${chosen ? consentGateHtml({ feature: "memory", icon: "graph", recipient: chosen.label, given: !!chosen.consent, lapsed: !!chosen.consentLapsed, words: chosen.consentText, view: v }) : ""}
-      ${consentLockHtml(rest, { locked: !chosen || !chosen.consent, feature: "memory", note: chosen ? "Agree above to set it up" : "Choose a provider above to set it up" })}`;
+      ${chosen ? memoryRoomsRow(row) : ""}
+      ${consentLockHtml(rest, { locked: !chosen || !chosen.consent, feature: "memory", note: chosen ? "Agree above to set it up" : "Choose a provider above to set it up" })}
+      ${chosen ? `${row({ label: "Memory deliveries", hint: "Check pending writes and cloud deletions, including rooms closed on this computer. Credit totals include reservations for requests whose outcome is unknown.", data: { ownSave: true }, control: UI.raw(UI.html("button", { label: "Refresh deliveries", id: "sp-mem-deliveries-load", size: "sm" })) })}<div id="sp-mem-deliveries" data-own-save aria-live="polite"></div>` : ""}`;
   }
 
   async function refreshFeatureViews() {
@@ -7788,6 +8592,7 @@
   function featuresChanged({ page = true } = {}) {
     voiceControl.redraw();
     markSettingsRail();
+    markOnboardingCards();
     if (page && state.view === "settings") renderSettingsPage();
   }
 
@@ -7795,11 +8600,16 @@
     const section = $("#sp-memory");
     if (!section) return;
     bindFeatureConsent(section);
+    section.addEventListener("click", (e) => {
+      const recover = e.target.closest?.("[data-mem-recover]");
+      if (recover) window.ViberoomRecovery.open(recover.dataset.memRecover, { openDialog, closeDialog, confirm: confirmDialog });
+    });
     for (const type of ["input", "change"]) section.addEventListener(type, (e) => { if (!e.target.closest?.("[data-own-save]")) e.stopPropagation(); });
     if (!state.memoryProvider) {
       loadMemoryProvider();
       return;
     }
+    bindMemoryDeliveries(section);
     bindSave(section, async () => {
       const q = (sel) => section.querySelector(sel);
       const patch = {
@@ -7827,6 +8637,165 @@
     });
     const filterSel = section.querySelector("#sp-mem-filter");
     if (filterSel) filterSel.addEventListener("change", () => { for (const r of section.querySelectorAll("[data-mem-llm]")) r.hidden = filterSel.value !== "llm"; });
+  }
+
+  function memoryDeliveryRowHtml(row) {
+    const states = { prepared: "Waiting to send", unknown: "Delivery not confirmed", accepted: "Accepted; processing not confirmed", processed: "Processing confirmed", rejected: "The provider refused this write", conflict: "Conflicting receipts; review needed", duplicates: "Duplicate episodes; repair pending" };
+    const cleanup = { pending: "Local text erased; cloud cleanup pending", not_requested: "Local copy removed; cloud memory kept", episodes_deleted: "Known episodes deleted", graph_deleted: "Cloud graph deletion confirmed" };
+    const reasons = { listing_page_limit: "The check reached 100 pages (up to 10,000 episodes); it cannot authorize another write.", listing_truncated: "The provider returned an incomplete list; no retry is authorized.", not_found: "The latest complete check did not find this operation.", fact_reconciliation_unverified: "This provider cannot yet verify an uncertain explicit fact write.",
+      index_building: "Reading the cloud history in parts; the next check will continue from here.",
+      index_recent_incomplete: "Checking the latest cloud records in parts; the next check will continue from here.",
+      index_cursor_expired: "The saved reading position expired; the check will start again.",
+      indexed_episode_unverified: "A found episode could not be confirmed; no repeat write is authorized.",
+      indexed_source_unverified: "The source's cloud records could not be confirmed; no repeat write is authorized." };
+    const removed = row.retiredAt !== null;
+    const outcome = row.retirement === "source_imported" ? `Imported history selected; cloud cleanup not requested · ${row.state === "prepared" && !row.attempts ? "previous delivery withdrawn before sending" : states[row.state] || row.state}`
+      : removed ? cleanup[row.cleanup] || "Local text erased" : states[row.state] || row.state;
+    const action = !removed && row.roomLoaded && row.state === "rejected" ? "retry"
+      : !removed && row.roomLoaded && row.state === "unknown" && row.replays && row.kind === "episode" ? "replay"
+      : !removed && row.roomLoaded && ["prepared", "unknown", "accepted", "duplicates"].includes(row.state) ? "check"
+      : removed && row.roomLoaded && row.cleanup === "pending" && row.attempts ? "check" : null;
+    const label = action === "retry" ? "Retry refused write" : action === "replay" ? "Authorize one more attempt…" : "Check again";
+    const maintenance = ["graph_deleted", "not_requested"].includes(row.cleanup) ? null : row.maintenance;
+    const cleanupStates = { processing: "Episode cleanup is waiting for processing or deletion confirmation", stalled: "Episode cleanup has been waiting for at least 30 minutes", watching: "Watching for late acceptance; complete erasure is not confirmed", failed: "Episode cleanup check incomplete", cleaned: "Episode cleanup confirmed; derived facts may still need repair" };
+    const maintenanceState = maintenance?.state === "processing" && Date.now() - maintenance.since >= 30 * 60_000 ? "stalled" : maintenance?.state;
+    const maintenanceHint = maintenance ? ` · ${cleanupStates[maintenanceState] || maintenanceState}${maintenance.reason ? ` (${maintenance.reason})` : ""}` : "";
+    const when = (ms) => new Date(ms).toLocaleString(), watch = row.watch;
+    const watchHint = !watch || watch.state === "resolved" ? ""
+      : watch.state === "active" ? ` · automatic checks until ${when(watch.deadlineAt)}${watch.nextAt !== null ? ` (next: ${when(watch.nextAt)})` : ""}`
+      : ` · automatic checks ended on ${when(watch.deadlineAt)}${removed && row.cleanup === "pending" ? "; a late acceptance was not observed until then" : ""}`;
+    const hint = `${outcome}${maintenanceHint}${row.reason ? ` · ${reasons[row.reason] || row.reason}` : ""}${watchHint}. ${row.attempts} attempts${row.creditsPerAttempt !== null ? ` · estimated ${row.creditsPerAttempt} credits per attempt` : ""}${row.roomLoaded ? "" : " · local room not loaded"}${row.repairPending ? " · affected facts and summaries await repair" : ""}`;
+    const watchGeek = watch ? `\nWatch: ${watch.state}, ${watch.checks} automatic checks since ${when(watch.startedAt)}${watch.lastCheckAt !== null ? `\nLast check: ${when(watch.lastCheckAt)} · ${watch.lastResult}` : ""}` : "";
+    return settingRow({ label: `${row.roomId} · ${row.sourceId}`, hint,
+      geek: `Operation: ${row.opId}\nGraph: ${row.roomUuid}\nReceipts: ${row.externalIds.join(", ") || "none"}\nPrepared: ${new Date(row.preparedAt).toLocaleString()}${watchGeek}`,
+      control: action ? UI.raw(UI.html("button", { label, size: "sm", data: { deliveryAction: action, op: row.opId, attempt: row.attempts } })) : undefined });
+  }
+
+  function memoryDeletionStateText(state) {
+    const states = { queued: "Episode deletion queued", processing: "Waiting for the episode to finish processing", stalled: "Episode processing stalled for at least 30 minutes", failed: "Episode deletion needs another attempt", expired: "Automatic attempts ended after 7 days; the deletion is still owed" };
+    return states[state] || state;
+  }
+
+  function memoryCleanupRowHtml(row) {
+    if (row.kind === "replacement") return memoryReplacementRowHtml(row);
+    const imported = row.reason === "imported_source_read_only";
+    const reason = row.reason && row.reason !== "episode_not_processed" ? ` · ${row.reason}` : "";
+    const retry = !imported && (row.state === "failed" || row.state === "expired");
+    return settingRow({ label: `Episode deletion · ${row.roomId} · ${row.sourceId}`,
+      hint: imported ? "Import leaves cloud memory unchanged. A new local edit or deletion can resume this operation."
+        : `${memoryDeletionStateText(row.state)}${reason}. Other operations continue.${row.retryAt && row.state !== "expired" ? ` Next check: ${new Date(row.retryAt).toLocaleString()}.` : ""}`,
+      geek: `Queue operation: ${row.id}\nGraph: ${row.roomUuid || "current room graph"}\nChecks: ${row.attempts}${row.waitingSince !== null ? `\nWaiting since: ${new Date(row.waitingSince).toLocaleString()}` : ""}`,
+      control: retry ? UI.raw(UI.html("button", { label: "Retry deletion", size: "sm", data: { deliveryAction: "retry-cleanup", op: row.id } })) : undefined });
+  }
+
+  function memoryReplacementRowHtml(row) {
+    const when = (ms) => new Date(ms).toLocaleString(), waits = row.waitsFor;
+    const imported = row.reason === "imported_source_read_only";
+    const hint = imported ? "Imported history is kept locally. A new local edit or deletion can change its cloud memory."
+      : row.state === "settling" ? `The new version goes a minute after the last edit, at ${when(row.retryAt)}.`
+      : row.state === "suspended" ? "The new version waits: this room does not remember now."
+      : row.state === "failed" ? `The new version is not sent yet${row.reason ? ` · ${row.reason}` : ""}.${row.retryAt ? ` Next attempt: ${when(row.retryAt)}.` : ""}`
+      : row.state === "expired" ? "Automatic attempts ended after 7 days; the new version is still owed."
+      : row.state === "waiting" && waits.kind === "deletion" ? `The new version waits for the old one's deletion: ${memoryDeletionStateText(waits.state)}${waits.reason && waits.reason !== "episode_not_processed" ? ` · ${waits.reason}` : ""}.`
+      : row.state === "waiting" ? `The new version waits until the old one has certainly left the graph${waits.reason ? ` · ${waits.reason}` : ""}.${waits.checksEnded ? " Automatic checks of the old version ended." : ""}`
+      : "The new version is due.";
+    const button = imported ? null : row.state === "failed" || row.state === "expired" ? { label: "Retry", data: { deliveryAction: "retry-replacement", op: row.id } }
+      : row.state === "waiting" && waits.kind === "deletion" && (waits.state === "failed" || waits.state === "expired") ? { label: "Retry deletion", data: { deliveryAction: "retry-cleanup", op: waits.op } }
+      : row.state === "waiting" && waits.kind === "version" && waits.checksEnded ? { label: "Check again", data: { deliveryAction: "check", op: waits.opId, attempt: waits.attempt } }
+      : null;
+    return settingRow({ label: `Edited message · ${row.roomId} · ${row.sourceId}`, hint,
+      geek: `Queue operation: ${row.id}\nGraph: ${row.roomUuid || "current room graph"}${waits ? `\nWaits for: ${waits.kind === "deletion" ? `deletion ${waits.op}` : `erased operation ${waits.opId} (${waits.state})`}` : ""}`,
+      control: button ? UI.raw(UI.html("button", { label: button.label, size: "sm", data: button.data })) : undefined });
+  }
+
+  function bindMemoryDeliveries(section) {
+    const load = section.querySelector("#sp-mem-deliveries-load"), box = section.querySelector("#sp-mem-deliveries");
+    if (!load || !box) return;
+    const provider = state.memoryProvider.view.provider;
+    let after = null, cleanupAfter = null, versionAfter = null, bindingAfter = null;
+    const refresh = async (more = false, moreCleanups = false, moreVersions = false, moreBindings = false) => {
+      load.disabled = true;
+      try {
+        const result = await get(`/api/memory-deliveries?provider=${encodeURIComponent(provider)}${more && after ? `&after=${encodeURIComponent(after)}` : ""}${moreCleanups && cleanupAfter ? `&cleanupAfter=${cleanupAfter}` : ""}${moreVersions && versionAfter ? `&versionAfter=${encodeURIComponent(versionAfter)}` : ""}${moreBindings && bindingAfter ? `&bindingAfter=${encodeURIComponent(bindingAfter)}` : ""}`);
+        if (!box.isConnected) return;
+        const entries = result.entries.map(memoryDeliveryRowHtml).join("");
+        const cleanups = result.cleanups.entries.map(memoryCleanupRowHtml).join("");
+        const versions = (result.versions?.entries || []).map(memoryVersionRowHtml).join("");
+        const bindings = (result.bindings?.entries || []).map(memoryBindingRowHtml).join("");
+        const skipHints = { written_before_memory: "Written before remembering was enabled in this copy.",
+          provider_cannot_check: "This provider cannot check imported messages; only messages written in this copy are sent.",
+          imported_history: "Import keeps history local. New messages and local changes can update cloud memory." };
+        const skips = (result.skippedVersions || []).map(row => settingRow({ label: `${row.roomId} · ${row.count} imported messages skipped`,
+          hint: skipHints[row.reason] || "This imported message was left out of cloud memory." })).join("");
+        const deletions = !more ? result.deletions.map(row => settingRow({ label: `Cloud deletion · ${row.room}`, hint: `${row.state}${row.reason ? ` · ${row.reason}` : ""}`, geek: `Graph: ${row.uuid}`, control: row.state === "failed" ? UI.raw(UI.html("button", { label: "Retry deletion", size: "sm", data: { deliveryAction: "retry-deletion", room: row.room, uuid: row.uuid } })) : undefined })).join("") : "";
+        if (!moreCleanups && !moreVersions && !moreBindings) box.querySelector("[data-more-deliveries]")?.remove();
+        if (!more && !moreVersions && !moreBindings) box.querySelector("[data-more-cleanups]")?.remove();
+        if (moreVersions) box.querySelector("[data-more-versions]")?.remove();
+        if (moreBindings) box.querySelector("[data-more-bindings]")?.remove();
+        if (more || moreCleanups || moreVersions || moreBindings) box.insertAdjacentHTML("beforeend", moreCleanups ? cleanups : moreVersions ? versions : moreBindings ? bindings : entries);
+        else box.innerHTML = deletions + cleanups + versions + bindings + skips + entries || '<p class="field-note">No recorded deliveries or pending deletions.</p>';
+        if (!moreCleanups && !moreVersions && !moreBindings) {
+          after = result.next;
+          if (after) box.insertAdjacentHTML("beforeend", UI.html("button", { label: "More deliveries", size: "sm", data: { moreDeliveries: true } }));
+        }
+        if (!more && !moreVersions && !moreBindings) {
+          cleanupAfter = result.cleanups.next;
+          if (cleanupAfter) box.insertAdjacentHTML("beforeend", UI.html("button", { label: "More deletions and edits", size: "sm", data: { moreCleanups: true } }));
+        }
+        if ((!more && !moreCleanups && !moreBindings) || moreVersions) {
+          versionAfter = result.versions?.next;
+          if (versionAfter) box.insertAdjacentHTML("beforeend", UI.html("button", { label: "More imported messages", size: "sm", data: { moreVersions: true } }));
+        }
+        if ((!more && !moreCleanups && !moreVersions) || moreBindings) {
+          bindingAfter = result.bindings?.next;
+          if (bindingAfter) box.insertAdjacentHTML("beforeend", UI.html("button", { label: "More shared episodes", size: "sm", data: { moreBindings: true } }));
+        }
+      } catch (error) { showError(error); }
+      finally { load.disabled = false; }
+    };
+    load.addEventListener("click", () => void refresh());
+    box.addEventListener("click", async event => {
+      if (event.target.closest("[data-more-deliveries]")) { await refresh(true); return; }
+      if (event.target.closest("[data-more-cleanups]")) { await refresh(false, true); return; }
+      if (event.target.closest("[data-more-versions]")) { await refresh(false, false, true); return; }
+      if (event.target.closest("[data-more-bindings]")) { await refresh(false, false, false, true); return; }
+      const button = event.target.closest("[data-delivery-action]");
+      if (!button) return;
+      const action = button.dataset.deliveryAction;
+      if (action === "replay" && !await confirmDialog("The previous request may still appear in the cloud. This permits one more paid attempt after a complete check and a ten-minute wait. A duplicate may require graph repair.", { title: "Authorize another memory attempt?", okLabel: "Authorize one attempt", danger: true })) return;
+      button.disabled = true;
+      try {
+        await post("/api/memory-deliveries", action === "check-binding" ? { action, watchId: button.dataset.watch }
+          : action === "check-version" ? { action, room: button.dataset.room, sourceId: button.dataset.source }
+          : action === "retry-deletion" ? { action, provider, room: button.dataset.room, uuid: button.dataset.uuid }
+          : action === "retry-cleanup" || action === "retry-replacement" ? { action, op: Number(button.dataset.op) }
+          : { action, opId: button.dataset.op, attempt: Number(button.dataset.attempt), confirm: action === "replay" });
+        await refresh();
+      } catch (error) { showError(error); button.disabled = false; }
+    });
+  }
+
+  function memoryVersionRowHtml(row) {
+    const reasons = { listing_incomplete: "The graph could not be read completely; nothing is sent.", older_version_leaving: "Waiting for the source's proven predecessors to leave the graph.",
+      source_replaced_elsewhere: "The graph contains a version absent from this copy's carry history; sending waits for a transfer.",
+      source_changed_during_check: "The source changed during the check; its current version will be checked again.",
+      source_presence_unavailable: "Cloud records could not be confirmed; nothing is sent.",
+      not_processed_yet: "Waiting for the matching episode to finish processing or become readable.", unknown_version: "The graph contains another version; waiting for a transfer that brings it here." };
+    const exhausted = row.state === "held" && typeof row.reason === "string" && row.reason.startsWith("source_check_exhausted:");
+    const hint = exhausted ? `Automatic checks ended: the graph could not be read back complete and fresh several times in a row (${row.reason.slice("source_check_exhausted:".length)}). The message is not confirmed in the long-term memory until a check passes.`
+      : reasons[row.reason] || "Queued for checking against the shared graph.";
+    return settingRow({ label: `Message version · ${row.roomId} · ${row.sourceId}`, hint,
+      geek: `State: ${row.state}${row.retries ? `\nIncomplete reads in a row: ${row.retries}` : ""}${row.retryAt ? `\nNext check: ${new Date(row.retryAt).toLocaleString()}` : ""}`,
+      control: exhausted ? UI.raw(UI.html("button", { label: "Check again", size: "sm", data: { deliveryAction: "check-version", room: row.roomId, source: row.sourceId } })) : undefined });
+  }
+
+  function memoryBindingRowHtml(row) {
+    const watch = row.watch;
+    return settingRow({ label: `Shared episode · ${row.roomId} · ${row.sourceId}`,
+      hint: watch?.state === "active" ? `Checking for late duplicates until ${new Date(watch.deadlineAt).toLocaleString()}.`
+        : "Automatic checks ended; this does not prove a late duplicate cannot appear.",
+      geek: `Version: ${row.version}${watch?.lastResult ? `\nLast result: ${watch.lastResult}` : ""}`,
+      control: UI.raw(UI.html("button", { label: "Check again", size: "sm", data: { deliveryAction: "check-binding", watch: row.watchId } })) });
   }
 
   function dropPairLink(cancelAtHub) {
@@ -8127,8 +9096,8 @@
   }
   function connectionState(c) {
     if (c.state === "connected") return { label: "connected", tone: "ready" };
-    if (c.state === "signing-in") return { label: c.command ? "starting…" : "signing in…", tone: "thinking" };
-    if (c.state === "reconnect") return { label: "sign in again", tone: "attention" };
+    if (c.state === "signing-in") return { label: c.command ? "starting…" : c.keysIn === "headers" ? "connecting…" : "signing in…", tone: "thinking" };
+    if (c.state === "reconnect") return { label: c.keysIn === "headers" ? "key refused" : "sign in again", tone: "attention" };
     if (c.state === "changed") return { label: "tools changed", tone: "attention" };
     return null;
   }
@@ -8165,23 +9134,24 @@
       return `${tools.length} tool${tools.length === 1 ? "" : "s"}: ${reads} read at once, ${tools.length - reads} write and ask you first`;
     };
     const about = (c) => c.group !== "own" ? c.blurb : c.command ? `Your own, on this computer: ${c.command}` : `Your own server at ${c.url}`;
-    const leave = (c) => ((c.env || []).length ? btn("Keys…", "keys", c.id, "ghost") : "") + (c.group === "own" ? btn("Remove", "remove", c.id, "ghost") : btn("Disconnect", "disconnect", c.id, "ghost"));
+    const leave = (c) => ((c.keys || []).length ? btn("Keys…", "keys", c.id, "ghost") : "") + (c.group === "own" ? btn("Remove", "remove", c.id, "ghost") : btn("Disconnect", "disconnect", c.id, "ghost"));
     const tile = (c) => {
       const s_ = connectionState(c);
-      const sub = c.state === "signing-in" ? (c.command ? "starting…" : "signing in…") : `${(c.tools || []).length} tool${(c.tools || []).length === 1 ? "" : "s"}${c.group === "own" ? (c.command ? " · on this computer" : " · your own") : ""}`;
+      const sub = c.state === "signing-in" ? (c.command ? "starting…" : c.keysIn === "headers" ? "connecting…" : "signing in…") : `${(c.tools || []).length} tool${(c.tools || []).length === 1 ? "" : "s"}${c.group === "own" ? (c.command ? " · on this computer" : " · your own") : ""}`;
       return `<button type="button" class="cn-tile" data-cn-act="open" data-cn-id="${esc(c.id)}">${connectionMark(c)}<span class="cn-tile-words"><b>${esc(c.name)}</b><span>${esc(sub)}</span></span>${s_ ? `<span class="cn-tile-state" data-tone="${s_.tone}">${esc(s_.label)}</span>` : ""}</button>`;
     };
     const groupWords = (c) => c.group === "own" ? "Your own" : (CONNECTION_GROUPS.find(([g]) => g === c.group) || [null, c.group])[1];
     const detail = (c) => {
       const controls = c.state === "signing-in" ? btn("Cancel", "cancel", c.id, "ghost")
-        : c.state === "reconnect" ? btn("Sign in again", "connect", c.id, "primary") + leave(c)
+        : c.state === "reconnect" ? btn(c.keysIn === "headers" ? "Connect again" : "Sign in again", "connect", c.id, "primary") + leave(c)
         : leave(c);
       const head = `<div class="cn-detail-head">${connectionMark(c, "lg")}<div class="cn-detail-words"><h2>${esc(c.name)}</h2><div class="hint">${esc(about(c))}</div></div><div class="cn-detail-acts">${badge(c)}${controls}</div></div>`;
       const cards_ = [];
+      const keyed = c.keysIn === "headers";
       cards_.push(settingsCard(`cn-status-${c.id}`, "", settingRow({
-        label: c.state === "reconnect" ? "Sign in again" : c.state === "signing-in" ? (c.command ? "Starting" : "Signing in") : "Connected",
-        hint: c.state === "reconnect" ? `${c.name} no longer accepts viberoom's access. Nothing runs until you sign in again.`
-          : c.state === "signing-in" ? (c.command ? "Starting it on this computer." : "Finish the sign-in in your browser.")
+        label: c.state === "reconnect" ? (keyed ? "Key refused" : "Sign in again") : c.state === "signing-in" ? (c.command ? "Starting" : keyed ? "Connecting" : "Signing in") : "Connected",
+        hint: c.state === "reconnect" ? (keyed ? `${c.name} no longer accepts its key. Nothing runs until you change it under Keys… and connect again.` : `${c.name} no longer accepts viberoom's access. Nothing runs until you sign in again.`)
+          : c.state === "signing-in" ? (c.command ? "Starting it on this computer." : keyed ? "Connecting with its key." : "Finish the sign-in in your browser.")
           : `${c.connectedAt ? `Since ${new Date(c.connectedAt).toLocaleDateString()}` : "Connected"}${c.server ? `, as ${c.server}` : ""}.`,
         statusTone: c.state === "reconnect" ? "warn" : "plain",
       })));
@@ -8205,8 +9175,8 @@
       }
       const info = [
         settingRow({ label: c.command ? "Command" : "Address", hint: UI.raw(`<code>${esc(c.command || c.address || "")}</code>`) }),
-        ...(c.command && (c.env || []).length ? [settingRow({ label: "Keys", hint: `${(c.env || []).join(", ")}, in this computer's vault.`, control: UI.raw(btn("Change…", "keys", c.id)) })] : []),
-        settingRow({ label: "Kind", hint: c.command ? "A program on this computer (MCP over stdio)" : c.group === "own" ? "A remote MCP server you added" : `${groupWords(c)}, from viberoom's catalogue` }),
+        ...((c.keys || []).length ? [settingRow({ label: "Keys", hint: `${c.keys.join(", ")}${c.keysIn === "headers" ? " (headers of every request)" : ""}, in this computer's vault.`, control: UI.raw(btn("Change…", "keys", c.id)) })] : []),
+        settingRow({ label: "Kind", hint: c.command ? "A program on this computer (MCP over stdio)" : c.group === "own" ? (c.keysIn === "headers" ? "A remote MCP server you added, with an API key" : "A remote MCP server you added") : `${groupWords(c)}, from viberoom's catalogue` }),
         settingRow({ label: "Access", hint: c.access === "sign-in" ? "Your sign-in, made in your browser; the access is in this computer's vault" : c.access === "keys" ? "The keys you typed, in this computer's vault" : "None needed: it answers without a sign-in" }),
       ];
       cards_.push(settingsCard(`cn-info-${c.id}`, "Information", info.join("")));
@@ -8228,7 +9198,8 @@
           <label>Keys<input type="text" class="input mono" id="cn-add-env" maxlength="1100" placeholder="GITHUB_PERSONAL_ACCESS_TOKEN (names only; optional)" spellcheck="false" autocomplete="off"></label>
           <p class="hint">The command runs on this computer with your rights, the way its documentation gives it; nothing goes through a shell. Keys are the names of the variables it reads them from: you type their values on the next card, and they go into this computer's vault. Every one of its tools asks you before it runs, reading too.</p>` : `
           <label>Address<input type="url" class="input" id="cn-add-url" maxlength="2000" placeholder="https://mcp.example.com/mcp" spellcheck="false" autocomplete="off"></label>
-          <p class="hint">viberoom has not looked at a server you add, so add only one you trust. Every one of its tools asks you before it runs, reading too. If it asks for a sign-in, that opens in your browser.</p>`}
+          <label>Keys in headers<input type="text" class="input mono" id="cn-add-headers" maxlength="600" placeholder="Authorization or X-API-Key (names only; optional)" spellcheck="false" autocomplete="off"></label>
+          <p class="hint">viberoom has not looked at a server you add, so add only one you trust. Every one of its tools asks you before it runs, reading too. If it asks for a sign-in, that opens in your browser. If it takes an API key instead, name the headers its documentation gives: you type their values on the next card, and they go into this computer's vault and with every request to this server.</p>`}
           <div class="cn-add-acts">${btn("Add and connect", "add", "", "primary")}</div>
         </div>`),
     }));
@@ -8247,6 +9218,7 @@
       <div class="page-head cn-back-head">${UI.html("button", { label: "Connections", icon: "back", kind: "ghost", data: { cnAct: "back" } })}</div>
       ${detail(shown)}` : `
       <div class="page-head"><div><h1>Connections</h1></div></div>
+      ${configurationProblemHtml("connections-storage-problem", state.connectionStorageProblem)}
       ${connectionsHeroHtml()}
       ${joined.length ? `<h2 class="cn-head">Connected</h2><div class="cn-tiles">${joined.map(tile).join("")}</div>` : ""}
       ${catalogue ? `<h2 class="cn-head">${joined.length ? "More systems" : "Connect a system"}</h2>${cards(catalogue)}` : ""}
@@ -8293,7 +9265,7 @@
         const res = act !== "add" ? await post(`/api/connections/${encodeURIComponent(id)}/${act}`, {})
           : state.cnAddKind === "local"
             ? await post("/api/connections/own", { name: $("#cn-add-name").value, command: $("#cn-add-command").value, env: $("#cn-add-env").value })
-            : await post("/api/connections/own", { name: $("#cn-add-name").value, url: $("#cn-add-url").value });
+            : await post("/api/connections/own", { name: $("#cn-add-name").value, url: $("#cn-add-url").value, headers: $("#cn-add-headers").value });
         if (res.connections) { state.connections = res.connections; renderConnectionsPage(); }
         if ((act === "disconnect" || act === "remove") && res.revoked === false) toast("Disconnected here. The system did not confirm the revocation; you can remove viberoom's access in its own settings.", "info");
       } catch (error) { showError(error); }
@@ -8398,7 +9370,7 @@
       textarea.setRangeText(`/${s.name} `, m.start, caret, "end");
       close();
       textarea.focus();
-      autosize();
+      autosizeSoon();
     }
     textarea.addEventListener("input", () => {
       m.index = 0;
@@ -8702,10 +9674,18 @@
     }
   }
 
+  function isSetupSecretCard(card) {
+    return !!(card && card.purpose === "telegram-token" && card.state === "open"
+      && card.askedBy?.kind === "window" && typeof card.id === "string" && card.id.length);
+  }
+  function setupSecretCard() {
+    return [...secretCards.values()].find(isSetupSecretCard) || null;
+  }
+
   function setupFacts() {
     const c = state.channels || {};
     const tg = c.telegram || null;
-    const card = [...secretCards.values()].find((r) => r.state === "open" && r.askedBy.kind === "window") || null;
+    const card = setupSecretCard();
     const paired = (c.pairings || []).filter((p) => !p.unpairedAt).map((p) => p.name || p.senderId);
     return { tg, machine: c.machine || "this computer", card, paired, link: state.pairLink, now: Date.now(), botfatherQr: setup.botfatherQr, linkFailed: setup.linkFailed, guide: true };
   }
@@ -8830,8 +9810,8 @@
     setup.open = false;
     setup.wantCode = false;
     if (setup.linkTimer) { clearTimeout(setup.linkTimer); setup.linkTimer = null; }
-    const card = [...secretCards.values()].find((r) => r.state === "open" && r.askedBy.kind === "window");
-    if (card) post(`/api/secrets/${card.id}/close`, {}).catch(() => {});
+    const card = setupSecretCard();
+    if (card) post(`/api/secrets/${encodeURIComponent(card.id)}/close`, {}).catch(() => {});
     dropPairLink(true);
     closeDialog(els.setupDialog);
     if (state.view === "settings") renderSettingsPage();
@@ -8904,7 +9884,8 @@
         if (!value.trim()) return;
         try {
           const card = facts.card || (await post("/api/secrets", { purpose: "telegram-token" })).request;
-          await post(`/api/secrets/${card.id}`, { value: value.trim() });
+          if (!isSetupSecretCard(card)) throw new Error("The Telegram key card is unavailable. Request a new card.");
+          await post(`/api/secrets/${encodeURIComponent(card.id)}`, { value: value.trim() });
         } catch (error) {
           const note = body.querySelector("#su-refusal");
           if (note) note.querySelector("b").textContent = error.message || String(error);
@@ -8947,11 +9928,37 @@
     for (const card of cards || []) secretCards.set(card.id, card);
     renderSecretDialog();
   }
+  function renderTrialBudgetDialog(card) {
+    const dialog = els.secretDialog, body = els.sdBody, offer = card.trialBudget;
+    const valid = offer && offer.schema === "viberoom-human-whole-trial-offer-v1" && offer.launchEnabled === true
+      && typeof offer.cardSha256 === "string" && /^[a-f0-9]{64}$/.test(offer.cardSha256)
+      && typeof offer.viewSha256 === "string" && /^[a-f0-9]{64}$/.test(offer.viewSha256)
+      && Number.isSafeInteger(offer.offerExpiresAt) && Number.isSafeInteger(offer.runMs) && offer.runMs > 0
+      && offer.whole && typeof offer.whole === "object" && !Array.isArray(offer.whole)
+      && Number.isFinite(offer.whole.policy?.limits?.localEstimatedCredits) && Number.isSafeInteger(offer.whole.policy?.kinds?.model);
+    dialog.dataset.card = card.id;
+    delete dialog.dataset.trialCardSha256; delete dialog.dataset.trialViewSha256;
+    if (!valid) {
+      body.innerHTML = `<h3>Graph-memory comparison</h3><p class="lead">This offer is unavailable. Review a new card before approving a run.</p>
+        <div class="actions">${UI.html("button", { label: "Close", kind: "ghost", act: "secret-close" })}</div>`;
+    } else {
+      const whole = offer.whole, limits = whole.policy?.limits || {}, kinds = whole.policy?.kinds || {};
+      body.innerHTML = `<h3><span class="h-ico">${ic("graph")}</span>One whole graph-memory comparison</h3>
+        <p class="lead">Approve this whole trial once. Estimated DATA credits: ${esc(String(limits.localEstimatedCredits))}. Model jobs: ${esc(String(kinds.model))}. The estimate is not an invoice ceiling.</p>
+        <p>The offer expires at ${esc(new Date(offer.offerExpiresAt).toLocaleString())}. This one run may last up to ${esc(String(offer.runMs / 60000))} minutes. Approval does not renew or resume an earlier run.</p>
+        <details open><summary>Exact scope, providers, model, costs and limits</summary><pre>${esc(JSON.stringify(whole, null, 2))}</pre></details>
+        <p class="field-note" id="sd-error" ${card.refusal ? "" : "hidden"}><b>${esc(card.refusal || "")}</b></p>
+        <div class="actions">${UI.html("button", { label: "Not now", kind: "ghost", act: "trial-budget-reject" })}${UI.html("button", { label: "Approve this whole trial and run once", kind: "primary", act: "trial-budget-approve" })}</div>`;
+      dialog.dataset.trialCardSha256 = offer.cardSha256;
+      dialog.dataset.trialViewSha256 = offer.viewSha256;
+    }
+    bindSecretDialog(); if (!dialog.open) openDialog(dialog);
+  }
   function renderSecretDialog() {
     const dialog = els.secretDialog;
     if (!dialog) return;
     const card = openSecretCard();
-    if (card && setup.open && card.askedBy.kind === "window") {
+    if (setup.open && isSetupSecretCard(card)) {
       if (dialog.open) closeDialog(dialog);
       renderSetupWizard();
       return;
@@ -8961,11 +9968,12 @@
       if (dialog.open) {
         closeDialog(dialog);
         const settled = [...secretCards.values()].filter((r) => r.state !== "open").sort((a, b) => b.askedAt - a.askedAt)[0];
-        if (settled && settled.state === "done") toast(settled.purpose === "telegram-pair" ? `Phone ${settled.outcome}.` : settled.purpose === "telegram-token" ? `Telegram bot ${settled.outcome}.` : settled.purpose === "connection" ? `${settled.connection?.name}: ${settled.outcome}.` : settled.purpose === "consent" ? `${settled.outcome.charAt(0).toUpperCase()}${settled.outcome.slice(1)}.` : `Saved: ${settled.outcome}.`, "success");
+        if (settled && settled.state === "done") toast(settled.purpose === "trial-budget" ? `Graph comparison: ${settled.outcome}.` : settled.purpose === "telegram-pair" ? `Phone ${settled.outcome}.` : settled.purpose === "telegram-token" ? `Telegram bot ${settled.outcome}.` : settled.purpose === "connection" ? `${settled.connection?.name}: ${settled.outcome}.` : settled.purpose === "consent" ? `${settled.outcome.charAt(0).toUpperCase()}${settled.outcome.slice(1)}.` : `Saved: ${settled.outcome}.`, "success");
       }
       return;
     }
     const body = els.sdBody;
+    if (card.purpose === "trial-budget") { renderTrialBudgetDialog(card); return; }
     if (card.purpose === "telegram-pair") {
       const link = card.link || {};
       const copied = secretCopied.has(card.id);
@@ -9009,14 +10017,18 @@
       const own = c.command
         ? `<p class="field-note">It runs on this computer with your rights, as <code class="cn-command">${esc(c.command)}</code>. Add it only if you trust where it comes from. Every one of its tools asks you before it runs, reading too.</p>`
         : c.url ? `<p class="field-note">Its address: <code>${esc(c.url)}</code>. viberoom has not looked at this server, so add it only if you trust who runs it. Every one of its tools asks you before it runs, reading too.</p>` : "";
-      const keys = (c.env || []).map((name) => `<label>${esc(name)}<input type="password" class="sd-env" data-env="${esc(name)}" autocomplete="off" spellcheck="false" placeholder="${(c.envSaved || []).includes(name) ? "saved; type to replace it" : "its value"}"></label>`).join("");
+      const headers = c.keysIn === "headers";
+      const keys = (c.keys || []).map((name) => `<label>${esc(name)}<input type="password" class="sd-key" data-key="${esc(name)}" autocomplete="off" spellcheck="false" placeholder="${(c.keysSaved || []).includes(name) ? "saved; type to replace it" : headers ? "the whole value, such as Bearer sk-…" : "its value"}"></label>`).join("")
+        + (headers && (c.keys || []).length ? `<p class="field-note">Each goes with every request to this server, and only there. Type the value whole, as the server's documentation gives it: often Bearer, a space, then the key.</p>` : "");
       body.innerHTML = `
       <h3>${UI.html("logo-tile", c.mark ? { icon: c.mark.url, brand: c.mark.hex } : { letter: (c.name || "?")[0] })}${c.add ? "Add" : "Connect"} ${esc(c.name || "")}</h3>
       <div class="sd-blind">${noPeekHtml("card", "The vibemate has turned its back: it never sees the access")}<p>${who}</p></div>
       ${own}
       ${c.signingIn ? "" : keys}
-      <p class="lead">${c.signingIn ? (c.command ? "Starting it on this computer. This card closes by itself when it is done." : "Finish the sign-in in your browser, if it asks for one. This card closes by itself when it is done.") : c.command
-        ? `${c.add ? "Add and connect puts" : "Connect starts"} ${esc(c.name || "it")} ${c.add ? "in Connections under Your own and starts it" : "on this computer"}.${(c.env || []).length ? " The keys go into this computer's vault and to the program when it starts; no vibemate ever sees them." : ""} It stops when unused for a while and starts again when a vibemate needs it. You can turn it off for a room, or remove it, in Connections.`
+      <p class="lead">${c.signingIn ? (c.command ? "Starting it on this computer. This card closes by itself when it is done." : headers ? "Connecting with its key. This card closes by itself when it is done." : "Finish the sign-in in your browser, if it asks for one. This card closes by itself when it is done.") : c.command
+        ? `${c.add ? "Add and connect puts" : "Connect starts"} ${esc(c.name || "it")} ${c.add ? "in Connections under Your own and starts it" : "on this computer"}.${(c.keys || []).length ? " The keys go into this computer's vault and to the program when it starts; no vibemate ever sees them." : ""} It stops when unused for a while and starts again when a vibemate needs it. You can turn it off for a room, or remove it, in Connections.`
+        : headers
+        ? `${c.add ? `Add and connect puts ${esc(c.name || "it")} in Connections under Your own and connects it` : `Connect connects ${esc(c.name || "it")}`} with its key. The key goes into this computer's vault and with every request to this server; no vibemate ever sees it. You can turn it off for a room, or remove it, in Connections.`
         : c.add
         ? `Add and connect puts ${esc(c.name || "it")} in Connections under Your own and connects it. If it asks for a sign-in, that opens in your browser; the access goes into this computer's vault, and no vibemate ever sees it. You can turn it off for a room, or remove it, in Connections.`
         : `Connect opens ${esc(c.name || "the system")}'s sign-in in your browser. You approve there what viberoom may do; the access goes into this computer's vault, and no vibemate ever sees it. It works in every room; you can turn it off for a room in Connections. Writing always asks you first, with the exact request.`}</p>
@@ -9075,13 +10087,29 @@
     const act = async (what) => {
       const card = openSecretCard();
       if (!card) return;
+      if (card.purpose === "trial-budget") {
+        if (what === "secret-close") {
+          try { await post(`/api/private-trial/budget/${encodeURIComponent(card.id)}/revoke`, {}); } catch (error) { showError(error); }
+          return;
+        }
+        if (what !== "trial-budget-approve" && what !== "trial-budget-reject") return;
+        const shown = els.secretDialog.dataset, offer = card.trialBudget;
+        if (!offer || shown.card !== card.id || !shown.trialCardSha256 || !shown.trialViewSha256
+          || shown.trialCardSha256 !== offer.cardSha256 || shown.trialViewSha256 !== offer.viewSha256) {
+          renderSecretDialog(); showError(new Error("This offer changed. Review the displayed card before deciding.")); return;
+        }
+        const decision = { cardSha256: shown.trialCardSha256, viewSha256: shown.trialViewSha256,
+          decision: what === "trial-budget-approve" ? "approve" : "reject" };
+        try { await post(`/api/private-trial/budget/${encodeURIComponent(card.id)}`, decision); } catch (error) { showError(error); }
+        return;
+      }
       if (what === "secret-close") {
         try { await post(`/api/secrets/${card.id}/close`, { copied: secretCopied.has(card.id) }); } catch (error) { showError(error); }
         return;
       }
       if (what === "secret-sign-in") {
-        const env = Object.fromEntries([...body.querySelectorAll(".sd-env")].map((input) => [input.dataset.env, input.value]));
-        try { await post(`/api/secrets/${card.id}/connect`, { env }); } catch (error) { showError(error); }
+        const keys = Object.fromEntries([...body.querySelectorAll(".sd-key")].map((input) => [input.dataset.key, input.value]));
+        try { await post(`/api/secrets/${card.id}/connect`, { keys }); } catch (error) { showError(error); }
         return;
       }
       if (what === "secret-copy") {
@@ -9444,8 +10472,9 @@
     els.rcError.hidden = true;
     els.rcReplay.value = room.settings.replayAfterRestart ?? 10;
     els.rcForm.querySelector(`input[name="rc-mode"][value="${renderReconnectDefault()}"]`).checked = true;
+    els.rcSubmit.textContent = only ? wakeWord(only) : "Reconnect";
     els.rcIntro.textContent = only
-      ? `${only.name} is offline in "${room.name}" (its session ended with the previous room run). Choose how it comes back:`
+      ? `${only.name} is ${only.asleep ? "asleep" : "offline"} in "${room.name}" (${only.asleep ? "you put it to sleep" : only.fell ? "its agent stopped" : "its session ended with the previous room run"}). Choose how it comes back:`
       : `${offline.length} vibemate${offline.length > 1 ? "s are" : " is"} offline in "${room.name}" (their sessions ended with the previous room run). Choose how they come back:`;
     els.rcTable.dataset.ids = offline.map((p) => p.id).join(",");
     els.rcTable.dataset.only = only?.id || "";
@@ -9546,7 +10575,7 @@
   }
   function maybeOfferReconnect() {
     const room = currentRoom();
-    if (!room || state.view !== "room" || reconnectPrompted.has(room.id) || els.rcDialog.open || els.pfDialog.open) return;
+    if (!room || state.view !== "room" || reconnectPrompted.has(room.id) || els.rcDialog.open || profilePending()) return;
     if (room.startingWithHub) return;
     if (offlineAgents(room).length) openReconnectDialog(room);
   }
@@ -9812,6 +10841,7 @@
       settingRow({ label: "Search the other rooms", for: "room-reads-others", hint: READS_OTHER_ROOMS_HINT, control: UI.raw(selectHtml("room-reads-others", READS_OTHER_ROOMS, d.readsOtherRooms || "on-search")) }),
       settingRow({ label: "Reachable from messengers", for: "room-reachable", kind: "switch", checked: true, hint: "A phone paired to viberoom can open this room, write to it and read its replies. You can change this later in the room's settings." }),
     ].join(""));
+    $("#room-art").innerHTML = window.Icons.scene("door");
     openDialog(els.roomDialog);
     els.roomName.focus();
   }
@@ -9832,15 +10862,20 @@
   }
 
 
+  const profilePending = () => !!state.settings && !state.settings.profileCompleted;
   function maybeOfferProfile() {
+    splashDone.then(offerProfile);
+  }
+  function offerProfile() {
     const s = state.settings;
-    if (!s || s.profileCompleted || els.pfDialog.open) return;
+    if (!profilePending() || els.pfDialog.open) return;
     els.pfName.value = s.humanName && s.humanName !== "Human" ? s.humanName : "";
     els.pfAvatar.value = s.humanAvatar || "";
     els.pfDesc.value = s.humanDescription || "";
     els.pfAvatarPicker.innerHTML = "";
     els.pfAvatarPicker.appendChild(window.Avatars.pickerElement(s.humanAvatar || "", (emoji) => (els.pfAvatar.value = emoji), els.pfAvatar));
     els.pfError.hidden = true;
+    $("#pf-art").innerHTML = window.Icons.scene("welcome");
     openDialog(els.pfDialog);
     els.pfName.focus();
   }
@@ -9880,6 +10915,12 @@
   $("#look-form").addEventListener("submit", (e) => {
     e.preventDefault();
     closeDialog($("#look-dialog"));
+  });
+  $("#look-dialog").addEventListener("close", () => {
+    if (!state.freshVibe || state.onboardingOffered) return;
+    state.onboardingOffered = true;
+    setView("onboarding");
+    remember("view", "onboarding");
   });
 
   function openEraseDialog() {
@@ -10028,6 +11069,14 @@
     const v = snapshot.version;
     const identity = v && v.build ? `${v.version} ${v.build} ${v.pid ?? ""}` : null;
     if (identity && hubIdentity && identity !== hubIdentity) {
+      if (shellLeadsConnection()) {
+        if (stream) { const ws = stream; stream = null; ws.close(); }
+        els.conn.classList.remove("ok");
+        if (!downSince) downSince = Date.now();
+        renderGonePop();
+        awaitShell();
+        return;
+      }
       location.reload();
       return;
     }
@@ -10038,6 +11087,7 @@
     state.settings = snapshot.settings;
     showAttention();
     state.automationPending = snapshot.automationPending || {};
+    state.automationJobs = snapshot.automationJobs || 0;
     state.looks = snapshot.looks || [];
     registerLooks(state.looks);
     applyAppearance();
@@ -10056,10 +11106,14 @@
     state.roomDefaults = snapshot.roomDefaults || null;
     state.channels = snapshot.channels || null;
     state.connections = snapshot.connections || [];
+    state.connectionStorageProblem = snapshot.connectionStorageProblem || null;
     state.voice = snapshot.voice || null;
     state.memoryProvider = snapshot.memoryProvider || state.memoryProvider;
     state.autostart = snapshot.autostart || null;
+    state.keepAwake = snapshot.keepAwake || null;
     state.dataFolder = snapshot.dataFolder || null;
+    state.perMessage = snapshot.perMessage || null;
+    state.pictures = new Map((snapshot.pictures || []).map((p) => [`${p.room}/${p.file}`, p]));
     featuresChanged({ page: false });
     state.rooms = new Map((snapshot.rooms || []).map((r) => [r.id, r]));
     for (const room of state.rooms.values()) {
@@ -10095,6 +11149,7 @@
       state.currentRoomId = state.rooms.has(remembered) ? remembered : null;
       openRoom = !!state.currentRoomId && recall("view") === "room";
     } else openRoom = state.view === "room";
+    if (state.currentRoomId && draftRoomId !== state.currentRoomId) bringDraft(state.currentRoomId);
     const participant = params.get("participant");
     if (participant && currentRoom() && findById(currentRoom(), participant)) {
       state.selection = { kind: "participant", id: participant };
@@ -10113,7 +11168,7 @@
     setView(openRoom && state.currentRoomId && (wanted || state.view === "room") ? "room" : state.view === "room" ? "rooms" : state.view);
     renderDetails();
     maybeOfferProfile();
-    if (!els.pfDialog.open) maybeOfferReconnect();
+    maybeOfferReconnect();
     const held = recall(HELD_LIVE);
     if (held) {
       forget(HELD_LIVE);
@@ -10204,11 +11259,11 @@
         trimBodyCache(room);
         return;
       case "message.delivery": {
-        const known = new Map(HistoryWindow.knownMessages(room).map(m => [m.id, m]));
         for (const update of event.updates || []) {
-          const m = known.get(update.id);
+          const m = HistoryWindow.messageById(room, update.id);
           if (!m || (m.bodyDelivery?.version ?? 0) > update.delivery.version) continue;
           m.bodyDelivery = update.delivery;
+          WindowBodies.invalidate(m);
           if (!showing) continue;
           const el = els.messages.querySelector(`.msg[data-id="${CSS.escape(m.id)}"]`);
           if (el) { fillSeen(el, room, m); renderWaiting(el, room, m); }
@@ -10259,10 +11314,13 @@
         room.permissions.push(event.permission);
         if (showing) renderPermission(room, event.permission);
         else toast(`${(findById(room, event.permission.participantId) || {}).name || "A vibemate"} in "${room.name}" asks for permission.`, "warn");
+        knockAsked(room, event.permission);
+        if (roomId === state.currentRoomId) renderSideRoom();
         return;
       case "permission.resolved":
         room.permissions = room.permissions.filter((p) => p.key !== event.key);
         if (showing) resolvePermissionCard(event.key, event.optionId);
+        if (roomId === state.currentRoomId) renderSideRoom();
         return;
       case "proposal":
         room.proposals = [...(room.proposals || []), event.proposal];
@@ -10297,6 +11355,7 @@
         room.hops = event.hops;
         room.settings = event.settings;
         if ((event.settings ? event.settings.foldAfter : null) !== foldBefore) foldSettingChanged(room.id);
+        showRoomValues(room);
         room.customRulesText = event.customRulesText != null ? event.customRulesText : room.customRulesText;
         room.focused = event.focused;
         room.startingWithHub = event.startingWithHub === true;
@@ -10326,12 +11385,33 @@
       state.autostart = m.autostart;
       if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
     },
-    automations: m => { state.automationPending = m.pending || {}; renderAutomationBadge(); void window.ViberoomAutomations.refresh(); },
+    "keep-awake": m => {
+      state.keepAwake = m.keepAwake;
+      const line = document.getElementById("sp-keep-awake-status");
+      if (!line) return;
+      line.textContent = keepAwakeStatusText();
+      if (keepAwakeTone() === "warn") line.dataset.tone = "warn";
+      else delete line.dataset.tone;
+    },
+    automations: m => {
+      state.automationPending = m.pending || {};
+      state.automationJobs = m.jobs || 0;
+      renderAutomationBadge();
+      markOnboardingCards();
+      void window.ViberoomAutomations.refresh();
+    },
     snapshot: (m) => {
       loadSnapshot(m.snapshot);
       loadSecretCards(m.snapshot.secrets);
+      splashReady();
     },
     "room.event": (m) => onRoomEvent(m.roomId, m.event),
+    picture: (m) => {
+      const key = `${m.room}/${m.file}`;
+      if (m.state) (state.pictures ||= new Map()).set(key, { room: m.room, file: m.file, ...m.state });
+      else state.pictures?.delete(key);
+      refreshPictureMarks(m.room, m.file);
+    },
     restart: (m) => {
       if (state.restart) state.restart.pending = m.restart || null;
       else state.restart = { can: true, pending: m.restart || null };
@@ -10365,6 +11445,7 @@
     "room.created": (m) => {
       state.rooms.set(m.room.id, m.room);
       renderOverviewSoon();
+      markOnboardingCards();
     },
     "rooms.opened": (m) => {
       state.openRooms = m.roomIds || [];
@@ -10373,6 +11454,8 @@
     "room.removed": (m) => {
       const { roomId } = m;
       state.rooms.delete(roomId);
+      Drafts.remove(localStorage, roomId);
+      if (draftRoomId === roomId) draftRoomId = null;
       state.openRooms = state.openRooms.filter((id) => id !== roomId);
       if (state.currentRoomId === roomId) {
         state.currentRoomId = null;
@@ -10381,6 +11464,7 @@
         setView("rooms");
       }
       renderOverviewSoon();
+      markOnboardingCards();
     },
     skills: (m) => {
       state.skills = m.skills || [];
@@ -10401,11 +11485,13 @@
       if ((m.settings ? m.settings.foldAfter : null) !== foldBefore) foldSettingChanged(null);
       applyAppearance();
       if (devBuild()) for (const el of els.messages.querySelectorAll(".msg.agent")) placeDevPrompt(el);
+      if (devBuild()) for (const el of els.messages.querySelectorAll(".msg[data-id]")) placeDevMemoryIngestion(el);
       rerenderDiagrams();
       renderRail();
       if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
       if (state.view === "me" && !editingInDetails()) renderMePage();
       if (state.view === "room") renderSideRoom();
+      markOnboardingCards();
     },
     update: (m) => {
       state.update = m.update;
@@ -10415,14 +11501,17 @@
     "agent.updates": (m) => agentUpdates.setView(m.updates),
     connections: (m) => {
       state.connections = m.connections || [];
+      state.connectionStorageProblem = m.storageProblem || null;
       if (state.view === "connections") renderConnectionsPage();
       else if (state.view === "home") renderHome();
+      markOnboardingCards();
     },
     channels: (m) => {
       state.channels = m.channels || null;
       if (state.pairLink && !(m.channels && m.channels.pairLinkUntil)) dropPairLink(false);
       if (state.view === "settings" && !editingInDetails()) renderSettingsPage();
       if (setup.open) renderSetupWizard();
+      markOnboardingCards();
     },
     reset: () => (location.href = "/"),
   };
@@ -10473,6 +11562,24 @@
   let releaseTimer = null;
   let retryTimer = null;
   let retryDelay = 1000;
+  const SPLASH_LONGEST_MS = 6000;
+  const splash = document.getElementById("splash");
+  let splashLeft = () => {};
+  const splashDone = splash ? new Promise((resolve) => (splashLeft = resolve)) : Promise.resolve();
+  splashDone.then(() => document.documentElement.classList.add("arrived"));
+  function splashGone() {
+    if (!splash || splash.classList.contains("gone")) return;
+    splash.classList.add("gone");
+    splashLeft();
+    setTimeout(() => splash.remove(), 400);
+  }
+  function splashReady() {
+    const arriving = splash?.getAnimations({ subtree: true }).filter((a) => a.playState !== "finished") ?? [];
+    if (!arriving.length) return splashGone();
+    Promise.all(arriving.map((a) => a.finished.catch(() => {}))).then(splashGone);
+  }
+  if (splash) setTimeout(splashGone, SPLASH_LONGEST_MS);
+
   let keyless = false;
   const keylessAnswer = (answer) => !!answer && answer.keyed === false;
   async function askKey() {
@@ -10488,6 +11595,13 @@
     if (stream) { const ws = stream; stream = null; ws.close(); }
     els.noKey.hidden = false;
     document.body.classList.add("keyless");
+    splashGone();
+  }
+  const shellLeadsConnection = () => !!window.ViberoomDesktop?.can("connection-led-by-shell");
+  function awaitShell() {
+    if (state.awaitingShell) return;
+    state.awaitingShell = true;
+    window.postMessage({ viberoomConnection: "lost" }, location.origin);
   }
   function connect() {
     if (keyless) return;
@@ -10497,6 +11611,7 @@
     stream = ws;
     ws.onopen = () => {
       if (stream !== ws) return;
+      state.awaitingShell = false;
       retryDelay = 1000;
       downSince = 0;
       els.conn.classList.add("ok");
@@ -10518,6 +11633,7 @@
       stream = null;
       if (!downSince) downSince = Date.now();
       renderGonePop();
+      if (shellLeadsConnection()) return void awaitShell();
       void askKey();
       retryTimer = setTimeout(connect, retryDelay);
       retryDelay = Math.min(retryDelay * 2, 10000);
@@ -10588,35 +11704,54 @@
   let composerMin = Number(recall("composerH")) || 0;
   const composerCeiling = () => Math.max(120, els.app.clientHeight - 260);
   function autosizeSoon() {
-    autosize();
+    if (composerBoundsFrame) return;
+    composerBoundsFrame = requestAnimationFrame(() => {
+      composerBoundsFrame = 0;
+      autosize();
+    });
   }
   let composerBounds = "";
+  let composerBoundsMin = null, composerBoundsDirty = true, composerBoundsFrame = 0;
   function autosize() {
     const min = Math.max(36, composerMin);
+    if (!composerBoundsDirty && composerBoundsMin === min) return;
     const max = Math.min(composerCeiling(), Math.max(180, min));
+    composerBoundsMin = min; composerBoundsDirty = false;
     if (composerBounds === `${min}/${max}`) return;
     composerBounds = `${min}/${max}`;
     els.input.style.minHeight = `${min}px`;
     els.input.style.maxHeight = `${max}px`;
   }
 
-  let composerShiftQueued = false;
+  let composerShiftQueued = false, composerShiftBefore = null;
   function watchComposerShift() {
-    const list = els.messages;
-    if (!list || composerShiftQueued) return;
-    const before = { top: list.scrollTop, view: list.clientHeight };
+    if (!els.messages || composerShiftQueued) return;
     composerShiftQueued = true;
     requestAnimationFrame(() => {
       composerShiftQueued = false;
-      const moved = Math.round(list.scrollTop - before.top);
+      const list = els.messages;
+      if (!list || state.view !== "room") { composerShiftBefore = null; return; }
+      const now = { roomId: state.currentRoomId, top: list.scrollTop, view: list.clientHeight };
+      const before = composerShiftBefore;
+      composerShiftBefore = now;
+      if (!before || before.roomId !== now.roomId || before.view === now.view) return;
+      const moved = Math.round(now.top - before.top);
       if (!moved) return;
-      const grew = Math.round(list.clientHeight - before.view);
-      const room = Math.round(list.scrollHeight - list.clientHeight);
-      noteFinding(`the field changed height: the list ${grew >= 0 ? "grew" : "shrank"} by ${Math.abs(grew)} px and the reader moved ${moved} px (${Math.round(before.top)} → ${Math.round(list.scrollTop)} of ${room}${before.top >= room - grew - 2 ? ", from the very bottom" : ""})`);
+      const grew = Math.round(now.view - before.view);
+      const room = Math.round(list.scrollHeight - now.view);
+      noteFinding(`the field changed height: the list ${grew >= 0 ? "grew" : "shrank"} by ${Math.abs(grew)} px and the reader moved ${moved} px (${Math.round(before.top)} → ${Math.round(now.top)} of ${room}${before.top >= room - grew - 2 ? ", from the very bottom" : ""})`);
     });
   }
-  window.addEventListener("resize", autosize);
+  function invalidateComposerBounds() {
+    composerBoundsDirty = true;
+    composerShiftBefore = null;
+    autosizeSoon();
+  }
+  window.addEventListener("resize", invalidateComposerBounds);
+  new ResizeObserver(invalidateComposerBounds).observe(els.app);
+  els.messages.addEventListener("scroll", () => { composerShiftBefore = null; }, { passive: true });
   autosize();
+  watchComposerShift();
   {
     const grip = $("#composer-grip");
     let drag = null;
@@ -10630,6 +11765,7 @@
     grip.addEventListener("pointermove", (e) => {
       if (!drag) return;
       composerMin = Math.round(Math.min(composerCeiling(), Math.max(36, drag.h + drag.y - Layout.length(e.clientY))));
+      composerShiftBefore = null;
       autosize();
     });
     const stop = () => {
@@ -10642,20 +11778,21 @@
     grip.addEventListener("pointercancel", stop);
     grip.addEventListener("dblclick", () => {
       composerMin = 0;
+      composerShiftBefore = null;
       remember("composerH", 0);
       autosize();
     });
   }
 
   const SHOT_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
-  const SHOTS_MAX = 6;
+  const perMessage = (kind) => state.perMessage?.[kind] ?? Infinity;
   let pendingShots = [];
   let shotSeq = 0;
   const shotMarker = (n) => `[img ${n}]`;
 
   const TIMED_KINDS = {
-    audio: { noun: "sound", icon: "mic", max: 4, types: ["audio/webm", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/x-wav", "audio/flac"], player: () => new Audio() },
-    video: { noun: "video", icon: "video", max: 2, types: ["video/mp4", "video/webm", "video/ogg", "video/quicktime"], player: () => document.createElement("video") },
+    audio: { noun: "sound", icon: "mic", types: ["audio/webm", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/x-wav", "audio/flac"], player: () => new Audio() },
+    video: { noun: "video", icon: "video", types: ["video/mp4", "video/webm", "video/ogg", "video/quicktime"], player: () => document.createElement("video") },
   };
   const timedDraft = Object.fromEntries(Object.keys(TIMED_KINDS).map((kind) => [kind, { pending: [], detached: [], seq: 0 }]));
   const timedMarker = (kind, n) => `[${kind} ${n}]`;
@@ -10665,7 +11802,7 @@
   const soundLength = (seconds) => (seconds ? `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, "0")}` : "");
   function addTimed(kind, item) {
     const spec = TIMED_KINDS[kind], draft = timedDraft[kind];
-    if (draft.pending.length >= spec.max) return void showError(new Error(`up to ${spec.max} ${spec.noun}s per message`));
+    if (draft.pending.length >= perMessage(kind)) return void showError(new Error(`up to ${perMessage(kind)} ${spec.noun}s per message`));
     item.n = ++draft.seq;
     draft.pending.push(item);
     renderShotsTray();
@@ -10706,11 +11843,13 @@
 
   const composerClear = $("#composer-clear");
   function updateComposerClear() {
-    composerClear.hidden = !(composer.value.trim() || pendingShots.length || timedCount() || pendingQuotes.length);
+    const hidden = !(composer.value.trim() || pendingShots.length || timedCount() || pendingQuotes.length);
+    if (composerClear.hidden !== hidden) composerClear.hidden = hidden;
+    keepDraftSoon();
   }
   function composerChanged() {
     updateComposerClear();
-    autosize();
+    autosizeSoon();
     watchComposerShift();
   }
   composerClear.addEventListener("click", () => {
@@ -10721,7 +11860,7 @@
     updateComposerClear();
     els.shotsTray.hidden = !pendingShots.length && !timedCount();
     els.shotsTray.innerHTML = pendingShots
-      .map((shot, i) => `<span class="shot-chip">${uploadMark(shot)}<img src="${esc(shot.url)}" alt=""><span class="shot-n">${shot.n}</span><button type="button" class="shot-drop" data-i="${i}" title="Remove ${esc(shot.name)}">×</button></span>`)
+      .map((shot, i) => `<span class="shot-chip">${uploadMark(shot)}<img src="${esc(shot.url)}" alt="">${shot.stored ? pictureMark(currentRoom()?.id, shot.stored.file) : ""}<span class="shot-n">${shot.n}</span><button type="button" class="shot-drop" data-i="${i}" title="Remove ${esc(shot.name)}">×</button></span>`)
       .concat(Object.entries(timedDraft).flatMap(([kind, draft]) => draft.pending.map((item, i) => `<span class="shot-chip sound-chip">${uploadMark(item)}${ic(TIMED_KINDS[kind].icon)}<span class="sound-len">${esc(soundLength(item.seconds) || item.name)}</span><span class="shot-n">${item.n}</span><button type="button" class="shot-drop" data-timed="${kind}" data-i="${i}" title="Remove ${esc(item.name)}">×</button></span>`)))
       .join("");
   }
@@ -10824,7 +11963,7 @@
         showError(new Error(`${file.name || "that image"} is a ${file.type || "kind"} the room cannot show (png, jpeg, webp and gif only)`));
         continue;
       }
-      if (pendingShots.length >= SHOTS_MAX) return void showError(new Error(`up to ${SHOTS_MAX} images per message`));
+      if (pendingShots.length >= perMessage("images")) return void showError(new Error(`up to ${perMessage("images")} images per message`));
       if (!(await mayCopy(file))) continue;
       const shot = { n: ++shotSeq, name: file.name || "", mimeType: file.type, url: URL.createObjectURL(file) };
       pendingShots.push(shot);
@@ -10903,7 +12042,6 @@
     if (shot) removeMarker(shotMarker(shot.n));
   });
 
-  const QUOTES_MAX = 6;
   let pendingQuotes = [];
   let quoteSeq = 0;
   const quoteMarker = (n) => `[quote ${n}]`;
@@ -10927,9 +12065,74 @@
     renderQuotesTray();
   }
 
+  const Drafts = window.VIBEROOM_DRAFTS;
+  const DRAFT_KEEP_MS = 400;
+  let draftTimer = 0;
+  let draftRoomId = null;
+  function draftOf({ text, img, audio, video, quotes, seq = {} }) {
+    const files = { img, audio, video };
+    const kept = (list) => list.filter((x) => x.stored?.file).map((x) => ({ n: x.n, file: x.stored.file, name: x.name, mimeType: x.mimeType, ...(x.seconds ? { seconds: x.seconds } : {}) }));
+    const top = (list, from = 0) => list.reduce((most, x) => Math.max(most, x.n || 0), from);
+    return {
+      text,
+      files: Object.fromEntries(Object.entries(files).map(([kind, list]) => [kind, kept(list)])),
+      quotes: quotes.map((q) => ({ ...q })),
+      unsent: Object.entries(files).flatMap(([kind, list]) => list.filter((x) => !x.stored?.file).map((x) => ({ kind, n: x.n, name: x.name || "" }))),
+      seq: { img: top(img, seq.img), audio: top(audio, seq.audio), video: top(video, seq.video), quote: top(quotes, seq.quote) },
+      at: Date.now(),
+    };
+  }
+  function draftNow() {
+    return draftOf({ text: composer.value, img: pendingShots, audio: timedDraft.audio.pending, video: timedDraft.video.pending, quotes: pendingQuotes,
+      seq: { img: shotSeq, audio: timedDraft.audio.seq, video: timedDraft.video.seq, quote: quoteSeq } });
+  }
+  function keepDraft() {
+    clearTimeout(draftTimer);
+    draftTimer = 0;
+    if (draftRoomId && state.rooms.has(draftRoomId)) Drafts.save(localStorage, draftRoomId, draftNow());
+  }
+  function keepDraftSoon() {
+    if (!draftRoomId) return;
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(keepDraft, DRAFT_KEEP_MS);
+  }
+  function bringDraft(roomId) {
+    keepDraft();
+    draftRoomId = null;
+    clearShots();
+    clearQuotes();
+    composer.reset("");
+    const draft = Drafts.load(localStorage, roomId);
+    if (draft) {
+      const fileOf = (kind, f) => {
+        const stored = { file: f.file };
+        return { n: f.n, name: f.name, mimeType: f.mimeType, ...(f.seconds ? { seconds: f.seconds } : {}), url: shotUrl(roomId, stored), stored, upload: Promise.resolve(stored) };
+      };
+      pendingShots = draft.files.img.map((f) => fileOf("img", f));
+      for (const kind of Object.keys(timedDraft)) {
+        timedDraft[kind].pending = (draft.files[kind] || []).map((f) => fileOf(kind, f));
+        timedDraft[kind].seq = draft.seq[kind];
+      }
+      shotSeq = draft.seq.img;
+      pendingQuotes = draft.quotes;
+      quoteSeq = draft.seq.quote;
+      const markerOf = (u) => (u.kind === "img" ? shotMarker(u.n) : timedMarker(u.kind, u.n));
+      composer.reset(draft.unsent.length ? Drafts.withoutMarkers(draft.text, draft.unsent.map(markerOf)) : draft.text);
+      renderShotsTray();
+      renderQuotesTray();
+      if (draft.unsent.length) {
+        const names = draft.unsent.map((u) => u.name || markerOf(u)).join(", ");
+        toast(`${names} had not reached the room when you left this draft, so ${draft.unsent.length === 1 ? "it is" : "they are"} not attached: attach ${draft.unsent.length === 1 ? "it" : "them"} again.`, "warn");
+      }
+    }
+    draftRoomId = roomId;
+    keepDraft();
+  }
+  window.addEventListener("pagehide", keepDraft);
+
   function addQuote(m, text) {
     if (!m || m.kind !== "chat" || m.pending) return void showError(new Error("only a message the room has can be quoted"));
-    if (pendingQuotes.length >= QUOTES_MAX) return void showError(new Error(`up to ${QUOTES_MAX} quotes per message`));
+    if (pendingQuotes.length >= perMessage("quotes")) return void showError(new Error(`up to ${perMessage("quotes")} quotes per message`));
     const fragment = String(text || "").trim() || String(m.text || "").trim();
     if (!fragment) return void showError(new Error("there is no text to quote in that message"));
     const n = ++quoteSeq;
@@ -11090,7 +12293,10 @@
     if (e.target.closest("button")) return;
     if (p.kind === "human") setView("me");
     else if (p.status === "unstaffed") openStaffDialog(p);
-    else void goToLastReply(room, p);
+    else {
+      if (panelFollows(p)) openDetails({ kind: "participant", id: p.id });
+      void goToLastReply(room, p);
+    }
   });
   const castBanner = $("#cast-banner");
   castBanner.addEventListener("click", (e) => {
@@ -11240,7 +12446,6 @@
     const text = composer.value.trim();
     const room = currentRoom();
     if ((!text && !pendingShots.length && !timedCount() && !pendingQuotes.length) || !room) return;
-    void askToKnock();
     const shots = pendingShots;
     const sounds = timedDraft.audio.pending;
     const clips = timedDraft.video.pending;
@@ -11266,10 +12471,16 @@
     } catch (error) {
       removeMessage(room.id, localId);
       showError(error);
+      if (state.currentRoomId !== room.id) {
+        Drafts.save(localStorage, room.id, draftOf({ text, img: shots, audio: sounds, video: clips, quotes }));
+        return void toast(`Your message to ${room.name} was not sent; it waits in that room's box.`, "warn");
+      }
       pendingShots = shots;
       timedDraft.audio.pending = sounds;
       timedDraft.video.pending = clips;
       pendingQuotes = quotes;
+      const back = draftOf({ text, img: shots, audio: sounds, video: clips, quotes }).seq;
+      shotSeq = back.img; timedDraft.audio.seq = back.audio; timedDraft.video.seq = back.video; quoteSeq = back.quote;
       composer.reset(text);
       renderShotsTray();
       renderQuotesTray();
@@ -11281,7 +12492,7 @@
     if (room.messages.some((m) => m.id === realId)) return removeMessage(roomId, localId);
     const m = room.messages.find((x) => x.id === localId);
     if (!m) return;
-    m.id = realId;
+    HistoryWindow.renameMessage(m, realId);
     delete m.pending;
     edited(m);
     if (room.history?.indexed) itemLists.delete(room);
@@ -11811,9 +13022,7 @@
     lastScrollTop = top;
     rememberReader();
     followWindowSoon();
-    els.jumpLatest.hidden = stuck;
-    updateTimelineView();
-    updateWorkingNow();
+    requestViewportWork({ view: true });
     if (stuck) clearNotes();
     else pruneDoneNotes();
     foldSettleSoon();
@@ -11827,6 +13036,12 @@
   setSideOpen(recall("sideOpen") !== "0");
   $("#rail-logo").addEventListener("click", () => setView("home"));
   $("#rail-new-room").addEventListener("click", openRoomDialog);
+  els.pageInner.addEventListener("click", (event) => {
+    const go = event.target.closest?.("[data-ob-go]");
+    if (go && state.view === "onboarding") onboardingGo(go.dataset.obGo);
+    const ask = event.target.closest?.("[data-ob-ask]");
+    if (ask && state.view === "onboarding") void onboardingAsk(ask.dataset.obAsk);
+  });
   new MutationObserver(renderGonePop).observe(els.conn, { attributes: true, attributeFilter: ["class"] });
   if (recall("railOpen") === "1") els.app.classList.add("rail-open");
   els.backToRooms.addEventListener("click", () => {
@@ -12141,6 +13356,15 @@
   const MINE_SLOT_H = 2;
   const PIN_GLYPH_H = 10.5;
   const VIEW_MIN_H = 6;
+  function stripBand(scrollTop, clientHeight, scrollHeight, stripH) {
+    const height = Math.min(stripH, Math.max(VIEW_MIN_H, (clientHeight / Math.max(1, scrollHeight)) * stripH));
+    const range = Math.max(0, scrollHeight - clientHeight);
+    return { top: range > 0 ? (Math.max(0, Math.min(range, scrollTop)) / range) * (stripH - height) : 0, height };
+  }
+  function stripScroll(bandTop, bandH, stripH, scrollHeight, clientHeight) {
+    const travel = stripH - bandH, range = Math.max(0, scrollHeight - clientHeight);
+    return travel > 0 ? Math.max(0, Math.min(range, (bandTop / travel) * range)) : 0;
+  }
   const DENSITY = 25;
   function createTimeline(root, pick, opts) {
     const tickH = opts.slotH || TICK_H;
@@ -12153,28 +13377,45 @@
       const items = room && state.view === "room" && !state.search ? listItems(room) : null;
       return !!items && !!t.map && t.map === mapOf(room, items) && !!listAccount && listAccount.items.length === items.length;
     }
+    function prepare(force) {
+      const room = currentRoom();
+      const nodes = !force && t.pos && sameMap(room) ? t.items : room && state.view === "room" ? pick(room) : [];
+      const hidden = nodes.length === 0;
+      if (t.el.hidden !== hidden) t.el.hidden = hidden;
+      return { nodes };
+    }
+    function measure(plan, viewport) {
+      const h = t.el.hidden ? 0 : t.ticks.clientHeight;
+      const fits = viewport.total <= viewport.height + 1;
+      const stripTop = fits && !t.el.hidden ? Layout.rect(t.ticks).top : 0;
+      const moved = viewport.aboveDelta - (viewport.top - viewport.beforeTop);
+      t.geometry = { ...viewport, h, fits, nodes: plan.nodes,
+        tops: fits ? plan.nodes.map(row => { const node = drawnRow(row.id); return node ? Layout.rect(node).top - stripTop + moved : 0; }) : null };
+    }
+    function releaseGeometry() { t.geometry = null; }
     function render(force) {
       const room = currentRoom();
+      const geometry = t.geometry;
       if (!force && sameMap(room)) {
         if (t.el.hidden) return;
-        if (t.pos && els.messages.scrollHeight > els.messages.clientHeight + 1) { place(); return; }
+        if (t.pos && (geometry ? !geometry.fits : els.messages.scrollHeight > els.messages.clientHeight + 1)) { place(); return; }
       }
-      const nodes = room && state.view === "room" ? pick(room) : [];
+      const nodes = geometry?.nodes || (room && state.view === "room" ? pick(room) : []);
       const items = room && state.view === "room" && !state.search ? listItems(room) : null;
       t.map = items && listAccount && listAccount.items.length === items.length ? mapOf(room, items) : null;
       t.items = nodes;
       t.slots = null;
-      t.el.hidden = nodes.length === 0;
+      if (t.el.hidden !== (nodes.length === 0)) t.el.hidden = nodes.length === 0;
       t.pop.hidden = true;
       aim(null);
       if (!nodes.length) return;
-      const total = els.messages.scrollHeight || 1;
-      const h = Math.max(0, t.ticks.clientHeight - tickH);
-      const fits = els.messages.scrollHeight <= els.messages.clientHeight + 1;
-      const stripTop = fits ? Layout.rect(t.ticks).top : 0;
-      const tops = fits
+      const total = geometry?.total ?? (els.messages.scrollHeight || 1);
+      const h = Math.max(0, (geometry?.h ?? t.ticks.clientHeight) - tickH);
+      const fits = geometry?.fits ?? (els.messages.scrollHeight <= els.messages.clientHeight + 1);
+      const stripTop = fits && !geometry ? Layout.rect(t.ticks).top : 0;
+      const tops = geometry?.tops || (fits
         ? nodes.map((row) => { const node = drawnRow(row.id); return node ? Layout.rect(node).top - stripTop : 0; })
-        : nodes.map((row) => row.top);
+        : nodes.map((row) => row.top));
       t.pos = fits ? null : tops;
       if (!fits && globalThis.VIBEROOM_TIMELINE) {
         t.heights = null;
@@ -12209,7 +13450,7 @@
       if (t.following) return;
       t.following = true;
       requestAnimationFrame(() => requestAnimationFrame(() => {
-        render();
+        requestViewportWork({ timeline: true });
         t.following = false;
       }));
     }
@@ -12221,7 +13462,7 @@
     }
     function drawSlots(nodes, tops, total) {
       const { slotsOf, pinGroups, INK_FLOOR } = globalThis.VIBEROOM_TIMELINE;
-      const height = t.ticks.clientHeight;
+      const height = t.geometry?.h ?? t.ticks.clientHeight;
       const places = Math.max(1, Math.floor(height / tickH));
       const authors = opts.colorOf ? nodes.map((row) => row.m.from || "") : nodes.map(() => "me");
       const slots = slotsOf({ pos: tops, authors, total, slots: places });
@@ -12282,27 +13523,31 @@
       if (!account || !room) return;
       const items = listItems(room);
       for (const row of t.items) if (items[row.at]?.m) row.m = items[row.at].m;
-      const total = els.messages.scrollHeight || 1;
+      const total = t.geometry?.total ?? (els.messages.scrollHeight || 1);
       t.pos = t.items.map((row) => ListIndex.topOf(account, row.at));
       if (t.slots) {
         drawSlots(t.items, t.pos, total);
         return;
       }
       t.heights = t.items.map((row) => ListIndex.heightAt(account, row.at));
-      const h = Math.max(0, t.ticks.clientHeight - TICK_H);
+      const h = Math.max(0, (t.geometry?.h ?? t.ticks.clientHeight) - TICK_H);
       const ticks = t.ticks.children;
       for (let i = 0; i < ticks.length && i < t.pos.length; i++) ticks[i].style.top = `${Math.round((t.pos[i] / total) * h)}px`;
       updateView();
     }
-    function updateView() {
-      if (t.el.hidden) return;
+    function readView(viewport) {
+      if (t.el.hidden) return null;
+      if (t.geometry) return t.geometry;
       const m = els.messages;
-      const total = m.scrollHeight || 1;
-      const h = t.ticks.clientHeight;
-      const top = m.scrollTop;
-      const bottom = top + m.clientHeight;
-      t.view.style.top = `${(top / total) * h}px`;
-      t.view.style.height = `${Math.max(VIEW_MIN_H, (m.clientHeight / total) * h)}px`;
+      return { total: viewport?.total ?? (m.scrollHeight || 1), h: t.ticks.clientHeight, top: viewport?.top ?? m.scrollTop, height: viewport?.height ?? m.clientHeight };
+    }
+    function updateView(view = readView()) {
+      if (!view) return;
+      const { total, h, top, height } = view;
+      const bottom = top + height;
+      const band = stripBand(top, height, total, h);
+      t.view.style.top = `${band.top}px`;
+      t.view.style.height = `${band.height}px`;
       if (t.slots) {
         const seen = t.inView || [];
         const next = t.slots.map((slot) => slot.count > 0 && slot.to > top && slot.from < bottom);
@@ -12407,6 +13652,7 @@
       return across > 0 && across >= Math.abs(to.y - from.y);
     }
     t.ticks.addEventListener("mousemove", (e) => {
+      if (drag?.moving) return;
       const point = { x: Layout.length(e.clientX), y: Layout.length(e.clientY) };
       const from = lastPoint;
       lastPoint = point;
@@ -12438,6 +13684,46 @@
       const tick = e.target.closest(".tl-tick");
       if (tick) void jumpToId(t.items[Number(tick.dataset.i)]?.id);
     });
+    const DRAG_FROM_PX = 3;
+    let drag = null, dragEnded = false;
+    t.el.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || e.target.closest(".tl-pop")) return;
+      e.preventDefault();
+      const band = Layout.rect(t.view), y = Layout.length(e.clientY);
+      drag = {
+        id: e.pointerId, from: y, moving: false,
+        top: Layout.rect(t.ticks).top, height: t.ticks.clientHeight, bandH: t.view.offsetHeight,
+        grab: e.target.closest(".tl-view") ? y - band.top : t.view.offsetHeight / 2,
+      };
+      for (const type of ["pointermove", "pointerup", "pointercancel"]) document.addEventListener(type, followDrag, true);
+    });
+    function followDrag(e) {
+      if (!drag || e.pointerId !== drag.id) return;
+      if (e.type !== "pointermove") {
+        for (const type of ["pointermove", "pointerup", "pointercancel"]) document.removeEventListener(type, followDrag, true);
+        if (drag.moving) {
+          t.el.classList.remove("dragging");
+          els.app.classList.remove("strip-dragging");
+          dragEnded = true;
+          setTimeout(() => { dragEnded = false; });
+        }
+        drag = null;
+        return;
+      }
+      const y = Layout.length(e.clientY);
+      if (!drag.moving) {
+        if (Math.abs(y - drag.from) < DRAG_FROM_PX) return;
+        drag.moving = true;
+        t.el.classList.add("dragging");
+        els.app.classList.add("strip-dragging");
+        clearTimeout(openTimer);
+        hidePop();
+      }
+      const m = els.messages;
+      lastUserScrollAt = Date.now();
+      m.scrollTop = stripScroll(y - drag.top - drag.grab, drag.bandH, drag.height, m.scrollHeight, m.clientHeight);
+    }
+    t.el.addEventListener("click", (e) => { if (dragEnded) { e.stopPropagation(); e.preventDefault(); } }, true);
     t.pop.addEventListener("click", (e) => {
       const row = e.target.closest(".tl-row");
       if (row) void jumpToId(t.items[Number(row.dataset.i)]?.id);
@@ -12466,7 +13752,7 @@
       else render();
     }
     const mapped = () => (t.el.hidden || !!t.pos) && sameMap(currentRoom());
-    return { render, rescale, updateView, follow, mapped };
+    return { render, rescale, readView, updateView, follow, mapped, prepare, measure, releaseGeometry };
   }
   function timelineText(row) {
     return String(row.m.text || "").trim().replace(/\s+/g, " ").slice(0, 240);
@@ -12474,7 +13760,7 @@
   const doneNotes = [];
   const NOTE_TTL_MS = 4000;
   function bubbleInView(id) {
-    const head = els.messages.querySelector(`.msg[data-id="${id}"] .head`);
+    const head = els.messages.querySelector(`.msg[data-id="${id}"] .msg-head`);
     if (!head) return false;
     const box = Layout.rect(els.messages);
     const r = Layout.rect(head);
@@ -12674,33 +13960,59 @@
       avatarOf: (room, el) => { const p = authorOf(room, el); return p ? avatar(p, 16, {}) : ""; },
     }),
   ];
+  let timelineFramePrepared = false;
+  function readViewportGeometry() {
+    const m = els.messages, beforeTop = m.scrollTop, height = m.clientHeight;
+    const total = m.scrollHeight || 1;
+    return { beforeTop, aboveDelta: 0, width: m.clientWidth, total, height,
+      top: stuck && !humanHoldsText() ? Math.max(0, total - height) : beforeTop };
+  }
+  function prepareTimelineFrame(force) { return timelines.map(t => t.prepare(force)); }
+  function measureTimelineFrame(plans, viewport) {
+    timelines.forEach((t, i) => t.measure(plans[i], viewport));
+    timelineFramePrepared = true;
+  }
+  function releaseTimelineFrame() {
+    for (const t of timelines) t.releaseGeometry();
+    timelineFramePrepared = false;
+  }
   function renderTimeline(force) {
     const t0 = performance.now();
-    for (const t of timelines) t.render(force);
+    if (!timelineFramePrepared) {
+      const plans = prepareTimelineFrame(force);
+      measureTimelineFrame(plans, readViewportGeometry());
+    }
+    try { for (const t of timelines) t.render(force); }
+    finally { releaseTimelineFrame(); }
     renderPins();
     noteSlow("timeline strips", performance.now() - t0);
   }
   function renderTimelineAfterList() {
-    if (timelines.every((t) => t.mapped())) renderTimelineSoon(false);
+    if (viewportRunning?.full) { renderTimeline(true); return; }
+    if (timelines.every((t) => t.mapped())) {
+      renderTimelineSoon(false);
+      if (timelineFramePrepared) { updateTimelineView(); releaseTimelineFrame(); }
+    }
     else renderTimeline();
   }
-  function updateTimelineView() { for (const t of timelines) t.updateView(); }
+  function updateTimelineView(viewport) {
+    if (!viewport && !timelineFramePrepared) viewport = readViewportGeometry();
+    const views = timelines.map((t) => t.readView(viewport));
+    timelines.forEach((t, i) => t.updateView(views[i]));
+  }
   function rescaleTimeline() { for (const t of timelines) t.rescale(); }
-  function followConversation() { for (const t of timelines) t.follow(); }
+  function followConversation() { requestViewportWork({ timeline: true }); }
   attachScrollHints(els.pageInner);
   attachScrollHints(els.detailsInner);
   document.querySelectorAll("dialog.dialog").forEach((d) => attachScrollHints(d));
   const composerFollowers = [els.mentionMenu, els.emojiMenu];
   new ResizeObserver(() => {
-    const h = `${els.composer.offsetHeight}px`;
-    for (const el of composerFollowers) el.style.setProperty("--composer-h", h);
-    followConversation();
+    requestViewportWork({ composer: true, timeline: true });
     renderTimelineSoon(true);
   }).observe(els.composer);
   new ResizeObserver(() => {
-    followConversation();
+    requestViewportWork({ timeline: true, resize: true });
     renderTimelineSoon(true);
-    repriceSoon();
   }).observe(els.messages);
   document.fonts.ready.then(() => renderTimeline());
   let timelineTimer = 0;
@@ -12712,8 +14024,11 @@
     timelineTimer = setTimeout(() => {
       timelineTimer = 0;
       if (Date.now() - lastTypedAt < TYPING_WINDOW_MS) renderTimelineSoon(false);
-      else if (timelineFull) { timelineFull = false; renderTimeline(); }
-      else rescaleTimeline();
+      else {
+        const full = timelineFull;
+        timelineFull = false;
+        requestViewportWork({ timeline: true, full });
+      }
     }, typing ? TYPING_WINDOW_MS : 300);
   }
   new MutationObserver((records) => {
@@ -12726,6 +14041,7 @@
   const WAVE_STEP = 280;
   const WAVE_RETIME = 420;
   let waveEpoch = null;
+  let twiceNoted = "";
   const bobOf = (el) => el.getAnimations().find((a) => a.animationName === "wn-bob") || null;
   function wavePlace(anim, i) {
     let target = waveEpoch + i * WAVE_STEP;
@@ -12760,8 +14076,18 @@
 
   function renderWorkingNow() {
     const room = currentRoom();
-    const working = room && state.view === "room" ? room.participants.filter((p) => p.kind === "agent" && p.status === "thinking") : [];
-    const have = new Map([...workingNow.children].map((el) => [el.dataset.id, el]));
+    const listed = room && state.view === "room" ? room.participants.filter((p) => p.kind === "agent" && p.status === "thinking") : [];
+    const working = [...new Map(listed.map((p) => [p.id, p])).values()];
+    const names = new Set(working.map((p) => p.name));
+    if (working.length !== listed.length || names.size !== working.length) {
+      const said = JSON.stringify(listed.map((p) => ({ id: p.id, name: p.name })));
+      if (said !== twiceNoted) noteFinding(`a working vibemate listed twice: ${(twiceNoted = said)}`);
+    }
+    const have = new Map();
+    for (const el of [...workingNow.children]) {
+      if (have.has(el.dataset.id)) el.remove();
+      else have.set(el.dataset.id, el);
+    }
     const wanted = new Set(working.map((p) => p.id));
     for (const [id, el] of have) if (!wanted.has(id) && !el.classList.contains("leaving")) leaveWave(el);
     working.forEach((p) => {
@@ -13004,6 +14330,14 @@
     const older = (room.pinnedOlder || []).filter((p) => !held.has(p.id));
     return [...older, ...room.messages.filter((m) => m.pinned && m.kind === "chat")].sort(HistoryWindow.compareMessages);
   }
+  const pinYearFormatter = new Intl.DateTimeFormat([], { day: "numeric", month: "short", year: "numeric" });
+  function pinWhen(ts, now = Date.now()) {
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return "";
+    if (localDay(ts) === localDay(now)) return time(ts);
+    const day = (d.getFullYear() === new Date(now).getFullYear() ? shortDateFormatter : pinYearFormatter).format(d);
+    return `${day}, ${time(ts)}`;
+  }
   function renderPins() {
     const room = currentRoom();
     const pins = room && state.view === "room" ? pinnedMessages(room) : [];
@@ -13014,24 +14348,79 @@
     pinsBtn.setAttribute("aria-label", pinsBtn.title);
     if (!pins.length) pinsPanel.hidden = true;
     if (pinsPanel.hidden) return;
+    if (pinsPanel.querySelector(".pin-label-input")) return;
     setHtml(pinsPanel, pins
       .map((m) => {
         const p = findById(room, m.from);
         const who = m.from === "human" ? Object.assign(meAvatarData(), { color: (p || {}).color }) : p;
         const text = String(m.text || "").replace(/\s+/g, " ").trim().slice(0, 160) || (m.images && m.images.length ? `[${m.images.length} image${m.images.length === 1 ? "" : "s"}]` : "");
-        return `<div class="tl-row pin-row${m.from === "human" ? " mine" : ""}" data-id="${esc(m.id)}"><span class="tl-av">${who ? avatar(who, 16, {}) : ""}</span><span class="tl-text">${esc(text)}</span><span class="pin-time">${time(m.ts)}</span><button type="button" class="pin-x" title="Unpin">×</button></div>`;
+        const shown = m.pinLabel ? `<span class="tl-text pin-label" title="${esc(text)}">${esc(m.pinLabel)}</span>` : `<span class="tl-text">${esc(text)}</span>`;
+        return `<div class="tl-row pin-row${m.from === "human" ? " mine" : ""}" data-id="${esc(m.id)}"><span class="tl-av">${who ? avatar(who, 16, {}) : ""}</span>${shown}<span class="pin-time">${esc(pinWhen(m.ts))}</span><button type="button" class="pin-edit" title="${m.pinLabel ? "Change this pin's title" : "Give this pin a title of your own"}">${ic("pencil")}</button><button type="button" class="pin-x" title="Unpin">×</button></div>`;
       })
       .join(""));
   }
+  let pinEdit = null;
+  function editPinLabel(row) {
+    const room = currentRoom();
+    const m = room && pinnedMessages(room).find((x) => x.id === row.dataset.id);
+    const text = row.querySelector(".tl-text");
+    if (!m || !text) return;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "pin-label-input";
+    input.maxLength = 120;
+    input.value = m.pinLabel || "";
+    input.placeholder = String(m.text || "").replace(/\s+/g, " ").trim().slice(0, 80);
+    input.setAttribute("aria-label", "The pin's title");
+    text.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = async (keep) => {
+      if (done) return;
+      done = true;
+      pinEdit = null;
+      input.remove();
+      drawnHtml.delete(pinsPanel);
+      renderPins();
+      if (!keep || input.value.trim() === (m.pinLabel || "")) return;
+      try {
+        await post(`/api/rooms/${encodeURIComponent(room.id)}/messages/${encodeURIComponent(m.id)}/pin-label`, { label: input.value });
+      } catch (error) {
+        showError(error);
+      }
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); void finish(true); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); void finish(false); }
+    });
+    input.addEventListener("blur", () => void finish(true));
+    pinEdit = { id: m.id, finish };
+  }
+  function pinsPanelPressed(e) {
+    if (pinEdit && e.target.closest(".pin-x, .pin-edit")) e.preventDefault();
+  }
+  pinsPanel.addEventListener("mousedown", pinsPanelPressed);
+  const pinRowOf = (id) => [...pinsPanel.querySelectorAll(".pin-row")].find((r) => r.dataset.id === id) || null;
   pinsBtn.addEventListener("click", () => {
     pinsPanel.hidden = !pinsPanel.hidden;
     renderPins();
   });
-  pinsPanel.addEventListener("click", async (e) => {
+  pinsPanel.addEventListener("click", (e) => void pinsPanelClicked(e));
+  async function pinsPanelClicked(e) {
     const row = e.target.closest(".pin-row");
     const room = currentRoom();
     if (!row || !room) return;
+    if (e.target.closest(".pin-label-input")) return;
+    const id = row.dataset.id;
+    if (e.target.closest(".pin-edit")) {
+      if (pinEdit) void pinEdit.finish(true);
+      const fresh = pinRowOf(id);
+      if (fresh) editPinLabel(fresh);
+      return;
+    }
     if (e.target.closest(".pin-x")) {
+      if (pinEdit) void pinEdit.finish(pinEdit.id !== id);
       try {
         await post(`/api/rooms/${encodeURIComponent(room.id)}/messages/${encodeURIComponent(row.dataset.id)}/pin`, { pinned: false });
       } catch (error) {
@@ -13041,7 +14430,7 @@
     }
     void jumpToId(row.dataset.id);
     pinsPanel.hidden = true;
-  });
+  }
   document.addEventListener("click", (e) => {
     if (!pinsPanel.hidden && !e.target.closest("#pins-panel, #pins-btn")) pinsPanel.hidden = true;
   });

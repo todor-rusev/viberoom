@@ -2,6 +2,7 @@
 import { lstatSync, readdirSync, realpathSync, unlinkSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Transcript } from "./log.js";
+import { transcriptWriter } from "./transcript-writer.js";
 
 export interface DiagnosticLogStats { files: number; bytes: number; skipped: number; unavailable: number }
 export interface DiagnosticLogClear {
@@ -61,7 +62,12 @@ export function diagnosticLogStats(dataDir: string): DiagnosticLogStats {
   return { files, bytes, skipped, unavailable };
 }
 
-export function clearDiagnosticLogs(dataDir: string, remove: (path: string) => void = unlinkSync): DiagnosticLogClear {
+export function clearDiagnosticLogs(dataDir: string, remove: (path: string) => void = unlinkSync): Promise<DiagnosticLogClear> {
+  if (transcriptWriter.isStopped(dataDir)) return Promise.reject(new Error("Diagnostic recording is stopping; clearing did not run."));
+  return transcriptWriter.barrier(() => clearFiles(dataDir, remove), 5000);
+}
+
+function clearFiles(dataDir: string, remove: (path: string) => void): DiagnosticLogClear {
   const found = inventory(dataDir);
   const result = { removedFiles: 0, removedBytes: 0, failedFiles: 0, skipped: found.skipped, unavailable: found.unavailable };
   if (!found.directories.length) return { ...result, remaining: diagnosticLogStats(dataDir) };

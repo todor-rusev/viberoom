@@ -1,11 +1,11 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
-import type { DatabaseSync } from "node:sqlite";
+import type { TimedDatabase } from "./timed-db.js";
 
 export type CardKind = "proposal" | "new-room";
 export interface StoredCard { kind: CardKind; key: string; body: unknown }
 
 export class RoomCards {
-  constructor(private readonly db: DatabaseSync) {
+  constructor(private readonly db: TimedDatabase) {
     db.exec("create table if not exists room_cards(room text not null, key text not null, kind text not null, ts integer not null, body text not null, primary key(room, key))");
   }
 

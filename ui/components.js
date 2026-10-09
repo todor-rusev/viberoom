@@ -25,11 +25,11 @@
   const GLYPH_TONES = ["violet", "sky", "orchid", "amber", "mint", "peach", "slate", "geek", "pad"];
   UI.define("settings-glyph", {
     group: "settingsGlyph",
-    describe: "A category's picture on a tile in the category's own tint. The ones for geeks share two quiet tiles, each standing off its ground: geek, the paper's, on the darker pad of the menu; pad, the pad's own tint, at the top of their page, on the paper. The glyph is a rig: it plays its gesture when the pointer arrives at the entry that holds it, and once when its page opens. Small in the menu, large at the top of the page.",
+    describe: "A category's picture on a tile in the category's own tint. The ones for geeks share two quiet tiles, each standing off its ground: geek, the paper's, on the darker pad of the menu; pad, the pad's own tint, at the top of their page, on the paper. The glyph is a rig: it plays its gesture when the pointer arrives at the entry that holds it, and once when its page opens. Small in the menu, large at the top of the page; extra small and round, an option's picture at the start of a choice (the ways of the computer's sleep: a sun, a plug, a moon).",
     props: {
       glyph: { type: "icon", required: true, note: "a glyph of ui/icons.js; one with parts (a rig) plays a gesture" },
       tone: { type: "enum", values: GLYPH_TONES, default: "slate" },
-      size: { type: "enum", values: ["sm", "lg"], default: "sm" },
+      size: { type: "enum", values: ["sm", "lg", "xs"], default: "sm", note: "xs: in a choice, as its lead" },
     },
     build: ({ glyph, tone, size }, ui) => ui.h("span", { "data-tone": tone, "data-size": size, "aria-hidden": "true" }, ui.raw(globalThis.Icons.rig(glyph))),
     states: ["rest"],
@@ -44,6 +44,7 @@
       { label: "for geeks, on the pad of the menu", props: { glyph: "sliders", tone: "geek" } },
       { label: "large, at the top of a page", props: { glyph: "graph", tone: "orchid", size: "lg" } },
       { label: "large, at the top of a page for geeks", props: { glyph: "sliders", tone: "pad", size: "lg" } },
+      { label: "extra small, an option's picture in a choice", props: { glyph: "moon", tone: "violet", size: "xs" } },
     ],
   });
 
@@ -275,17 +276,20 @@
     group: "skeleton",
     describe: "Grey bones in the shape of the content that is on its way (a message body, the conversation), with one soft band of light sweeping over them. Decorative: the words that say what loads stay beside it for screen readers.",
     props: {
-      lines: { type: "number", default: 3, note: "how many bones, 1–6; each is a little shorter than the one before" },
+      lines: { type: "number", default: 3, note: "how many bones, 1–6, each a little shorter than the one before; a bubble may ask for 0, an empty card" },
       shape: { type: "enum", values: ["lines", "bubble"], default: "lines", note: "bubble: the bones sit on a message-shaped card with a face beside it" },
+      still: { type: "boolean", default: false, note: "no band of light: for many at once, as the rows that stand in for their messages while a long list is taken far" },
     },
-    build: ({ lines, shape }, ui) => {
-      const bones = Array.from({ length: Math.max(1, Math.min(6, Math.round(Number(lines) || 3))) }, () => ui.h("i", {}));
-      return ui.h("span", { "aria-hidden": "true", "data-shape": shape }, shape === "bubble" ? [ui.h("b", { class: "face" }), ui.h("span", { class: "card" }, bones)] : bones);
+    build: ({ lines, shape, still }, ui) => {
+      const count = shape === "bubble" && Number(lines) === 0 ? 0 : Math.max(1, Math.min(6, Math.round(Number(lines) || 3)));
+      const bones = Array.from({ length: count }, () => ui.h("i", {}));
+      return ui.h("span", { "aria-hidden": "true", "data-shape": shape, "data-still": still }, shape === "bubble" ? [ui.h("b", { class: "face" }), ui.h("span", { class: "card" }, bones)] : bones);
     },
     states: ["rest"],
     samples: [
       { label: "three lines", props: { lines: 3 } },
       { label: "a message on its way", props: { lines: 2, shape: "bubble" } },
+      { label: "a row standing in while the list moves", props: { lines: 0, shape: "bubble", still: true } },
     ],
   });
 
@@ -522,7 +526,7 @@
     describe: "One option of a few, as a pill: the chosen one is lit (on). What choosing does is the page's: a data mark says which option this is.",
     props: {
       label: { type: "string", required: true },
-      lead: { type: "node", note: "markup before the words (a colour swatch), as ui.raw" },
+      lead: { type: "node", note: "markup before the words (a colour swatch; an option's picture, a settings-glyph of size xs, whose rig plays when the pointer comes), as ui.raw" },
       trail: { type: "node", note: "markup after the words (a hint), as ui.raw" },
       on: { type: "boolean", default: false, note: "the chosen one" },
       quiet: { type: "boolean", default: false, note: "the option that means none" },
@@ -539,6 +543,7 @@
       { label: "an option", props: { label: "The default app" } },
       { label: "the chosen one", props: { label: "Auto", on: true } },
       { label: "none", props: { label: "No preset", quiet: true } },
+      { label: "with its picture", props: { label: "When plugged in", on: true, lead: UI.raw(UI.html("settings-glyph", { glyph: "plug", tone: "mint", size: "xs" })) } },
     ],
   });
 
@@ -686,11 +691,18 @@
   });
 
   const CHOICE_KIND = { ok: "ok", no: "danger" };
+  const ASK_KIND = {
+    permission: { icon: "lock", lead: "asks for permission:" },
+    proposal: { icon: "pencil", lead: "proposes changes to the room" },
+    recovery: { icon: "info", lead: "has a decision for you" },
+    "new-room": { icon: "rooms", lead: "proposes a room" },
+    notify: { icon: "bell", lead: "can let you know when a vibemate answers while you are in another window" },
+  };
   UI.define("ask-card", {
     group: "askCard",
-    describe: "A card the room puts in front of you for a decision: a permission a vibemate asks for, a proposal it makes. It says who asks and what, shows the details, and offers the choices as buttons; decided, it dims and keeps the outcome in the choices' place.",
+    describe: "A card the room puts in front of you for a decision: a permission a vibemate asks for, a proposal it makes, viberoom's own offer to notify you. It says who asks and what, shows the details, and offers the choices as buttons; decided, it dims and keeps the outcome in the choices' place.",
     props: {
-      kind: { type: "enum", values: ["permission", "proposal", "recovery", "new-room"], required: true },
+      kind: { type: "enum", values: Object.keys(ASK_KIND), required: true },
       who: { type: "string", required: true, note: "who asks, by name" },
       lead: { type: "string", note: "what is asked, in words after the name; the default fits the kind" },
       subject: { type: "string", note: "what the ask is about, in bold: the tool call's title" },
@@ -703,7 +715,7 @@
     },
     build: ({ kind, who, lead, subject, subjectKind, input, body, choices, outcome, data }, ui) =>
       ui.h("div", { "data-kind": kind, "data-state": outcome ? "resolved" : null, ...ui.dataAttrs(data) },
-        ui.h("div", { class: "title" }, ui.icon(kind === "permission" ? "lock" : kind === "recovery" ? "info" : kind === "new-room" ? "rooms" : "pencil"), " ", who, " ", lead || (kind === "permission" ? "asks for permission:" : kind === "recovery" ? "has a decision for you" : kind === "new-room" ? "proposes a room" : "proposes changes to the room"), subject ? [" ", ui.h("strong", null, subject)] : null, subjectKind ? [" ", ui.h("span", { class: "kind" }, subjectKind)] : null),
+        ui.h("div", { class: "title" }, ui.icon(ASK_KIND[kind].icon), " ", who, " ", lead || ASK_KIND[kind].lead, subject ? [" ", ui.h("strong", null, subject)] : null, subjectKind ? [" ", ui.h("span", { class: "kind" }, subjectKind)] : null),
         input ? ui.h("pre", { class: "input" }, input.slice(0, 1200)) : null,
         body ? ui.raw(body) : null,
         ui.h("div", { class: "choices" },
@@ -715,6 +727,7 @@
       { label: "a permission", props: { kind: "permission", who: "Maken", subject: "Bash", subjectKind: "execute", input: "{ \"command\": \"npm test\" }", choices: [{ label: "Allow", tone: "ok", act: "permit", data: { option: "allow" } }, { label: "Deny", tone: "no", act: "permit", data: { option: "deny" } }, { label: "Dismiss (cancelled)", act: "permit" }] } },
       { label: "a proposal", props: { kind: "proposal", who: "Ana", body: "<div class=\"why\">The room keeps forgetting the deploy steps.</div>", choices: [{ label: "Apply", tone: "ok", act: "decide", data: { answer: "apply" } }, { label: "Reject", tone: "no", act: "decide", data: { answer: "reject" } }] } },
       { label: "a room", props: { kind: "new-room", who: "Ana", lead: "proposes a room called Review", body: "<div class=\"prop-row\">Rex (opus-5) and Wren (sonnet-5) — <b>2 new sessions</b></div><div class=\"prop-line\">No working folder yet · not reachable from a messenger · they all start in a mode that asks before it acts.</div>", choices: [{ label: "Create", tone: "ok", act: "make-room", data: { answer: "create" } }, { label: "No", tone: "no", act: "make-room", data: { answer: "no" } }] } },
+      { label: "the offer to notify", props: { kind: "notify", who: "viberoom", body: "<div class=\"prop-why\">Turn it on, and your system asks you once whether to allow it.</div>", choices: [{ label: "Turn on", tone: "ok", act: "knock", data: { answer: "on" } }, { label: "Not now", act: "knock", data: { answer: "later" } }] } },
       { label: "decided", props: { kind: "permission", who: "Maken", subject: "Bash", outcome: "chosen: allow" } },
     ],
   });
@@ -897,11 +910,12 @@
       const r = (px) => `calc(${px}px * ${look.shape.rScale || 1})`;
       const canvas = (look.canvas && look.canvas.gradCanvas) || p.bg;
       const shadows = look.elevation || {};
+      const action = e.btn && e.btn.primaryBg && !/^var\(/.test(e.btn.primaryBg) ? e.btn.primaryBg : p.primary;
       return ui.h("button", { type: "button", "data-look": look.id, "data-state": on ? "on" : null, "aria-pressed": on ? "true" : "false", "data-act": act, title: title || look.label, ...ui.dataAttrs(data) },
         ui.h("span", { class: "paper", style: `background:${canvas};border-radius:${r(10)}` },
           ui.h("span", { class: "reply", style: `background:${e.bubble.bg};color:${e.bubble.ink};border-radius:${r(8)};font-family:${look.type.font};box-shadow:${e.bubble.shadow || "none"}` }, "Aa"),
           ui.h("span", { class: "mine", style: `background:${e.bubble.mineBg};border-radius:${r(8)};box-shadow:${e.bubble.mineShadow || "none"}` }),
-          ui.h("span", { class: "accent", style: `background:${p.primary};border-radius:${r(6)};box-shadow:${shadows.shadowPrimary || "none"}` })),
+          ui.h("span", { class: "accent", style: `background:${action};border-radius:${r(6)};box-shadow:${shadows.shadowPrimary || "none"}` })),
         ui.h("span", { class: "name", style: `font-family:${look.type.font}` }, look.label),
         tag ? ui.h("span", { class: "tag" }, tag) : null);
     },

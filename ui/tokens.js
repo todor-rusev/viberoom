@@ -9,6 +9,7 @@
       : [(n >> 16) & 255, (n >> 8) & 255, n & 255];
   };
   const alpha = (hex, a) => `rgba(${rgb(hex).join(", ")}, ${a})`;
+  const TEAMS = { mine: "#e8ebfa", frameTop: "#e3e6ec", frameWarm: "#e6e7e3", frameFoot: "#dfe9eb", paper: "#faf9f5", purple: "#5b5fc7" };
   const mix = (a, b, t) => {
     const [x, y, z] = rgb(a);
     const [i, j, k] = rgb(b);
@@ -18,12 +19,12 @@
   const NO_SHADOW = "0 0 0 0 transparent";
 
   const pop = {
-    primary: "#5b5bf0",
-    primaryLight: "#6a6af7",
-    primaryDeep: "#4f4fe0",
-    primaryDark: "#4343cc",
-    violet: "#8b5cf6",
-    iris: "#6d5dfc",
+    primary: "#5d65c7",
+    primaryLight: "#6e74d8",
+    primaryDeep: "#5159ba",
+    primaryDark: "#464ead",
+    violet: "#866dd3",
+    iris: "#6f6ed2",
     ink: "#1c1b33",
     ink2: "#2c2b4a",
     ink3: "#5c5c80",
@@ -49,35 +50,35 @@
     mintTint: "#e4f7ee",
     mintInk: "#1d8f6a",
     forest: "#14533f",
-    green: "#2fc97e",
+    green: "#47c783",
     warm: "#fff3cc",
     warm2: "#ffeaa8",
-    warmInk: "#a07408",
+    warmInk: "#8f6b3e",
     bronze: "#5a4200",
-    amber: "#f5a524",
+    amber: "#f2a635",
     honey: "#ffcf8f",
     spark: "#ffd166",
     peach: "#ffe3cc",
     peach2: "#ffe4d6",
-    orange: "#ff8a3d",
-    orangeLight: "#ff9447",
-    orangeDeep: "#e8642a",
-    orangeDark: "#c9461c",
-    ember: "#ff7a45",
-    emberDeep: "#f0452c",
+    orange: "#f88f4e",
+    orangeLight: "#ed975a",
+    orangeDeep: "#dc6e42",
+    orangeDark: "#bd4f2f",
+    ember: "#f48358",
+    emberDeep: "#d7634f",
     rose: "#fff0ee",
     rose2: "#ffe1dd",
-    roseInk: "#e0554a",
-    roseDark: "#c9463c",
-    pink: "#be185d",
+    roseInk: "#c45146",
+    roseDark: "#c04d43",
+    pink: "#a9395d",
     pinkTint: "#fff1f7",
     sky: "#dcefff",
-    blue: "#4f8ef7",
+    blue: "#588fec",
     blueDeep: "#2a6fbf",
     blueSoft: "#7aa7ff",
     orchid: "#f3e4fb",
-    orchidInk: "#8a3fc2",
-    orchidMid: "#b06be0",
+    orchidInk: "#804caa",
+    orchidMid: "#ab73d4",
     periwinkle: "#cdcdf9",
     periwinkleDeep: "#a9a9f5",
     deep: "#26244a",
@@ -118,8 +119,8 @@
 
   const classicDark = {
     ...pop,
-    primary: "#8a8aff", primaryLight: "#9c9cff", primaryDeep: "#7474f7", primaryDark: "#6262e6",
-    violet: "#b39cff",
+    primary: "#8d91e3", primaryLight: "#9d9ff2", primaryDeep: "#797fcf", primaryDark: "#6f76c5",
+    violet: "#b29ff3",
     iris: "#202142",
     ink: "#f1efff", ink2: "#e0deff", ink3: "#c0bde6", indigo: "#f6f4ff",
     muted: "#a4a2cc", faint: "#8583b0", placeholder: "#7f7dab", grey: "#8e90b0",
@@ -127,15 +128,15 @@
     bg: "#0f1024", soft: "#262848", softer: "#232445", lav: "#2c2e56", lav2: "#3a3c6e",
     canvasTop: "#141530", canvasMid: "#111226", canvasBottom: "#0e0f21",
     shadowInk: "#000000",
-    mint: "#1a4235", mint2: "#205241", mintTint: "#173a2f", mintInk: "#6ee8b3", forest: "#a8ecc9", green: "#4bdc98",
-    warm: "#46381a", warm2: "#54441e", warmInk: "#f5c94f", bronze: "#ffe08a", amber: "#f5b73a", honey: "#f5c974", spark: "#ffd166",
-    peach: "#3f2a1a", peach2: "#4a3020", orange: "#ff9a4d", orangeLight: "#ffab66", orangeDeep: "#f07c34", orangeDark: "#ffb36b", ember: "#ff8a55", emberDeep: "#f0603c",
-    rose: "#401c1e", rose2: "#4d2325", roseInk: "#ff7a70", roseDark: "#ff8f86", pink: "#ff8ac4", pinkTint: "#351a2a",
-    sky: "#1a2e46", blue: "#6aa4ff", blueDeep: "#8cb8ff", blueSoft: "#9fc4ff",
-    orchid: "#2e2140", orchidInk: "#c9a3ff", orchidMid: "#b48cf0",
+    mint: "#1a4235", mint2: "#205241", mintTint: "#173a2f", mintInk: "#6bbf98", forest: "#a8ecc9", green: "#73d5a2",
+    warm: "#46381a", warm2: "#54441e", warmInk: "#c8ac61", bronze: "#ffe08a", amber: "#ebba62", honey: "#f5c974", spark: "#cbab61",
+    peach: "#3f2a1a", peach2: "#4a3020", orange: "#f1a168", orangeLight: "#faad6f", orangeDeep: "#dd895a", orangeDark: "#fdb470", ember: "#ee956e", emberDeep: "#d37861",
+    rose: "#401c1e", rose2: "#4d2325", roseInk: "#ea8a80", roseDark: "#f7958c", pink: "#f096c1", pinkTint: "#351a2a",
+    sky: "#1a2e46", blue: "#76a5ef", blueDeep: "#8cb8ff", blueSoft: "#9fc4ff",
+    orchid: "#2e2140", orchidInk: "#c7a6f8", orchidMid: "#b191e3",
     periwinkle: "#34365c", periwinkleDeep: "#40437a",
     deep: "#0f1020", deepGutter: "#0b0c1a", deepInk: "#f4f2ff", deepMuted: "#7c78ad", deepHead: "#e8e6ff", deepMeta: "#a9a5d8",
-    lavGrey: "#7c78ad", lilac: "#b9a7ff", seafoam: "#8fe3bd", azure: "#9cd2ff", salmon: "#ff9f9f", magenta: "#f2b8ff",
+    lavGrey: "#7c78ad", lilac: "#b9a8fc", seafoam: "#8fe3bd", azure: "#9cd2ff", salmon: "#ff9f9f", magenta: "#f2b8ff",
   };
 
   const clay = {
@@ -274,6 +275,7 @@
       bevel: "none",
       shadowRoom: "0px",
       bevelPressed: "none",
+      panelEdge: "var(--edge)",
     };
   };
 
@@ -322,6 +324,9 @@
     rScale: "1",
     rCtlMin: "0px",
     rXs: "calc(8px * var(--r-scale))", rSm: "calc(12px * var(--r-scale))", rMd: "calc(14px * var(--r-scale))", rLg: "calc(18px * var(--r-scale))", rXl: "calc(18px * var(--r-scale))", rPill: "calc(99px * var(--r-scale))",
+    gap: "6px",
+    panelRadius: "var(--r-lg)",
+    rRound: "var(--r-scale)",
   };
   const type = {
     font: '"Nunito", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif',
@@ -334,6 +339,21 @@
     fsLg: "calc(16px * var(--fs-scale))",
     fsXl: "calc(18px * var(--fs-scale))",
     fs2xl: "calc(22px * var(--fs-scale))",
+    fontDisplay: "var(--font)",
+    displayWeight: "800",
+    displayScale: "1",
+    fontAside: "var(--font)",
+    asideStyle: "normal",
+    asideWeight: "700",
+    asideOpen: `'"'`,
+    asideClose: `'"'`,
+    asideScale: "1",
+    wSoft: "500",
+    wText: "600",
+    wTextPlus: "650",
+    wStrong: "700",
+    wStrongPlus: "750",
+    wBold: "800",
   };
   const motion = {
     tFast: "120ms", tBase: "200ms", tSlow: "320ms", tEnter: "380ms", tBreath: "2800ms", tShimmer: "1600ms", tGesture: "640ms", stagger: "32ms",
@@ -364,6 +384,7 @@
       hoverBg: p.lav,
       hoverInk: p.primary,
       onPrimary: p.white,
+      primaryBg: "var(--grad-primary)",
       secondaryBg: p.white,
       secondaryHoverBg: p.white,
       softBg: p.lav,
@@ -529,6 +550,7 @@
       geekBg: p.white,
       geekInk: p.ink3,
       controlBorder: mix(p.lav2, p.ink, 0.12),
+      controlBorderW: "1.5px",
       controlHoverBorder: p.muted,
       controlH: "38px",
       controlW: "280px",
@@ -593,6 +615,7 @@
       padInk: p.ink3,
       sm: "30px",
       lg: "52px",
+      xs: "22px",
       radius: "calc(9px * var(--r-scale))",
       radiusLg: "calc(15px * var(--r-scale))",
       shadow: "none",
@@ -634,6 +657,10 @@
       failedInk: p.roseInk,
       fs: "calc(11px * var(--fs-scale))",
       shadow: "none",
+      radius: "var(--r-pill)",
+      border: "0",
+      font: "var(--font)",
+      weight: "var(--w-bold)",
     },
     askCard: {
       bg: p.warm,
@@ -755,6 +782,13 @@
     rail: {
       logoShadow: `0 8px 18px -6px ${alpha(p.primary, 0.6)}`,
       activeBg: p.white,
+      bg: "transparent",
+      ink: p.muted,
+      hoverInk: p.primary,
+      activeInk: p.primary,
+      activeShadow: "var(--shadow-tile)",
+      cut: p.bg,
+      mark: p.primary,
     },
     cast: {
       c1: p.primary,
@@ -776,6 +810,7 @@
     },
     bubble: {
       bg: p.white,
+      mineSelection: "var(--page-selection)",
       ink: p.ink2,
       border: "transparent",
       shadow: `0 2px 0 ${alpha(p.ink, 0.06)}, 0 1px 3px ${alpha(p.ink, 0.04)}`,
@@ -783,6 +818,8 @@
       mineInk: p.white,
       mineSoftInk: alpha(p.white, 0.85),
       mineWaitingInk: alpha(p.white, 0.92),
+      mineWaitingBg: "var(--attention-grad)",
+      mineWaitingShadow: "var(--attention-shadow)",
       mineShadow: `0 8px 18px -10px ${alpha(p.primary, 0.7)}`,
       mineRule: alpha(p.white, 0.35),
       mineBorder: alpha(p.white, 0.35),
@@ -798,6 +835,25 @@
       mineCtaInk: p.primary,
       insetBg: p.white,
       propRowBg: alpha(p.white, 0.6),
+      mineMentionInk: "var(--bubble-mine-ink)",
+      pad: "12px 16px",
+      minePad: "11px 16px",
+      corners: "calc(6px * var(--r-scale)) calc(18px * var(--r-scale)) calc(18px * var(--r-scale)) calc(18px * var(--r-scale))",
+      mineCorners: "calc(18px * var(--r-scale)) calc(6px * var(--r-scale)) calc(18px * var(--r-scale)) calc(18px * var(--r-scale))",
+    },
+    message: {
+      indent: "16px",
+      agentSpaceEnd: "calc(40px + var(--shadow-room))",
+      mineSpaceStart: "calc(40px + var(--shadow-room))",
+      mineSpaceEnd: "0px",
+      mineIndentStart: "0px",
+      mineIndentEnd: "16px",
+      mineOrigin: "100% 100%",
+      mineName: "none",
+      nameOwn: "100%",
+      nameInk: p.ink,
+      edgeBorder: "0",
+      edgePad: "0px",
     },
     quote: {
       mineBg: alpha(p.white, 0.16),
@@ -861,6 +917,7 @@
       sbThumb: alpha(p.deepInk, 0.3),
       sbThumbHover: alpha(p.deepInk, 0.5),
       sbFirefox: alpha(p.deepInk, 0.35),
+      selection: alpha(p.deepInk, 0.25),
       findHitBg: p.honey,
       findHitInk: p.deep,
     },
@@ -937,6 +994,12 @@
       labelCase: "none",
       labelTracking: "0px",
       labelShadow: "none",
+      labelWeight: "var(--w-bold)",
+      align: "center",
+      lineOffset: "0px",
+      lineDisplay: "inline",
+      labelAlign: "center",
+      labelPad: "6px 14px",
     },
     skeleton: {
       bone: p.lav,
@@ -989,6 +1052,57 @@
       prefix: "none",
       prefixGap: "0px",
       actionShadow: "var(--edge)",
+      lineDir: "column",
+      lineAlign: "flex-start",
+      lineGap: "4px",
+      rule: "none",
+    },
+    action: {
+      flow: "column",
+      gap: "6px",
+      h: "58px",
+      dir: "column",
+      justify: "center",
+      bg: p.soft,
+      hoverBg: p.lav,
+      radius: "var(--r-md)",
+      shadow: "none",
+      fs: "calc(11px * var(--fs-scale))",
+      ink: p.ink3,
+      firstInk: p.primary,
+      dangerBg: p.rose,
+      hoverLift: "-1px",
+    },
+    sideList: {
+      selectedMark: "none",
+    },
+    mention: {
+      own: "100%",
+      ink: p.ink,
+      bg: "transparent",
+    },
+    side: {
+      bg: "var(--panel)",
+    },
+    sideHead: {
+      titleAlign: "center",
+    },
+    chat: {
+      bg: "transparent",
+      edgeColor: "transparent",
+      edgeShadowColor: "transparent",
+    },
+    chatHead: {
+      roomName: "none",
+      border: "0",
+      bg: "transparent",
+    },
+    toolbar: {
+      padPaper: p.softer,
+      padEdge: `0 1px 1px ${alpha(p.ink, 0.08)}`,
+      searchPaper: p.softer,
+      searchEdge: `0 1px 1px ${alpha(p.ink, 0.08)}`,
+      searchRadius: "var(--r-pill)",
     },
     hero: {
       ink: p.white,
@@ -1019,6 +1133,9 @@
       bg: "transparent",
       radius: "0px",
       padX: "0px",
+      areaBg: p.softer,
+      topBorder: "0",
+      focusRing: "var(--primary)",
     },
     step: {
       bg: p.white,
@@ -1056,46 +1173,46 @@
 
   const plain = {
     ...pop,
-    primary: "#202123", primaryLight: "#2f3033", primaryDeep: "#121314", primaryDark: "#0b0c0d",
-    violet: "#3f4045",
-    iris: "#202123",
-    ink: "#17181a", ink2: "#1f2124", ink3: "#46484d", indigo: "#17181a",
-    muted: "#6b6d72", faint: "#8e9095", placeholder: "#8e9095", grey: "#9a9ca1",
+    primary: "#141416", primaryLight: "#1e1e22", primaryDeep: "#0e0e10", primaryDark: "#000000",
+    violet: "#3a3a40",
+    iris: "#141416",
+    ink: "#141416", ink2: "#2a2a2f", ink3: "#46464e", indigo: "#141416",
+    muted: "#77777f", faint: "#8a8a92", placeholder: "#8a8a92", grey: "#a0a0a8",
     white: "#ffffff", black: "#000000", snow: "#ffffff",
-    bg: "#f7f7f8", soft: "#f4f4f5", softer: "#ececee", lav: "#f0f0f1", lav2: "#e3e3e5",
-    canvasTop: "#fcfcfd", canvasMid: "#fcfcfd", canvasBottom: "#fcfcfd",
-    shadowInk: "#17181a",
-    mint: "#e7f3ec", mint2: "#d8ebe1", mintTint: "#eff7f2", mintInk: "#186a4c", forest: "#12432f", green: "#2f9e6a",
+    bg: "#fafafb", soft: "#f6f6f8", softer: "#f0f0f3", lav: "#f0f0f3", lav2: "#e4e4e8",
+    canvasTop: "#fafafb", canvasMid: "#fafafb", canvasBottom: "#fafafb",
+    shadowInk: "#141416",
+    mint: "#e2f5f1", mint2: "#bfe3dc", mintTint: "#eff9f7", mintInk: "#0b6f62", forest: "#0a4a42", green: "#0f9d8a",
     warm: "#faf1da", warm2: "#f3e5c2", warmInk: "#8a6510", bronze: "#4f3c0b", amber: "#d99a2b", honey: "#9a5b0f", spark: "#e6c77a",
     peach: "#f7e7dc", peach2: "#f2ded1", orange: "#d8763c", orangeLight: "#e08348", orangeDeep: "#c25c28", orangeDark: "#a24a1d", ember: "#d86f43", emberDeep: "#c4472f",
-    rose: "#fbeeec", rose2: "#f5ded9", roseInk: "#b3372c", roseDark: "#962c22", pink: "#a3336a", pinkTint: "#fbeff5",
+    rose: "#fdf0ee", rose2: "#f7dfdb", roseInk: "#b42318", roseDark: "#8f1c13", pink: "#a3336a", pinkTint: "#fbeff5",
     sky: "#e6eef8", blue: "#2563eb", blueDeep: "#1d4ed8", blueSoft: "#7ba0e8",
     orchid: "#f0e9f7", orchidInk: "#6b3fa0", orchidMid: "#9a6fc4",
-    periwinkle: "#d8d9dc", periwinkleDeep: "#b6b8bd",
-    deep: "#f7f7f8", deepGutter: "#f0f0f1", deepInk: "#17181a", deepMuted: "#6b6d72", deepHead: "#17181a", deepMeta: "#6b6d72",
-    lavGrey: "#57595e", lilac: "#7c3fbf", seafoam: "#0a7b55", azure: "#1f6feb", salmon: "#b3261e", magenta: "#8a3fa0",
+    periwinkle: "#d4d4da", periwinkleDeep: "#b6b6be",
+    deep: "#fafafb", deepGutter: "#f0f0f3", deepInk: "#141416", deepMuted: "#77777f", deepHead: "#141416", deepMeta: "#77777f",
+    lavGrey: "#57575f", lilac: "#7c3fbf", seafoam: "#0b6f62", azure: "#1f6feb", salmon: "#b42318", magenta: "#8a3fa0",
   };
 
   const plainDark = {
     ...pop,
-    primary: "#e8e8ea", primaryLight: "#f2f2f3", primaryDeep: "#d6d6d9", primaryDark: "#c2c2c6",
+    primary: "#ececef", primaryLight: "#f6f6f8", primaryDeep: "#d6d6db", primaryDark: "#c2c2c8",
     violet: "#b9b9bf",
-    iris: "#17171a",
-    ink: "#f2f2f3", ink2: "#e6e6e8", ink3: "#b9b9bf", indigo: "#f7f7f8",
-    muted: "#9a9aa1", faint: "#76767d", placeholder: "#76767d", grey: "#84848b",
+    iris: "#0b0b0c",
+    ink: "#f2f2f3", ink2: "#e2e2e6", ink3: "#b9b9bf", indigo: "#f6f6f8",
+    muted: "#a0a0a8", faint: "#85858e", placeholder: "#85858e", grey: "#6e6e77",
     white: "#17171a", black: "#000000", snow: "#ffffff",
-    bg: "#0f0f10", soft: "#1e1e21", softer: "#26262a", lav: "#1c1c20", lav2: "#2e2e33",
+    bg: "#121214", soft: "#1d1d21", softer: "#232327", lav: "#232327", lav2: "#2e2e33",
     canvasTop: "#121214", canvasMid: "#121214", canvasBottom: "#121214",
     shadowInk: "#000000",
-    mint: "#123a2a", mint2: "#174a36", mintTint: "#0f2e23", mintInk: "#5fd6a0", forest: "#a8ecc9", green: "#43c98a",
+    mint: "#10302b", mint2: "#1f4a43", mintTint: "#0d2622", mintInk: "#5fd6c4", forest: "#a8ecdf", green: "#2fbfa8",
     warm: "#3a3014", warm2: "#4a3e1a", warmInk: "#e8bd52", bronze: "#ffe08a", amber: "#dfa93a", honey: "#e8bd52", spark: "#ffd166",
     peach: "#3a2a1c", peach2: "#4a3524", orange: "#e8935a", orangeLight: "#f0a26d", orangeDeep: "#d2763c", orangeDark: "#f0a26d", ember: "#e8875a", emberDeep: "#d2603c",
     rose: "#3c1c1a", rose2: "#4c2420", roseInk: "#f08a7e", roseDark: "#f5a099", pink: "#f08ac0", pinkTint: "#331a26",
     sky: "#1a2a3c", blue: "#7aa9f5", blueDeep: "#96bcf8", blueSoft: "#a8c6f8",
     orchid: "#2a2036", orchidInk: "#c2a0ea", orchidMid: "#ab8ad8",
-    periwinkle: "#2e2e33", periwinkleDeep: "#3d3d44",
-    deep: "#0b0b0c", deepGutter: "#0f0f10", deepInk: "#f2f2f3", deepMuted: "#76767d", deepHead: "#e6e6e8", deepMeta: "#9a9aa1",
-    lavGrey: "#76767d", lilac: "#c2a0ea", seafoam: "#5fd6a0", azure: "#7aa9f5", salmon: "#f08a7e", magenta: "#f08ac0",
+    periwinkle: "#3a3a40", periwinkleDeep: "#4a4a52",
+    deep: "#0f0f11", deepGutter: "#121214", deepInk: "#f2f2f3", deepMuted: "#85858e", deepHead: "#e2e2e6", deepMeta: "#a0a0a8",
+    lavGrey: "#85858e", lilac: "#c2a0ea", seafoam: "#5fd6c4", azure: "#7aa9f5", salmon: "#f08a7e", magenta: "#f08ac0",
   };
 
   const look = (id, label, scheme, palette, wants = {}) => {
@@ -1108,7 +1225,7 @@
       palette,
       meaning: meaningOf(palette),
       aliases: aliasesOf(palette),
-      elevation: { ...elevationOf(palette), ...(wants.elevation || {}) },
+      elevation: { ...elevationOf(palette), ...(typeof wants.elevation === "function" ? wants.elevation(palette) : wants.elevation || {}) },
       canvas: { ...canvasOf(palette), ...(wants.canvas ? wants.canvas(palette) : {}) },
       shape: { ...shape, ...(wants.shape || {}) },
       type: { ...type, ...(wants.type || {}) },
@@ -1122,37 +1239,71 @@
   const flat = Object.fromEntries(Object.keys(elevationOf(pop)).map((key) => [key, "none"]));
 
   const plainWants = {
-    shape: { rScale: "0.85", rCtlMin: "99px" },
-    type: { font: '"Manrope", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif', mono: '"IBM Plex Mono", ui-monospace, Consolas, "Courier New", monospace', lineHeight: "1.6" },
+    shape: { rScale: "0.3", rCtlMin: "0px", rRound: "1", gap: "1px", panelRadius: "0px" },
+    type: {
+      wSoft: "400", wText: "400", wTextPlus: "500", wStrong: "500", wStrongPlus: "600", wBold: "600",
+      font: '"Golos Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif',
+      mono: '"JetBrains Mono", ui-monospace, Consolas, "Courier New", monospace',
+      lineHeight: "1.6",
+      fontDisplay: '"Playfair Display", Georgia, "Times New Roman", serif',
+      displayWeight: "400",
+      displayScale: "1.35",
+      fontAside: '"Source Serif 4", Georgia, "Times New Roman", serif',
+      asideStyle: "italic",
+      asideWeight: "400",
+      asideOpen: "none",
+      asideClose: "none",
+      asideScale: "1.08",
+    },
     motion: { tFast: "100ms", tBase: "160ms", tSlow: "240ms", tEnter: "300ms", tGesture: "520ms" },
     elevation: (p) => ({
       ...flat,
-      edge: `0 0 0 1px ${alpha(p.ink, 0.07)}`,
-      shadowCard: `0 0 0 1px ${alpha(p.ink, 0.07)}`,
-      shadow: `0 0 0 1px ${alpha(p.ink, 0.07)}`,
-      shadow1: `0 0 0 1px ${alpha(p.ink, 0.07)}`,
+      edge: `0 0 0 1px ${p.lav2}`,
+      shadowCard: `0 0 0 1px ${p.lav2}`,
+      shadow: `0 0 0 1px ${p.lav2}`,
+      shadow1: `0 0 0 1px ${p.lav2}`,
       shadowPop: `0 8px 24px -12px ${alpha(p.shadowInk, 0.35)}`,
       shadowDialog: `0 24px 60px -28px ${alpha(p.shadowInk, 0.45)}`,
       shadow2: `0 24px 60px -28px ${alpha(p.shadowInk, 0.45)}`,
+      shadowRoom: "0px",
     }),
     canvas: (p) => ({ gradCanvas: p.canvasTop, canvasPattern: "none", canvasPatternSize: "0 0", sbThumb: alpha(p.ink, 0.18), sbThumbHover: alpha(p.ink, 0.32) }),
     elements: (p) => ({
-      link: { ink: p.blue, underline: alpha(p.blue, 0.35) },
+      page: { bg: p.lav2 },
+      link: { ink: p.green, underline: alpha(p.green, 0.5) },
+      focus: { ring: alpha(p.green, 0.45) },
       cast: { c1: p.blue, c2: p.mintInk, c3: p.warmInk, c4: p.roseInk, c5: p.orchidInk, c6: p.pink, c7: p.orangeDark, c8: p.ink3 },
+      message: {
+        nameOwn: "0%",
+        nameInk: p.ink,
+        indent: "52px",
+        mineIndentEnd: "52px",
+        mineName: "inline",
+        edgeBorder: `calc(var(--screen-px) * 2) solid ${p.lav}`,
+        edgePad: "10px",
+      },
       bubble: {
-        border: alpha(p.ink, 0.08),
+        bg: p.canvasTop,
+        border: alpha(p.ink, 0),
         shadow: "none",
-        mineBg: `linear-gradient(${p.soft}, ${p.soft})`,
+        pad: "0px",
+        minePad: "0 14px 0 0",
+        corners: "0px",
+        mineCorners: "0px",
+        mineBg: `linear-gradient(${p.canvasTop}, ${p.canvasTop})`,
         mineInk: p.ink,
         mineSoftInk: alpha(p.ink, 0.7),
         mineWaitingInk: alpha(p.ink, 0.8),
-        mineShadow: "none",
+        mineShadow: `inset -2px 0 0 ${p.ink}`,
+        mineWaitingBg: `linear-gradient(${p.canvasTop}, ${p.canvasTop})`,
+        mineWaitingShadow: `inset -2px 0 0 ${p.orange}`,
         mineRule: alpha(p.ink, 0.12),
         mineBorder: alpha(p.ink, 0.1),
-        mineChipBg: alpha(p.ink, 0.06),
+        mineChipBg: p.mint,
+        mineMentionInk: p.mintInk,
         mineCodeBg: alpha(p.ink, 0.06),
         mineThBg: alpha(p.ink, 0.06),
-        mineLinkUnderline: alpha(p.blue, 0.4),
+        mineLinkUnderline: alpha(p.green, 0.5),
         mineQuoteBorder: alpha(p.ink, 0.25),
         mineBtnBg: p.white,
         mineBtnHoverBg: p.white,
@@ -1162,14 +1313,27 @@
         insetBg: p.white,
         propRowBg: alpha(p.white, 0.7),
       },
+      rail: { bg: p.iris, ink: mix(p.iris, p.snow, 0.52), hoverInk: p.snow, activeInk: p.snow, activeBg: alpha(p.snow, 0), activeShadow: `inset 2px 0 0 ${p.green}`, cut: p.iris, mark: p.green, logoShadow: "none" },
       quote: { mineBg: alpha(p.ink, 0.05), mineBorder: alpha(p.ink, 0.2), mineHoverBg: alpha(p.ink, 0.08), mineHoverBorder: alpha(p.ink, 0.4), mineHeadInk: alpha(p.ink, 0.7), mineTextInk: p.ink, minePassage: alpha(p.ink, 0.14) },
-      attach: { refBg: alpha(p.ink, 0.08), mineRefBg: alpha(p.ink, 0.08), mineChipOpenBg: alpha(p.ink, 0.12), mineChipOpenInk: p.ink, thumbShadow: `0 0 0 1px ${alpha(p.ink, 0.08)}` },
-      code: { headBg: alpha(p.ink, 0.04), headInk: p.ink, headMeta: p.muted, headBtnBg: alpha(p.ink, 0.06), headBtnInk: p.ink, bodyBg: alpha(p.ink, 0.02), sbTrack: alpha(p.ink, 0.06), sbThumb: alpha(p.ink, 0.2), sbThumbHover: alpha(p.ink, 0.35), sbFirefox: alpha(p.ink, 0.25), lineMarkInk: p.orangeDark, lineMarkBg: alpha(p.amber, 0.16) },
+      attach: { refBg: alpha(p.ink, 0.08), mineRefBg: alpha(p.ink, 0.08), mineChipOpenBg: alpha(p.ink, 0.12), mineChipOpenInk: p.ink, thumbShadow: `0 0 0 1px ${p.lav2}` },
+      code: { headBg: alpha(p.ink, 0.04), headInk: p.ink, headMeta: p.muted, headBtnBg: alpha(p.ink, 0.06), headBtnInk: p.ink, bodyBg: alpha(p.ink, 0.02), selection: alpha(p.ink, 0.18), sbTrack: alpha(p.ink, 0.06), sbThumb: alpha(p.ink, 0.2), sbThumbHover: alpha(p.ink, 0.35), sbFirefox: alpha(p.ink, 0.25), lineMarkInk: p.orangeDark, lineMarkBg: alpha(p.amber, 0.16) },
       fileCard: { ink: p.ink, headBg: alpha(p.ink, 0.04), headInk: p.ink, headMeta: p.muted, imageBodyBg: alpha(p.ink, 0.02), imageBg: p.white, shadow: "var(--edge)" },
-      composer: { bg: p.white, radius: "calc(14px * var(--r-scale))", padX: "6px", shadow: `0 0 0 1px ${alpha(p.ink, 0.1)}` },
-      input: { bg: p.white, focusBorder: p.primary, shadow: "none" },
-      face: { shadow: "none", tint: "4%", paper: p.soft, cardBg: p.soft },
+      composer: { bg: alpha(p.white, 0), radius: "0px", padX: "0px", shadow: `inset 0 -1px 0 ${p.periwinkle}`, areaBg: alpha(p.white, 0), topBorder: `1px solid ${p.lav2}` },
+      unseenLine: { ink: p.muted, bg: alpha(p.white, 0), labelWeight: "400", lineDisplay: "none", labelAlign: "left", labelPad: "2px 14px" },
+      sideHead: { titleAlign: "left" },
+      chatHead: { roomName: "block", border: `1px solid ${p.lav2}` },
+      toolbar: { padPaper: alpha(p.white, 0), padEdge: "none", searchPaper: alpha(p.white, 0), searchEdge: `inset 0 -1px 0 ${p.periwinkle}`, searchRadius: "0px" },
+      timeline: { viewBg: alpha(p.ink, 0.035), viewEdge: alpha(p.ink, 0) },
+      sideList: { selectedMark: `inset 3px 0 0 ${p.green}` },
+      mention: { own: "0%", ink: p.ink, bg: "transparent" },
+      action: { flow: "row", gap: "0px", h: "40px", dir: "row-reverse", justify: "space-between", bg: alpha(p.white, 0), hoverBg: p.soft, radius: "0px", shadow: `inset 0 -1px 0 ${p.softer}`, fs: "calc(13px * var(--fs-scale))", ink: p.ink, firstInk: p.ink, dangerBg: alpha(p.white, 0), hoverLift: "0px" },
+      settingsGroup: { bg: p.white },
+      setting: { rule: p.lav2, ruleW: "1px", hoverBg: p.soft, geekBg: p.soft, controlBorderW: "0 0 1px 0" },
+      input: { bg: alpha(p.white, 0), focusBorder: p.primary, shadow: "none" },
+      toolFold: { ink: p.mintInk, bg: alpha(p.white, 0), hoverBg: p.mint, hoverInk: p.mintInk, radius: "3px", border: `1px solid ${p.mint2}`, font: "var(--mono)", weight: "400" },
+      face: { shadow: "none", tint: "0%", paper: p.softer, cardBg: p.soft },
       logoTile: { bg: p.soft, badgeBg: p.soft, shadow: "none" },
+      profile: { bg: `linear-gradient(${p.white}, ${p.white})`, badgeBg: p.soft },
       toast: { bg: p.ink, ink: p.white },
     }),
   };
@@ -1178,10 +1342,82 @@
     look(id, label, scheme, palette, { ...plainWants, elements: (p) => ({ ...plainWants.elements(p), roomMark: mark }) });
 
   const looks = {
-    classic: look("classic", "VibeClassic", "light", pop),
+    classic: look("classic", "VibeClassic", "light", {
+      ...pop,
+      faint: mix(pop.faint, pop.ink, 0.04),
+      canvasTop: mix(pop.white, TEAMS.frameTop, 0.35),
+      canvasMid: mix(pop.white, TEAMS.frameTop, 0.42),
+      canvasBottom: mix(pop.white, TEAMS.frameTop, 0.48),
+    }, {
+      elements: (p) => {
+        const paper = mix(TEAMS.paper, p.white, 0.5);
+        const waitingPeach = mix(mix(p.orangeLight, p.white, 0.6), mix(p.orangeDeep, p.white, 0.5), 0.5);
+        return {
+          page: { bg: `linear-gradient(180deg, ${TEAMS.frameTop} 0%, ${TEAMS.frameTop} 35%, ${TEAMS.frameWarm} 70%, ${TEAMS.frameFoot} 100%)` },
+          rail: { bg: "transparent", cut: TEAMS.frameTop },
+          side: { bg: paper },
+          chatHead: { bg: paper },
+          composer: { areaBg: "var(--page-bg)", bg: p.white, radius: "12px", padX: "12px", shadow: `0 0 0 1px ${mix(TEAMS.paper, p.ink, 0.16)}, 0 1px 2px ${alpha(p.ink, 0.06)}` },
+          btn: { primaryBg: `linear-gradient(${TEAMS.purple}, ${TEAMS.purple})` },
+          bubble: {
+            bg: paper,
+            mineBg: `linear-gradient(${TEAMS.mine}, ${TEAMS.mine})`,
+            mineSelection: alpha(TEAMS.purple, 0.24),
+            mineInk: p.ink,
+            mineSoftInk: alpha(p.ink, 0.7),
+            mineWaitingInk: alpha(p.ink, 0.85),
+            mineWaitingBg: `linear-gradient(${waitingPeach}, ${waitingPeach})`,
+            mineWaitingShadow: `0 8px 18px -12px ${alpha(p.orangeDeep, 0.45)}`,
+            mineShadow: `0 8px 18px -12px ${alpha(p.primary, 0.45)}`,
+            mineRule: alpha(p.ink, 0.14),
+            mineBorder: alpha(p.ink, 0.12),
+            mineChipBg: alpha(p.white, 0.6),
+            mineCodeBg: alpha(p.white, 0.55),
+            mineThBg: alpha(p.white, 0.55),
+            mineLinkUnderline: alpha(p.primary, 0.5),
+            mineQuoteBorder: alpha(p.primary, 0.45),
+            mineGhostHoverBg: alpha(p.white, 0.45),
+            mineCtaBg: p.primary,
+            mineCtaInk: p.white,
+          },
+          quote: { mineBg: alpha(p.white, 0.5), mineBorder: alpha(p.primary, 0.35), mineHoverBg: alpha(p.white, 0.75), mineHoverBorder: alpha(p.primary, 0.6), mineHeadInk: alpha(p.ink, 0.7), mineTextInk: p.ink, minePassage: alpha(p.ink, 0.14) },
+          attach: { mineRefBg: alpha(p.white, 0.55), mineChipOpenBg: alpha(p.white, 0.85), mineChipOpenInk: p.ink },
+        };
+      },
+    }),
     "classic-dark": look("classic-dark", "VibeClassic Dark", "dark", classicDark, {
-      elements: (p) => ({ roomMark: { emoji: "42% 26%", gradFrom: "55% 68%", gradTo: "52% 58%" }, logoTile: { bg: p.lav, ink: p.ink, badgeBg: p.lav, badgeInk: p.ink }, bubble: { border: mix(p.white, p.ink, 0.14) },
+      elements: (p) => ({ roomMark: { emoji: "42% 26%", gradFrom: "55% 68%", gradTo: "52% 58%" }, logoTile: { bg: p.lav, ink: p.ink, badgeBg: p.lav, badgeInk: p.ink }, bubble: { border: mix(p.white, p.ink, 0.14), mineWaitingBg: "linear-gradient(135deg, #e8b58d, #ca9274)", mineWaitingShadow: `0 8px 18px -12px ${alpha(p.orangeDeep, 0.35)}` },
         settingsNav: { onInk: p.primary, geekOnInk: p.primary }, settingsGlyph: { violetInk: p.primary } }),
+    }),
+    sky: look("sky", "VibeSky", "light", pop, {
+      elevation: (p) => ({ shadowPrimary: `0 8px 18px -8px ${alpha(mix(p.blue, p.blueDeep, 0.6), 0.6)}` }),
+      elements: (p) => ({
+        chat: { edgeColor: alpha(p.ink, 0.06), edgeShadowColor: alpha(p.ink, 0.04) },
+        btn: { primaryBg: `linear-gradient(135deg, ${p.blue}, ${mix(p.blue, p.blueDeep, 0.6)})` },
+        composer: { focusRing: p.blue },
+        input: { focusBorder: p.blue },
+        bubble: {
+          mineBg: `linear-gradient(135deg, ${p.sky}, ${mix(p.sky, p.blue, 0.15)})`,
+          mineInk: p.ink,
+          mineSoftInk: alpha(p.ink, 0.7),
+          mineWaitingInk: alpha(p.ink, 0.85),
+          mineWaitingBg: `linear-gradient(135deg, ${p.warm}, ${p.peach2})`,
+          mineWaitingShadow: `0 8px 18px -12px ${alpha(p.orangeDeep, 0.3)}`,
+          mineShadow: `0 8px 18px -12px ${alpha(p.blue, 0.4)}`,
+          mineRule: alpha(p.ink, 0.14),
+          mineBorder: alpha(p.ink, 0.12),
+          mineChipBg: alpha(p.white, 0.6),
+          mineCodeBg: alpha(p.white, 0.55),
+          mineThBg: alpha(p.white, 0.55),
+          mineLinkUnderline: alpha(p.primary, 0.5),
+          mineQuoteBorder: alpha(p.primary, 0.45),
+          mineGhostHoverBg: alpha(p.white, 0.45),
+          mineCtaBg: "var(--btn-primary-bg)",
+          mineCtaInk: p.white,
+        },
+        quote: { mineBg: alpha(p.white, 0.5), mineBorder: alpha(p.primary, 0.35), mineHoverBg: alpha(p.white, 0.75), mineHoverBorder: alpha(p.primary, 0.6), mineHeadInk: alpha(p.ink, 0.7), mineTextInk: p.ink, minePassage: alpha(p.ink, 0.14) },
+        attach: { mineRefBg: alpha(p.white, 0.55), mineChipOpenBg: alpha(p.white, 0.85), mineChipOpenInk: p.ink },
+      }),
     }),
     clay: look("clay", "Clay", "light", clay, {
       type: { font: '"Inter", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif' },
@@ -1193,7 +1429,7 @@
       canvas: (p) => ({ gradCanvas: p.bg, canvasPattern: "none", canvasPatternSize: "0 0" }),
       elevation: { shadowPrimary: "none", shadowGlow: "none" },
       elements: (p) => ({ roomMark: { emoji: "34% 89%", gradFrom: "36% 52%", gradTo: "34% 44%" },
-        code: { headBg: alpha(p.ink, 0.04), headBtnBg: alpha(p.ink, 0.08), headBtnInk: p.ink, bodyBg: alpha(p.ink, 0.02), sbTrack: alpha(p.ink, 0.06), sbThumb: alpha(p.ink, 0.3) },
+        code: { headBg: alpha(p.ink, 0.04), headBtnBg: alpha(p.ink, 0.08), headBtnInk: p.ink, bodyBg: alpha(p.ink, 0.02), selection: alpha(p.ink, 0.18), sbTrack: alpha(p.ink, 0.06), sbThumb: alpha(p.ink, 0.3) },
         bubble: { mineBg: `linear-gradient(135deg, ${p.primaryLight}, ${p.primaryDeep})`, shadow: `0 1px 2px ${alpha(p.ink, 0.06)}`, mineShadow: "none" },
         logoTile: { bg: p.white, ink: p.ink },
         btn: { darkHoverBg: p.lav2 },
@@ -1351,7 +1587,7 @@
     { key: "ring", group: "Bubbles", label: "Bubble outline", hint: "a hairline around a reply; the bubble's own colour hides it", kind: "colour", of: (l) => hexOr(l.elements.bubble.border, l.elements.bubble.bg), vars: (v) => ({ "--bubble-border": v }) },
     { key: "ink", group: "Ink", label: "Words", kind: "colour", of: (l) => l.palette.ink, vars: (v) => ({ "--ink": v, "--ink-2": v, "--bubble-ink": v }) },
     { key: "muted", group: "Ink", label: "Quiet words", hint: "times, hints, labels", kind: "colour", of: (l) => l.palette.muted, vars: (v) => ({ "--muted": v, "--faint": v }) },
-    { key: "accent", group: "Ink", label: "Accent", hint: "buttons, links, the ring on your face", kind: "colour", of: (l) => l.palette.primary, vars: (v) => ({ "--primary": v, "--grad-primary": `linear-gradient(135deg, ${v}, ${v})` }) },
+    { key: "accent", group: "Ink", label: "Accent", hint: "buttons, links, the ring on your face", kind: "colour", of: (l) => l.palette.primary, vars: (v) => ({ "--primary": v, "--grad-primary": `linear-gradient(135deg, ${v}, ${v})`, "--btn-primary-bg": `linear-gradient(135deg, ${v}, ${v})`, "--composer-focus-ring": v, "--input-focus-border": v }) },
     { key: "face", group: "Marks", label: "Face tile", hint: "the paper a face's colour is tinted into", kind: "colour", of: (l) => l.elements.face.paper, vars: (v) => ({ "--face-paper": v }) },
     { key: "logo", group: "Marks", label: "Logo tile", hint: "behind a vendor's mark", kind: "colour", of: (l) => l.elements.logoTile.bg, vars: (v) => ({ "--logo-tile-bg": v, "--logo-tile-badge-bg": v }) },
     { key: "logoInk", group: "Marks", label: "Logo ink", hint: "the mark itself", kind: "colour", of: (l) => l.elements.logoTile.ink, vars: (v) => ({ "--logo-tile-ink": v, "--logo-tile-badge-ink": v }) },
@@ -1414,8 +1650,17 @@
     return out;
   };
 
+  const RETIRED = {
+    message: {
+      mineAlign: "your own message stands at the right in every look; this key no longer does anything",
+      mineHeadDir: "your own message has its face on the right in every look; this key no longer does anything",
+    },
+  };
+
   function make(spec) {
     if (!spec || typeof spec !== "object" || Array.isArray(spec)) throw new Error("a look spec is an object");
+    const retiredSeen = new Map();
+    const retired = { push: (r) => retiredSeen.set(r.key, r) };
     const id = String(spec.id ?? "").trim();
     if (!SPEC_ID.test(id)) throw new Error("id: a short lower-case id of letters, digits and hyphens (1-31), starting with a letter");
     if (looks[id] && !looks[id].custom) throw new Error(`id "${id}" belongs to a look viberoom ships; pick another`);
@@ -1448,8 +1693,8 @@
     for (const [key, raw] of Object.entries(section("type"))) {
       if (!(key in type)) throw new Error(`type.${key}: no such token (${Object.keys(type).join(", ")})`);
       const v = resolveValue(raw, palette, `type.${key}`);
-      if (key === "font" || key === "mono") {
-        const table = key === "font" ? fonts.text : fonts.mono;
+      if (key === "font" || key === "mono" || key === "fontDisplay" || key === "fontAside") {
+        const table = key === "mono" ? fonts.mono : fonts.text;
         if (table[v]) typeWants[key] = table[v].stack;
         else if (FONT_STACK.test(v)) typeWants[key] = v;
         else throw new Error(`type.${key}: a font id (${Object.keys(table).join(", ")}) or a family stack`);
@@ -1461,7 +1706,7 @@
       shape: flatSection(section("shape"), "shape", shape, baseWants.shape, palette),
       type: typeWants,
       motion: flatSection(section("motion"), "motion", motion, baseWants.motion, palette),
-      elevation: flatSection(section("elevation"), "elevation", elevationOf(palette), baseWants.elevation, palette),
+      elevation: flatSection(section("elevation"), "elevation", elevationOf(palette), typeof baseWants.elevation === "function" ? baseWants.elevation(palette) : baseWants.elevation, palette),
       canvas: (p) => flatSection(specCanvas, "canvas", canvasOf(p), baseWants.canvas ? baseWants.canvas(p) : {}, p),
       elements: (p) => {
         const defaults = elementsOf(p);
@@ -1473,6 +1718,7 @@
           if (!parts || typeof parts !== "object" || Array.isArray(parts)) throw new Error(`elements.${group}: an object of keys and values`);
           out[group] = { ...(out[group] || {}) };
           for (const [key, raw] of Object.entries(parts)) {
+            if (RETIRED[group]?.[key]) { retired.push({ key: `elements.${group}.${key}`, reason: RETIRED[group][key] }); continue; }
             if (!(key in defaults[group])) throw new Error(`elements.${group}.${key}: no such token (${Object.keys(defaults[group]).join(", ")})`);
             out[group][key] = checked(defaults[group][key], resolveValue(raw, p, `elements.${group}.${key}`), `elements.${group}.${key}`);
           }
@@ -1481,6 +1727,7 @@
       },
     };
     const made = look(id, label, scheme, palette, wants);
+    made.retired = [...retiredSeen.values()];
     made.custom = true;
     made.extends = base.id;
     made.author = spec.author === undefined || spec.author === null ? "" : String(spec.author).slice(0, 40);
@@ -1490,10 +1737,10 @@
   const docs = {
     sections: {
       palette: "the hues of the look, named after what they look like, never after what they are for; every element is derived from them, so a hue changed here reaches every place that wears it",
-      shape: "corners: rScale multiplies every radius in the window (0 square, 1 as designed, 1.6 very round); rCtlMin is the least radius of a button, an icon button or a chip (0px keeps each one's own, 99px makes every control a pill); rXs…rPill are the named radii, each ONE length or calc() (they are used inside calc() and max(), so a multi-corner value breaks every corner)",
-      type: "text: font and mono are the family stacks (in a spec: an id from fonts, or a stack), lineHeight the running text's, fsScale multiplies every text size, fsXs…fs2xl are the named sizes",
+      shape: "corners: rScale multiplies every radius in the window (0 square, 1 as designed, 1.6 very round); rCtlMin is the least radius of a button, an icon button or a chip (0px keeps each one's own, 99px makes every control a pill); rXs…rPill are the named radii, each ONE length or calc() (they are used inside calc() and max(), so a multi-corner value breaks every corner); gap is the space between the window's columns and around them, panelRadius the corner of a panel (0px for flat columns), rRound how round the round things are (the corner scale by default; 1 keeps dots round under square corners)",
+      type: "text: font and mono are the family stacks (in a spec: an id from fonts, or a stack), lineHeight the running text's, fsScale multiplies every text size, fsXs…fs2xl are the named sizes; fontDisplay, displayWeight and displayScale are the titles' voice (a room's name over its list, a vibemate's name in its panel), wSoft, wText, wTextPlus, wStrong, wStrongPlus and wBold the ladder of weights every text of the window takes (500 to 800 by default); fontAside, asideStyle (normal or italic), asideWeight and asideScale the voice of the asides (a vibemate's vibesona in its panel and in the list, the hub's lines about who came and went), asideOpen and asideClose the quotes around a vibesona in the list (a quoted string, or none)",
       motion: "the durations (tFast, tBase, tSlow, tEnter for an arrival, tBreath and tShimmer for the few loops, tGesture for the one gesture a glyph plays when the pointer arrives at its control, stagger between rows arriving together; 0ms for none) and easings (easeOut, easePop, easeSpring, easeSoft) of the transitions",
-      elevation: "the shadows and the light: edge (a hair under a panel), shadowTile (a raised tile), shadowPop (a floating balloon), shadowPrimary (the glow under the accent), shadowDialog, shadowCard, shadowCtl and shadowCtlHover (a control at rest and under the pointer), shadowInset (a sunken thing), shadowSoft (a small raised thing), shadow / shadow1 / shadow2 (older names), bevel (a light laid over a raised surface: a gradient, or none), bevelPressed (the same when pressed), shadowRoom (room around a message for its shadow, 0px unless the shadows reach out)",
+      elevation: "the shadows and the light: edge (a hair under a panel), shadowTile (a raised tile), shadowPop (a floating balloon), shadowPrimary (the glow under the accent), shadowDialog, shadowCard, shadowCtl and shadowCtlHover (a control at rest and under the pointer), shadowInset (a sunken thing), shadowSoft (a small raised thing), shadow / shadow1 / shadow2 (older names), bevel (a light laid over a raised surface: a gradient, or none), bevelPressed (the same when pressed), shadowRoom (room around a message for its shadow, 0px unless the shadows reach out), panelEdge (the hair under a panel of the window: the edge, or none when the paper between the columns draws them)",
       canvas: "the chat's paper: gradCanvas (the paint behind the messages: a colour, or gradients), canvasPattern and canvasPatternSize (a pattern over it, or none / 0 0), gradPage (the paper behind the panels), sbW / sbThumb / sbThumbHover (the scrollbar)",
       elements: "every UI element and what it wears: the group is the element, the key the part (bg, ink, hoverBg, border, shadow, radius…); a key ending in Ink is written on the key of the same stem ending in Bg (or on bg), and the pair must read at 3:1 or better; a key whose value is none / 0px / transparent is structure a look may switch on (a border, a shadow, a lift, capitals)",
     },
@@ -1577,7 +1824,7 @@
       page: "the page itself: its paper, its ink, the selection",
       focus: "the ring around whatever the keyboard is on",
       link: "a path or a link inside a message, and message-ref: the number of another message (#N), a word that leads to it",
-      btn: "button: a button with words; the colours of every kind (primary, secondary, soft, ghost, danger, danger-solid, dark, warn, inverse, link, ok, paper), its sizes, and its structure (border: width style colour; case; tracking; ghostBg; the shadows at rest / on hover / pressed; hoverLift: negative lifts)",
+      btn: "button: a button with words; the colours of every kind (primary, secondary, soft, ghost, danger, danger-solid, dark, warn, inverse, link, ok, paper; primaryBg the paper of every primary button, icon button and send, and of the home page's step numbers and a door card's tile in Rooms, the accent's gradient by default), its sizes, and its structure (border: width style colour; case; tracking; ghostBg; the shadows at rest / on hover / pressed; hoverLift: negative lifts)",
       iconButton: "icon-button: a button that is only a glyph; kinds primary, danger, ghost, inline; its sizes and structure (ghostBg, shadows, hoverLift)",
       badge: "badge: a small label that states a fact; the state tones come from the room's meaning colours; fill (100% filled, 0% an outline in its ink), border, case, tracking, shadow",
       chip: "chip: a small tag that names a thing; fill, border, shadow, hoverLift, activeDrop",
@@ -1586,7 +1833,7 @@
       settingsGroup: "settings-group: a named group of settings, folding in a side panel and a card on a page of Settings; its paper, words, heading (headingInk folds, titleInk on a card), with a separate danger tone",
       setting: "setting: one setting on a card (a page of Settings, a section of a side panel, a dialog); its name (ink), what it does (hintInk), what it reports (statusInk, warnInk for a warning), the Saved mark (savedInk), the hairline between two (rule, ruleW), the pad under the pointer (hoverBg), the explanation for geeks (geekInk on geekBg), the edge of the controls it holds (controlBorder, controlHoverBorder under the pointer) and their height and widths, its padding, height and gap",
       switch: "switch: the window's one switch, in a setting's row or alone on a card; its words (onInk, offInk) and its colours (off: the outline and knob when off; on: the fill when on)",
-      settingsGlyph: "settings-glyph: a category's picture on its tile; one tint per category (violet, sky, orchid, amber, mint, peach, slate: xBg and xInk), two quiet tiles for the categories for geeks (geekBg, geekInk in the menu, on its darker pad; padBg, padInk at the top of their page), its sizes and corners",
+      settingsGlyph: "settings-glyph: a category's picture on its tile; one tint per category (violet, sky, orchid, amber, mint, peach, slate: xBg and xInk), two quiet tiles for the categories for geeks (geekBg, geekInk in the menu, on its darker pad; padBg, padInk at the top of their page), its sizes (sm in the menu, lg at the top of a page, xs an option's picture in a choice) and corners",
       settingsNav: "settings-nav: the menu at the side of Settings; an entry's words (ink on bg), under the pointer (hover), the one shown (on, and its bar), the rule and label before the categories for geeks, their darker pad (geekBg) and their states on it, the attention dot",
       settingsCategory: "settings-category: the page of one category in Settings: its title, the line about it, the 'for geeks' eyebrow, the width it keeps and the gap between its cards",
       toolFold: "tool-fold: the calls of a finished reply, in one line",
@@ -1603,10 +1850,11 @@
       dialog: "the glass behind a dialog",
       scrim: "the dark glass behind a picture or a diagram",
       toast: "a toast: the ink with the paper's colour on it",
-      rail: "the main menu",
+      rail: "the main menu: activeBg, logoShadow; structure: bg (a column of its own colour, transparent by default), ink / hoverInk / activeInk (its glyphs on it), activeShadow (the mark of the place you are: a raised tile, or a bar at the edge as inset 2px 0 0 c), cut (the ring that sets a dot off the rail), mark (the ring around the room you are in)",
       cast: "the vibemates' own colours (c1-c8): the eight a room hands out in turn, worn by a face's ring, its tile's tint, its name and its ticks; a vibemate keeps its slot, so the cast follows the look",
       timeline: "the strips beside the chat",
-      bubble: "the message balloon: everyone else's (bg, ink, border, shadow) and your own (mineBg: always an image, a flat colour as linear-gradient(c, c); mineInk, mineShadow and the parts inside it)",
+      bubble: "the message balloon: everyone else's (bg, ink, border, shadow) and your own (mineBg: always an image, a flat colour as linear-gradient(c, c); mineInk, mineShadow and the parts inside it; mineWaitingBg / mineWaitingShadow while it waits for a vibemate still at work, the attention gradient unless the look draws its own); structure: pad / minePad (CSS padding), corners / mineCorners (four corners, the one at the face first for a reply)",
+      message: "a message in the chat, around its balloon: indent (how far a reply's balloon starts from its face), agentSpaceEnd (the room a reply leaves on the right), the room your own message leaves and stands in (it is always at the right, with its face on that side: mineSpaceStart / mineSpaceEnd, mineIndentStart / mineIndentEnd, mineOrigin the corner it lands from), mineName (display of your name over it: none or inline), nameOwn and nameInk (a name is its vibemate's own colour mixed with nameInk: nameOwn 100% is all its own, 0% all nameInk), edgeBorder and edgePad (a line at a message's start and end, shared by two messages and never on a line of the hub, and the room between it and the words: 0 for none)",
       quote: "a quoted message inside a balloon",
       messagePeek: "message-peek: the card the number of another message raises under the pointer (its paper, ink, quiet ink for the number and the time, shadow, corner, width, the size of its words)",
       hint: "hint: the words a control keeps for the pointer, beside it after the hover delay (its paper, ink, shadow, corner, widest width, the size of its words and its padding: compact, and menu* for the main menu's)",
@@ -1619,17 +1867,25 @@
       profile: "the human's own card",
       face: "face: a participant's face (paper and tint of the tile, corner, rings — me, and alert while it needs you —, shadow, cardShadow)",
       logoTile: "logo-tile: a vendor's mark on a tile (bg, ink, the badge in a face's corner, the unplugged mark, shadow, radius / radiusSm / radiusLg / radiusBadge)",
-      unseenLine: "unseen-line: a vibemate's starting position and access to earlier history (ink, bg, the line's drawing, the label's border / case / tracking / shadow)",
+      unseenLine: "unseen-line: a vibemate's starting position and access to earlier history (ink, bg, the line's drawing, the label's border / case / tracking / shadow / weight; align and lineOffset: where the lines meet the label, across its middle or at its first row; lineDisplay, labelAlign and labelPad: the lines drawn (inline) or not (none), the words centred or at the left, and the label's padding)",
       numberField: "number-field: a number with its own steps",
       sliderField: "slider-field: a value picked along a range, its number beside it",
       skeleton: "skeleton: the shape of content still loading (the bones' paper, the sweeping band of light, the bones' radius, gap and height)",
       breath: "the calm pulse around a reply being written (ring, glow)",
       adjustRow: "adjust-row: one thing the human may adjust in a look, in Settings",
       rowButton: "row-button: a small action on a vibemate's row",
-      hubRow: "hub-row: a line the room writes (ink, tones, the one that leads somewhere: actionBg / actionShadow; prefix / prefixGap: what stands before the line, none or a prompt)",
+      side: "the column beside the chat, the rooms or a room's vibemates: bg (its paper; the panel's by default)",
+      sideHead: "the head of the rooms' column in a room: titleAlign (the room's name: center, or left)",
+      action: "the actions of a vibemate's panel: flow (column: tiles side by side; row: a list), gap, h (a button's height), dir (column: the glyph over the word; row-reverse: the word, then the glyph at the right), justify, bg, hoverBg, radius, shadow (e.g. a hair under each: inset 0 -1px 0 c), fs, ink, firstInk (Mention), dangerBg (Remove), hoverLift",
+      sideList: "the column's lists of rooms and vibemates: selectedMark (a shadow beside the chosen row's tint, e.g. inset 3px 0 0 c; none by default)",
+      mention: "a name written in a message (@Name): own (how much of its vibemate's colour, 100% by default), ink (the rest), bg (a chip under it, transparent by default); in your own message bubble.mineMentionInk and mineChipBg",
+      chat: "the chat as a whole, its head, the talk and the band you write in: bg (its one paper; transparent leaves the column's own); edgeColor / edgeShadowColor the talk's edges under the head and over the band (a line of two screen pixels and a soft shadow into the talk; transparent for none)",
+      chatHead: "the chat's head: roomName (display of the room's name before its folder: none, or block), border (a line under it: 0 for none), bg (its paper; transparent leaves the chat's)",
+      toolbar: "the chat's toolbar: padPaper and padEdge (the pad under each glyph), searchPaper, searchEdge and searchRadius (the search's pad)",
+      hubRow: "hub-row: a line the room writes (lineDir, lineAlign, lineGap and rule: the line around it, under the faces or centred between hairlines; ink, tones, the one that leads somewhere: actionBg / actionShadow; prefix / prefixGap: what stands before the line, none or a prompt)",
       hero: "the welcome screen's hero",
       feature: "the welcome screen's feature tiles (emojiBg, shadow)",
-      composer: "the box you write in (shadow, bg, radius, padX: flat and bare, or sunk into the paper)",
+      composer: "the box you write in (shadow, bg, radius, padX: flat and bare, or sunk into the paper; areaBg the band it sits in; topBorder a line across the chat above that band: 0 for none; focusRing the ring around it while you write and the handle on its top edge, the accent by default)",
       step: "the welcome screen's numbered steps",
       tpl: "the template list in Open a room",
       browser: "the colour the browser paints its window frame with",
@@ -1651,21 +1907,42 @@
     gradient: "a CSS gradient image (linear-gradient / radial-gradient), a flat colour, or none",
     bevel: "a gradient image laid over a raised face, or none",
     font: "a font id from fonts (text or mono), or a family stack",
+    style: "normal or italic",
+    weight: 'a font weight as a string ("400", "800")',
+    padding: 'a CSS padding of one to four lengths, e.g. "12px 16px" or 0',
+    corners: "four corner radii, each a length or calc(), the first at the top left",
+    align: "flex-start, center or flex-end (left, center or right for a text)",
+    direction: "row, row-reverse or column",
+    display: "none, or inline to show it",
+    justify: "center or space-between",
   };
   const kindOf = (section, key, value) => {
     const v = String(value);
     if (COLOUR_VALUE.test(v)) return "colour";
-    if (section === "shape") return key === "rScale" ? "scale" : "radius";
-    if (section === "type") return key === "font" || key === "mono" ? "font" : /^fs/.test(key) ? "length" : "scale";
+    if (section === "shape") return key === "rScale" || key === "rRound" ? "scale" : key === "gap" ? "length" : "radius";
+    if (section === "type") return /^aside(Open|Close)$/.test(key) ? "prefix" : /^font|^mono$/.test(key) ? "font" : key === "asideStyle" ? "style" : /Weight$|^w[A-Z]/.test(key) ? "weight" : /^fs/.test(key) ? "length" : "scale";
     if (section === "elevation") return /^bevel/.test(key) ? "bevel" : key === "shadowRoom" ? "length" : "shadow";
     if (section === "canvas") return /^grad|Pattern$/.test(key) ? "gradient" : "length";
     if (/[Rr]adius/.test(key)) return "radius";
+    if (/[Cc]orners$/.test(key)) return "corners";
+    if (/^pad$|Pad$/.test(key)) return "padding";
+    if (/^align$|Align$/.test(key)) return "align";
+    if (/Offset$/.test(key)) return "length";
+    if (key === "roomName" || /Display$/.test(key)) return "display";
+    if (/Dir$/.test(key)) return "direction";
+    if (/^indent$|Indent|Space(Start|End)$|Origin$|Gap$|^gap$|^h$/.test(key)) return "length";
+    if (/BorderW$/.test(key)) return "padding";
+    if (key === "flow") return "direction";
+    if (key === "justify") return "justify";
+    if (/^weight$|Weight$/.test(key)) return "weight";
+    if (/Own$|^own$/.test(key)) return "fill";
+    if (key === "mineName") return "display";
     if (/[Ss]hadow$/.test(key)) return "shadow";
     if (key === "border" || /Border$/.test(key)) return "border";
     if (/Lift$/.test(key)) return "lift";
     if (/Drop$/.test(key)) return "drop";
-    if (key === "fill") return "fill";
-    if (key === "prefix") return "prefix";
+    if (key === "fill" || /Own$/.test(key)) return "fill";
+    if (key === "prefix" || key === "rule") return "prefix";
     if (key === "case" || /Case$/.test(key)) return "case";
     if (/[Tt]racking$/.test(key)) return "tracking";
     if (/^hue/.test(key)) return "scale";

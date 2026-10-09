@@ -64,9 +64,16 @@ export interface RoomSettings {
   autoNotes: boolean;
   missedMessagesNotice: boolean;
   remembers: boolean;
+  memoryInput: "excerpts" | "whole";
 }
 
-export type SettingSpec = { doc: string; brief: boolean; agent: boolean } & (
+export type SettingSpec = {
+  doc: string;
+  brief: boolean;
+  agent: boolean;
+  template?: false;
+  agentMay?: readonly unknown[];
+} & (
   | { kind: "integer"; min: number; max: number; default: number }
   | { kind: "integer-or-null"; min: number; max: number; default: number | null }
   | { kind: "number"; min: number; max: number; default: number }
@@ -79,8 +86,8 @@ export type SettingSpec = { doc: string; brief: boolean; agent: boolean } & (
 );
 
 export const ROOM_SETTINGS_SPEC: Record<keyof RoomSettings, SettingSpec> = {
-  wakeAfterRestart: { kind: "boolean", default: false, brief: false, agent: false, doc: "After a requested hub restart, send this room's restart message once to its successfully restored, unmuted vibemates. Requires Start with viberoom." },
-  restartMessage: { kind: "text", max: 8000, default: "", brief: false, agent: false, doc: "The human's optional instruction to the room after a requested restart. Empty text never starts a turn." },
+  wakeAfterRestart: { kind: "boolean", default: false, brief: false, agent: true, doc: "After a requested hub restart, send this room's restart message once to its successfully restored, unmuted vibemates. Requires Start with viberoom." },
+  restartMessage: { kind: "text", max: 8000, default: "", brief: false, agent: true, doc: "The human's optional instruction to the room after a requested restart. Empty text never starts a turn." },
   name: { kind: "own-path", brief: true, agent: false, doc: "The room's name; changed with rename." },
   humanName: { kind: "own-path", brief: true, agent: false, doc: "The human's name; a program-level setting." },
   topic: { kind: "text", max: 2000, default: "", brief: true, agent: true, doc: "One line about what the room is for; the brief repeats it to every vibemate." },
@@ -105,20 +112,22 @@ export const ROOM_SETTINGS_SPEC: Record<keyof RoomSettings, SettingSpec> = {
   readsOtherRooms: { kind: "enum", values: ["off", "on-search", "every-turn"], default: "on-search", brief: false, agent: true, doc: "Whether this room searches the rooms that share their history: off; on-search, when a vibemate searches with rooms=\"all\" (their messages and their memory's facts); or every-turn, that and each turn's memory block reading their memory too." },
   reachableFromMessengers: { kind: "boolean", default: true, brief: false, agent: true, doc: "The room can be opened from a phone paired to viberoom (Telegram): listed there, written to and read from. Off: the phone neither sees nor reaches this room." },
   startWithHub: { kind: "boolean", default: false, brief: false, agent: true, doc: "The room's vibemates are started when viberoom starts, one room after another; they pay nothing until the first turn, but their processes and memory stay while they wait." },
-  reconnectMode: { kind: "enum", values: ["inherit", "load", "replay"], default: "inherit", brief: false, agent: false, doc: "How this room's vibemates come back when it starts itself: use the app's Welcome back setting, continue their saved sessions, or start fresh with the last messages replayed." },
+  reconnectMode: { kind: "enum", values: ["inherit", "load", "replay"], default: "inherit", brief: false, agent: true, doc: "How this room's vibemates come back when it starts itself: use the app's Welcome back setting, continue their saved sessions, or start fresh with the last messages replayed." },
   waitWhileHumanTypes: { kind: "boolean", default: true, brief: false, agent: true, doc: "A vibemate about to start a turn waits while the human is typing." },
   agentsWakeEachOther: { kind: "boolean", default: true, brief: true, agent: true, doc: "A vibemate's message without @ wakes the others, as the human's does; off: only @Name wakes a vibemate." },
   replyDelay: { kind: "number", min: 0, max: 120, default: 4, brief: false, agent: true, doc: "Seconds (a random 0..N) every vibemate waits before a turn, so replies cross less; a vibemate's own delay overrides it." },
-  transcripts: { kind: "enum", values: ["inherit", "off", "errors", "full"], default: "inherit", brief: false, agent: false, doc: "Save diagnostic details to investigate problems with a vibemate: use the app setting, turn logging off, save details when something fails, or record all activity. Conversations are saved with any option." },
-  missedMessagesNotice: { kind: "boolean", default: true, brief: false, agent: false, doc: "After a vibemate's turn, if messages arrived meanwhile and none woke it, it is told how many and may read them with check_room; they still arrive with its next turn. Each notice counts as one hop." },
+  transcripts: { kind: "enum", values: ["inherit", "off", "errors", "full"], default: "inherit", brief: false, agent: true, doc: "Save diagnostic details to investigate problems with a vibemate: use the app setting, turn logging off, save details when something fails, or record all activity. Conversations are saved with any option." },
+  missedMessagesNotice: { kind: "boolean", default: true, brief: false, agent: true, doc: "After a vibemate's turn, if messages arrived meanwhile and none woke it, it is told how many and may read them with check_room; they still arrive with its next turn. Each notice counts as one hop." },
   autoNotes: { kind: "boolean", default: true, brief: false, agent: true, doc: "The hub asks a vibemate for notes on its own work when its context fills past 80% or is compacted, so a restart can carry them. Off: notes are written only when the human asks (Take notes now, a change of role or of coding agent)." },
-  foldAfter: { kind: "integer-or-null", min: 100, max: 20_000, default: null, brief: false, agent: false, doc: "How many of the newest messages the window draws at once; older ones wait above a ceiling and come in as you scroll up, pinned ones always shown. Empty means the app setting." },
-  remembers: { kind: "boolean", default: false, brief: false, agent: false, doc: "This room feeds the long-term memory provider (Settings → Memory): its messages, sifted by the memory filter, become recallable facts. Off: nothing of this room is sent to the provider." },
+  foldAfter: { kind: "integer-or-null", min: 100, max: 20_000, default: null, brief: false, agent: true, doc: "How many of the newest messages the window draws at once; older ones wait above a ceiling and come in as you scroll up, pinned ones always shown. Empty means the app setting." },
+  remembers: { kind: "boolean", default: true, brief: false, agent: true, agentMay: [false], template: false, doc: "This room feeds the long-term memory provider (Settings → Memory): its messages, sifted by the memory filter, become recallable facts. On for a new room; a room made before keeps the switch it had. Off: nothing of this room is sent to the provider." },
+  memoryInput: { kind: "enum", values: ["excerpts", "whole"], default: "excerpts", brief: false, agent: true, agentMay: ["excerpts"], template: false, doc: "What a kept message becomes in the long-term memory: excerpts, the message's own sentences that carry the information, copied letter for letter (economical, the default); whole, the entire message with Zep (most accurate, may cost more). A room keeps its choice; a template does not carry it." },
 };
 
 export function upgradeRoomSettings<T extends Record<string, unknown>>(raw: T): T {
-  if (!("searchOtherRooms" in raw) && !("recallAcrossRooms" in raw)) return raw;
-  const { searchOtherRooms, recallAcrossRooms, ...rest } = raw;
+  const input = upgradeMemoryInput(raw);
+  if (!("searchOtherRooms" in input) && !("recallAcrossRooms" in input)) return input;
+  const { searchOtherRooms, recallAcrossRooms, ...rest } = input;
   const shared = searchOtherRooms !== false;
   const reads = !shared ? "off" : recallAcrossRooms === "on" ? "every-turn" : recallAcrossRooms === "off" ? "on-search" : undefined;
   return {
@@ -126,6 +135,18 @@ export function upgradeRoomSettings<T extends Record<string, unknown>>(raw: T): 
     ...(rest.readsOtherRooms === undefined && reads ? { readsOtherRooms: reads } : {}),
     ...rest,
   } as unknown as T;
+}
+
+function upgradeMemoryInput<T extends Record<string, unknown>>(raw: T): T {
+  if (!("memoryOriginalInput" in raw) && raw.memoryInput !== "summary") return raw;
+  const { memoryOriginalInput, ...rest } = raw;
+  const memoryInput = rest.memoryInput === undefined || rest.memoryInput === "summary" ? (memoryOriginalInput === true ? "whole" : "excerpts") : rest.memoryInput;
+  return { ...rest, memoryInput } as unknown as T;
+}
+
+export function pastRoomSettings<T extends Record<string, unknown>>(raw: T): T {
+  const read = upgradeRoomSettings(raw);
+  return "remembers" in read ? read : ({ ...read, remembers: false } as T);
 }
 
 function defaultsFromSpec(): Omit<RoomSettings, "name" | "humanName"> {
@@ -186,7 +207,7 @@ export function coerceSetting<K extends keyof RoomSettings>(key: K, raw: unknown
   }
 }
 
-export function describeSettings(current: RoomSettings): { key: string; doc: string; kind: string; range?: string; default: unknown; value: unknown; affectsBrief: boolean }[] {
+export function describeSettings(current: RoomSettings): { key: string; doc: string; kind: string; range?: string; youMayPropose?: unknown[]; default: unknown; value: unknown; affectsBrief: boolean }[] {
   return AGENT_SETTINGS.map((key) => {
     const spec = ROOM_SETTINGS_SPEC[key];
     const range =
@@ -203,7 +224,7 @@ export function describeSettings(current: RoomSettings): { key: string; doc: str
                 : spec.kind === "language"
                 ? '"follow-human" or a language name'
                 : undefined;
-    return { key, doc: spec.doc, kind: spec.kind, range, default: spec.kind === "own-path" ? undefined : spec.default, value: current[key], affectsBrief: spec.brief };
+    return { key, doc: spec.doc, kind: spec.kind, range, ...(spec.agentMay ? { youMayPropose: [...spec.agentMay] } : {}), default: spec.kind === "own-path" ? undefined : spec.default, value: current[key], affectsBrief: spec.brief };
   });
 }
 
@@ -219,6 +240,7 @@ export interface RosterEntry {
   vendor?: string;
   tagline?: string;
   muted?: boolean;
+  asleep?: boolean;
   activity?: string;
   formerNames?: string[];
 }
@@ -416,7 +438,8 @@ function describeEntry(entry: RosterEntry, settings: RoomSettings): string {
   const parts = ["agent"];
   if (settings.showVendorInRoster && entry.vendor) parts.push(entry.vendor);
   if (entry.tagline) parts.push(`"${entry.tagline}"`);
-  if (entry.muted) parts.push("muted");
+  if (entry.asleep) parts.push("asleep");
+  else if (entry.muted) parts.push("muted");
   const earlier = formerly(entry);
   if (earlier) parts.push(earlier);
   return `${entry.name} (${parts.join(" · ")})`;
@@ -425,7 +448,11 @@ function describeEntry(entry: RosterEntry, settings: RoomSettings): string {
 function skillsSection(skills: SkillsForPrompt): string[] {
   const lines: string[] = [];
   lines.push("");
-  if (skills.channel === "tool") lines.push(DISCOVERY_INSTRUCTIONS);
+  if (skills.channel === "tool") {
+    lines.push(DISCOVERY_INSTRUCTIONS);
+    lines.push("The deferred post_message operation publishes a completed independent message under your name, with the room's usual @ addressing, including between requested turns.");
+    lines.push("The deferred register_background_task operation returns a task key and a separate completion URL/token for an independent worker. Registration does not execute the worker. Its terminal JSON callback {key,token,status,result} saves the complete result and brings it to you in a new turn without a human request, subject to the room's work and wake permissions. list_background_tasks reads the 50 most recent task states; get_background_task reads one complete saved task; cancel_background_task cancels delivery without stopping an operating-system process.");
+  }
   if (!skills.items.length && !skills.canCreate) return lines;
   if (skills.items.length) {
     lines.push("Skills available to you (each is a set of instructions for one kind of task; load one only when what you are asked to do matches its description):");
@@ -546,7 +573,7 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
   lines.push(`Participants: ${others.length ? others.map((r) => describeEntry(r, settings)).join("; ") : "nobody else yet"}.`);
   const self = roster.find((r) => r.name === persona.name);
   if (self && formerly(self)) lines.push(`Older messages of this room call you by an earlier name: ${(self.formerNames ?? []).slice(0, ROSTER_FORMER_NAMES).join(", ")}.`);
-  if (skills && (skills.items.length || skills.canCreate)) lines.push(...skillsSection(skills));
+  if (skills && (skills.channel === "tool" || skills.items.length || skills.canCreate)) lines.push(...skillsSection(skills));
   lines.push("");
   lines.push(
     `How prompts look: <room-header> (who you are, who is here, the hop counter, the room's notes), then <messages> (everything posted since your previous turn, oldest first, as "Name -> @Target: text"; room events as "· text"), then "Reply as ${persona.name}" with the language rule beside it. Your own earlier messages are not repeated. Reply with the text of your message only.`,
@@ -615,7 +642,7 @@ export function buildHeader(
     .map((r) => {
       if (r.name === persona.name) return `${r.name} (you)`;
       if (r.kind === "human") return `${r.name} (human)`;
-      return r.muted ? `${r.name} (muted)` : r.activity ? `${r.name} (${r.activity})` : r.name;
+      return r.asleep ? `${r.name} (asleep)` : r.muted ? `${r.name} (muted)` : r.activity ? `${r.name} (${r.activity})` : r.name;
     })
     .join(", ");
   const who = persona.tagline.trim() ? `${persona.name} (${persona.tagline.trim()})` : persona.name;

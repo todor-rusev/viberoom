@@ -3,6 +3,7 @@ import { runManaged } from "./managed-process.js";
 import { AcpAgent } from "./acp-client.js";
 import type { LoginState } from "./agent-health.js";
 import { RemoteError } from "./jsonrpc.js";
+import { REGISTRY_URL } from "./update.js";
 
 export interface LoginCheck {
   state: LoginState;
@@ -11,7 +12,8 @@ export interface LoginCheck {
   detail: string;
 }
 
-export type StatusReader = (out: string, code: number | null) => LoginState | { state: LoginState; detail: string };
+export type StatusReader = (out: string, code: number | null) =>
+  LoginState | { state: LoginState; detail: string; serverUnreachable?: boolean };
 
 export type LoginStatusSpec =
   | { kind: "command"; command?: string | null; args: string[]; read: StatusReader; timeoutMs?: number }
@@ -66,6 +68,23 @@ export async function runStatusCommand(command: string, args: string[], timeoutM
   const result = await runManaged({ command, args, env: context?.env }, context?.cwd ?? process.cwd(), { signal, timeoutMs });
   return { code: result.code, out: result.error ? result.output + "\n" + result.error : result.output, timedOut: result.timedOut };
 }
+
+export function signInRefused(lines: string[]): string | null {
+  const said = lines.map((line) => stripAnsi(line).trim()).reverse().find((line) => /\bunauthenticated\b|\bunauthori[sz]ed\b|\bnot (?:logged|signed) in\b|\blogin required\b|\bplease (?:log|sign) ?in\b/i.test(line));
+  return said ? (said.length > 160 ? `${said.slice(0, 159)}…` : said) : null;
+}
+
+export const readCursorStatus: StatusReader = (out, code) => {
+  const lines = stripAnsi(out).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const quote = (line: string): string => (line.length > 120 ? `${line.slice(0, 119)}…` : line);
+  const signedOut = lines.find((line) => /\bnot logged in\b|\bplease (?:log|sign) ?in\b|\blogin required\b/i.test(line));
+  if (signedOut) return { state: "missing", detail: quote(signedOut) };
+  const signedIn = lines.find((line) => /\blogged in\b/i.test(line));
+  if (!signedIn) return "unknown";
+  const unconfirmed = lines.find((line) => /unable to fetch|could not (?:reach|fetch)|failed to fetch|unauthenticated|unauthori[sz]ed/i.test(line));
+  if (unconfirmed) return { state: "missing", detail: quote(unconfirmed), serverUnreachable: true };
+  return code === 0 ? { state: "ok", detail: quote(signedIn) } : "unknown";
+};
 
 export function firstWords(out: string, max = 120): string {
   const line = stripAnsi(out).split(/\r?\n/).map((l) => l.trim()).find((l) => l && !/^[{}\[\]]$/.test(l) && !/^\s*"?\w*"?:\s*[{\[]?$/.test(l)) ?? "";
@@ -123,7 +142,18 @@ export async function probeLoginViaAcp(launch: { command: string; args: string[]
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-export async function checkLogin(spec: LoginStatusSpec, launch: { command: string; args: string[]; env?: Record<string, string> } | null, cwd: string, signal?: AbortSignal): Promise<LoginCheck> {
+export const ONLINE_TIMEOUT_MS = 4000;
+
+export async function online(signal?: AbortSignal, doFetch: typeof fetch = fetch): Promise<boolean> {
+  try {
+    await doFetch(REGISTRY_URL, { method: "HEAD", signal: AbortSignal.any([AbortSignal.timeout(ONLINE_TIMEOUT_MS), ...(signal ? [signal] : [])]) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function checkLogin(spec: LoginStatusSpec, launch: { command: string; args: string[]; env?: Record<string, string> } | null, cwd: string, signal?: AbortSignal, reachable: typeof online = online): Promise<LoginCheck> {
   const at = Date.now();
   if (!launch || !launch.command) return { state: "unknown", how: "command", at, detail: "not installed" };
   if (spec.kind === "command") {
@@ -134,6 +164,9 @@ export async function checkLogin(spec: LoginStatusSpec, launch: { command: strin
     const read = spec.read(out, code);
     const state = typeof read === "string" ? read : read.state;
     const detail = typeof read === "string" ? firstWords(out) || `exit ${code}` : read.detail;
+    if (typeof read !== "string" && read.serverUnreachable && !(await reachable(signal))) {
+      return { state: "unknown", how: "command", at, detail: `${detail}; this computer could not reach the network, so the sign-in could not be checked` };
+    }
     return { state, how: "command", at, detail };
   }
   return probeLoginViaAcp(launch, cwd, 25_000, signal);

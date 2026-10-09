@@ -33,7 +33,7 @@ export interface InboundMessage {
 }
 
 export interface InboundFile {
-  kind: "photo" | "sound" | "document";
+  kind: "photo" | "sound" | "video" | "document";
   fileId: string;
   name?: string;
   mime?: string;

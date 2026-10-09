@@ -7,6 +7,7 @@ import { EventEmitter } from "node:events";
 import { memoryBlock } from "./shared-memory.js";
 import { instructionBlock, planInstructionDelivery, type InstructionRevisions } from "./instruction-delivery.js";
 import { randomUUID } from "node:crypto";
+import { AgentMessageError, agentMessageId, agentMessageHash, parsePostMessage, type PostMessageReceipt } from "./agent-message.js";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { NameDirectory } from "./name-directory.js";
 import type { CardKind, StoredCard } from "./room-cards.js";
@@ -25,9 +26,11 @@ import { agentReadableWindow, resolveQuotes, visibleToAgents, type Quote, type Q
 import { canAutoApproveMessageCheck, isDirectMessageCheck, messageAddressing, messageCheckCursor, messageCheckHeader, messageCheckPageCursor, messageCheckPagePosition, messageCheckPosition, messageCheckTitle, packMessageCheck, packLiveDraft, parseMessageCheckArgs, type MessageCheckArgs, type MessageCheckCounts, type MessageCheckResult } from "./message-check.js";
 import { historySearchReceipt, historySearchTitle, parseAgentSearchArgs, type AgentSearchArgs, type AgentSearchResult, type HistorySearchReceipt } from "./agent-history.js";
 import { canAutoApproveRoomTool, isWrappedRoomCall, roomOperation, roomToolChip, roomToolTitle, cursorPermissionInput } from "./room-tool-identity.js";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { AGENT_MESSAGE_MAX_BYTES, PromptBudget, type AgentView, type PictureTag } from "./agent-images.js";
 import { AcpAgent } from "./acp-client.js";
-import { ExtensionRouter, type AgentAuthStatus } from "./acp-extensions.js";
+import { ExtensionRouter, type AgentAuthStatus, type BackgroundMessage } from "./acp-extensions.js";
 import { errorCode, errorDetail, RemoteError } from "./jsonrpc.js";
 import { getRecipe, listRecipes, publicRecipes, type AgentRecipe } from "./recipes.js";
 import { recipeStamp } from "./install-stamp.js";
@@ -51,7 +54,7 @@ import {
 import type { McpServer } from "./acp-types.js";
 import type { BriefSearch } from "./memory/service.js";
 import { runAsNodeEntries } from "./own-runtime.js";
-import { templateId, type TemplateLibrary, type TemplateVibemate } from "./templates.js";
+import { templateId, templateRoomSettings, type TemplateLibrary, type TemplateVibemate } from "./templates.js";
 import type { LookCheck, LookSpec } from "./looks.js";
 import type { AppearanceSettings } from "./hub.js";
 import { applyVibemateChanges, diffSettings, lintRoomDesign, ruleLines, type RoomChangeSet, type RoomDesign, type RoomDesignContext, type SettingChange, type VibemateChange } from "./room-design.js";
@@ -86,6 +89,7 @@ import {
   type RosterEntry,
 } from "./persona.js";
 import { Logger, Transcript, type TranscriptMode } from "./log.js";
+import { WINDOW_RECENT_BODIES } from "./window-wire.js";
 import type {
   ContentBlock,
   NewSessionResult,
@@ -153,6 +157,8 @@ export interface Participant {
   role?: string;
   avatar?: string;
   muted?: boolean;
+  asleep?: boolean;
+  fell?: true;
   startupSkipped?: "muted";
   createdByVibemate?: boolean;
   replyDelay?: number;
@@ -198,6 +204,7 @@ export interface StoredParticipant {
   launch: LaunchPrefs;
   earlierLaunches?: Record<string, LaunchPrefs>;
   muted: boolean;
+  asleep?: boolean;
   createdByVibemate?: boolean;
   replyDelay?: number;
   skills?: string[];
@@ -220,6 +227,7 @@ export interface ReconnectOptions {
   replay?: number;
   reason?: string;
   notes?: boolean;
+  wake?: boolean;
 }
 
 export function resumeNotesSource(loaded: boolean, options: ReconnectOptions | undefined, replayed: boolean): Exclude<NotesSource, "live"> | null {
@@ -322,13 +330,14 @@ export interface ChatMessage {
   ts: number;
   displayOrder?: number;
   kind: "chat" | "system" | "hidden";
-  details?: { original?: string; corrections?: string[]; outcome?: string; skill?: string; via?: "tool" | "marker"; refId?: string; agentId?: string; tone?: "attention" | "error" | "hush"; about?: "room"; renamed?: Renamed };
+  details?: { original?: string; corrections?: string[]; outcome?: string; skill?: string; via?: "tool" | "marker"; refId?: string; agentId?: string; tone?: "attention" | "error" | "hush"; about?: "room"; renamed?: Renamed; reportHash?: string };
   skill?: { name: string; args: string };
   edited?: { ts: number; previous: string };
   bodyDelivery?: BodyDelivery;
   bodyEdit?: BodyEdit;
   via?: MessageVia;
   pinned?: true;
+  pinLabel?: string;
   diagramRepairs?: DiagramRepair[];
   images?: Attachment[];
   audio?: AudioAttachment[];
@@ -382,6 +391,7 @@ export interface RoomProposal {
   ts: number;
   afterSeq?: number;
   why: string;
+  room?: { id: string; name: string };
   settings: SettingChange[];
   vibemates: VibemateChange[];
   appearance?: SettingChange[];
@@ -391,7 +401,7 @@ export interface RoomProposal {
   skipped?: string[];
 }
 
-interface ProposalPlan { settings: SettingChange[]; vibemates: TemplateVibemate[]; ops: VibemateChange[]; ids: Record<string, string>; appearance?: Record<string, unknown> }
+interface ProposalPlan { settings: SettingChange[]; vibemates: TemplateVibemate[]; ops: VibemateChange[]; ids: Record<string, string>; appearance?: Record<string, unknown>; roomId?: string }
 
 export interface RoomRecovery {
   rows: number;
@@ -466,6 +476,12 @@ export interface SkillsBridge {
     check: (raw: unknown) => Promise<LookCheck>;
     save: (raw: unknown, options: { author: string; replace?: boolean }) => Promise<LookCheck>;
   };
+  rooms?: {
+    list: () => { id: string; name: string }[];
+    find: (selector: string) => Room;
+    get: (id: string) => Room | undefined;
+    sharesWith: (readerId: string, targetId: string) => boolean;
+  };
   appearance?: {
     current: () => AppearanceSettings;
     preview: (patch: Record<string, unknown>) => AppearanceSettings;
@@ -529,9 +545,11 @@ export interface RoomOptions {
   programHumanDescription: string;
   bypassPermissionsByDefault: boolean;
   hubRun?: () => { id: string; build: string } | null;
-  memoryGraph?: (roomId: string, addressed: readonly number[]) => { revision: string; block: string; search?: BriefSearch } | null;
+  memoryGraph?: (roomId: string, addressed: readonly number[], shown: readonly number[]) => { revision: string; block: string; search?: BriefSearch } | null;
   memoryGraphReady?: (roomId: string, addressed: readonly number[]) => Promise<void>;
+  memoryWhy?: (roomId: string, addressed: readonly number[]) => string;
   connections?: (roomUuid: string) => string[];
+  pictures?: { prepare(path: string, mimeType: string, tag: PictureTag): Promise<AgentView>; forAgent(path: string, mimeType: string, tag: PictureTag): Promise<AgentView> };
   programTranscripts?: TranscriptMode;
   programFoldAfter?: number;
   recordPrompts?: boolean;
@@ -556,6 +574,7 @@ interface AgentRuntime {
   turnActive: boolean;
   pendingConfig?: { configId: string; value: string | boolean; from?: string }[];
   workBusy?: boolean;
+  workSettled?: { promise: Promise<void>; resolve: () => void };
   notesPending?: boolean;
   workCancelled?: boolean;
   roomStopped?: boolean;
@@ -567,6 +586,9 @@ interface AgentRuntime {
   turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; lastSignAt?: number; lastWorkAt?: number; published: boolean; publishedAt?: number; hidden?: boolean; messagesFromSeq: number; shownLength?: number } | null;
   quiet?: { turnId: string; nudge?: "asking" | "answered" | "silent" };
   strayMessageId: string | null;
+  backgroundMessages?: Set<string>;
+  backgroundCorrections?: RetryRequest[];
+  backgroundBacklogPending?: boolean;
   turnsSinceBrief: number;
   usedAtBrief: number;
   briefSentThisTurn: boolean;
@@ -604,6 +626,15 @@ interface RetryRequest {
   record: ChatMessage;
 }
 
+export interface BackgroundCompletion {
+  key: string; taskId: string; description: string; status: string; result: string;
+  claim(messageId: string): boolean;
+  finish(confirmed: boolean, messageId: string): void;
+}
+interface QueuedBackgroundCompletion extends BackgroundCompletion {
+  claimed: boolean; continuing: boolean; confirmed: boolean; messageId: string;
+}
+
 type PromptMemoryNote = BriefSearch & { sent: boolean };
 
 interface TurnExtras {
@@ -620,12 +651,16 @@ interface PermissionEntry extends PendingPermission {
 const ADAPTER_TRACE = "viberoom-trace ";
 const SILENCE_CHECK_MS = 60_000;
 const STOP_GRACE_MS = 30_000;
+const SHUTDOWN_TURN_STOP_MS = 2_000;
+const SHUTDOWN_SETTLE_MS = 1_000;
+export const ROOM_SHUTDOWN_WAIT_MS = SHUTDOWN_TURN_STOP_MS + SHUTDOWN_SETTLE_MS;
 const SILENCE_MS = 10 * 60_000;
 const WORK_SIGNS = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan"]);
 const NUDGE_WAIT_MS = 10_000;
 
 const COLORS = ["#6d5dfc", "#16a34a", "#d97706", "#dc2626", "#0891b2", "#be185d", "#4d7c0f", "#7c3aed"];
 export const CAST_SIZE = 8;
+export const PIN_LABEL_MAX = 120;
 export { spokenText };
 const RULE_REF_TOKEN = /@\{p:([^}]+)\}/g;
 const ADAPTER_ERROR_PATTERN =
@@ -675,8 +710,10 @@ export class Room extends EventEmitter {
   dir: string;
   readonly dataDir: string;
   private readonly hubRun: () => { id: string; build: string } | null;
-  private readonly memoryGraph: (roomId: string, addressed: readonly number[]) => { revision: string; block: string; search?: BriefSearch } | null;
+  private readonly memoryGraph: (roomId: string, addressed: readonly number[], shown: readonly number[]) => { revision: string; block: string; search?: BriefSearch } | null;
   private readonly memoryGraphReady: (roomId: string, addressed: readonly number[]) => Promise<void>;
+  private readonly memoryWhy: (roomId: string, addressed: readonly number[]) => string;
+  private readonly pictures: RoomOptions["pictures"];
   private readonly connections: (roomUuid: string) => string[];
   readonly createdAt: number;
   settings: RoomSettings;
@@ -704,6 +741,9 @@ export class Room extends EventEmitter {
   private typingTimer: NodeJS.Timeout | null = null;
   private closing = false;
   private readonly runtimes = new Map<string, AgentRuntime>();
+  private readonly unconfirmedBackground = new Map<string, RetryRequest | null>();
+  private readonly backgroundCompletions = new Map<string, QueuedBackgroundCompletion[]>();
+  private readonly activeBackgroundCompletions = new Map<string, QueuedBackgroundCompletion>();
   private readonly automationTasks = new Map<string, {
     run: AutomationRun; runtime: AgentRuntime; resolve: (outcome: AutomationOutcome) => void;
     cleanup: () => void; outcome: AutomationOutcome; continuing: boolean;
@@ -741,7 +781,9 @@ export class Room extends EventEmitter {
     this.bypassPermissionsByDefault = options.bypassPermissionsByDefault;
     this.hubRun = options.hubRun ?? (() => null);
     this.memoryGraph = options.memoryGraph ?? (() => null);
+    this.pictures = options.pictures;
     this.memoryGraphReady = options.memoryGraphReady ?? (async () => {});
+    this.memoryWhy = options.memoryWhy ?? (() => "none");
     this.connections = options.connections ?? (() => []);
     this.programTranscripts = options.programTranscripts ?? "off";
     this.programFoldAfter = options.programFoldAfter ?? 1200;
@@ -1014,7 +1056,7 @@ export class Room extends EventEmitter {
         agentLabel: recipe?.label ?? s.agentType,
         agentVendor: recipe?.vendor ?? s.agentType,
         status: "offline",
-        statusDetail: s.muted ? "Not summoned — muted" : "not connected since the room restarted",
+        statusDetail: s.asleep ? "Asleep" : s.muted ? "Not summoned — muted" : "not connected since the room restarted",
         ...(s.muted ? { startupSkipped: "muted" as const } : {}),
         turns: 0,
         color: s.color,
@@ -1023,6 +1065,7 @@ export class Room extends EventEmitter {
         role: s.role,
         avatar: s.avatar || undefined,
         muted: s.muted,
+        ...(s.asleep ? { asleep: true } : {}),
         createdByVibemate: s.createdByVibemate,
         replyDelay: s.replyDelay,
         skills: normalizeSkillList(s.skills),
@@ -1055,8 +1098,7 @@ export class Room extends EventEmitter {
   }
 
   templateOf(): { dir: string; settings: Partial<RoomSettings>; vibemates: TemplateVibemate[] } {
-    const { name: _n, humanName: _h, ...rest } = this.settings;
-    const settings: Partial<RoomSettings> = { ...rest, customRules: this.renderRuleReferences(this.settings.customRules) };
+    const settings = templateRoomSettings({ ...this.settings, customRules: this.renderRuleReferences(this.settings.customRules) });
     const vibemates: TemplateVibemate[] = [];
     for (const p of this.participants.values()) {
       if (p.kind !== "agent" || p.status === "left") continue;
@@ -1103,6 +1145,7 @@ export class Room extends EventEmitter {
           launch: p.launch ?? { model: p.model ?? null, effort: p.effort ?? null, mode: p.mode ?? null },
           earlierLaunches: p.earlierLaunches ? { ...p.earlierLaunches } : undefined,
           muted: !!p.muted,
+          asleep: p.asleep || undefined,
           createdByVibemate: p.createdByVibemate || undefined,
           replyDelay: p.replyDelay,
           skills: p.skills && p.skills.length ? [...p.skills] : undefined,
@@ -1251,7 +1294,7 @@ export class Room extends EventEmitter {
       streamSequence: this.historyStreamSequence, handedFromSeq: this.handedFromSeq(), total: this.messages.length, chats, lastChatAt };
   }
 
-  snapshot(request: { from?: Cursor; all?: boolean; seq?: number; message?: string } = {}): unknown {
+  snapshot(request: { from?: Cursor; all?: boolean; seq?: number; message?: string; index?: boolean } = {}): unknown {
     const last = this.messages.length ? this.messages[this.messages.length - 1] : null;
     const all = this.messagesWithLiveDrafts();
     let from = foldIndex(all, this.effectiveFoldAfter());
@@ -1297,7 +1340,9 @@ export class Room extends EventEmitter {
       settings: this.settings,
       customRulesText: this.renderRuleReferences(this.settings.customRules),
       participants: [...this.participants.values()].map(p => this.participantView(p)),
-      messages: shown.map((m) => this.forWindow(m)),
+      messages: request.index
+        ? shown.map((m, at) => (at >= shown.length - WINDOW_RECENT_BODIES || m.streaming ? this.forWindow(m) : m))
+        : shown.map((m) => this.forWindow(m)),
       permissions: [...this.permissions.values()].map(({ resolve: _r, ...p }) => p),
       proposals: [...this.proposals.values()],
       newRooms: [...this.newRooms.values()],
@@ -1395,6 +1440,49 @@ export class Room extends EventEmitter {
     this.requestTurn(participantId, true);
   }
 
+  enqueueBackgroundCompletion(participantId: string, completion: BackgroundCompletion): void {
+    const participant = this.participants.get(participantId);
+    if (!participant || participant.kind !== "agent" || participant.status === "left" || this.closing || this.readOnly) return;
+    const queue = this.backgroundCompletions.get(participantId) ?? [];
+    if (!queue.some(task => task.key === completion.key)) {
+      queue.push({ ...completion, claimed: false, continuing: false, confirmed: false,
+        messageId: `background-task-${completion.key}` });
+      this.backgroundCompletions.set(participantId, queue);
+    }
+    this.requestBackgroundCompletion(participantId);
+  }
+
+  resumeBackgroundCompletions(): void {
+    for (const participantId of this.backgroundCompletions.keys()) this.requestBackgroundCompletion(participantId);
+  }
+
+  private requestBackgroundCompletion(participantId: string): void {
+    const participant = this.participants.get(participantId);
+    const runtime = this.runtimes.get(participantId);
+    if (!participant || participant.status === "left" || this.closing || this.readOnly) return;
+    if (!runtime?.agent.alive || runtime.retiring || runtime.workCancelled || participant.muted
+        || runtime.workBusy || runtime.turnActive || runtime.pendingTurn || runtime.delayTimer
+        || participant.status === "error" || participant.trouble || this.focused || this.recordHold) return;
+    this.requestTurn(participantId);
+  }
+
+  removeBackgroundCompletion(participantId: string, key: string): void {
+    const queue = this.backgroundCompletions.get(participantId);
+    if (!queue) return;
+    this.backgroundCompletions.set(participantId, queue.filter(task => task.key !== key || task.claimed));
+  }
+
+  private removeFinishedBackgroundCompletion(participantId: string, completion: QueuedBackgroundCompletion): void {
+    const remaining = this.backgroundCompletions.get(participantId)?.filter(task => task !== completion) ?? [];
+    if (remaining.length) this.backgroundCompletions.set(participantId, remaining);
+    else this.backgroundCompletions.delete(participantId);
+  }
+
+  acceptsBackgroundRegistration(participantId: string, token: string): boolean {
+    const runtime = this.runtimes.get(participantId);
+    return !!runtime && !!token && runtime.mcpToken === token && this.liveAgentSession(participantId, runtime.agent, runtime.sessionId);
+  }
+
   askConnectionWrite(participantId: string, call: { title: string; input: Record<string, unknown> }): Promise<boolean> {
     return new Promise((resolve) => {
       const entry: PermissionEntry = {
@@ -1416,11 +1504,12 @@ export class Room extends EventEmitter {
     });
   }
 
-  shownStatus(id: string): ParticipantStatus | "working" | "writing" | "notes" {
+  shownStatus(id: string): ParticipantStatus | "working" | "writing" | "notes" | "asking" {
     const participant = this.participants.get(id);
     if (!participant) return "left";
     if (participant.status !== "thinking") return participant.status;
     if (participant.notesTurn) return "notes";
+    if (this.askingHuman(id)) return "asking";
     const draft = [...this.drafts.values()].find((m) => m.streaming && m.from === id);
     if (!draft) return "thinking";
     if ((draft.toolCalls ?? []).some((c) => c.status === "pending" || c.status === "in_progress")) return "working";
@@ -1432,7 +1521,7 @@ export class Room extends EventEmitter {
     const out: import("./message-check.js").CheckedVibemate[] = [];
     for (const p of this.participants.values()) {
       if (p.kind !== "agent" || p.status === "left") continue;
-      const state = p.muted ? "muted" : this.shownStatus(p.id);
+      const state = p.asleep ? "asleep" : p.muted ? "muted" : this.shownStatus(p.id);
       const turn = this.runtimes.get(p.id)?.turn;
       const parts = [state];
       let timing: Pick<import("./message-check.js").CheckedVibemate, "startedAt" | "elapsedSeconds" | "quietSeconds"> = {};
@@ -1446,6 +1535,18 @@ export class Room extends EventEmitter {
         parts.push(`since ${formatQuoteTime(turn.startedAt).slice(-5)}`);
       }
       out.push({ name: p.name, state, line: parts.join(" · "), ...timing });
+    }
+    return out;
+  }
+
+  workingNow(): { name: string; lastSignAt: number | null }[] {
+    const out: { name: string; lastSignAt: number | null }[] = [];
+    for (const p of this.participants.values()) {
+      if (p.kind !== "agent" || p.status === "left") continue;
+      const runtime = this.runtimes.get(p.id);
+      if (!runtime || !(runtime.turnActive || runtime.workBusy)) continue;
+      const turn = runtime.turn;
+      out.push({ name: p.name, lastSignAt: turn ? (turn.lastSignAt ?? turn.startedAt) : null });
     }
     return out;
   }
@@ -1469,6 +1570,7 @@ export class Room extends EventEmitter {
       if (quiet < SILENCE_MS) continue;
       const participant = this.participants.get(id);
       if (!participant || participant.muted) continue;
+      if (this.askingHuman(id)) continue;
       if (!runtime.quiet || runtime.quiet.turnId !== turn.message.id) {
         runtime.quiet = { turnId: turn.message.id };
         this.push({ type: "participant", participant });
@@ -1571,13 +1673,15 @@ export class Room extends EventEmitter {
     const id = job.targetId!, participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent" || participant.status === "left") return "The selected vibemate is no longer in this room. Edit the automation.";
     if (participant.muted) return "The selected vibemate is muted.";
+    if (participant.asleep) return "The selected vibemate is asleep. Wake it up to let the automation run.";
     if (participant.trouble || participant.status === "error") return "The selected vibemate needs attention before it can work.";
     if (participant.status === "offline" && job.wakeOffline && allowWake) return null;
     const runtime = this.runtimes.get(id);
     if (!runtime?.agent.alive) return "The selected vibemate is offline.";
     if (this.focused || participant.muted || this.closing || this.recordHold) return "The room paused while the vibemate was connecting.";
     if (runtime.workCancelled) return "The selected vibemate was stopped. Speak to it to resume work.";
-    if (runtime.turnActive || runtime.workBusy || runtime.pendingTurn || runtime.delayTimer || runtime.retiring || this.automationTasks.has(id) || participant.status !== "idle") return "Waiting for the selected vibemate to finish.";
+    if (runtime.turnActive || runtime.workBusy || runtime.pendingTurn || runtime.delayTimer || runtime.retiring || this.automationTasks.has(id)
+        || this.backgroundCompletions.get(id)?.length || participant.status !== "idle") return "Waiting for the selected vibemate to finish.";
     return null;
   }
 
@@ -1662,6 +1766,7 @@ export class Room extends EventEmitter {
     if (!trimmed && !images.length && !audio.length && !video.length && !quotes.length) throw new RoomRefusal("empty message");
     const quoted = quotes.length ? resolveQuotes(quotes, this.messages, this.drafts) : [];
     const attachments = images.length ? saveImages(ensureDir(this.filesDir()), images) : [];
+    for (const a of attachments) void this.pictures?.prepare(join(this.filesDir(), a.file), a.mimeType, { room: this.id, file: a.file });
     const sounds = audio.length ? saveAudio(ensureDir(this.filesDir()), audio).map((kept, i) => ({ ...kept, ...(audio[i].words !== undefined ? { words: audio[i].words } : {}), ...(audio[i].unheard ? { unheard: audio[i].unheard } : {}) })) : [];
     const clips = video.length ? saveVideo(ensureDir(this.filesDir()), video) : [];
     this.humanTypingUntil = 0;
@@ -1734,7 +1839,23 @@ export class Room extends EventEmitter {
     if (!message || message.kind !== "chat") throw new Error("only chat messages can be pinned");
     if (!!message.pinned === pinned) return message;
     if (pinned) message.pinned = true;
-    else delete message.pinned;
+    else {
+      delete message.pinned;
+      delete message.pinLabel;
+    }
+    if (!message.streaming) this.persist({ kind: "upsert", message });
+    this.push({ type: "message", message });
+    return message;
+  }
+
+  setPinLabel(messageId: string, label: string): ChatMessage {
+    this.assertRecordOpen();
+    const message = this.messages.find((m) => m.id === messageId) ?? this.drafts.get(messageId);
+    if (!message || message.kind !== "chat" || !message.pinned) throw new Error("only a pinned message has a title of its own");
+    const title = String(label ?? "").replace(/\s+/g, " ").trim().slice(0, PIN_LABEL_MAX);
+    if ((message.pinLabel ?? "") === title) return message;
+    if (title) message.pinLabel = title;
+    else delete message.pinLabel;
     if (!message.streaming) this.persist({ kind: "upsert", message });
     this.push({ type: "message", message });
     return message;
@@ -1923,7 +2044,7 @@ export class Room extends EventEmitter {
     return { restarted, removed: removed.length };
   }
 
-  async respawnAgent(id: string, options: { memory?: boolean; replay?: number; reason?: string } = {}): Promise<Participant> {
+  async respawnAgent(id: string, options: { memory?: boolean; replay?: number; reason?: string; wake?: boolean } = {}): Promise<Participant> {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
     const online = this.runtimes.has(id);
@@ -1940,8 +2061,8 @@ export class Room extends EventEmitter {
     this.push({ type: "participant", participant });
     if (!online) this.log.info(`respawn of ${participant.name} (offline): stored session dropped, starting it now`);
     await this.reconnect(id, memory
-      ? { mode: "replay", replay, reason: `${why}; it comes back with ${withNotes ? "its notes and " : ""}the last ${replay} messages` }
-      : { mode: "replay", replay: 0, notes: false, reason: `${why}, it remembers nothing from before` });
+      ? { mode: "replay", replay, reason: `${why}; it comes back with ${withNotes ? "its notes and " : ""}the last ${replay} messages`, wake: options.wake }
+      : { mode: "replay", replay: 0, notes: false, reason: `${why}, it remembers nothing from before`, wake: options.wake });
     this.log.info(`respawn of ${participant.name}: fresh session, ${memory ? `${withNotes ? "notes + " : ""}replay ${replay}` : "no replay"}`);
     return participant;
   }
@@ -1992,7 +2113,7 @@ export class Room extends EventEmitter {
     if (!runtime || !runtime.agent.alive) throw new Error(`${participant.name} is not online`);
     if (runtime.turnActive || runtime.workBusy) throw new Error(`${participant.name} is in the middle of a reply; try again when it is idle`);
     const header = buildHeader(this.effectiveSettings(), this.personaOf(participant), this.roster(), this.hops, ["hidden turn: notes only, nothing is posted"]);
-    runtime.workBusy = true;
+    this.takeWork(runtime);
     runtime.workCancelled = false;
     runtime.notesPending = false;
     if (runtime.delayTimer) clearTimeout(runtime.delayTimer);
@@ -2302,6 +2423,26 @@ export class Room extends EventEmitter {
     if (why) this.notice(`${participant.name} is back in the conversation (${why}).`, "info");
   }
 
+  async setAsleep(id: string, from?: string): Promise<Participant> {
+    const participant = this.participants.get(id);
+    if (!participant || participant.kind !== "agent") throw new Error("no such agent");
+    if (participant.status === "unstaffed") throw new Error(`${participant.name} has no coding agent to put to sleep`);
+    if (participant.asleep) return participant;
+    if (participant.status === "starting") throw new Error(`${participant.name} is starting; put it to sleep once it is up`);
+    this.giveUpRepairs(id, "all");
+    this.dropScheduledTurn(id);
+    this.cancelPermissionsOf(id);
+    await this.retireRuntime(id);
+    participant.asleep = true;
+    participant.status = "offline";
+    participant.statusDetail = "Asleep";
+    participant.startupSkipped = undefined;
+    this.push({ type: "participant", participant });
+    const where = from ? ` (${from})` : "";
+    this.postRoomEvent(`${participant.name} is asleep: its agent is stopped, and it starts again only when it is woken up${where}.`);
+    return participant;
+  }
+
   setMuted(id: string, muted: boolean, from?: string): Participant {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
@@ -2547,6 +2688,11 @@ export class Room extends EventEmitter {
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
     assertAgentAvailable(participant.agentType ?? "");
     if (this.runtimes.has(id) || participant.status === "starting") return participant;
+    if (participant.asleep && !options.wake) return participant;
+    const woken = !!participant.asleep;
+    delete participant.asleep;
+    if (woken) this.postRoomEvent(`${participant.name} is woken up.`);
+    delete participant.fell;
     participant.status = "starting";
     participant.startupSkipped = undefined;
     participant.statusDetail = undefined;
@@ -2596,10 +2742,12 @@ export class Room extends EventEmitter {
       {
         onAuthStatus: (status) => {
           const p = this.participants.get(id);
-          if (!p) return;
+          const current = this.runtimes.get(id);
+          if (!p || !agent?.alive || this.closing || (current && current.agent !== agent)) return;
           p.authStatus = status;
           this.push({ type: "participant", participant: p });
         },
+        onBackgroundMessage: (message) => this.onBackgroundMessage(id, agent, message),
       },
       { info: (text) => log.info(`protocol: ${text}`), warn: (text) => log.warn(`protocol: ${text}`) },
     );
@@ -2608,8 +2756,11 @@ export class Room extends EventEmitter {
       agent = new AcpAgent(
         { ...spec, cwd },
         {
-          onSessionUpdate: (_sessionId, update) => this.onSessionUpdate(id, update),
-          onPermissionRequest: (params) => this.onPermissionRequest(id, params),
+          onSessionUpdate: (sessionId, update) => {
+            if (this.liveAgentSession(id, agent, sessionId)) this.onSessionUpdate(id, update);
+          },
+          onPermissionRequest: (params) => this.liveAgentSession(id, agent, params.sessionId)
+            ? this.onPermissionRequest(id, params) : Promise.resolve({ outcome: { outcome: "cancelled" } }),
           onStderr: (line) => routeAdapterStderr(line, {
             note: (text) => transcript.note(text),
             say: (text) => log.info(text),
@@ -2912,7 +3063,7 @@ export class Room extends EventEmitter {
       return;
     }
     let owner = runtime;
-    runtime.workBusy = true;
+    this.takeWork(runtime);
     try { owner = await this.applyConfigNow(id, configId, value, from); }
     finally { await this.finishRuntimeWork(id, owner); }
   }
@@ -2945,12 +3096,12 @@ export class Room extends EventEmitter {
       await this.respawnAgent(id, { memory: true, reason: "its mode changed" });
       const replacement = this.runtimes.get(id);
       if (!replacement) throw new Error("the vibemate could not restart with its new mode");
-      replacement.workBusy = true;
+      this.takeWork(replacement);
       replacement.pendingTurn ||= pendingTurn;
       replacement.addressed ||= addressed;
       replacement.pendingConfig = [...(runtime.pendingConfig || []), ...(replacement.pendingConfig || [])];
       runtime.pendingConfig = undefined;
-      runtime.workBusy = false;
+      this.releaseWork(runtime);
       return replacement;
     }
     if (!option && configId === "mode" && (participant.modes?.some((m) => m.id === value) || participant.mode === value)) {
@@ -3022,12 +3173,20 @@ export class Room extends EventEmitter {
     return this.permissions.has(key);
   }
 
+  private askingHuman(id: string): boolean {
+    for (const entry of this.permissions.values()) if (entry.participantId === id) return true;
+    return false;
+  }
+
   resolvePermission(key: string, optionId: string | null): void {
     const entry = this.permissions.get(key);
     if (!entry) throw new Error("no such pending permission");
     this.permissions.delete(key);
     entry.resolve(optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } });
     this.push({ type: "permission.resolved", key, optionId });
+    const turn = this.runtimes.get(entry.participantId)?.turn;
+    if (turn) turn.lastSignAt = Date.now();
+    this.log.info(`${this.participants.get(entry.participantId)?.name ?? entry.participantId}'s question for permission was answered: ${optionId ?? "dismissed"}`);
   }
 
   postNotice(text: string): void {
@@ -3064,18 +3223,26 @@ export class Room extends EventEmitter {
 
   async shutdown(): Promise<void> {
     this.closeDoor();
-    for (const [id, runtime] of this.runtimes) {
+    const runtimes = [...this.runtimes.entries()];
+    const working = runtimes.map(([, runtime]) => runtime).filter((runtime) => runtime.turnActive || runtime.workBusy);
+    for (const runtime of working) {
+      runtime.roomStopped = true;
       try {
-        if (runtime.turnActive) {
-          runtime.roomStopped = true;
-          runtime.agent.cancel(runtime.sessionId);
-        }
+        if (runtime.turnActive) runtime.agent.cancel(runtime.sessionId);
+      } catch {
+      }
+    }
+    const ended = (jobs: AgentRuntime[], ms: number) => jobs.length ? Promise.race([Promise.all(jobs.map((runtime) => runtime.workSettled?.promise)), delay(ms)]) : Promise.resolve();
+    await ended(working, SHUTDOWN_TURN_STOP_MS);
+    for (const [id, runtime] of runtimes) {
+      try {
         await Promise.race([runtime.agent.closeSession(runtime.sessionId), delay(1000)]);
       } catch {
       }
       runtime.agent.kill();
       this.forgetRuntime(id);
     }
+    await ended(working.filter((runtime) => runtime.workBusy), SHUTDOWN_SETTLE_MS);
   }
 
 
@@ -3181,8 +3348,10 @@ export class Room extends EventEmitter {
     return runtime.turn.message.id;
   }
 
-  describeRoomForAgent(participantId: string): Record<string, unknown> {
+  describeRoomForAgent(participantId: string, selector?: string): Record<string, unknown> {
     const participant = this.agentInRoom(participantId);
+    const other = this.otherRoom(selector);
+    if (other) return other.describeForVisitor(this.skills!.rooms!.sharesWith(this.id, other.id));
     const shape = this.templateOf();
     const skills = this.skills ? this.skills.library.list().filter((s) => !s.problems.length && !s.draft).map((s) => ({ name: s.name, description: s.description })) : [];
     const templates = this.skills ? this.skills.templates.list().map((t) => ({ id: t.id, name: t.name, builtin: !!t.builtin })) : [];
@@ -3206,9 +3375,37 @@ export class Room extends EventEmitter {
       }),
       skills,
       templates,
+      otherRooms: this.skills?.rooms ? this.skills.rooms.list().filter((room) => room.id !== this.id) : [],
       yourBrief: buildInstructionPreview(this.effectiveSettings(), this.personaOf(participant), this.roster(), this.skillsForPrompt(participant, this.runtimes.get(participant.id)!)),
       howTo: "Settings are proposed by key with the values above; rules are one per line in customRules; a vibemate is { name, tagline, role, avatar, skills }. Another vibemate's role is private: you learn only that it has one and how long it is, and you may still propose a new one, which the human reads in full on the card. Check a design with lint_room_design, then create_template (a file for the human to pick) or propose_room_changes (a card the human applies).",
     };
+  }
+
+  private otherRoom(selector: string | undefined): Room | null {
+    const wanted = String(selector ?? "").trim();
+    if (!wanted) return null;
+    if (!this.skills?.rooms) throw new Error("the other rooms are not available here");
+    const room = this.skills.rooms.find(wanted);
+    return room === this ? null : room;
+  }
+
+  describeForVisitor(sharesHistory: boolean): Record<string, unknown> {
+    const rows = describeSettings({ ...this.settings, customRules: this.renderRuleReferences(this.settings.customRules) });
+    return {
+      room: { id: this.id, name: this.settings.name, emoji: this.settings.emoji },
+      human: this.settings.humanName,
+      settings: sharesHistory ? rows : rows.map(({ value, ...row }) => (row.kind === "text" ? { ...row, valueHidden: `${String(value ?? "").length} characters; this room does not share its history with yours` } : { ...row, value })),
+      howTo: "Propose settings here with propose_room_changes and room set to this room's id: the card stands in your room, and Apply changes this one. Its vibemates are proposed from inside it.",
+    };
+  }
+
+  proposalShape(): { context: RoomDesignContext; vibemates: TemplateVibemate[] } {
+    return { context: this.designContext("room"), vibemates: this.templateOf().vibemates };
+  }
+
+  applySettingsFromCard(patch: Record<string, unknown>, line: string): void {
+    this.updateSettings(patch);
+    this.postRoomEvent(line);
   }
 
   lintDesignForAgent(participantId: string, kind: "template" | "room", design: RoomDesign): { ok: boolean; errors: string[]; warnings: string[]; preview?: string } {
@@ -3562,8 +3759,10 @@ export class Room extends EventEmitter {
   }
 
 
-  proposeRoomChanges(participantId: string, why: string, changes: RoomChangeSet): { ok: true; message: string; key: string; warnings: string[] } {
+  proposeRoomChanges(participantId: string, why: string, changes: RoomChangeSet, roomSelector?: string): { ok: true; message: string; key: string; warnings: string[] } {
     const participant = this.agentInRoom(participantId);
+    const target = this.otherRoom(roomSelector);
+    if (target) return this.proposeSettingsFor(target, participant, why, changes);
     const shape = this.templateOf();
     const current = shape.vibemates;
     const vibes = applyVibemateChanges(current, changes.vibemates);
@@ -3575,8 +3774,35 @@ export class Room extends EventEmitter {
     const settingChanges = diffSettings(base, result.settings!);
     if (!settingChanges.length && !vibes.ops.length) throw new Error("not proposed: the change set leaves the room as it is");
     const touchesOwn = vibes.ops.some((op) => op.name.toLowerCase() === participant.name.toLowerCase()) || settingChanges.some((c) => c.key === "customRules");
-    const what = [...settingChanges.map((c) => c.key), ...vibes.ops.map((o) => `${o.op} ${o.name}`)].join(", ");
-    const line = this.postRoomEvent(`${participant.name} proposes changes to the room (${what}); apply or reject them on the card.`, "human", false, { tone: "attention" });
+    const ids: Record<string, string> = {};
+    for (const op of vibes.ops) {
+      const target = op.op === "add" ? undefined : this.findByName(op.name);
+      if (target) ids[op.name] = target.id;
+    }
+    return this.holdProposal(participant, why, undefined, settingChanges, vibes.ops, result.warnings.map((w) => w.message), touchesOwn,
+      { settings: settingChanges, vibemates: vibes.next, ops: vibes.ops, ids });
+  }
+
+  private proposeSettingsFor(target: Room, participant: Participant, why: string, changes: RoomChangeSet): { ok: true; message: string; key: string; warnings: string[] } {
+    const asked = changes.vibemates;
+    if (asked && (asked.add?.length || asked.update?.length || asked.remove?.length)) {
+      throw new Error(`not proposed: a proposal for another room changes its settings only; the vibemates of ${target.settings.name} are proposed from inside it`);
+    }
+    if (target.readOnly) throw new Error(`not proposed: ${target.settings.name} waits for ${this.settings.humanName} to release its record, and changes nothing until then`);
+    const { context, vibemates } = target.proposalShape();
+    const result = lintRoomDesign({ settings: changes.settings, vibemates }, { ...context, changedVibemates: [] });
+    if (result.errors.length) throw new Error(`not proposed: ${result.errors.map((e) => e.message).join("; ")}`);
+    const settingChanges = diffSettings(context.base!, result.settings!);
+    if (!settingChanges.length) throw new Error(`not proposed: the change set leaves ${target.settings.name} as it is`);
+    return this.holdProposal(participant, why, { id: target.id, name: target.settings.name }, settingChanges, [], result.warnings.map((w) => w.message), false,
+      { settings: settingChanges, vibemates: [], ops: [], ids: {}, roomId: target.id });
+  }
+
+  private holdProposal(participant: Participant, why: string, room: RoomProposal["room"], settingChanges: SettingChange[], ops: VibemateChange[], warnings: string[], touchesOwn: boolean, plan: ProposalPlan): { ok: true; message: string; key: string; warnings: string[] } {
+    const participantId = participant.id;
+    const what = [...settingChanges.map((c) => c.key), ...ops.map((o) => `${o.op} ${o.name}`)].join(", ");
+    const where = room ? `the room ${room.name}` : "the room";
+    const line = this.postRoomEvent(`${participant.name} proposes changes to ${where} (${what}); apply or reject them on the card.`, "human", false, { tone: "attention" });
     const proposal: RoomProposal = {
       key: randomUUID(),
       participantId,
@@ -3584,25 +3810,21 @@ export class Room extends EventEmitter {
       ts: Date.now(),
       afterSeq: line.seq,
       why: String(why ?? "").trim().slice(0, 600),
+      ...(room ? { room } : {}),
       settings: settingChanges,
-      vibemates: vibes.ops,
-      warnings: result.warnings.map((w) => w.message),
+      vibemates: ops,
+      warnings,
       touchesOwn,
       status: "pending",
     };
-    const ids: Record<string, string> = {};
-    for (const op of vibes.ops) {
-      const target = op.op === "add" ? undefined : this.findByName(op.name);
-      if (target) ids[op.name] = target.id;
-    }
-    this.proposalPlans.set(proposal.key, { settings: settingChanges, vibemates: vibes.next, ops: vibes.ops, ids });
+    this.proposalPlans.set(proposal.key, plan);
     this.proposals.set(proposal.key, proposal);
     this.keepCard("proposal", proposal.key);
     this.push({ type: "proposal", proposal });
-    this.log.info(`proposal ${proposal.key} from ${participant.name}: ${what}`);
+    this.log.info(`proposal ${proposal.key} from ${participant.name}${room ? ` for ${room.name} (${room.id})` : ""}: ${what}`);
     return {
       ok: true,
-      message: `Proposal sent to ${this.settings.humanName} as a card in the room (${what}). Nothing changes until they apply it; you will see a room line with the outcome.${proposal.warnings.length ? ` Warnings shown on the card: ${proposal.warnings.join("; ")}` : ""}`,
+      message: `Proposal sent to ${this.settings.humanName} as a card in the room${room ? ` you are in, for the room ${room.name}` : ""} (${what}). Nothing changes until they apply it; you will see a room line with the outcome.${proposal.warnings.length ? ` Warnings shown on the card: ${proposal.warnings.join("; ")}` : ""}`,
       key: proposal.key,
       warnings: proposal.warnings,
     };
@@ -3761,7 +3983,8 @@ export class Room extends EventEmitter {
     const plan = this.proposalPlans.get(key);
     if (!proposal || !plan) throw new Error("no such pending proposal");
     if (proposal.status !== "pending") return proposal;
-    const what = [...proposal.settings.map((c) => c.key), ...proposal.vibemates.map((o) => `${o.op} ${o.name}`), ...(proposal.appearance ?? []).map((c) => c.key)].join(", ");
+    const what = [...proposal.settings.map((c) => c.key), ...proposal.vibemates.map((o) => `${o.op} ${o.name}`), ...(proposal.appearance ?? []).map((c) => c.key)].join(", ")
+      + (proposal.room ? ` for the room ${proposal.room.name}` : "");
     if (!accept) {
       proposal.status = "rejected";
       this.proposalPlans.delete(key);
@@ -3813,7 +4036,13 @@ export class Room extends EventEmitter {
     if (plan.settings.length) {
       const patch: Record<string, unknown> = {};
       for (const c of plan.settings) patch[c.key] = c.key === "language" ? (c.to as RoomSettings["language"]) : c.to;
-      this.updateSettings(patch);
+      if (!plan.roomId) this.updateSettings(patch);
+      else {
+        const target = this.skills?.rooms?.get(plan.roomId);
+        if (!target) skipped.push(`the settings (the room ${proposal.room?.name ?? plan.roomId} is gone)`);
+        else if (target.readOnly) skipped.push(`the settings (${target.settings.name} waits for its record to be released)`);
+        else target.applySettingsFromCard(patch, `${this.settings.humanName} applied ${proposal.participantName}'s proposal from the room ${this.settings.name} (${proposal.settings.map((c) => c.key).join(", ")}).`);
+      }
     }
     if (plan.appearance) {
       try {
@@ -4017,6 +4246,9 @@ export class Room extends EventEmitter {
     return canAutoApproveRoomTool(call, known, "tool_search", input => validArguments("tool_search", input)) || canAutoApproveMessageCheck(call, known) || canAutoApproveRoomTool(call, known, "memory",
       input => Object.keys(input).every(key => ["action", "scope", "ticket", "notes", "reason", "acknowledge"].includes(key)) && (input.action === "read" || input.action === "revise")) || canAutoApproveRoomTool(call, known, SKILL_TOOL_NAME,
       input => Object.keys(input).every(key => key === "name") && typeof input.name === "string" && !!input.name.trim())
+      || canAutoApproveRoomTool(call, known, "post_message", input => validArguments("post_message", input))
+      || ["register_background_task", "list_background_tasks", "get_background_task", "cancel_background_task"].some(name =>
+        canAutoApproveRoomTool(call, known, name, input => validArguments(name, input)))
       || canAutoApproveRoomTool(call, known, "fix_diagram", () => true);
   }
 
@@ -4029,11 +4261,12 @@ export class Room extends EventEmitter {
     this.runtimes.delete(id);
   }
 
-  private requestTurn(id: string, addressed = false, missedNotice = false): void {
+  private requestTurn(id: string, addressed = false, missedNotice = false, backgroundCorrection = false): void {
     if (this.recordHold) return;
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
     if (!runtime || !participant) return;
+    if (!backgroundCorrection && runtime.backgroundCorrections?.length) runtime.backgroundBacklogPending = true;
     runtime.pendingTurn = true;
     runtime.missedNotice = missedNotice;
     if (runtime.retiring) return;
@@ -4161,15 +4394,23 @@ export class Room extends EventEmitter {
     const participant = this.participants.get(id);
     const runtime = this.runtimes.get(id);
     if (!participant || !runtime || runtime.turnActive || runtime.workBusy) return;
-    runtime.workBusy = true;
+    this.takeWork(runtime);
     runtime.workCancelled = false;
     this.speaking = id;
     runtime.addressed = false;
     const automation = this.automationTasks.get(id);
     if (automation) automation.continuing = false;
+    const activeCompletion = this.activeBackgroundCompletions.get(id);
+    if (activeCompletion) activeCompletion.continuing = false;
     try {
       await this.runTurnInner(id, participant, runtime);
     } finally {
+      const completion = this.activeBackgroundCompletions.get(id);
+      if (completion && (!completion.continuing || runtime.workCancelled || this.closing || runtime.retiring)) {
+        this.activeBackgroundCompletions.delete(id);
+        this.removeFinishedBackgroundCompletion(id, completion);
+        completion.finish(completion.confirmed && !runtime.workCancelled && !this.closing && !runtime.retiring, completion.messageId);
+      }
       if (automation && this.automationTasks.get(id) === automation && (!automation.continuing || runtime.workCancelled || this.closing)) this.finishAutomation(id);
       this.giveUpRepairs(id, "delivered");
       if (this.speaking === id) this.speaking = null;
@@ -4184,6 +4425,22 @@ export class Room extends EventEmitter {
     }
   }
 
+  private takeWork(runtime: AgentRuntime): void {
+    runtime.workBusy = true;
+    if (!runtime.workSettled) {
+      let resolve!: () => void;
+      const promise = new Promise<void>((done) => { resolve = done; });
+      runtime.workSettled = { promise, resolve };
+    }
+  }
+
+  private releaseWork(runtime: AgentRuntime): void {
+    runtime.workBusy = false;
+    const settled = runtime.workSettled;
+    runtime.workSettled = undefined;
+    settled?.resolve();
+  }
+
   private async finishRuntimeWork(id: string, runtime: AgentRuntime): Promise<void> {
     let owner = runtime;
     try { owner = await this.applyPendingConfig(id, runtime) ?? runtime; }
@@ -4191,10 +4448,18 @@ export class Room extends EventEmitter {
   }
 
   private resumeRuntimeWork(id: string, runtime: AgentRuntime): void {
-    runtime.workBusy = false;
+    this.releaseWork(runtime);
     if (this.closing || runtime.retiring || this.runtimes.get(id) !== runtime || !runtime.agent.alive) return;
     const participant = this.participants.get(id);
-    if (runtime.notesPending && this.settings.autoNotes && !runtime.workCancelled && participant && participant.status !== "error" && !participant.muted && !this.focused) {
+    if (!participant || participant.muted || this.focused || participant.status === "error" || this.recordHold) {
+      runtime.promptedThisWork = false;
+      return;
+    }
+    if (runtime.backgroundCorrections?.length && !this.automationTasks.has(id)) {
+      this.requestTurn(id, false, false, true);
+    } else if (this.backgroundCompletions.get(id)?.length) {
+      this.requestTurn(id);
+    } else if (runtime.notesPending && this.settings.autoNotes && !runtime.workCancelled) {
       runtime.notesPending = false;
       void this.takeNotes(id).catch(error => runtime.log.warn(`notes: hidden turn failed: ${describeError(error)}`));
     } else if (runtime.pendingTurn) {
@@ -4248,16 +4513,53 @@ export class Room extends EventEmitter {
   private async runTurnInner(id: string, participant: Participant, runtime: AgentRuntime): Promise<void> {
     runtime.pendingTurn = false;
     if (!runtime.agent.alive || participant.muted || this.focused || runtime.workCancelled) return;
+    const correction = !this.automationTasks.has(id) && !this.activeBackgroundCompletions.has(id) ? runtime.backgroundCorrections?.shift() : undefined;
+    if (correction) {
+      const backlogPending = runtime.backgroundBacklogPending;
+      runtime.backgroundBacklogPending = false;
+      await this.executeTurn(participant, runtime, [{ type: "text", text: correction.prompt }], correction);
+      if (backlogPending || runtime.backgroundCorrections?.length) runtime.pendingTurn = true;
+      return;
+    }
     await this.awaitSkillChannel(participant, runtime);
     if (this.settings.remembers && !this.noticeOnly(id, runtime)) {
       await this.memoryGraphReady(this.id, this.addressedIn(id, this.messages.filter(m => m.seq > runtime.lastSeenSeq)));
     }
     if (!runtime.agent.alive || runtime.retiring || this.runtimes.get(id) !== runtime || participant.muted || this.focused || runtime.workCancelled) return;
 
+    const completion = !this.automationTasks.has(id) ? this.backgroundCompletions.get(id)?.[0] : undefined;
+    if (completion && !completion.claimed) {
+      try {
+        if (!this.history.hasMessageId(this.id, completion.messageId)) {
+          const pending = this.messages.find(message => message.id === completion.messageId);
+          let stored: StoreOutcome;
+          if (pending) stored = this.persist({ kind: "upsert", message: pending });
+          else {
+            const notice: ChatMessage = { id: completion.messageId, seq: ++this.seq, from: "system", fromName: "",
+              to: [id], toNames: [participant.name], text: `Background task finished · ${completion.description}`,
+              ts: Date.now(), kind: "system", audience: "human", details: { agentId: id } };
+            stored = this.commit(notice);
+          }
+          if (stored !== "record") { this.removeFinishedBackgroundCompletion(id, completion); return; }
+        }
+        if (!completion.claim(completion.messageId)) {
+          this.removeFinishedBackgroundCompletion(id, completion);
+          runtime.pendingTurn = true;
+          return;
+        }
+      } catch (error) {
+        this.removeFinishedBackgroundCompletion(id, completion);
+        runtime.log.warn(`background completion is waiting for storage: ${describeError(error)}`);
+        return;
+      }
+      completion.claimed = true;
+      this.activeBackgroundCompletions.set(id, completion);
+    }
+
     const unreadAll = this.messages.filter(
       (m) => m.kind !== "hidden" && m.audience !== "human" && m.seq > runtime.lastSeenSeq && (m.kind === "system" || m.from !== id || m.seq <= runtime.replayOwnUntilSeq),
     );
-    if (!unreadAll.some((m) => m.kind === "chat" || m.wakes) && !this.automationTasks.has(id) && !this.repairTasks.has(id)) return;
+    if (!unreadAll.some((m) => m.kind === "chat" || m.wakes) && !this.automationTasks.has(id) && !this.repairTasks.has(id) && !completion) return;
     const missed = this.noticeOnly(id, runtime) ? this.missedChat(id, runtime).length : 0;
     runtime.missedNotice = false;
     runtime.promptedThisWork = !missed;
@@ -4287,7 +4589,7 @@ export class Room extends EventEmitter {
     const contents = buildInstructionContents(settings, persona, roster, skillsForPrompt);
     const delivery = planInstructionDelivery(contents, runtime.instructionRevisions, briefReason !== null, runtime.skillCatalogPending);
     const sendMemory = delivery.full || runtime.memoryStamp !== memoryStamp;
-    const memoryGraph = this.settings.remembers ? this.memoryGraph(this.id, this.addressedIn(id, unread)) : null;
+    const memoryGraph = this.settings.remembers ? this.memoryGraph(this.id, this.addressedIn(id, unread), unread.map(m => m.seq)) : null;
     const sendMemoryGraph = !!memoryGraph && (delivery.full || runtime.memoryGraphStamp !== memoryGraph.revision);
 
     const notes = [...runtime.headerNotes];
@@ -4372,10 +4674,19 @@ export class Room extends EventEmitter {
     }
     runtime.firstTurnDone = true;
     runtime.replayOwnUntilSeq = -1;
-    runtime.log.info(`turn: ${unread.length} unread (${omitted} omitted), full refresh=${briefReason ?? "no"}, blocks=${[delivery.brief && "brief", delivery.roomRules && "rules", delivery.vibio && "vibio"].filter(Boolean).join(",") || "none"}, notes=${notes.length}`);
+    const memoryWords = !this.settings.remembers ? "off"
+      : memoryGraph ? `${sendMemoryGraph ? "sent" : "unchanged, not sent again"} for #${memoryGraph.search?.seq ?? "?"}`
+      : this.memoryWhy(this.id, this.addressedIn(id, unread));
+    runtime.log.info(`turn: ${unread.length} unread (${omitted} omitted), full refresh=${briefReason ?? "no"}, blocks=${[delivery.brief && "brief", delivery.roomRules && "rules", delivery.vibio && "vibio"].filter(Boolean).join(",") || "none"}, memory=${memoryWords}, notes=${notes.length}`);
 
-    const blocks = this.promptBlocks(prompt, runtime);
+    const blocks = await this.promptBlocks(prompt, runtime);
     const automation = this.automationTasks.get(id);
+    if (completion) {
+      completion.continuing = false;
+      completion.confirmed = false;
+      blocks.push({ type: "text", text: `<background-task-completion>\n${JSON.stringify({ taskId: completion.taskId,
+        description: completion.description, status: completion.status, result: completion.result }).replaceAll("<", "\\u003c")}\n</background-task-completion>` });
+    }
     for (const task of this.repairTasks.get(id) ?? []) {
       if (task.delivered) continue;
       const text = this.repairTaskBlock(task);
@@ -4422,15 +4733,28 @@ export class Room extends EventEmitter {
     }
   }
 
-  private promptBlocks(parts: PromptPart[], runtime: AgentRuntime): ContentBlock[] {
+  private async promptBlocks(parts: PromptPart[], runtime: AgentRuntime): Promise<ContentBlock[]> {
     const blocks: ContentBlock[] = [];
+    const budget = new PromptBudget(parts.reduce((bytes, part) => part.type === "text" ? bytes + Buffer.byteLength(JSON.stringify(part.text)) : bytes, 0));
     for (const part of parts) {
       if (part.type === "text") {
         blocks.push({ type: "text", text: part.text });
         continue;
       }
+      const view: AgentView = this.pictures
+        ? await this.pictures.forAgent(part.image.path, part.image.mimeType, { room: this.id, file: basename(part.image.path) })
+        : { path: part.image.path, mimeType: part.image.mimeType };
+      if ("unavailable" in view) {
+        blocks.push({ type: "text", text: ` (${part.image.ref} is not shown: ${view.unavailable})` });
+        continue;
+      }
       try {
-        blocks.push({ type: "image", data: readFileSync(part.image.path).toString("base64"), mimeType: part.image.mimeType });
+        if (!budget.take((await stat(view.path)).size)) {
+          runtime.log.info(`image ${part.image.ref} is not attached: the turn's pictures before it fill the message`);
+          blocks.push({ type: "text", text: ` (${part.image.ref} is not attached: with it this message would pass the ${AGENT_MESSAGE_MAX_BYTES / 1024 / 1024} MiB one message to you may carry; it is in the room)` });
+          continue;
+        }
+        blocks.push({ type: "image", data: (await readFile(view.path)).toString("base64"), mimeType: view.mimeType });
       } catch (error) {
         runtime.log.warn(`image ${part.image.ref} could not be read: ${describeError(error)}`);
         blocks.push({ type: "text", text: ` (${part.image.ref} could not be read: ${part.image.path})` });
@@ -4443,6 +4767,10 @@ export class Room extends EventEmitter {
     const { hidden = false, historyNoticeOffered = false, supplied = [], memorySearch } = extras;
     if (runtime.turnActive || runtime.turn) throw new Error(`${participant.name} is already answering`);
     const id = participant.id;
+    if (!hidden) {
+      const completion = this.activeBackgroundCompletions.get(id);
+      if (completion) completion.confirmed = false;
+    }
     runtime.turnActive = true;
     runtime.usageSeenThisTurn = false;
     runtime.fixedDiagramThisTurn = false;
@@ -4500,6 +4828,11 @@ export class Room extends EventEmitter {
       if (retry) this.closeRetry(retry, "the session was replaced; nothing was posted");
       return null;
     }
+    if ((failure || !result) && runtime.roomStopped) {
+      runtime.log.info(`the turn ended with the room's shutdown: ${failure ?? "no result"}`);
+      result = { stopReason: "cancelled" };
+      failure = null;
+    }
     if (failure || !result) {
       const automation = !hidden ? this.automationTasks.get(id) : undefined;
       if (automation) automation.outcome = { status: "failed", detail: failure ?? "No result was returned." };
@@ -4554,7 +4887,10 @@ export class Room extends EventEmitter {
     const failedBefore = participant.failedTurns ?? 0;
     const automation = !hidden ? this.automationTasks.get(id) : undefined;
     if (automation) automation.outcome = { status: result.stopReason === "cancelled" ? "cancelled" : result.stopReason === "end_turn" ? "completed" : "failed", delivery: "silent", detail: result.stopReason === "end_turn" ? "The assigned vibemate finished its reply." : `The reply ended with ${result.stopReason}.` };
+    const completion = !hidden ? this.activeBackgroundCompletions.get(id) : undefined;
+    if (completion) completion.confirmed = result.stopReason === "end_turn" && (participant.failedTurns ?? 0) === failedBefore;
     const next = this.finalizeTurn(participant, runtime, draft, result, Date.now() - startedAt, retry, published, publishedAt, hidden);
+    if (completion && (participant.failedTurns ?? 0) !== failedBefore) completion.confirmed = false;
     if (historyNoticeOffered && result.stopReason !== "cancelled" && !runtime.workCancelled && (participant.failedTurns ?? 0) === failedBefore) {
       runtime.historyNoticePending = false;
     }
@@ -4638,6 +4974,8 @@ export class Room extends EventEmitter {
       runtime.briefPending = "requested by the agent";
       const automation = this.automationTasks.get(participant.id);
       if (automation) automation.continuing = true;
+      const completion = this.activeBackgroundCompletions.get(participant.id);
+      if (completion) completion.continuing = true;
       this.notice(`${participant.name} asked for the room brief (hidden turn); re-sending with the same messages.`, "info");
       this.requestTurn(participant.id);
       return null;
@@ -4649,6 +4987,8 @@ export class Room extends EventEmitter {
       const next = this.handleSkillPull(participant, runtime, text, pull);
       const automation = this.automationTasks.get(participant.id);
       if (automation) automation.continuing = runtime.pendingTurn;
+      const completion = this.activeBackgroundCompletions.get(participant.id);
+      if (completion) completion.continuing = runtime.pendingTurn;
       return next;
     }
 
@@ -4688,17 +5028,28 @@ export class Room extends EventEmitter {
       return null;
     }
 
+    return this.publishAgentReply(participant, runtime, draft, result, durationMs, publishedAt, retry, endedBy);
+  }
+
+  private publishAgentReply(
+    participant: Participant, runtime: AgentRuntime, draft: ChatMessage, result: PromptResult,
+    durationMs: number | undefined, publishedAt: number | null, retry: RetryRequest | null,
+    endedBy?: ChatMessage["cancelledBy"], background = false,
+  ): RetryRequest | null {
+    const text = draft.text.trim();
+    const cancelled = result.stopReason === "cancelled";
+    const stoppedByHuman = endedBy === "human";
     const mentions = this.parseMentions(text);
     const corrections = this.referee(participant, text, mentions);
     if (corrections.length) {
       participant.violations = (participant.violations ?? 0) + corrections.length;
       runtime.log.info(`referee${retry ? " (after retry)" : ""}: ${corrections.join(" | ")}`);
-      if (!retry && this.settings.refereeAction === "retry-hidden" && !cancelled) {
+      if (!retry && this.settings.refereeAction === "retry-hidden" && !cancelled && !draft.failed) {
         this.push({ type: "message.removed", id: draft.id });
         participant.retries = (participant.retries ?? 0) + 1;
         this.push({ type: "participant", participant });
         const record: ChatMessage = {
-          id: randomUUID(),
+          id: background ? draft.id : randomUUID(),
           seq: ++this.seq,
           from: participant.id,
           fromName: participant.name,
@@ -4707,18 +5058,23 @@ export class Room extends EventEmitter {
           text: `Reply held back; correction requested: ${corrections.map((c) => c.replace(/^reminder:\s*/i, "")).join("; ")}`,
           ts: Date.now(),
           kind: "hidden",
-          details: { original: text, corrections },
+          details: { ...draft.details, original: text, corrections },
         };
-        this.commit(record);
+        const stored = this.commit(record);
         const header = buildHeader(this.effectiveSettings(), this.personaOf(participant), this.roster(), this.hops, [
           "your last reply was not posted; see the correction below",
         ]);
-        return {
+        const request: RetryRequest = {
           prompt: composeCorrectionPrompt({ header, originalText: text, corrections, personaName: participant.name }),
           original: text,
           corrections,
           record,
         };
+        if (background) {
+          if (stored === "record") this.queueBackgroundCorrection(participant.id, runtime, request);
+          else this.unconfirmedBackground.set(record.id, request);
+        }
+        return request;
       }
       runtime.headerNotes.push(...corrections);
       this.push({ type: "participant", participant });
@@ -4733,20 +5089,25 @@ export class Room extends EventEmitter {
       text,
       answerFrom: answerFrom > 0 && answerFrom < text.length ? answerFrom : undefined,
       streaming: false,
-      stopReason: result.stopReason,
+      stopReason: background && draft.failed ? undefined : result.stopReason,
       ...(endedBy ? { cancelledBy: endedBy } : {}),
       ...(stoppedByHuman ? { stoppedBy: this.humanName } : {}),
       usage: result.usage ?? null,
       durationMs,
     };
     const stored = this.commit(message);
-    const automation = this.automationTasks.get(participant.id);
+    if (background && stored !== "record") this.unconfirmedBackground.set(message.id, null);
+    if (!background && stored !== "record") {
+      const completion = this.activeBackgroundCompletions.get(participant.id);
+      if (completion) completion.confirmed = false;
+    }
+    const automation = background ? undefined : this.automationTasks.get(participant.id);
     if (automation) automation.outcome = stored === "record" ? { ...automation.outcome, delivery: "posted", messageId: message.id } : { ...automation.outcome, delivery: "unconfirmed", detail: "The reply finished but could not be durably recorded. Its delivery is unconfirmed." };
-    if (participant.contextEvent?.kind === "compacted") {
+    if (!background && participant.contextEvent?.kind === "compacted") {
       participant.contextEvent = undefined;
       this.push({ type: "participant", participant });
     }
-    if (publishedAt !== null && this.messages.some((x) => x.kind === "chat" && x.id !== message.id && x.ts > publishedAt)) {
+    if (publishedAt !== null && durationMs !== undefined && this.messages.some((x) => x.kind === "chat" && x.id !== message.id && x.ts > publishedAt)) {
       const at = new Date(draft.ts);
       const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
       this.postSystem(`${participant.name} finished the reply started at ${hhmm} · ${formatDuration(durationMs)}`, "human", false, { refId: message.id, agentId: participant.id });
@@ -4755,6 +5116,7 @@ export class Room extends EventEmitter {
       this.closeRetry(retry, corrections.length ? `corrected reply posted, but it still breaks: ${corrections.map((c) => c.replace(/^reminder:\s*/i, "")).join("; ")}` : "corrected reply posted");
     }
     if (cancelled) {
+      if (background) return null;
       const cut = endedBy === "human" ? `${participant.name} was stopped mid-reply by ${this.humanName}`
         : endedBy === "room" ? `${participant.name}'s turn ended mid-reply when viberoom stopped`
         : `${participant.name}'s agent ended the turn mid-reply`;
@@ -4764,7 +5126,7 @@ export class Room extends EventEmitter {
     if (result.stopReason !== "end_turn") {
       this.postRoomEvent(`${participant.name} stopped with ${result.stopReason}.`, undefined, false, { tone: "attention" });
     }
-    if (!automation) this.route(message);
+    if (!automation && (!background || (stored === "record" && !message.audience && !message.failed))) this.route(message);
     return null;
   }
 
@@ -4834,6 +5196,110 @@ export class Room extends EventEmitter {
     return corrections;
   }
 
+
+  private liveAgentSession(id: string, agent: AcpAgent, sessionId: string): boolean {
+    const runtime = this.runtimes.get(id);
+    const participant = this.participants.get(id);
+    return !!participant && participant.kind === "agent" && participant.status !== "left"
+      && !!runtime && runtime.agent === agent && runtime.sessionId === sessionId
+      && agent.alive && !runtime.retiring && !this.closing && !this.readOnly && !this.recordHold;
+  }
+
+  postMessageForAgent(id: string, token: string, raw: unknown): PostMessageReceipt {
+    const runtime = this.runtimes.get(id);
+    if (!runtime || runtime.mcpToken !== token || !token || !this.liveAgentSession(id, runtime.agent, runtime.sessionId))
+      throw new AgentMessageError(403, "session_unavailable", "This agent session cannot publish a message now.");
+    const input = parsePostMessage(raw);
+    const visible = extractNotes(input.text).visible.trim();
+    if (!visible || visible.toLowerCase() === SILENT_MARKER || visible.toLowerCase() === REQUEST_BRIEF_MARKER || skillPull(visible))
+      throw new AgentMessageError(400, "invalid_arguments", "post_message publishes a complete visible message; control markers and notes alone are not messages.");
+    const report: BackgroundMessage = { sessionId: runtime.sessionId, ...input, stopReason: "end_turn" };
+    const messageId = agentMessageId(this.uuid, id, runtime.sessionId, input.messageId, "mcp");
+    const hash = agentMessageHash(report);
+    const confirm = <T>(read: () => T): T => {
+      try { return read(); }
+      catch (error) {
+        if (error instanceof AgentMessageError) throw error;
+        throw new AgentMessageError(503, "unconfirmed_result", "The message could not be confirmed in the room's durable record; inspect it before retrying.");
+      }
+    };
+    const receipt = (stored: NonNullable<ReturnType<HistoryStore["agentMessageReceipt"]>>, duplicate: boolean): PostMessageReceipt => {
+      if (stored.hash !== hash) throw new AgentMessageError(409, "message_id_conflict", "That messageId already belongs to a different message.");
+      return { messageId, seq: stored.seq, status: stored.deleted ? "deleted" : stored.kind === "hidden" ? "held" : "posted", duplicate };
+    };
+    const previous = confirm(() => this.history.agentMessageReceipt(this.id, messageId));
+    if (previous) {
+      const result = receipt(previous, true);
+      this.finishBackgroundDelivery(id, runtime, messageId, previous.deleted);
+      return result;
+    }
+    const pending = this.messages.find(message => message.id === messageId);
+    if (pending) {
+      if (pending.details?.reportHash !== hash)
+        throw new AgentMessageError(409, "message_id_conflict", "That messageId already belongs to a different message.");
+      if (!confirm(() => this.history.hasMessageId(this.id, messageId))) this.persist({ kind: "upsert", message: pending });
+      const recovered = confirm(() => this.history.agentMessageReceipt(this.id, messageId));
+      if (recovered) {
+        const result = receipt(recovered, true);
+        this.finishBackgroundDelivery(id, runtime, messageId, recovered.deleted);
+        return result;
+      }
+      throw new AgentMessageError(503, "unconfirmed_result", "The message could not be confirmed in the room's durable record; inspect it before retrying.");
+    }
+    confirm(() => this.onBackgroundMessage(id, runtime.agent, report, "mcp"));
+    const stored = confirm(() => this.history.agentMessageReceipt(this.id, messageId));
+    if (!stored) throw new AgentMessageError(503, "unconfirmed_result", "The message could not be confirmed in the room's durable record; inspect it before retrying.");
+    return receipt(stored, false);
+  }
+
+  private onBackgroundMessage(id: string, agent: AcpAgent, report: BackgroundMessage, transport: "acp" | "mcp" = "acp"): void {
+    if (!this.liveAgentSession(id, agent, report.sessionId)) return;
+    const runtime = this.runtimes.get(id)!;
+    const participant = this.participants.get(id)!;
+    const messageId = agentMessageId(this.uuid, id, report.sessionId, report.messageId, transport);
+    const seen = runtime.backgroundMessages ??= new Set();
+    if (seen.has(messageId) || this.messages.some(message => message.id === messageId) || this.history.hasMessageId(this.id, messageId)) return;
+    seen.add(messageId);
+    if (seen.size > 256) seen.delete(seen.values().next().value!);
+
+    const extracted = extractNotes(report.text);
+    if (report.stopReason === "end_turn") this.keepNotes(participant, runtime, extracted.notes, "reply");
+    const text = extracted.visible.trim();
+    if (!text || text.toLowerCase() === SILENT_MARKER) return;
+    if (text.toLowerCase() === REQUEST_BRIEF_MARKER || skillPull(text)) {
+      runtime.headerNotes.push("your autonomous report requested room instructions; use the instructions supplied with your next turn");
+      return;
+    }
+    const interrupted = report.stopReason !== "end_turn";
+    const draft: ChatMessage = {
+      id: messageId, seq: 0, from: id, fromName: participant.name, to: [], toNames: [],
+      text, ts: Date.now(), kind: "chat", streaming: false,
+      details: { reportHash: agentMessageHash(report) },
+      ...(interrupted ? { audience: "human" as const } : {}),
+      ...(report.stopReason === "error" ? { failed: "The autonomous agent cycle failed before completing." } : {}),
+    };
+    this.publishAgentReply(participant, runtime, draft,
+      { stopReason: report.stopReason === "cancelled" ? "cancelled" : "end_turn" }, undefined, null, null,
+      report.stopReason === "cancelled" ? "agent" : undefined, true);
+  }
+
+  private finishBackgroundDelivery(id: string, runtime: AgentRuntime, messageId: string, deleted: boolean): void {
+    if (!this.unconfirmedBackground.has(messageId)) return;
+    const retry = this.unconfirmedBackground.get(messageId);
+    this.unconfirmedBackground.delete(messageId);
+    if (deleted) return;
+    if (retry) this.queueBackgroundCorrection(id, runtime, retry);
+    else {
+      const message = this.messages.find(message => message.id === messageId);
+      if (message?.kind === "chat" && !message.audience && !message.failed) this.route(message);
+    }
+  }
+
+  private queueBackgroundCorrection(id: string, runtime: AgentRuntime, retry: RetryRequest): void {
+    runtime.backgroundBacklogPending ||= runtime.pendingTurn;
+    (runtime.backgroundCorrections ??= []).push(retry);
+    this.requestTurn(id, false, false, true);
+  }
 
   private showDraft(turn: NonNullable<AgentRuntime["turn"]>): void {
     if (turn.published || turn.hidden) return;
@@ -5034,6 +5500,7 @@ export class Room extends EventEmitter {
     if (participant.status !== "left") {
       if (runtime) this.restoredSeen.set(id, runtime.lastSeenSeq);
       participant.status = "offline";
+      participant.fell = true;
       participant.statusDetail = `process exited (code ${code}${signal ? `, signal ${signal}` : ""}); reconnect to continue`;
       this.push({ type: "participant", participant });
       this.notice(`${participant.name}: agent process exited.`, "error");
@@ -5106,6 +5573,10 @@ export class Room extends EventEmitter {
       if (option.currentValue === value) continue;
       try {
         participant.configOptions = await runtime.agent.setConfigOption(runtime.sessionId, option.id, value);
+        const taken = participant.configOptions?.find((o) => o.id === option.id)?.currentValue;
+        if (taken !== undefined && taken !== value) {
+          warnings.push({ category, log: `${category}: asked for "${value}", the agent took "${String(taken)}"`, said: `the agent took ${label} ${String(taken)} instead of ${value}` });
+        }
       } catch (error) {
         warnings.push({ category, log: `${category}: set_config_option failed: ${describeError(error)}`, said: `the agent refused ${label} ${value}; it uses ${String(option.currentValue)}` });
       }
@@ -5160,18 +5631,22 @@ export class Room extends EventEmitter {
       this.push({ type: "participant.removed", id: participant.id });
     } else {
       participant.status = "offline";
+      participant.fell = true;
       this.push({ type: "participant", participant });
     }
     return new Error(`${participant.trouble.what} ${participant.trouble.advice} (${participant.statusDetail})`);
   }
 
   private cancelPermissionsOf(id: string): void {
+    let ended = 0;
     for (const [key, entry] of this.permissions) {
       if (entry.participantId !== id) continue;
       this.permissions.delete(key);
       entry.resolve({ outcome: { outcome: "cancelled" } });
       this.push({ type: "permission.resolved", key, optionId: null });
+      ended++;
     }
+    if (ended) this.log.info(`${this.participants.get(id)?.name ?? id}'s question${ended === 1 ? "" : "s"} for permission ended with the turn, unanswered`);
   }
 
   private personaOf(participant: Participant): Persona {
@@ -5182,7 +5657,7 @@ export class Room extends EventEmitter {
     const activity = new Map(this.whoIsBusy().map(p => [p.name, p.line]));
     return [...this.participants.values()]
       .filter((p) => p.status !== "left" && p.status !== "unstaffed")
-      .map((p) => ({ name: p.name, kind: p.kind, vendor: p.agentVendor ?? p.agentLabel, tagline: p.tagline || undefined, muted: p.muted || undefined, activity: activity.get(p.name), formerNames: p.formerNames?.length ? p.formerNames : undefined }));
+      .map((p) => ({ name: p.name, kind: p.kind, vendor: p.agentVendor ?? p.agentLabel, tagline: p.tagline || undefined, muted: p.muted || undefined, asleep: p.asleep || undefined, activity: activity.get(p.name), formerNames: p.formerNames?.length ? p.formerNames : undefined }));
   }
 
   private parseMentions(text: string): { ids: string[]; names: string[] } {

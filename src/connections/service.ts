@@ -1,16 +1,15 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { writeFileAtomic } from "../atomic.js";
+import { RecoverableJsonFile } from "../recoverable-json.js";
 import { OPERATIONS } from "../tool-spec.js";
 import type { Vault } from "../vault.js";
 import { CATALOG, CONNECTION_ID, KEYED_SYSTEMS, ownConnectionId, type CatalogEntry } from "./catalog.js";
 import { ConnectionError } from "./errors.js";
 import { checkEnvNames, checkLaunch, commandLine, sameLaunch, type LocalLaunch } from "./local-launch.js";
 import { McpLocal, type McpLocalOptions } from "./mcp-local.js";
-import { McpAuthRequired, McpRemote } from "./mcp-remote.js";
+import { checkHeaderNames, keysMayGoTo, McpAuthRequired, McpRemote } from "./mcp-remote.js";
 import type { McpSession, McpTool, ToolResult } from "./mcp-session.js";
 import { checkOutbound } from "./outbound.js";
 import {
@@ -35,7 +34,7 @@ export interface PinnedTool {
 }
 
 export type OwnSystem =
-  | { id: string; name: string; mcpUrl: string; addedAt: string }
+  | { id: string; name: string; mcpUrl: string; headers?: string[]; addedAt: string }
   | { id: string; name: string; launch: LocalLaunch; env: string[]; addedAt: string };
 
 interface System {
@@ -46,6 +45,7 @@ interface System {
   mcpUrl?: string;
   launch?: LocalLaunch;
   env?: string[];
+  headers?: string[];
   mark?: CatalogEntry["mark"];
   own: boolean;
 }
@@ -64,9 +64,56 @@ export interface ConnectionRecord {
   pending?: { tools: PinnedTool[]; toolsHash: string; seenAt: string };
 }
 
-type SecretPart = "client" | "tokens" | "env";
+type SecretPart = "client" | "tokens" | "env" | "headers";
 
 interface FileShape { version: 1; connections: ConnectionRecord[]; own?: OwnSystem[] }
+
+const settingsObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
+const stringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === "string");
+const settingsUrl = (value: unknown): value is string => typeof value === "string" && URL.canParse(value);
+
+function validPinnedTools(value: unknown): boolean {
+  return Array.isArray(value) && value.every(tool => settingsObject(tool) && typeof tool.name === "string"
+    && (tool.title === undefined || typeof tool.title === "string") && typeof tool.description === "string"
+    && settingsObject(tool.inputSchema) && (tool.rule === "read" || tool.rule === "write"));
+}
+
+function validServerAuth(value: unknown): boolean {
+  return value === null || settingsObject(value) && settingsUrl(value.resource) && settingsUrl(value.issuer)
+    && settingsUrl(value.authorizationEndpoint) && settingsUrl(value.tokenEndpoint)
+    && (value.registrationEndpoint === undefined || settingsUrl(value.registrationEndpoint))
+    && (value.revocationEndpoint === undefined || settingsUrl(value.revocationEndpoint))
+    && typeof value.issParameter === "boolean" && stringList(value.tokenAuthMethods) && stringList(value.scopes);
+}
+
+function validConnectionRecord(value: unknown): boolean {
+  if (!settingsObject(value) || typeof value.id !== "string" || !CONNECTION_ID.test(value.id)
+    || (value.url !== undefined && !settingsUrl(value.url)) || !validServerAuth(value.auth)
+    || typeof value.state !== "string" || !["connected", "reconnect", "changed"].includes(value.state) || typeof value.connectedAt !== "string"
+    || !validPinnedTools(value.tools) || typeof value.toolsHash !== "string" || !stringList(value.offInRooms)
+    || typeof value.port !== "number" || !Number.isInteger(value.port) || value.port < 0 || value.port > 65535) return false;
+  if (value.server !== undefined && (!settingsObject(value.server)
+    || (value.server.name !== undefined && typeof value.server.name !== "string")
+    || (value.server.version !== undefined && typeof value.server.version !== "string"))) return false;
+  if (value.pending !== undefined || value.state === "changed") {
+    if (!settingsObject(value.pending) || !validPinnedTools(value.pending.tools)
+      || typeof value.pending.toolsHash !== "string" || typeof value.pending.seenAt !== "string") return false;
+  }
+  return true;
+}
+
+function validOwnSystem(value: unknown): boolean {
+  if (!settingsObject(value) || typeof value.id !== "string" || !CONNECTION_ID.test(value.id)
+    || typeof value.name !== "string" || typeof value.addedAt !== "string") return false;
+  if (value.mcpUrl !== undefined) return settingsUrl(value.mcpUrl) && value.launch === undefined && (value.headers === undefined || stringList(value.headers));
+  return settingsObject(value.launch) && typeof value.launch.command === "string"
+    && (value.launch.args === undefined || stringList(value.launch.args)) && (value.env === undefined || stringList(value.env));
+}
+
+function validConnectionsFile(value: Record<string, unknown>): boolean {
+  return value.version === 1 && Array.isArray(value.connections) && value.connections.every(validConnectionRecord)
+    && (value.own === undefined || Array.isArray(value.own) && value.own.every(validOwnSystem));
+}
 
 export interface ConnectionView {
   id: string;
@@ -78,8 +125,9 @@ export interface ConnectionView {
   address?: string;
   access?: "sign-in" | "keys" | "none";
   command?: string;
-  env?: string[];
-  envReady?: boolean;
+  keys?: string[];
+  keysIn?: "env" | "headers";
+  keysReady?: boolean;
   state: ConnectionState | "not-connected" | "signing-in";
   connectedAt?: string;
   server?: string;
@@ -100,6 +148,7 @@ export interface ConnectionsOptions {
   catalog?: readonly CatalogEntry[];
   checkAddress?: (raw: string) => URL;
   changed?: () => void;
+  warn?: (message: string) => void;
   local?: Pick<McpLocalOptions, "resolve" | "spawn" | "stop" | "idleMs">;
 }
 
@@ -150,6 +199,8 @@ class SignIn {
 }
 
 export class Connections {
+  private readonly file: RecoverableJsonFile;
+  get storageProblem(): string | null { return this.file.problem; }
   private records = new Map<string, ConnectionRecord>();
   private sessions = new Map<string, McpSession>();
   private refreshing = new Map<string, Promise<TokenSet>>();
@@ -164,12 +215,18 @@ export class Connections {
     this.now = options.now ?? Date.now;
     this.catalog = options.catalog ?? CATALOG;
     const path = join(options.dataDir, CONNECTIONS_FILE);
-    if (existsSync(path)) {
-      const file = JSON.parse(readFileSync(path, "utf8")) as Partial<FileShape>;
+    this.file = new RecoverableJsonFile(path, "Connection settings", options.warn);
+    const file = this.file.read(validConnectionsFile) as Partial<FileShape> | null;
+    if (file) {
       for (const own of Array.isArray(file.own) ? file.own : []) {
         if (!own || typeof own.id !== "string" || !CONNECTION_ID.test(own.id) || this.entry(own.id) || typeof own.name !== "string") continue;
-        if ("mcpUrl" in own && typeof own.mcpUrl === "string" && URL.canParse(own.mcpUrl)) this.own.set(own.id, own);
-        else if ("launch" in own) {
+        if ("mcpUrl" in own && typeof own.mcpUrl === "string" && URL.canParse(own.mcpUrl)) {
+          try {
+            const headers = checkHeaderNames(own.headers);
+            if (headers.length && !keysMayGoTo(own.mcpUrl)) throw new ConnectionError("a key goes over HTTPS only", "failed");
+            this.own.set(own.id, { id: own.id, name: own.name, mcpUrl: own.mcpUrl, ...(headers.length ? { headers } : {}), addedAt: own.addedAt });
+          } catch { }
+        } else if ("launch" in own) {
           try { this.own.set(own.id, { ...own, launch: checkLaunch(own.launch ?? {}), env: checkEnvNames(own.env) }); } catch { }
         }
       }
@@ -185,7 +242,11 @@ export class Connections {
     const own = this.own.get(id);
     if (!own) return undefined;
     if ("launch" in own) return { id: own.id, name: own.name, blurb: commandLine(own.launch), group: "own", launch: own.launch, env: own.env, own: true };
-    return { id: own.id, name: own.name, blurb: new URL(own.mcpUrl).host, group: "own", mcpUrl: own.mcpUrl, own: true };
+    return { id: own.id, name: own.name, blurb: new URL(own.mcpUrl).host, group: "own", mcpUrl: own.mcpUrl, ...(own.headers?.length ? { headers: own.headers } : {}), own: true };
+  }
+
+  private keysOf(entry: System | undefined): { names: string[]; part: "env" | "headers" } {
+    return entry?.launch ? { names: entry.env ?? [], part: "env" } : { names: entry?.headers ?? [], part: "headers" };
   }
 
   private systems(): System[] {
@@ -194,7 +255,7 @@ export class Connections {
 
   private save(): void {
     const file: FileShape = { version: 1, connections: [...this.records.values()], own: [...this.own.values()] };
-    writeFileAtomic(join(this.options.dataDir, CONNECTIONS_FILE), JSON.stringify(file, null, 2) + "\n");
+    this.file.write(file);
     this.options.changed?.();
   }
 
@@ -211,6 +272,7 @@ export class Connections {
   }
 
   private setSecret(id: string, part: SecretPart, value: unknown): void {
+    this.file.prepareWrite();
     if (value === null) this.options.vault()?.set(`connections.${id}.${part}`, "");
     else this.vault().set(`connections.${id}.${part}`, JSON.stringify(value));
   }
@@ -219,12 +281,14 @@ export class Connections {
   view(): ConnectionView[] {
     return this.systems().map((entry) => {
       const record = this.records.get(entry.id);
+      const keys = this.keysOf(entry);
       const base = {
         id: entry.id, name: entry.name, blurb: entry.blurb, group: entry.group,
         ...(entry.mark ? { mark: { url: `/connection-logos/${entry.id}.svg`, hex: entry.mark.hex } } : {}),
         ...(entry.own && entry.mcpUrl ? { url: entry.mcpUrl } : {}),
         ...(entry.mcpUrl ? { address: entry.mcpUrl } : {}),
-        ...(entry.launch ? { command: commandLine(entry.launch), env: [...entry.env!], envReady: this.missingEnv(entry.id).length === 0 } : {}),
+        ...(entry.launch ? { command: commandLine(entry.launch) } : {}),
+        ...(keys.names.length ? { keys: [...keys.names], keysIn: keys.part, keysReady: this.missingKeys(entry.id).length === 0 } : {}),
       };
       if (this.signIns.has(entry.id)) return { ...base, state: "signing-in" as const };
       if (!record) return { ...base, state: "not-connected" as const };
@@ -232,7 +296,7 @@ export class Connections {
         ...base,
         state: record.state,
         connectedAt: record.connectedAt,
-        access: record.auth ? "sign-in" as const : entry.launch && entry.env?.length ? "keys" as const : "none" as const,
+        access: record.auth ? "sign-in" as const : keys.names.length ? "keys" as const : "none" as const,
         server: record.server?.name,
         tools: record.tools.map((t) => ({ name: t.name, ...(t.title ? { title: t.title } : {}), rule: t.rule })),
         offInRooms: [...record.offInRooms],
@@ -275,6 +339,7 @@ export class Connections {
   setRoom(id: string, roomId: string, on: boolean): void {
     const record = this.records.get(id);
     if (!record) throw new ConnectionError(`${this.entry(id)?.name ?? id} is not connected`, "not-connected");
+    this.file.prepareWrite();
     const off = new Set(record.offInRooms);
     if (on) off.delete(roomId); else off.add(roomId);
     record.offInRooms = [...off];
@@ -284,6 +349,7 @@ export class Connections {
   acceptChanges(id: string): void {
     const record = this.records.get(id);
     if (!record?.pending) return;
+    this.file.prepareWrite();
     record.tools = record.pending.tools;
     record.toolsHash = record.pending.toolsHash;
     delete record.pending;
@@ -305,12 +371,15 @@ export class Connections {
     return (this.options.checkAddress ?? checkOutbound)(raw.trim());
   }
 
-  addOwn(name: string, raw: string): string {
+  addOwn(name: string, raw: string, headers: readonly string[] = []): string {
     const url = this.address(raw);
+    const names = checkHeaderNames([...headers]);
+    if (names.length && !keysMayGoTo(url)) throw new ConnectionError("a server that takes a key in a header is added by an https address", "failed");
     const known = this.findByUrl(url.href);
     if (known) return known;
     const { id, label } = this.ownName(name);
-    this.own.set(id, { id, name: label, mcpUrl: url.href, addedAt: new Date(this.now()).toISOString() });
+    this.file.prepareWrite();
+    this.own.set(id, { id, name: label, mcpUrl: url.href, ...(names.length ? { headers: names } : {}), addedAt: new Date(this.now()).toISOString() });
     this.save();
     return id;
   }
@@ -321,6 +390,7 @@ export class Connections {
     const known = this.findByLaunch(checked);
     if (known) return known;
     const { id, label } = this.ownName(name);
+    this.file.prepareWrite();
     this.own.set(id, { id, name: label, launch: checked, env: names, addedAt: new Date(this.now()).toISOString() });
     this.save();
     return id;
@@ -333,34 +403,38 @@ export class Connections {
     return { id: ownConnectionId(label, (candidate) => reserved.has(candidate) || this.entry(candidate) !== undefined), label };
   }
 
-  missingEnv(id: string): string[] {
-    const saved = new Set(this.savedEnv(id));
-    return (this.entry(id)?.env ?? []).filter((name) => !saved.has(name));
+  missingKeys(id: string): string[] {
+    const saved = new Set(this.savedKeys(id));
+    return this.keysOf(this.entry(id)).names.filter((name) => !saved.has(name));
   }
 
-  savedEnv(id: string): string[] {
-    const entry = this.entry(id);
-    if (!entry?.env?.length) return [];
-    const values = this.secret<Record<string, string>>(id, "env") ?? {};
-    return entry.env.filter((name) => !!values[name]);
+  savedKeys(id: string): string[] {
+    const { names, part } = this.keysOf(this.entry(id));
+    if (!names.length) return [];
+    const values = this.secret<Record<string, string>>(id, part) ?? {};
+    return names.filter((name) => !!values[name]);
   }
 
-  async setEnv(id: string, values: Record<string, unknown>): Promise<void> {
+  async setKeys(id: string, values: Record<string, unknown>): Promise<void> {
     const entry = this.entry(id);
-    if (!entry?.launch) throw new ConnectionError(`${entry?.name ?? id} is not a local server`, "unknown-tool");
-    const kept = this.secret<Record<string, string>>(id, "env") ?? {};
+    const { names, part } = this.keysOf(entry);
+    if (!entry?.own || !names.length) throw new ConnectionError(`${entry?.name ?? id} takes no keys`, "unknown-tool");
+    const kept = this.secret<Record<string, string>>(id, part) ?? {};
     const next: Record<string, string> = {};
-    for (const name of entry.env ?? []) {
+    for (const name of names) {
       const value = typeof values[name] === "string" ? (values[name] as string).trim() : "";
-      if (value.length > 8_000 || /[\u0000\r\n]/.test(value)) throw new ConnectionError(`the value of ${name} must be one line`, "failed");
+      if (value.length > 8_000 || (part === "headers" ? /[\u0000-\u0008\u000a-\u001f\u007f]/ : /[\u0000\r\n]/).test(value)) {
+        throw new ConnectionError(`the value of ${name} must be one line of text`, "failed");
+      }
       if (value || kept[name]) next[name] = value || kept[name];
     }
-    this.setSecret(id, "env", next);
+    this.setSecret(id, part, next);
     await this.sessions.get(id)?.close();
   }
 
   async removeOwn(id: string): Promise<{ revoked: boolean | null }> {
     if (!this.own.has(id)) throw new ConnectionError(`"${id}" is not a server you added`, "unknown-tool");
+    this.file.prepareWrite();
     const result = await this.disconnect(id);
     this.own.delete(id);
     this.save();
@@ -371,6 +445,7 @@ export class Connections {
     this.signIns.get(id)?.cancel("the connection was removed");
     const record = this.records.get(id);
     if (!record) return { revoked: null };
+    this.file.prepareWrite();
     const client = this.secret<ClientRegistration>(id, "client");
     const tokens = this.secret<TokenSet>(id, "tokens");
     let revoked: boolean | null = record.auth ? false : null;
@@ -380,6 +455,7 @@ export class Connections {
     this.setSecret(id, "tokens", null);
     this.setSecret(id, "client", null);
     this.setSecret(id, "env", null);
+    this.setSecret(id, "headers", null);
     this.records.delete(id);
     this.save();
     return { revoked };
@@ -399,6 +475,7 @@ export class Connections {
     if (!entry) return Promise.reject(new ConnectionError(`"${id}" is not a connection viberoom knows`, "unknown-tool"));
     const running = this.signIns.get(id);
     if (running) return running.done;
+    try { this.file.prepareWrite(); } catch (error) { return Promise.reject(error); }
     const signIn = new SignIn();
     this.signIns.set(id, signIn);
     this.options.changed?.();
@@ -413,9 +490,16 @@ export class Connections {
         this.sessions.delete(id);
         let listed: McpTool[] | null = null;
         if (entry.launch) {
-          const missing = this.missingEnv(id);
+          const missing = this.missingKeys(id);
           if (missing.length) throw new ConnectionError(`${entry.name} needs ${missing.join(", ")} before it can start`, "failed");
           listed = await this.session(record).listTools();
+        } else if (entry.headers?.length) {
+          const missing = this.missingKeys(id);
+          if (missing.length) throw new ConnectionError(`${entry.name} needs ${missing.join(", ")} before it can connect`, "failed");
+          try { listed = await this.session(record).listTools(); } catch (error) {
+            if (!(error instanceof McpAuthRequired)) throw error;
+            throw new ConnectionError(`${entry.name} did not accept the key: check ${entry.headers.join(", ")} against the server's docs, with the whole value they give (often Bearer and the key)`, "failed");
+          }
         } else {
           let door = await this.door(entry.mcpUrl!);
           signIn.check();
@@ -439,6 +523,7 @@ export class Connections {
         record.tools = tools;
         record.toolsHash = toolsHash(tools);
         record.server = this.session(record).serverInfo;
+        this.file.prepareWrite();
         this.records.set(id, record);
         this.verified.add(id);
       } finally {
@@ -536,6 +621,7 @@ export class Connections {
 
   private markReconnect(record: ConnectionRecord): void {
     if (record.state === "reconnect") return;
+    this.file.prepareWrite();
     record.state = "reconnect";
     this.save();
   }
@@ -550,6 +636,14 @@ export class Connections {
         cwd: join(this.options.dataDir, "connections", record.id),
         env: () => this.secret<Record<string, string>>(record.id, "env") ?? {},
         ...this.options.local,
+      });
+    } else if (entry.headers?.length) {
+      session = new McpRemote(entry.mcpUrl!, {
+        fetch: this.options.fetch,
+        clientVersion: this.options.clientVersion,
+        token: async () => null,
+        refused: async () => false,
+        headers: this.secret<Record<string, string>>(record.id, "headers") ?? {},
       });
     } else {
       session = new McpRemote(entry.mcpUrl!, {
@@ -570,6 +664,7 @@ export class Connections {
     const tools = pinTools(await this.withAuth(record, (session) => session.listTools()), !this.entry(id)!.own);
     const hash = toolsHash(tools);
     if (hash === record.toolsHash) return;
+    this.file.prepareWrite();
     record.pending = { tools, toolsHash: hash, seenAt: new Date(this.now()).toISOString() };
     record.state = "changed";
     this.save();
@@ -590,10 +685,13 @@ export class Connections {
       return await run(this.session(record));
     } catch (error) {
       if (error instanceof McpAuthRequired) {
+        const entry = this.entry(record.id)!;
         if (!error.insufficientScope) this.markReconnect(record);
-        throw new ConnectionError(error.insufficientScope
-          ? `${this.entry(record.id)!.name} wants more access for this; sign in again to grant it`
-          : `${this.entry(record.id)!.name} no longer accepts viberoom's access; sign in again`, "reconnect");
+        throw new ConnectionError(entry.headers?.length
+          ? `${entry.name} no longer accepts its key; change it in Connections (Keys…), then connect again`
+          : error.insufficientScope
+          ? `${entry.name} wants more access for this; sign in again to grant it`
+          : `${entry.name} no longer accepts viberoom's access; sign in again`, "reconnect");
       }
       throw error;
     }
@@ -603,5 +701,13 @@ export class Connections {
     for (const signIn of this.signIns.values()) signIn.cancel("viberoom is closing");
     await Promise.all([...this.sessions.values()].map((session) => session.close()));
     this.sessions.clear();
+  }
+
+  clear(): void {
+    this.file.clear();
+    this.records.clear();
+    this.own.clear();
+    this.verified.clear();
+    this.options.changed?.();
   }
 }

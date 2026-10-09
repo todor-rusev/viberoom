@@ -3,7 +3,7 @@
   "use strict";
 
   function way(doc = root.document) {
-    if (doc.documentElement.dataset.viberoomDesktop) return "box";
+    if (root.ViberoomDesktop && root.ViberoomDesktop.can("save-dialog", doc)) return "box";
     return typeof root.showSaveFilePicker === "function" ? "picker" : "browser";
   }
 

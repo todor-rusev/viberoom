@@ -2,6 +2,8 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, posix, resolve, win32 } from "node:path";
+import { KEY_HEADER } from "./local-gate.js";
+import { readKey } from "./local-key.js";
 import { OPERATIONAL_LOG_KEEP, rollAside } from "./log.js";
 
 export type Command = "run" | "serve" | "start" | "stop" | "status" | "open" | "logs" | "doctor" | "autostart" | "help";
@@ -237,7 +239,9 @@ export function savedWindowPlacement(profileDir: string): WindowPlacement | null
   }
 }
 
-export function allowOwnNotifications(profileDir: string, origin: string, now = Date.now()): boolean {
+export type OwnNotifications = { outcome: "written" } | { outcome: "kept" } | { outcome: "failed"; why: string };
+
+export function allowOwnNotifications(profileDir: string, origin: string, now = Date.now()): OwnNotifications {
   const file = join(profileDir, "Default", "Preferences");
   try {
     let prefs: Record<string, unknown> = {};
@@ -249,14 +253,15 @@ export function allowOwnNotifications(profileDir: string, origin: string, now = 
     };
     const notifications = child(child(child(child(prefs, "profile"), "content_settings"), "exceptions"), "notifications");
     const pattern = `${origin},*`;
-    if (pattern in notifications) return false;
+    if (pattern in notifications) return { outcome: "kept" };
     notifications[pattern] = { last_modified: String((now + 11_644_473_600_000) * 1000), setting: 1 };
     mkdirSync(join(profileDir, "Default"), { recursive: true });
     writeFileSync(`${file}.viberoom`, JSON.stringify(prefs));
     renameSync(`${file}.viberoom`, file);
-    return true;
-  } catch {
-    return false;
+    return { outcome: "written" };
+  } catch (error) {
+    const e = error as NodeJS.ErrnoException;
+    return { outcome: "failed", why: e && e.code ? `${e.code} on ${file}` : String(e && e.message || e) };
   }
 }
 
@@ -318,4 +323,71 @@ export function browserAdvice(chromium: string | null, platform: NodeJS.Platform
   const names = `${all.slice(0, -1).join(", ")} or ${all[all.length - 1]}`;
   const where = platform === "linux" ? " on PATH" : "";
   return `No Chromium-based browser found (${names}${where}); viberoom opens in a tab of your default browser instead. Install one of them for the app window.`;
+}
+
+export async function waitUntil(check: () => Promise<boolean>, timeoutMs: number, stepMs = 250): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return true;
+    await new Promise((resolve) => setTimeout(resolve, stepMs));
+  }
+  return false;
+}
+
+export async function hubAnswers(url: string): Promise<boolean> {
+  try {
+    await fetch(`${url}api/version`, { signal: AbortSignal.timeout(500) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function recordedHubAnswers(dataDir: string, self: number): Promise<boolean> {
+  const record = readPidFile(dataDir);
+  if (!record || record.pid === self || !isProcessAlive(record.pid)) return false;
+  const key = readKey(dataDir);
+  try {
+    const answer = await fetch(`${hubUrl(record.port)}api/version`, { headers: key ? { [KEY_HEADER]: key } : {}, signal: AbortSignal.timeout(1500) });
+    if (!answer.ok) return false;
+    const said = (await answer.json()) as HubIdentity & { name?: string };
+    return said.name === "viberoom" && !foreignHub(said, dataDir) && said.pid === record.pid;
+  } catch {
+    return false;
+  }
+}
+
+export const STOP_MARGIN_MS = 15_000;
+export const UNSAID_STOP_WAIT_MS = 120_000;
+
+export function stopWaitMs(promised: unknown): number {
+  const ms = Number(promised);
+  return Number.isFinite(ms) && ms > 0 ? ms + STOP_MARGIN_MS : UNSAID_STOP_WAIT_MS;
+}
+
+export async function stopRunningHub(url: string, dataDir: string, log: { warn(line: string): void }, timeoutMs?: number): Promise<boolean> {
+  const key = readKey(dataDir);
+  let pid: number;
+  let wait: number;
+  try {
+    const identity = await fetch(`${url}api/version`, { headers: key ? { [KEY_HEADER]: key } : {}, signal: AbortSignal.timeout(1500) });
+    const said = await identity.json() as HubIdentity & { name?: string };
+    if (!identity.ok || said.name !== "viberoom" || foreignHub(said, dataDir) || !Number.isInteger(said.pid) || !said.pid || said.pid < 1 || said.pid === process.pid) {
+      log.warn("the running room did not identify its process and this data folder; it was not asked to stop");
+      return false;
+    }
+    pid = said.pid;
+    const answer = await fetch(`${url}api/shutdown`, { method: "POST", headers: key ? { [KEY_HEADER]: key } : {}, signal: AbortSignal.timeout(1500) });
+    if (!answer.ok) {
+      log.warn(`the running room did not accept the request to stop (${answer.status}): it is not this folder's`);
+      return false;
+    }
+    wait = timeoutMs ?? stopWaitMs((await answer.json().catch(() => ({})) as { stopsWithinMs?: unknown }).stopsWithinMs);
+  } catch (error) {
+    log.warn(`could not ask the running room to stop: ${String(error)}`);
+    return false;
+  }
+  const stopped = await waitUntil(async () => !isProcessAlive(pid) && !(await hubAnswers(url)), wait);
+  if (!stopped) log.warn(`the running room (pid ${pid}) was still running ${wait} ms after it was asked to stop`);
+  return stopped;
 }

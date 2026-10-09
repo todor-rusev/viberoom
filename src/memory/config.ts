@@ -2,6 +2,7 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
 import { writeFileAtomic } from "../atomic.js";
 import { hostOf, isThisComputer } from "../net/hosts.js";
 import type { Vault } from "../vault.js";
@@ -50,8 +51,10 @@ function empty(): MemoryConfig {
 }
 
 export function consentWords(entry: ProviderEntry, filter: MemoryConfig["filter"]): string {
-  return `${sieveSentence(filter)} ${entry.consentText}`;
+  return `${sieveSentence(filter)} ${entry.consentText} ${NEW_ROOMS_SENTENCE}`;
 }
+
+export const NEW_ROOMS_SENTENCE = "A new room remembers from the start, until its switch \u201cThis room remembers\u201d is turned off; the rooms made before keep the choice they have.";
 
 
 export function sieveUnset(filter: MemoryConfig["filter"]): boolean {
@@ -100,10 +103,12 @@ export interface MemoryProviderView {
   label: string;
   blurb: string;
   costUnit: string;
+  dashboard?: { label: string; url: string };
   capabilities: MemoryCapabilities;
   consent: boolean;
   consentLapsed: boolean;
   consentText: string;
+  roomForget?: { description: string; completed: string };
   fields: MemoryFieldView[];
 }
 
@@ -132,6 +137,11 @@ function secretSlots(state: MemoryConfig): SecretSlot[] {
 }
 
 export class MemoryConfigStore {
+  private readonly trialLifetime = randomUUID();
+  private trialUpdates = 0;
+
+  trialRevision(): string { return `${this.trialLifetime}:${this.trialUpdates}`; }
+  invalidateTrialRevision(): void { this.trialUpdates++; }
   private state: MemoryConfig;
   private readonly vault: () => Vault | null;
 
@@ -150,6 +160,7 @@ export class MemoryConfigStore {
   }
 
   update(change: (state: MemoryConfig) => void): void {
+    this.invalidateTrialRevision();
     change(this.state);
     this.write();
   }
@@ -175,10 +186,12 @@ export class MemoryConfigStore {
           label: entry.label,
           blurb: entry.blurb,
           costUnit: entry.costUnit,
+          ...(entry.dashboard ? { dashboard: { ...entry.dashboard } } : {}),
           capabilities: entry.capabilities,
           consent: consentCurrent(s, entry.id),
           consentLapsed: !!s.consent[entry.id] && !consentCurrent(s, entry.id),
           consentText: consentWords(entry, s.filter),
+          ...(entry.roomForget ? { roomForget: entry.roomForget } : {}),
           fields: entry.fields.map((field) => ({
             key: field.key, label: field.label, kind: field.kind,
             ...(field.hint ? { hint: field.hint } : {}),

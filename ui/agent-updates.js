@@ -21,16 +21,20 @@
     const unknown = view.updates.filter(u => u.status === "unknown" || u.status === "manual").length;
     return `${available ? `${available} agent update${available === 1 ? "" : "s"} available.` : "No agent updates found."}${unknown ? ` ${unknown} check${unknown === 1 ? " needs" : "s need"} attention.` : ""}${view.checkedAt ? ` Checked ${new Date(view.checkedAt).toLocaleString()}.` : ""}`;
   }
-  function row(update, recipe, flow, busy, { error, blocked, entry } = {}) {
+  function row(update, recipe, flow, busy, { error, blocked, entry, quiet = false } = {}) {
     const name = recipe?.vendor || update.vendor;
     const running = flow?.state === "running";
     const phase = updatePhase(flow, busy, entry);
     const problem = error || (entry?.state === "failed" ? entry.detail : flow?.state === "failed" ? flow.detail : "");
+    const loginFirst = !running && flow?.state === "failed" && flow.failedBecause === "sign-in";
     const action = running ? `<button type="button" data-ui="button" data-kind="ghost" data-stop="${esc(flow.id)}">Cancel update</button>`
-      : update.status === "available" && update.canUpdate ? `<button type="button" data-ui="button" data-kind="primary" data-update="${esc(update.vendor)}" ${phase || blocked ? "disabled" : ""}${blocked ? ` title="${esc(blocked)}"` : ""}>${phase ? activity(phase) : "Update"}</button>`
+      : update.status === "available" && update.canUpdate ? `<button type="button" data-ui="button" data-kind="${loginFirst || quiet ? "ghost" : "primary"}" data-update="${esc(update.vendor)}" ${phase || blocked ? "disabled" : ""}${blocked ? ` title="${esc(blocked)}"` : ""}>${phase ? activity(phase) : "Update"}</button>`
       : update.status !== "current" ? `<a data-ui="button" data-kind="ghost" href="${esc(update.help)}" target="_blank" rel="noopener noreferrer">Update instructions</a>` : "";
+    const signIn = loginFirst
+      ? `<button type="button" data-ui="button" data-kind="primary" data-act="open-login-dialog" data-recipe="${esc(flow.recipeId)}" data-purpose="login">Log in to ${esc(name)}</button>`
+      : "";
     return `<article class="agent-update-row" data-vendor="${esc(update.vendor)}">
-      <div class="agent-update-top">${recipe?.icon ? `<img src="${esc(recipe.icon)}" alt="" width="34" height="34">` : ""}<div><strong>${esc(name)}</strong>${running ? activity(phase) : ""}<div>${esc(short(update.current))}${update.status === "available" && update.latest ? ` → ${esc(short(update.latest))}` : ""}${update.skipped ? ' <span class="hint">Skipped</span>' : ""}</div></div>${action}</div>
+      <div class="agent-update-top">${recipe?.icon ? `<img src="${esc(recipe.icon)}" alt="" width="34" height="34">` : ""}<div><strong>${esc(name)}</strong>${running ? activity(phase) : ""}<div>${esc(short(update.current))}${update.status === "available" && update.latest ? ` → ${esc(short(update.latest))}` : ""}${update.skipped ? ' <span class="hint">Skipped</span>' : ""}</div></div>${signIn}${action}</div>
       <p class="hint">${esc(update.method)} · ${esc(update.channel)} · <span class="agent-update-path">${esc(update.executable)}</span></p>
       <p class="agent-update-detail${problem ? " agent-update-error" : ""}" role="${problem ? "alert" : "status"}">${esc(problem || (busy ? `Preparing ${name}’s update…` : entry?.detail || flow?.detail || update.detail))}</p>
       ${running && flow.wantsInput ? `<form data-answer="${esc(flow.id)}"><label>Answer the updater <input name="answer" autocomplete="off" spellcheck="false"></label><button type="submit" data-ui="button">Send answer</button></form>` : ""}
@@ -43,6 +47,9 @@
     let generalError = "", allPending = false, cancelPending = false;
     let pendingAllEntries = [];
     let visibleKeys = [];
+    let dialogGeneration = 0, dismissRun = false, renewing = null;
+    const dismissals = [];
+    let startedHere = false;
     document.addEventListener("keydown", () => { lastInput = Date.now(); }, { passive: true });
     document.addEventListener("input", () => { lastInput = Date.now(); }, { passive: true });
     const safeToShow = () => document.visibilityState === "visible" && document.hasFocus() && !document.querySelector("dialog[open]") && Date.now() - lastInput > 4000;
@@ -50,6 +57,7 @@
     const active = vendor => busy.has(vendor) || flows.get(vendor)?.state === "running" || batchActive() && view.batch.entries.some(e => e.vendor === vendor);
     const activeVendor = () => [...busy][0] || [...flows.values()].find(flow => flow.state === "running")?.recipeId;
     const eligible = () => (view?.updates || []).filter(u => u.status === "available" && u.canUpdate && u.key);
+    const updating = () => startedHere || allPending || batchActive() || !!activeVendor();
     const entryFor = vendor => {
       const pending = pendingAllEntries.find(e => e.vendor === vendor);
       if (pending) return pending;
@@ -108,7 +116,7 @@
       const keys = eligible().map(u => u.key); if (!keys.length) return;
       for (const update of eligible()) { errors.delete(update.vendor); if (flows.get(update.vendor)?.state !== "running") flows.delete(update.vendor); }
       pendingAllEntries = eligible().map(u => ({ vendor: u.vendor, key: u.key, state: "queued", detail: "Waiting for Update all to start…" }));
-      generalError = ""; allPending = true; render();
+      generalError = ""; allPending = true; startedHere = true; render();
       try { const result = await post("/api/agents/updates/start-all", { keys }); setView(result.updates); }
       catch (error) { fail(error); }
       finally { allPending = false; pendingAllEntries = []; render(); }
@@ -120,7 +128,7 @@
       if (!update?.canUpdate || update.status !== "available") return;
       const blocked = blockedBy(vendor);
       if (blocked) { fail(new Error(blocked), vendor); return; }
-      errors.delete(vendor); flows.delete(vendor); busy.add(vendor); render(); reveal(vendor);
+      errors.delete(vendor); flows.delete(vendor); busy.add(vendor); startedHere = true; render(); reveal(vendor);
       try { const result = await post("/api/agents/updates/start", { vendor, key: update.key }, { deadline: 180000 }); setFlow(result.flow, true); }
       catch (error) { fail(error, vendor); }
       finally { busy.delete(vendor); render(); }
@@ -142,8 +150,8 @@
       const scrollTop = dialog.querySelector(".agent-update-body")?.scrollTop || 0;
       const all = view?.updates || [];
       visibleKeys = all.filter(u => u.status === "available").map(u => u.key).filter(Boolean);
-      const buttons = `<div class="agent-update-actions"><button type="button" data-ui="button" data-kind="ghost" data-check ${view?.checking || activeVendor() || batchActive() || allPending ? "disabled" : ""}>Check now</button><span></span>${batchActive() ? `<button type="button" data-ui="button" data-kind="warn" data-cancel-all ${cancelPending || view.batch.state === "cancelling" ? "disabled" : ""}>${cancelPending || view.batch.state === "cancelling" ? "Cancelling…" : "Cancel updates"}</button>` : `<button type="button" data-ui="button" data-kind="primary" data-update-all ${allPending || activeVendor() || !eligible().length ? "disabled" : ""}>${allPending ? "Preparing…" : `Update all (${eligible().length})`}</button>`}<button type="button" data-ui="button" data-kind="ghost" data-skip ${visibleKeys.length ? "" : "disabled"}>Skip these versions</button><button type="button" data-ui="button" data-kind="primary" data-dismiss>Mute for now · Close</button></div>`;
-      dialog.innerHTML = `<div class="agent-update-body"><h2 id="agent-update-title">Updates for your agents</h2><p>${esc(status(view))}</p><p class="hint">Updates keep each agent’s installation method and run one at a time. Update all skips busy agents and reports why; installations needing manual steps keep their instructions. Idle vibemates reconnect afterwards; agents without session restore start with their notes and recent messages.</p><div class="agent-update-list">${all.length ? all.map(u => row(u, recipes().find(r => r.id === u.vendor), flows.get(u.vendor), busy.has(u.vendor), { error: errors.get(u.vendor), blocked: blockedBy(u.vendor), entry: entryFor(u.vendor) })).join("") : '<p>No installed agents were found.</p>'}</div></div><footer class="agent-update-footer">${generalError ? `<p class="agent-update-error" role="alert">${esc(generalError)}</p>` : ""}${batchStatus() ? `<p role="status">${esc(batchStatus())}</p>` : ""}${buttons}<p class="hint">Close waits 24 hours; updates already started keep running. Skip remembers these exact versions; a later version can be offered again.</p></footer>`;
+      const buttons = `<div class="agent-update-actions"><button type="button" data-ui="button" data-kind="ghost" data-check ${view?.checking || activeVendor() || batchActive() || allPending ? "disabled" : ""}>Check now</button><span></span>${batchActive() ? `<button type="button" data-ui="button" data-kind="warn" data-cancel-all ${cancelPending || view.batch.state === "cancelling" ? "disabled" : ""}>${cancelPending || view.batch.state === "cancelling" ? "Cancelling…" : "Cancel updates"}</button>` : `<button type="button" data-ui="button" data-kind="${updating() ? "ghost" : "primary"}" data-update-all ${allPending || activeVendor() || !eligible().length ? "disabled" : ""}>${allPending ? "Preparing…" : `Update all (${eligible().length})`}</button>`}<button type="button" data-ui="button" data-kind="ghost" data-skip ${visibleKeys.length && !dismissals.some(d => d.action === "skip" && d.dialog === dialog) ? "" : "disabled"}>Skip these versions</button><button type="button" data-ui="button" data-kind="${updating() ? "primary" : "ghost"}" data-dismiss>${updating() ? "Close" : "Mute for now"}</button></div>`;
+      dialog.innerHTML = `<div class="agent-update-body"><h2 id="agent-update-title">Updates for your agents</h2><p>${esc(status(view))}</p><p class="hint">Updates keep each agent’s installation method and run one at a time. Update all skips busy agents and reports why; installations needing manual steps keep their instructions. Idle vibemates reconnect afterwards; agents without session restore start with their notes and recent messages.</p><div class="agent-update-list">${all.length ? all.map(u => row(u, recipes().find(r => r.id === u.vendor), flows.get(u.vendor), busy.has(u.vendor), { error: errors.get(u.vendor), blocked: blockedBy(u.vendor), entry: entryFor(u.vendor), quiet: updating() })).join("") : '<p>No installed agents were found.</p>'}</div></div><footer class="agent-update-footer">${generalError ? `<p class="agent-update-error" role="alert">${esc(generalError)}</p>` : ""}${batchStatus() ? `<p role="status">${esc(batchStatus())}</p>` : ""}${buttons}<p class="hint">${updating() ? "Close" : "Mute for now"} waits 24 hours; updates already started keep running. Skip remembers these exact versions; a later version can be offered again.</p></footer>`;
       for (const details of dialog.querySelectorAll("details")) if (opened.has(details.closest("[data-vendor]").dataset.vendor)) details.open = true;
       dialog.querySelector(".agent-update-body").scrollTop = scrollTop;
       for (const form of dialog.querySelectorAll("form[data-answer]")) {
@@ -153,16 +161,55 @@
       }
       if (focused) [...dialog.querySelectorAll("[data-update], [data-stop]")].find(el => el.dataset.update === focused || el.dataset.stop === focused)?.focus({ preventScroll: true });
     }
-    async function dismiss(action) {
+    function closeDialog(target) {
+      if (!target || dialog !== target) return;
+      token = null; dialog = null; dialogGeneration++;
+      target.close(); target.remove(); render();
+    }
+    async function saveDismissals() {
+      if (dismissRun) return;
+      dismissRun = true;
       try {
-        const result = await post("/api/agents/updates/dismiss", { action, keys: visibleKeys });
-        setView(result.updates); token = null; closedLocallyUntil = action === "close" ? Date.now() + 86400000 : 0;
-        dialog?.close(); dialog?.remove(); dialog = null; render();
-      } catch (error) { fail(error); }
+        while (dismissals.length) {
+          const request = dismissals[0], instance = view?.instance;
+          if (request.retryAt > Date.now()) break;
+          request.attempts++;
+          try {
+            const result = await post("/api/agents/updates/dismiss", { action: request.action, keys: request.keys });
+            if (instance !== view?.instance) throw new Error("The room restarted while saving the update reminder pause.");
+            dismissals.shift(); setView(result.updates);
+            if (request.action === "skip" && dialog === request.dialog) {
+              closedLocallyUntil = 0; closeDialog(request.dialog);
+            }
+          } catch (error) {
+            if (request.action === "close") {
+              if (request.attempts >= 3) {
+                dismissals.shift();
+                onError(new Error(`The update window is closed, but the room could not save its 24-hour pause. This window stays muted for 24 hours. ${error?.message || error}`));
+                continue;
+              }
+              request.retryAt = Date.now() + request.attempts * 5000;
+              break;
+            }
+            dismissals.shift();
+            if (dialog === request.dialog) fail(error); else onError(error);
+          }
+        }
+      } finally { dismissRun = false; }
+    }
+    function dismiss(action) {
+      const target = dialog;
+      if (!target || dismissals.some(d => d.action === action && d.dialog === target)) return;
+      dismissals.push({ action, keys: [...visibleKeys], dialog: target, attempts: 0, retryAt: 0 });
+      if (action === "close") { closedLocallyUntil = Date.now() + 86400000; closeDialog(target); }
+      else render();
+      void saveDismissals();
     }
     function open(vendor) {
       if (dialog) { if (vendor) reveal(vendor); else dialog.focus(); return; }
       visibleKeys = (view?.updates || []).filter(u => u.status === "available").map(u => u.key).filter(Boolean);
+      startedHere = false;
+      dialogGeneration++;
       dialog = document.createElement("dialog"); dialog.className = "dialog agent-updates-dialog"; dialog.id = "agent-updates-dialog";
       dialog.setAttribute("aria-labelledby", "agent-update-title");
       dialog.addEventListener("cancel", event => { event.preventDefault(); void dismiss("close"); });
@@ -204,7 +251,9 @@
     function setView(value) {
       if (view?.instance && value?.instance === view.instance && value.revision < view.revision) return;
       if (value?.batch?.id && value.batch.id !== view?.batch?.id) pendingAllEntries = [];
-      if (view?.instance && value?.instance && value.instance !== view.instance) { flows.clear(); errors.clear(); }
+      if (view?.instance && value?.instance && value.instance !== view.instance) {
+        flows.clear(); errors.clear(); token = null; dialogGeneration++;
+      }
       if (value?.batch?.id && value.batch.id !== view?.batch?.id) for (const entry of value.batch.entries) {
         errors.delete(entry.vendor);
         if (flows.get(entry.vendor)?.state !== "running") flows.delete(entry.vendor);
@@ -220,15 +269,24 @@
       flows.set(flow.recipeId, flow); render();
     }
     const timer = setInterval(async () => {
+      if (dismissals.length) void saveDismissals();
       if (dialog && token) {
-        try { const result = await post("/api/agents/updates/renew", { token }); if (!result.ok) { token = null; dialog.close(); dialog.remove(); dialog = null; } } catch { }
+        const target = dialog, claimedToken = token;
+        if (renewing?.dialog === target && renewing.token === claimedToken) return;
+        const request = renewing = { dialog: target, token: claimedToken };
+        try {
+          const result = await post("/api/agents/updates/renew", { token: claimedToken });
+          if (!result.ok && dialog === target && token === claimedToken) closeDialog(target);
+        } catch { }
+        finally { if (renewing === request) renewing = null; }
         return;
       }
-      if (!view?.notification || claiming || closedLocallyUntil > Date.now() || !safeToShow()) return;
+      if (!view?.notification || claiming || dismissals.length || closedLocallyUntil > Date.now() || !safeToShow()) return;
       claiming = true;
+      const generation = dialogGeneration, instance = view.instance, notification = view.notification;
       try {
-        const answer = await post("/api/agents/updates/claim", { windowId, notification: view.notification });
-        if (answer.token && safeToShow()) { token = answer.token; open(); }
+        const answer = await post("/api/agents/updates/claim", { windowId, notification });
+        if (answer.token && generation === dialogGeneration && instance === view?.instance && notification === view?.notification && !dismissals.length && closedLocallyUntil <= Date.now() && safeToShow()) { token = answer.token; open(); }
       } catch { }
       finally { claiming = false; }
     }, 5000);

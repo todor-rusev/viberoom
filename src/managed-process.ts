@@ -2,9 +2,11 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { childEnvironment } from "./child-environment.js";
 import { RUN_AS_NODE } from "./own-runtime.js";
+import { groupStarted, groupStopped } from "./process-groups.js";
+import { basename } from "node:path";
 
 export interface AgentCommand { command: string; args: string[]; env?: Record<string, string> }
-export interface ProcessResult { code: number | null; output: string; timedOut: boolean; cancelled: boolean; error?: string }
+export interface ProcessResult { code: number | null; stdout: string; output: string; timedOut: boolean; cancelled: boolean; error?: string }
 
 export function processCommand(spec: AgentCommand, platform: NodeJS.Platform = process.platform): AgentCommand & { verbatim?: boolean } {
   if (/\.(?:mjs|cjs|js)$/i.test(spec.command)) return { command: process.execPath, args: [spec.command, ...spec.args], env: { ...spec.env, ...RUN_AS_NODE } };
@@ -37,6 +39,7 @@ export async function stopManaged(child: ChildProcess, group = true): Promise<vo
     }
     try { if (group) process.kill(-child.pid, "SIGKILL"); else child.kill("SIGKILL"); }
     catch { try { child.kill("SIGKILL"); } catch { } }
+    if (group) groupStopped(child.pid);
   }
   if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolve, reject) => {
@@ -49,39 +52,43 @@ export async function stopManaged(child: ChildProcess, group = true): Promise<vo
 
 export function spawnManaged(spec: AgentCommand, cwd: string): ChildProcess {
   const launch = processCommand(spec);
-  return spawn(launch.command, launch.args, {
+  const child = spawn(launch.command, launch.args, {
     cwd, env: childEnvironment({ ...launch.env, NO_COLOR: "1", FORCE_COLOR: "0", TERM: "dumb" }),
     stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
     windowsVerbatimArguments: launch.verbatim, detached: process.platform !== "win32",
   });
+  if (process.platform !== "win32") groupStarted(child, basename(spec.command));
+  return child;
 }
 
 export function runManaged(spec: AgentCommand, cwd: string, options: {
   signal?: AbortSignal; timeoutMs?: number; maxBytes?: number; onOutput?: (text: string) => void;
 } = {}): Promise<ProcessResult> {
-  if (options.signal?.aborted) return Promise.resolve({ code: null, output: "", timedOut: false, cancelled: true });
+  if (options.signal?.aborted) return Promise.resolve({ code: null, stdout: "", output: "", timedOut: false, cancelled: true });
   return new Promise(resolve => {
     let child: ChildProcess;
     try { child = spawnManaged(spec, cwd); }
-    catch (error) { resolve({ code: null, output: "", timedOut: false, cancelled: false, error: String(error) }); return; }
+    catch (error) { resolve({ code: null, stdout: "", output: "", timedOut: false, cancelled: false, error: String(error) }); return; }
     child.stdin?.end();
-    let output = "", timedOut = false, cancelled = false, settled = false;
+    let stdout = "", output = "", timedOut = false, cancelled = false, settled = false;
     let cleanup: Promise<void> | undefined;
     const finish = async (code: number | null, error?: string) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer); options.signal?.removeEventListener("abort", abort);
       try { await cleanup; } catch (failure) { error = String(failure); }
-      resolve({ code, output, timedOut, cancelled, ...(error ? { error } : {}) });
+      resolve({ code, stdout, output, timedOut, cancelled, ...(error ? { error } : {}) });
     };
     const stop = () => { if (!cleanup) { cleanup = stopManaged(child); void cleanup.then(() => finish(null), error => finish(null, String(error))); } };
     const abort = () => { cancelled = true; stop(); };
     const timer = setTimeout(() => { timedOut = true; stop(); }, options.timeoutMs ?? 20_000);
+    const limit = options.maxBytes ?? 64 * 1024;
     const collect = (data: Buffer) => {
       const text = String(data);
-      output = (output + text).slice(-(options.maxBytes ?? 64 * 1024)); options.onOutput?.(text);
+      output = (output + text).slice(-limit); options.onOutput?.(text);
     };
-    child.stdout?.on("data", collect); child.stderr?.on("data", collect);
+    child.stdout?.on("data", (data: Buffer) => { stdout = (stdout + String(data)).slice(-limit); collect(data); });
+    child.stderr?.on("data", collect);
     child.once("error", e => { void finish(null, e.message); });
     child.once("close", code => { void finish(code); });
     options.signal?.addEventListener("abort", abort, { once: true });

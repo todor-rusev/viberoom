@@ -1,5 +1,30 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { HUB_HOST } from "./launcher.js";
+import { createServer, type RequestListener, type Server } from "node:http";
+
+const startingHandlers = new WeakMap<Server, RequestListener>();
+
+export function adoptReservedHubPort(server: Server): void {
+  const starting = startingHandlers.get(server);
+  if (starting) server.removeListener("request", starting);
+  startingHandlers.delete(server);
+}
+
+export function reserveHubPort(port: number): Promise<Server> {
+  const starting: RequestListener = (_req, res) => {
+    res.writeHead(503, { "Content-Type": "text/plain; charset=utf-8", "Retry-After": "1", "Cache-Control": "no-store", Connection: "close" });
+    res.end("viberoom is starting. Try again in a moment.");
+  };
+  const server = createServer(starting);
+  startingHandlers.set(server, starting);
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, HUB_HOST, () => {
+      server.removeListener("error", reject);
+      resolve(server);
+    });
+  });
+}
 
 export interface PortHolder {
   build: string | null;

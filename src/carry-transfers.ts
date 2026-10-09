@@ -349,13 +349,18 @@ export class CarryTransfers {
         }
         for (const room of plan.rooms) {
           const history = this.hub.history, id = room.stored.id;
+          const states = room.made ? [] : stage.planRows<CarryState>(room.uuid, "state");
+          const revisions = room.made ? [] : stage.planRows<CarryRevision>(room.uuid, "revision");
+          if (room.repair || room.rows.state) history.importMemoryRepair(id, room.stored.uuid!,
+            room.repair ? stage.memoryRepair(room.uuid) : undefined, states, new Map(revisions.map(r => [r.revision, r])),
+            [...history.carry.aliases(id), ...room.aliases]);
           if (room.memory) {
             if (room.memoryMode === "merge") this.hub.history.memory.mergeRoom(room.stored.uuid!, room.memory);
             else this.hub.history.memory.importRoom(room.stored.uuid!, room.memory);
           }
           if (room.made) continue;
-          history.carry.importRevisions(id, stage.planRows<CarryRevision>(room.uuid, "revision"));
-          for (const state of stage.planRows<CarryState>(room.uuid, "state")) {
+          history.carry.importRevisions(id, revisions);
+          for (const state of states) {
             history.upsert(id, state.message, { track: false });
             if (state.deletedAt !== null) history.markDeleted(id, [state.message.id], state.deletedAt, { track: false });
           }

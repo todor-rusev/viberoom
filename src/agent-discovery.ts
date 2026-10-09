@@ -1,6 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { existsSync, readFileSync, realpathSync, readdirSync, statSync, lstatSync, openSync, readSync, closeSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { Worker } from "node:worker_threads";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 import { createHash } from "node:crypto";
@@ -24,13 +25,14 @@ export interface AgentInstallation {
 }
 export interface DiscoveryHost {
   platform: NodeJS.Platform; env: NodeJS.ProcessEnv; home: string; runtime: string;
+  runtimeIsElectron?: boolean;
   exists(path: string): boolean; read(path: string): string; real(path: string): string;
   head(path: string): string;
   dirs(path: string): string[]; mtime(path: string): number;
   query(command: AgentCommand): string;
 }
 const defaults: DiscoveryHost = {
-  platform: process.platform, env: process.env, home: homedir(), runtime: process.execPath,
+  platform: process.platform, env: process.env, home: homedir(), runtime: process.execPath, runtimeIsElectron: !!process.versions.electron,
   exists: path => {
     if (existsSync(path)) return true;
     if (process.platform === "win32" && /[\\/]Microsoft[\\/]WindowsApps[\\/][^\\/]+\.exe$/i.test(path)) {
@@ -50,15 +52,60 @@ const defaults: DiscoveryHost = {
   },
 };
 
+export interface DiscoverySnapshot { selected: AgentInstallation[]; npmRoot: string | null; npmPath: string | null }
+export type DiscoveryScan = { found: DiscoverySnapshot } | { failed: string };
+export type DiscoveryScanner = (prefix: string | null, signal?: AbortSignal) => Promise<DiscoveryScan>;
+
+export const scanInWorker: DiscoveryScanner = (prefix, signal) => new Promise((resolve) => {
+  if (signal?.aborted) { resolve({ failed: "the look was called off" }); return; }
+  let answer: DiscoverySnapshot | null = null, why: string | null = null;
+  let worker: Worker;
+  try {
+    worker = new Worker(new URL("./agent-discovery-worker.js", import.meta.url), { workerData: { prefix } });
+  } catch (error) {
+    resolve({ failed: `the worker could not start: ${error instanceof Error ? error.message : String(error)}` });
+    return;
+  }
+  const stop = () => void worker.terminate();
+  signal?.addEventListener("abort", stop, { once: true });
+  worker.once("message", (value: DiscoverySnapshot) => { answer = value; void worker.terminate(); });
+  worker.once("error", (error) => { why = error instanceof Error ? error.message : String(error); });
+  worker.once("exit", (code) => {
+    signal?.removeEventListener("abort", stop);
+    if (signal?.aborted) resolve({ failed: "the look was called off" });
+    else resolve(answer ? { found: answer } : { failed: why ?? `the worker ended (exit ${code}) before it answered` });
+  });
+});
+
 export class AgentDiscovery {
   readonly host: DiscoveryHost;
   private selected = new Map<VendorId, AgentInstallation>();
   private initialized = false;
+  private offThread = false;
+  readsBeforeScan = 0;
+  private running: Promise<void> | null = null;
+  private next: Promise<void> | null = null;
+  onReport: ((line: string, level: "info" | "warn") => void) | null = null;
   private npmRoot: string | null = null;
   private npmPath: string | null = null;
-  constructor(host: Partial<DiscoveryHost> = {}) {
+  private prefix: string | null = null;
+  constructor(host: Partial<DiscoveryHost> = {}, private readonly scanner: DiscoveryScanner | null = null) {
     this.host = { ...defaults, ...host };
     if (host.read && !host.head) this.host.head = p => host.read!(p).slice(0, 256);
+  }
+  keepOffThread(): void { this.offThread = true; }
+  snapshot(): DiscoverySnapshot { return { selected: [...this.selected.values()], npmRoot: this.npmRoot, npmPath: this.npmPath }; }
+  private adopt(found: DiscoverySnapshot): void {
+    this.initialized = true;
+    this.selected = new Map(found.selected.map((i) => [i.vendor, i]));
+    this.npmRoot = found.npmRoot;
+    this.npmPath = found.npmPath;
+  }
+  private unread(): boolean {
+    if (this.initialized) return false;
+    if (!this.offThread) { this.refresh(); return false; }
+    this.readsBeforeScan++;
+    return true;
   }
   private get p() { return this.host.platform === "win32" ? win32 : posix; }
   private real(path: string): string { try { return this.host.real(path); } catch { return path; } }
@@ -71,21 +118,62 @@ export class AgentDiscovery {
     return findOnPath(name, env, this.host.platform, this.host.exists);
   }
   npm(): string | null {
+    if (this.offThread) {
+      if (this.initialized) return this.npmPath;
+      this.readsBeforeScan++;
+      return null;
+    }
     const p = this.p, dir = p.dirname(this.host.runtime);
-    return [p.join(dir, "node_modules/npm/bin/npm-cli.js"), p.join(dir, "../lib/node_modules/npm/bin/npm-cli.js")]
+    return [p.join(dir, "node_modules/npm/bin/npm-cli.js"), p.join(dir, "../Resources/npm/bin/npm-cli.js"), p.join(dir, "../lib/node_modules/npm/bin/npm-cli.js")]
       .find(x => this.host.exists(x)) ?? this.onPath("npm");
   }
-  get(id: VendorId): AgentInstallation | null { if (!this.initialized) this.refresh(); return this.selected.get(id) ?? null; }
-  list(): AgentInstallation[] { if (!this.initialized) this.refresh(); return [...this.selected.values()]; }
-  refresh(): void {
-    this.npmPath = this.npm();
-    this.rebuild(this.npmPath ? this.query({ command: this.npmPath, args: ["root", "--global"] }) : null);
+  installInto(prefix: string | null): boolean {
+    if (prefix === this.prefix) return false;
+    this.prefix = prefix;
+    this.initialized = false;
+    return true;
   }
-  async refreshAsync(signal?: AbortSignal): Promise<void> {
+  get ownPrefix(): string | null { return this.prefix; }
+  npmGlobal(args: string[]): string[] { return this.prefix ? [...args, "--prefix", this.prefix] : args; }
+  get(id: VendorId): AgentInstallation | null { return this.unread() ? null : this.selected.get(id) ?? null; }
+  list(): AgentInstallation[] { return this.unread() ? [] : [...this.selected.values()]; }
+  refresh(): void {
+    if (this.offThread) throw new Error("the coding agents are looked for away from the hub's thread: use refreshAsync");
     this.npmPath = this.npm();
-    const result = this.npmPath ? await runManaged({ command: this.npmPath, args: ["root", "--global"] }, this.host.home, { signal, timeoutMs: 6000, maxBytes: 256 * 1024 }) : null;
+    this.rebuild(this.npmPath ? this.query({ command: this.npmPath, args: this.npmGlobal(["root", "--global"]) }) : null);
+  }
+  refreshAsync(signal?: AbortSignal): Promise<void> {
+    if (!this.scanner) return this.refreshHere(signal);
+    if (!this.running) {
+      this.running = this.scanOnce(signal).finally(() => { this.running = null; });
+      return this.running;
+    }
+    this.next ??= this.running.catch(() => {}).then(() => { this.next = null; return this.refreshAsync(signal); });
+    return this.next;
+  }
+  private async scanOnce(signal?: AbortSignal): Promise<void> {
+    const started = Date.now();
+    const scan = await this.scanner!(this.prefix, signal);
     if (signal?.aborted) return;
-    this.rebuild(result?.code === 0 ? result.output.trim() : null);
+    if ("found" in scan) {
+      this.adopt(scan.found);
+      const names = scan.found.selected.map((i) => i.vendor).join(", ") || "none";
+      this.onReport?.(`the coding agents on this machine, looked for in a worker in ${Date.now() - started} ms: ${names}`, "info");
+      return;
+    }
+    if (this.initialized) {
+      this.onReport?.(`the look for the coding agents could not be made (${scan.failed}); the last one stays`, "warn");
+      return;
+    }
+    this.onReport?.(`the look for the coding agents could not be made in a worker (${scan.failed}); it is made on the hub's thread this once`, "warn");
+    this.offThread = false;
+    try { this.refresh(); } finally { this.offThread = true; }
+  }
+  private async refreshHere(signal?: AbortSignal): Promise<void> {
+    this.npmPath = this.npm();
+    const result = this.npmPath ? await runManaged({ command: this.npmPath, args: this.npmGlobal(["root", "--global"]) }, this.host.home, { signal, timeoutMs: 6000, maxBytes: 256 * 1024 }) : null;
+    if (signal?.aborted) return;
+    this.rebuild(result?.code === 0 ? result.stdout.trim() : null);
   }
   private rebuild(root: string | null): void {
     this.initialized = true;
@@ -142,7 +230,15 @@ export class AgentDiscovery {
     if (!node && !/\.(?:exe|cmd|bat|ps1)$/i.test(file)) {
       try { node = /^#![^\r\n]*\bnode\b/.test(this.host.head(file)); } catch { }
     }
-    return node ? { command: this.host.runtime, args: [file], env: { ...RUN_AS_NODE } } : { command: file, args: [] };
+    if (!node) return { command: file, args: [] };
+    const machineNode = this.machineNode();
+    return machineNode ? { command: machineNode, args: [file] } : { command: this.host.runtime, args: [file], env: { ...RUN_AS_NODE } };
+  }
+  private machineNode(): string | null {
+    if (!this.host.runtimeIsElectron || this.host.platform !== "win32") return null;
+    const beside = this.npmRoot ? this.p.join(this.p.dirname(this.npmRoot), "node.exe") : null;
+    if (beside && this.host.exists(beside)) return beside;
+    return this.onPath("node.exe");
   }
   private describe(id: VendorId, executable: string, file: string, known: Partial<AgentInstallation> = {}): AgentInstallation {
     const p = this.p, real = this.real(file), pkg = this.packageAt(real, id);
@@ -266,4 +362,4 @@ export class AgentDiscovery {
   }
 }
 
-export const agentDiscovery = new AgentDiscovery();
+export const agentDiscovery = new AgentDiscovery({}, scanInWorker);

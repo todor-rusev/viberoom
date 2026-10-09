@@ -1,8 +1,8 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
-import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, parse, resolve, sep } from "node:path";
-import { writeFileAtomic } from "../atomic.js";
+import { RecoverableJsonFile } from "../recoverable-json.js";
 import { isVaultRef, vaultRef, type Vault } from "../vault.js";
 import type { Platform } from "./types.js";
 
@@ -57,11 +57,14 @@ const TOKEN_SECRET = "channels.telegram.token";
 
 export class ChannelsStore {
   private state: ChannelsState;
+  private readonly file: RecoverableJsonFile;
+  get storageProblem(): string | null { return this.file.problem; }
   private readonly vault: () => Vault | null;
 
-  constructor(readonly path: string, vault?: Vault | (() => Vault | null)) {
+  constructor(readonly path: string, vault?: Vault | (() => Vault | null), report?: (message: string) => void) {
     this.vault = typeof vault === "function" ? vault : () => vault ?? null;
-    this.state = load(path);
+    this.file = new RecoverableJsonFile(path, "Telegram settings", report);
+    this.state = load(this.file);
     this.adoptSecrets();
   }
 
@@ -79,13 +82,15 @@ export class ChannelsStore {
   }
 
   update(change: (state: ChannelsState) => void): void {
+    this.file.prepareWrite();
     change(this.state);
     this.write();
   }
 
   private write(): void {
     mkdirSync(dirname(this.path), { recursive: true });
-    writeFileAtomic(this.path, JSON.stringify(this.serialized(), null, 2) + "\n");
+    this.file.prepareWrite();
+    this.file.write(this.serialized());
     if (process.platform !== "win32") chmodSync(this.path, 0o600);
   }
 
@@ -114,8 +119,13 @@ export class ChannelsStore {
   }
 
   reload(): void {
-    this.state = load(this.path);
+    this.state = load(this.file);
     this.adoptSecrets();
+  }
+
+  clear(): void {
+    this.file.clear();
+    this.state = structuredClone(EMPTY);
   }
 }
 
@@ -137,10 +147,11 @@ export function maskToken(token: string): string {
   return token ? `${token.slice(0, 4)}…(${token.length} chars)` : "";
 }
 
-function load(path: string): ChannelsState {
-  if (!existsSync(path)) return structuredClone(EMPTY);
-  const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<ChannelsState>;
+function load(file: RecoverableJsonFile): ChannelsState {
+  const raw = file.read() as Partial<ChannelsState> | null;
+  if (!raw) return structuredClone(EMPTY);
   const state: ChannelsState = { version: 1, bindings: {}, pairings: [], detached: {}, fileRoots: [] };
+  if (typeof raw.phoneApprovals === "boolean") state.phoneApprovals = raw.phoneApprovals;
   if (Array.isArray(raw.fileRoots)) {
     for (const r of raw.fileRoots as unknown[]) {
       if (typeof r === "string" && r.trim()) state.fileRoots.push({ path: r, subfolders: true });
@@ -168,6 +179,8 @@ function load(path: string): ChannelsState {
       state.bindings[key] = { roomId: value.roomId, cursorSeq: Number.isFinite(value.cursorSeq) ? Number(value.cursorSeq) : 0, since: Number.isFinite(value.since) ? Number(value.since) : 0 };
       const live = value.live;
       if (live && typeof live.messageId === "string" && typeof live.roomMessageId === "string") state.bindings[key].live = { messageId: live.messageId, roomMessageId: live.roomMessageId };
+      const wedge = value.wedge;
+      if (wedge && typeof wedge.messageId === "string" && typeof wedge.turnId === "string") state.bindings[key].wedge = { messageId: wedge.messageId, turnId: wedge.turnId };
     }
   }
   if (raw.detached && typeof raw.detached === "object") {

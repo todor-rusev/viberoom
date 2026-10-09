@@ -1,6 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { andedTerms, type HistoryStore } from "./history-store.js";
-import type { RecalledFact } from "./memory/provider.js";
+import { isFact, type Recalled, type RecalledFact } from "./memory/provider.js";
+import { untracedNote } from "./memory/provenance.js";
 import { NameDirectory, namesInQuery, type NameHolder } from "./name-directory.js";
 
 export const AGENT_SEARCH_RESPONSE_BYTES = 16 * 1024;
@@ -11,7 +12,7 @@ const FACT_BYTES = 480;
 
 export interface AgentSearchArgs { query: string; rooms: "this" | "all"; kinds: "chat" | "chat,system"; limit: number; author?: string; only?: "messages" | "facts" }
 
-export type AgentSearchFacts = { facts: RecalledFact[]; pending: number } | { unavailable: string };
+export type AgentSearchFacts = { facts: Recalled[]; pending: number } | { unavailable: string };
 
 export function parseAgentSearchArgs(params: Record<string, unknown>, http = false): AgentSearchArgs {
   const queryKey = http ? "q" : "query";
@@ -97,21 +98,28 @@ export function searchAgentHistory(
   }) : { hits: [], usedTrigram: false, query: args.query };
   const context = found.hits.length ? store!.agentSearchContext(found.hits[0].roomId, found.hits[0].seq, kinds) : [];
   const recalled = args.only !== "messages" && memory && "facts" in memory ? memory.facts : [];
-  const facts: { facts?: Array<{ fact: string; validAt?: string; invalidAt?: string; relevance?: number; roomName?: string }>; factsPending?: number; factsUnavailable?: string } =
+  const note = untracedNote(recalled);
+  const facts: { facts?: Array<{ kind?: "node" | "message"; fact?: string; name?: string; labels?: string[]; attributes?: Record<string, unknown>; summary?: string; text?: string; sources?: NonNullable<RecalledFact["sources"]>; sourcesOmitted?: number; verification?: RecalledFact["verification"]; validAt?: string; invalidAt?: string; relevance?: number; roomName?: string }>; factsNote?: string; factsPending?: number; factsUnavailable?: string } =
     args.only === "messages" ? {}
     : !memory ? (args.only === "facts" ? { factsUnavailable: "This room keeps no long-term memory." } : {})
     : "unavailable" in memory ? { factsUnavailable: memory.unavailable }
     : {
       facts: recalled.map((f) => ({
-        fact: "",
-        ...(f.validAt ? { validAt: f.validAt } : {}), ...(f.invalidAt ? { invalidAt: f.invalidAt } : {}),
+        ...(f.kind === "node" ? { kind: "node" as const, name: f.name, ...(f.labels?.length ? { labels: f.labels } : {}),
+            ...(f.attributes && Object.keys(f.attributes).length ? { attributes: f.attributes } : {}), summary: "" }
+          : f.kind === "episode" ? { kind: "message" as const, text: "" } : { fact: "" }),
+        ...(f.verification ? { verification: f.verification } : {}),
+        ...(f.sources ? { sources: f.sources.slice(0, 3), sourcesOmitted: Math.max(0, f.sources.length - 3) } : {}),
+        ...(isFact(f) && f.validAt ? { validAt: f.validAt } : {}), ...(isFact(f) && f.invalidAt ? { invalidAt: f.invalidAt } : {}),
         ...(typeof f.relevance === "number" ? { relevance: Math.round(f.relevance * 1000) / 1000 } : {}),
         ...(f.room ? { roomName: f.room } : {}),
       })),
+      ...(note ? { factsNote: note } : {}),
       ...(memory.pending ? { factsPending: memory.pending } : {}),
     };
   const response = {
     truncated: false,
+    factsOmitted: 0,
     results: found.hits.map((hit, index) => ({
       room: hit.roomId, roomName: names.get(hit.roomId) ?? hit.roomId, seq: hit.seq, from: hit.fromName, ...now(hit.roomId, hit.from, hit.fromName), to: hit.toNames,
       when: new Date(hit.ts).toISOString(), snippet: "", snippetTruncated: false,
@@ -141,11 +149,27 @@ export function searchAgentHistory(
           : "Only this room is searched; pass rooms=\"all\" to include the rooms that share their history.") +
       " Recent messages are included. Context contains the top hit and up to two visible neighbours on each side. The response is capped at 16 KiB of JSON; snippetTruncated/truncated mark shortened text."),
   };
+  if (response.facts?.length) response.hint += " Fact sources are related episodes, which may support or invalidate a claim. verification=source_changed means the assertion and its validity are unverified after a source changed or was removed." +
+    (response.facts.some(f => f.verification === "end_unverified") ? " verification=end_unverified means the fact's end may come from a source removed with no record of what it touched: the fact may still hold." : "") +
+    " read_message accepts room, message_id and an optional version fingerprint; version_unknown points only to the current message.";
   let remaining = AGENT_SEARCH_RESPONSE_BYTES - Buffer.byteLength(JSON.stringify(response, null, 2), "utf8");
+  while (remaining < 512 && response.facts?.length) {
+    const many = [...response.facts].reverse().find(f => (f.sources?.length ?? 0) > 1);
+    if (many) { many.sources!.pop(); many.sourcesOmitted = (many.sourcesOmitted ?? 0) + 1; }
+    else { response.facts.pop(); response.factsOmitted++; }
+    response.truncated = true;
+    remaining = AGENT_SEARCH_RESPONSE_BYTES - Buffer.byteLength(JSON.stringify(response, null, 2), "utf8");
+  }
+  if (response.factsOmitted && response.factsNote) {
+    const kept = untracedNote(recalled.slice(0, response.facts!.length));
+    if (kept) response.factsNote = kept; else delete response.factsNote;
+    remaining = AGENT_SEARCH_RESPONSE_BYTES - Buffer.byteLength(JSON.stringify(response, null, 2), "utf8");
+  }
   if (remaining < 0) throw new Error("search result metadata exceeds the response budget; try a smaller limit");
   response.facts?.forEach((entry, index) => {
-    const part = excerpt(recalled[index].fact, Math.min(FACT_BYTES, remaining));
-    entry.fact = part.text;
+    const item = recalled[index];
+    const part = excerpt(item.kind === "episode" ? item.text : item.kind === "node" ? item.summary : item.fact, Math.min(FACT_BYTES, remaining));
+    if (item.kind === "episode") entry.text = part.text; else if (item.kind === "node") entry.summary = part.text; else entry.fact = part.text;
     response.truncated ||= part.truncated;
     remaining -= part.bytes;
   });

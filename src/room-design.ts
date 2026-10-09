@@ -71,11 +71,23 @@ export function lintRoomDesign(design: RoomDesign, context: RoomDesignContext): 
       error("setting-not-yours", `"${key}" is set by the human, not through a design`);
       continue;
     }
+    const spec = ROOM_SETTINGS_SPEC[k];
+    if (context.kind === "template" && spec.template === false) {
+      error("setting-not-in-template", `"${key}" is this room's or this machine's own choice; a template does not carry it`);
+      continue;
+    }
+    let coerced: unknown;
     try {
-      (settings as unknown as Record<string, unknown>)[k] = coerceSetting(k, value);
+      coerced = coerceSetting(k, value);
     } catch (e) {
       error("invalid-setting", e instanceof Error ? e.message : String(e));
+      continue;
     }
+    if (spec.agentMay && !spec.agentMay.includes(coerced) && JSON.stringify(coerced) !== JSON.stringify(base[k])) {
+      error("setting-human-value", `"${key}" may be proposed only as ${spec.agentMay.map((v) => JSON.stringify(v)).join(" or ")}; ${JSON.stringify(coerced)} sends more of the room out of this computer, so ${context.humanName} sets it on the setting itself`);
+      continue;
+    }
+    (settings as unknown as Record<string, unknown>)[k] = coerced;
   }
   if (design.emoji !== undefined && !settings.emoji) {
     try { settings.emoji = cleanFace(String(design.emoji), "room"); }

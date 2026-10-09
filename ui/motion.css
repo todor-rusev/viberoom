@@ -45,7 +45,7 @@
   .menu button, .mention-menu button):is(:not(:hover), :disabled)) *) {
   animation: var(--word);
 }
-:where(.side-head.room, .participants, .automations-dialog, .send-btn, .mm-expand, .head [data-act="pin"], .tn-tw) .i { animation: none; }
+:where(.side-head.room, .participants, .automations-dialog, .send-btn, .mm-expand, .msg-head [data-act="pin"], .tn-tw) .i { animation: none; }
 @keyframes g-turn { to { transform: rotate(60deg) scale(1.1); } }
 @keyframes g-spin { to { transform: rotate(360deg) scale(1.08); } }
 @keyframes g-quarter { 50% { transform: rotate(90deg) scale(1.15); } 100% { transform: rotate(90deg) scale(1.1); } }
@@ -67,8 +67,115 @@
 .rig-plus.play > .p-h { animation: rig-quarter-follow var(--t-gesture) var(--ease-soft); }
 @keyframes rig-quarter-lead { 70%, to { transform: rotate(90deg); } }
 @keyframes rig-quarter-follow { 30% { transform: rotate(0deg); } to { transform: rotate(90deg); } }
-.rig-plug.play > :is(.p-prongs, .p-body, .p-cord) { animation: rig-plug var(--t-gesture) var(--ease-soft); }
-@keyframes rig-plug { 35%, 55% { transform: translateY(-8.33%); } }
+.rig-ship > :is(.p-hull, .p-mast, .p-sail, .p-jib, .p-flag, .p-gangway) { transform-origin: 51.04% 70%; }
+.rig-ship > .p-sail { transform-origin: 57.08% 54.58%; }
+.rig-ship > .p-flag { transform-origin: 54.17% 13.75%; }
+.rig-ship > .p-gull { transform-origin: 18.33% 21.25%; }
+.rig-ship.play > :is(.p-hull, .p-mast, .p-jib, .p-gangway) { animation: rig-ship-rock calc(var(--t-gesture) * 2.5) var(--ease-soft); }
+.rig-ship.play > .p-sail { animation: rig-ship-sail calc(var(--t-gesture) * 2.5) var(--ease-soft); }
+.rig-ship.play > .p-flag { animation: rig-ship-flag calc(var(--t-gesture) * 2.5) var(--ease-soft); }
+.rig-ship.play > .p-gull { animation: rig-ship-gull calc(var(--t-gesture) * 2.5) var(--ease-soft); }
+.rig-ship.play > .p-waves { animation: rig-ship-waves calc(var(--t-gesture) * 2.5) var(--ease-soft); }
+.rig-ship.play > .p-person { animation: rig-ship-aboard calc(var(--t-gesture) * 2.5) var(--ease-soft); }
+.rig-ship.play > .p-climber { animation: rig-ship-climb calc(var(--t-gesture) * 2.5) var(--ease-soft); }
+@keyframes rig-ship-rock { 74% { rotate: 0deg; } 82% { rotate: -3deg; } 92% { rotate: 1.5deg; } }
+@keyframes rig-ship-sail {
+  66% { scale: 1 1; }
+  76% { scale: 1.16 1.03; }
+  88% { scale: 0.97 1; }
+  74% { rotate: 0deg; translate: 0 0; }
+  82% { rotate: -3deg; translate: -0.82% -0.3%; }
+  92% { rotate: 1.5deg; translate: 0.4% 0.16%; }
+}
+@keyframes rig-ship-flag {
+  66% { scale: 1 1; rotate: 0deg; translate: 0 0; }
+  72% { scale: 1.35 1; rotate: -8deg; }
+  74% { translate: 0 0; }
+  80% { scale: 0.75 1; rotate: 2.75deg; }
+  82% { rotate: 0.25deg; translate: -2.95% -0.09%; }
+  88% { scale: 1.12 1; rotate: -2.3deg; }
+  92% { rotate: 0.5deg; translate: 1.47% 0.1%; }
+  96% { scale: 1 1; rotate: 0.75deg; }
+}
+@keyframes rig-ship-gull {
+  10% { transform: translate(0, 0) scaleY(-0.6); }
+  20% { transform: translate(6%, -2%) scaleY(1); }
+  30% { transform: translate(12%, -4%) scaleY(-0.6); }
+  40% { transform: translate(18%, -3%) scaleY(1); }
+  55% { transform: translate(22%, -1%); opacity: 0; }
+  56% { transform: translate(-8%, 2%); opacity: 0; }
+  75% { transform: translate(-3%, 1%) scaleY(-0.6); opacity: 1; }
+  85% { transform: translate(0, 0) scaleY(1); }
+}
+@keyframes rig-ship-waves { to { transform: translateX(-25%); } }
+@keyframes rig-ship-aboard {
+  6%, 60% { opacity: 0; translate: 0 0; }
+  62% { opacity: 1; translate: 0 0; }
+  68% { translate: 0 -6.25%; }
+  74% { translate: 0 0; rotate: 0deg; }
+  82% { translate: -1.05% 0.08%; rotate: -3deg; }
+  92% { translate: 0.52% -0.02%; rotate: 1.5deg; }
+}
+@keyframes rig-ship-climb {
+  from { opacity: 0; transform: translate(0, 0); }
+  6% { opacity: 1; transform: translate(0, 0); }
+  14% { transform: translate(2.5%, -4.2%); }
+  22% { transform: translate(5%, -6.04%); }
+  30% { transform: translate(7.5%, -10.3%); }
+  38% { transform: translate(10%, -12.08%); }
+  48% { transform: translate(14%, -13.3%); }
+  60% { opacity: 1; transform: translate(18.33%, -12.08%); }
+  62%, to { opacity: 0; transform: translate(18.33%, -12.08%); }
+}
+.rig-plug > :is(.p-prongs, .p-body) { transform-origin: 50% 37.5%; }
+.rig-plug > .p-cord { transform-origin: 50% 70.83%; }
+.rig-plug > .p-socket { transform-origin: 50% 26.67%; }
+.rig-plug > .p-spark { transform-origin: 50% 18.33%; }
+.rig-plug.play > :is(.p-prongs, .p-body) { animation: rig-plug calc(var(--t-gesture) * 2) var(--ease-soft); }
+.rig-plug.play > .p-cord { animation: rig-plug-cord calc(var(--t-gesture) * 2) var(--ease-soft); }
+.rig-plug.play > .p-socket { animation: rig-plug-socket calc(var(--t-gesture) * 2) var(--ease-soft); }
+.rig-plug.play > .p-spark { animation: rig-plug-spark calc(var(--t-gesture) * 2) var(--ease-soft); }
+@keyframes rig-plug {
+  8% { transform: translateY(8%) rotate(-9deg); }
+  18% { transform: translateY(14.58%) rotate(8deg); }
+  26% { transform: translateY(14.58%) rotate(0deg); }
+  42%, 70% { transform: translateY(-17.08%); }
+  84% { transform: translateY(0); }
+}
+@keyframes rig-plug-cord {
+  8% { transform: translateY(8%) rotate(6deg); }
+  18% { transform: translateY(14.58%) rotate(-6deg); }
+  26% { transform: translateY(14.58%) rotate(0deg); }
+  42% { transform: translateY(-17.08%) rotate(-10deg); }
+  54% { transform: translateY(-17.08%) rotate(8deg); }
+  64%, 70% { transform: translateY(-17.08%) rotate(0deg); }
+  84% { transform: translateY(0); }
+}
+@keyframes rig-plug-socket {
+  from { opacity: 0; transform: translateY(-25%); }
+  24% { opacity: 1; transform: translateY(-12.5%); }
+  42% { transform: translateY(-12.5%) scale(1); }
+  47% { transform: translateY(-12.5%) scale(1.12); }
+  54% { transform: translateY(-12.5%) scale(1); }
+  74% { opacity: 1; transform: translateY(-12.5%); }
+  88% { opacity: 1; transform: translateY(-20.83%); }
+  to { opacity: 0; transform: translateY(-25%); }
+}
+@keyframes rig-plug-spark {
+  42% { opacity: 0; transform: scale(0.5); }
+  47% { opacity: 1; transform: scale(1.1); }
+  60% { opacity: 1; transform: scale(1.3); }
+  68%, to { opacity: 0; transform: scale(1.5); }
+}
+.rig-sun.play > .p-rays { animation: rig-rays var(--t-gesture) var(--ease-soft); }
+.rig-sun.play > .p-core { animation: rig-breath var(--t-gesture) var(--ease-soft); }
+@keyframes rig-rays { to { transform: rotate(45deg); } }
+@keyframes rig-breath { 45% { transform: scale(0.8); } }
+.rig-moon > .p-star { transform-origin: 72.5% 24.17%; }
+.rig-moon.play > .p-crescent { animation: rig-rock var(--t-gesture) var(--ease-soft); }
+.rig-moon.play > .p-star { animation: rig-twinkle var(--t-gesture) var(--ease-soft); }
+@keyframes rig-rock { 30% { transform: rotate(-16deg); } 65% { transform: rotate(7deg); } }
+@keyframes rig-twinkle { 25% { opacity: 0.35; transform: scale(0.45) rotate(-45deg); } 60% { opacity: 1; transform: scale(1.3) rotate(15deg); } }
 .rig-rooms > .p-tl { transform-origin: 31.25% 31.25%; }
 .rig-rooms > .p-tr { transform-origin: 68.75% 31.25%; }
 .rig-rooms > .p-br { transform-origin: 68.75% 68.75%; }

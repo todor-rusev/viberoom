@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.js";
 import { fileURLToPath } from "node:url";
 import type { Logger } from "./log.js";
-import { upgradeRoomSettings, type RoomSettings } from "./persona.js";
+import { ROOM_SETTINGS_SPEC, coerceSetting, upgradeRoomSettings, type RoomSettings } from "./persona.js";
 import { cleanFace } from "./faces.js";
 
 export interface TemplateVibemate {
@@ -40,6 +40,16 @@ const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 export const SHIPPED_TEMPLATES_DIR = fileURLToPath(new URL("../templates/", import.meta.url));
 
+export function templateRoomSettings(raw: Partial<RoomSettings>): Partial<RoomSettings> {
+  const upgraded = upgradeRoomSettings(raw), settings: Partial<RoomSettings> = {};
+  for (const key of Object.keys(ROOM_SETTINGS_SPEC) as (keyof RoomSettings)[]) {
+    const spec = ROOM_SETTINGS_SPEC[key];
+    if (spec.kind === "own-path" || spec.template === false || !Object.hasOwn(upgraded, key)) continue;
+    (settings as Record<string, unknown>)[key] = coerceSetting(key, upgraded[key]);
+  }
+  return settings;
+}
+
 export function cleanTemplate(raw: unknown, id: string): RoomTemplate {
   const t = (raw ?? {}) as Record<string, unknown>;
   const name = String(t.name ?? "").trim();
@@ -57,7 +67,7 @@ export function cleanTemplate(raw: unknown, id: string): RoomTemplate {
     if (typeof o.replyDelay === "number" && Number.isFinite(o.replyDelay)) out.replyDelay = o.replyDelay;
     return out;
   });
-  const settings = upgradeRoomSettings((t.settings && typeof t.settings === "object" ? t.settings : {}) as Partial<RoomSettings>);
+  const settings = templateRoomSettings((t.settings && typeof t.settings === "object" && !Array.isArray(t.settings) ? t.settings : {}) as Partial<RoomSettings>);
   const out: RoomTemplate = { id, name, description: String(t.description ?? "").trim(), settings, vibemates };
   if (typeof t.order === "number" && Number.isFinite(t.order)) out.order = t.order;
   if (typeof t.emoji === "string" && t.emoji.trim()) out.emoji = cleanFace(t.emoji, "room");
@@ -68,7 +78,7 @@ export function cleanTemplate(raw: unknown, id: string): RoomTemplate {
 }
 
 export function roomSettingsFromTemplate(template: RoomTemplate): Partial<RoomSettings> {
-  const settings: Partial<RoomSettings> = { ...template.settings };
+  const settings = templateRoomSettings(template.settings);
   if (!settings.emoji && template.emoji) settings.emoji = template.emoji;
   return settings;
 }

@@ -65,6 +65,46 @@ export const LOOK_SPEC_FIELDS = {
 
 export const OPERATIONS: OperationSpec[] = [
   {
+    name: "register_background_task", exposure: "deferred",
+    summary: "Register a background job whose completion resumes your next turn automatically.",
+    description: "Register an independent background task in this room under your name. Registration does not execute a command or start a worker. It returns a stable key and completion {url,token}: give those only to that worker. On completion the worker POSTs JSON {key,token,status:'succeeded'|'failed'|'cancelled',result:string} to the completion URL; result is the complete output and may be empty. An unchanged retry is idempotent; changing an already completed result is rejected. The hub saves the result and supplies it in your next turn without requiring a human message, subject to the room's existing work and wake permissions. The completion token authorizes only that task's terminal result; it is separate from your session token. Repeating taskId with the same description returns the registration. list_background_tasks reads recent states, get_background_task reads one complete saved record, and cancel_background_task cancels delivery.",
+    inputSchema: { type: "object", additionalProperties: false, required: ["taskId", "description"], properties: {
+      taskId: { type: "string", minLength: 1, maxLength: 128, pattern: "\\S", description: "Stable caller-assigned ID for this task; an unchanged retry uses the same ID." },
+      description: { type: "string", minLength: 1, maxLength: 8000, pattern: "\\S", description: "What the independent worker does and what its completion means." },
+    } }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: "list_background_tasks", exposure: "deferred",
+    summary: "Read the states of your 50 most recent registered background tasks.",
+    description: "Read the 50 most recent background tasks registered under your name in this room, with terminal status, result character count and whether delivery to your model is pending, claimed, delivered or interrupted. Descriptions, result texts and completion tokens are not included; get_background_task reads one complete saved record by taskId. This does not run commands or restart interrupted work.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} }, annotations: { readOnlyHint: true },
+  },
+  {
+    name: "get_background_task", exposure: "deferred",
+    summary: "Read one of your background tasks with its complete saved result.",
+    description: "Read one registered background task under your name in this room by its caller-assigned taskId. The saved description, complete result and completion and delivery states are returned without truncation; the completion token is not included. This does not run commands or restart interrupted work.",
+    inputSchema: { type: "object", additionalProperties: false, required: ["taskId"], properties: {
+      taskId: { type: "string", minLength: 1, maxLength: 128, pattern: "\\S", description: "The caller-assigned ID used in register_background_task." },
+    } }, annotations: { readOnlyHint: true },
+  },
+  {
+    name: "cancel_background_task", exposure: "deferred",
+    summary: "Cancel one of your registered background tasks and its automatic completion delivery.",
+    description: "Cancel a registered background task under your name in this room by its taskId. This cancels the registration and automatic delivery; it does not stop an operating-system process or undo completed external work. A repeated cancellation is idempotent. A completed task keeps its saved result.",
+    inputSchema: { type: "object", additionalProperties: false, required: ["taskId"], properties: {
+      taskId: { type: "string", minLength: 1, maxLength: 128, pattern: "\\S", description: "The caller-assigned ID used in register_background_task." },
+    } }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: "post_message", exposure: "deferred",
+    summary: "Publish a completed independent message in this room, including between requested turns.",
+    description: "Publish a complete independent message under your name in this room, including between requested turns. The text uses the room's usual @ addressing. A stable messageId identifies the message: repeating the same ID and text returns its receipt; reusing the ID with changed text is rejected. Publication does not start an ACP prompt for the author, advance the author's room-reading cursor or settle an automation. This operation publishes completed text; it does not itself resume the author's model after a background task. The receipt names the saved message and its current posted, held or deleted state.",
+    inputSchema: { type: "object", additionalProperties: false, required: ["messageId", "text"], properties: {
+      messageId: { type: "string", minLength: 1, maxLength: 128, pattern: "\\S", description: "Stable caller-assigned ID for this complete message; an unchanged retry uses the same ID." },
+      text: { type: "string", minLength: 1, maxLength: 200000, pattern: "\\S", description: "The complete message text, with the room's usual @ addressing." },
+    } }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  },
+  {
     name: "list_automations", exposure: "deferred",
     summary: "Read this room's scheduled tasks, reminders, proposals and execution history.",
     description: "Read this room's automations and available recipient IDs. Schedules run only while the hub is running. Completed means the assigned agent turn finished, not that its business goal was verified. Use propose_automation to suggest a change; only the human can apply it.",
@@ -168,8 +208,8 @@ export const OPERATIONS: OperationSpec[] = [
     exposure: "deferred",
     summary: "Inspect current room settings, participants, rules, skills and available templates.",
     description:
-      "The facts about this room before you design anything: its settings with their meaning, bounds, defaults and current values; the rules; the vibemates (name, tagline, role, avatar, skills); the skill library; the templates that exist; and the brief you yourself receive. Read-only. Load the built-in skill \"room-designer\" for what makes rules and roles good.",
-    inputSchema: { type: "object", properties: {} },
+      "The facts about this room before you design anything: its settings with their meaning, bounds, defaults and current values; the rules; the vibemates (name, tagline, role, avatar, skills); the skill library; the templates that exist; the other rooms (otherRooms, by id and name); and the brief you yourself receive. With room, another room's settings instead, the ones you may propose there; their texts only when that room shares its history with yours. Read-only. Load the built-in skill \"room-designer\" for what makes rules and roles good.",
+    inputSchema: { type: "object", properties: { room: { type: "string", description: "optional: another room's id (or its name, when unique) from otherRooms" } } },
     annotations: { readOnlyHint: true },
   },
   {
@@ -203,13 +243,14 @@ export const OPERATIONS: OperationSpec[] = [
   {
     name: "propose_room_changes",
     exposure: "deferred",
-    summary: "Propose changes to current room rules, settings and participants for human approval.",
+    summary: "Propose changes to current room rules, settings and participants, or to another room's settings, for human approval.",
     description:
-      "Propose changes to this room: settings by key (rules in customRules, one per line) and vibemates to add, update or remove. The room checks the change set like a template, then shows the human a card with the diff and the warnings; nothing changes until the human clicks Apply, and the room gets a line with the outcome. A new vibemate is added waiting for the human to pick its coding agent. Say in why what the change fixes.",
+      "Propose changes to this room: settings by key (rules in customRules, one per line) and vibemates to add, update or remove. The room checks the change set like a template, then shows the human a card with the diff and the warnings; nothing changes until the human clicks Apply, and the room gets a line with the outcome. A new vibemate is added waiting for the human to pick its coding agent. Say in why what the change fixes. With room, the settings of another room instead (describe_room with room shows them): the card stands in this room and Apply changes that one; its vibemates are proposed from inside it.",
     inputSchema: {
       type: "object",
       properties: {
         why: { type: "string", description: "one or two sentences: what this change fixes or enables; shown on the card" },
+        room: { type: "string", description: "optional: another room's id (or its name, when unique) from describe_room's otherRooms; settings only" },
         settings: DESIGN_FIELDS.settings,
         vibemates: {
           type: "object",
@@ -225,6 +266,17 @@ export const OPERATIONS: OperationSpec[] = [
         },
       },
       required: ["why"],
+    },
+  },
+  {
+    name: "restart_viberoom",
+    exposure: "deferred",
+    summary: "Restart viberoom the way the human's own Restart button does, waking the rooms after it.",
+    description:
+      "Restart viberoom exactly as the human's Restart button does: a fresh viberoom takes over from this one, the vibemates come back as the human's setting says, and every room set to wake after a restart gets its restart message. Every room is told who asked and from which room. By default it waits for the replies being written, yours included, so it happens once your turn ends; when \"now\", the replies being written are cut short.",
+    inputSchema: {
+      type: "object",
+      properties: { when: { type: "string", enum: ["idle", "now"], description: "optional: \"idle\" (default) waits for the replies being written, \"now\" cuts them short" } },
     },
   },
   {
@@ -274,7 +326,7 @@ export const OPERATIONS: OperationSpec[] = [
     description:
       "Put a card on the human's screen to connect one system, when the work needs it and the human agrees; warn them first and open it on their word. " +
       "A catalogue system (" + CATALOG.map((entry) => entry.id).join(", ") + ") gets a Connect button: the human signs in at the system in the browser. Outcome row: connected with its tools, not now, or failed; then tool_search the system's name for its tools and use tool_call. A connection the human turned off in this room stays off: do not ask again. " +
-      "Any other system: give url, the address of its remote MCP server (HTTPS, public), and name, what the human will call it, instead of system; load the built-in skill add-connection first for how to find and check the address. The card shows the address and adds the server to the human's own connections only when they press it; then it connects the same way, and every one of its tools asks the human before it runs, reading too. An address already on the list is that system. " +
+      "Any other system: give url, the address of its remote MCP server (HTTPS, public), and name, what the human will call it, instead of system; load the built-in skill add-connection first for how to find and check the address. The card shows the address and adds the server to the human's own connections only when they press it; then it connects the same way, and every one of its tools asks the human before it runs, reading too. A server that takes an API key in a header instead of a sign-in: add headers, the names of those headers as its documentation gives them (Authorization, X-API-Key…), never their values; the card has a field for each, and the values go into the vault and with every request to that server. An address already on the list is that system. " +
       "A system whose MCP server runs on this computer (stdio): give command (the program, such as npx or uvx), args, env (the names of the variables that carry its keys, never their values) and name, instead of system; the same skill says how. The card shows the command as it will run with the human's rights and a field for each key; the keys go from the card into the vault. The same command already on the list is that server. " +
       "A keyed system gets a field the human pastes a key into: " + KEYED_SYSTEMS.map((entry) => `"${entry.id}", ${entry.blurb}`).join("; ") + ". Outcome row: connected as @name (telegram) or saved, refused with the reason, or closed without a key. A key turns nothing on by itself where something leaves this computer: the long-term memory and the voice are turned on by the human's own press on the card ask_consent opens, after their keys. " +
       "Either way the access goes into this computer's vault or settings and never to you: it does not enter the conversation, the record or your context, and the outcome row wakes you. One card per system; it closes by itself after ten minutes.",
@@ -283,6 +335,7 @@ export const OPERATIONS: OperationSpec[] = [
       properties: {
         system: { type: "string", pattern: "^[a-z][a-z0-9-]{1,31}$", description: "the system's id as tool_search lists it (the catalogue, or a server the human added), or telegram, zep, sieve, voice" },
         url: { type: "string", minLength: 1, maxLength: 2000, description: "instead of system: the HTTPS address of a remote MCP server outside the catalogue" },
+        headers: { type: "array", maxItems: 8, items: { type: "string", pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$" }, description: "with url, for a server that takes an API key in a header instead of a sign-in: the names of the headers, such as Authorization or X-API-Key; never a value" },
         command: { type: "string", minLength: 1, maxLength: 400, description: "instead of system or url: the program that starts a local MCP server, such as npx, uvx, docker or a full path" },
         args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 2000 }, description: "with command: its arguments, one string each, as the server's own documentation gives them; never a key's value" },
         env: { type: "array", maxItems: 16, items: { type: "string", pattern: "^[A-Za-z_][A-Za-z0-9_]{0,63}$" }, description: "with command: the names of the environment variables that carry its keys, such as GITHUB_PERSONAL_ACCESS_TOKEN; the human types the values on the card" },
@@ -387,7 +440,7 @@ export const OPERATIONS: OperationSpec[] = [
     exposure: "direct",
     summary: "Search this room's past: messages by their words, and the facts its long-term memory keeps, by meaning.",
     chip: (a) => `Searching ${a.rooms === "all" ? "the rooms" : "this room"} · ${chipText(a.query) || "…"}`,
-    description: "Search the room's past two ways at once. Messages, recent ones included: found by words, a quoted phrase or prefix*. Several words are required together, so a question asked as a sentence usually finds no message: widen it with OR, a phrase in quotes, or NOT. Each hit carries its message number for read_message; the top one comes with up to two neighbours on each side. Facts, in a room with long-term memory: what the memory learned from the conversation, found by meaning, best first, each with the span it held true and a relevance 0–1 where the memory gives them. They are the memory's inference, not quotes: check one against the messages before relying on it. rooms=\"all\" widens both to the rooms that share their history, when the human lets this room search them; only narrows the answer to messages or facts. Hidden, deleted and human-only messages are never returned. The answer has a size limit and flags shortened text. Read-only.",
+    description: "Search the room's past two ways at once. Messages, recent ones included: found by words, a quoted phrase or prefix*. Several words are required together, so a question asked as a sentence usually finds no message: widen it with OR, a phrase in quotes, or NOT. Each hit carries its message number for read_message; the top one comes with up to two neighbours on each side. Facts, in a room with long-term memory: what the memory holds, found by meaning, best first, with a relevance 0–1 where the memory gives one: facts it learned from the conversation, each with the span it held true; what it holds about an entity (kind node: its name and summary); and messages themselves (kind message). Facts and what it holds about an entity are the memory's inference, not quotes: check one against the messages before relying on it. rooms=\"all\" widens both to the rooms that share their history, when the human lets this room search them; only narrows the answer to messages or facts. Hidden, deleted and human-only messages are never returned. The answer has a size limit and flags shortened text. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -444,19 +497,20 @@ export const OPERATIONS: OperationSpec[] = [
   {
     name: "read_message",
     exposure: "direct",
-    summary: "Read a complete conversation message by number with optional neighboring messages.",
-    chip: (a) => `Read message #${chipText(a.seq) || "?"}${chipText(a.room) ? ` in ${chipText(a.room, 40)}` : ""}${Number(a.around) > 0 ? ` and ${a.around} on each side` : ""}`,
+    summary: "Read a complete conversation message by number or stable ID with optional neighboring messages.",
+    chip: (a) => `Read message ${a.message_id ? chipText(a.message_id, 40) : `#${chipText(a.seq) || "?"}`}${chipText(a.room) ? ` in ${chipText(a.room, 40)}` : ""}${Number(a.around) > 0 ? ` and ${a.around} on each side` : ""}`,
     description:
-      "Read a full message by seq. Omit room for this room, or pass the room ID from search_history (preferred) or an exact, unique accessible room name. IDs take precedence over names. Other rooms must share history with yours and have an available record. Returns the room's identity, author, addressees, time, text, images as file paths, quotes, and up to around visible neighbours on each side. Hidden, deleted and human-only rows are excluded. Unknown or inaccessible rooms return the same error; there is no fallback to this room. A number another computer's copy of the room gave (a message's numbers note, or a record citing \"#7738 on <name>\") is read with copy: that computer's name. Read-only.",
+      "Read a full message by exactly one of seq or message_id. message_id is stable across copies; version optionally checks the source's sha256 fingerprint and refuses a changed message. Omit room for this room, or pass the room ID from search_history (preferred) or an exact, unique accessible room name. IDs take precedence over names. Other rooms must share history with yours and have an available record. Returns the room's identity, author, addressees, time, text, images as file paths, quotes, and up to around visible neighbours on each side. Hidden, deleted and human-only rows are excluded. Unknown or inaccessible rooms return the same error; there is no fallback to this room. A number another computer's copy of the room gave (a message's numbers note, or a record citing \"#7738 on <name>\") is read with copy: that computer's name. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
         seq: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "the message number, the N of #N" },
+        message_id: { type: "string", minLength: 1, maxLength: 200, description: "stable message ID; use instead of seq and copy" },
+        version: { type: "string", pattern: "^sha256:[a-f0-9]{64}$", description: "optional: the original content fingerprint returned with a memory source; requires message_id" },
         room: { type: "string", minLength: 1, maxLength: 200, description: "optional: room ID from a search result (preferred), or exact unique accessible room name; omitted means this room" },
         around: { type: "integer", minimum: 0, maximum: 5, description: "optional: how many neighbouring messages to include on each side (default 0, at most 5)" },
         copy: { type: "string", minLength: 1, maxLength: 100, description: "optional: the computer whose number seq is, when it was written on another copy of the room (its name, as a numbers note or a record says it); omitted means this room's own numbers" },
       },
-      required: ["seq"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true },

@@ -7,6 +7,7 @@ import { basename, extname, join, win32 } from "node:path";
 import { renameWithRetry } from "./atomic.js";
 import { findChromium, hubUrl } from "./launcher.js";
 import { ensureDataRoot } from "./data-root.js";
+import { bundleOf, installedMacApp, MAC_LAUNCHER_ID, macAppPath, retireLauncher, SOURCE_LAUNCHER_NAME, sourceLauncherPath, startsInstalledCopy } from "./mac-app.js";
 
 export interface ShortcutOptions {
   root: string;
@@ -19,6 +20,7 @@ export interface ShortcutOptions {
   home?: string;
   env?: NodeJS.ProcessEnv;
   browser?: string | null;
+  system?: string;
 }
 
 export interface ShortcutResult {
@@ -142,12 +144,28 @@ export function withEntryIcon(entry: string, icon: string): string {
   return entryIcon(entry) === null ? entry.replace(/^Terminal=/m, `Icon=${icon}\nTerminal=`) : entry.replace(/^Icon=.*$/m, `Icon=${icon}`);
 }
 
-export function macPlist(version: string, icon = "icon"): string {
+export function removeOwnLinuxShortcuts(home: string, dataDir: string, o: { read?: (path: string) => string | null; remove?: (path: string) => void } = {}): string[] {
+  const read = o.read ?? ((path: string) => { try { return readFileSync(path, "utf8"); } catch { return null; } });
+  const remove = o.remove ?? ((path: string) => rmSync(path, { force: true }));
+  const removed: string[] = [];
+  for (const path of [join(home, ".local", "share", "applications", "viberoom.desktop"), join(home, "Desktop", "viberoom.desktop")]) {
+    const entry = read(path);
+    if (entry === null) continue;
+    const lines = entry.split(/\r?\n/);
+    const ours = lines.some((line) => /^Exec="[^"]+" "[^"]+[\\/]dist[\\/]main\.js" start$/.test(line)) && lines.includes(`Path=${dataDir}`);
+    if (!ours) continue;
+    remove(path);
+    removed.push(path);
+  }
+  return removed;
+}
+
+export function macPlist(version: string, icon = "icon", name = "viberoom"): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>viberoom</string>
-  <key>CFBundleDisplayName</key><string>viberoom</string>
+  <key>CFBundleName</key><string>${name}</string>
+  <key>CFBundleDisplayName</key><string>${name}</string>
   <key>CFBundleIdentifier</key><string>dev.viberoom.launcher</string>
   <key>CFBundleVersion</key><string>${version}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -192,11 +210,26 @@ export function installShortcuts(o: ShortcutOptions): ShortcutResult {
   }
 
   if (platform === "darwin") {
-    const app = join(home, "Applications", "viberoom.app");
+    const source = !startsInstalledCopy(main);
+    const installed = installedMacApp(home, { system: o.system });
+    if (source || installed) {
+      const moved = retireLauncher(home);
+      if (moved?.action === "renamed") result.notes.push(`the launcher of the source checkout is ${moved.to} now`);
+    }
+    if (!source && installed) {
+      result.notes.push(`${installed.app} is viberoom's icon: open it from Launchpad or Finder`);
+      return result;
+    }
+    const app = source ? sourceLauncherPath(home) : macAppPath(home);
+    const found = bundleOf(app);
+    if (found && found.id !== MAC_LAUNCHER_ID) {
+      result.notes.push(`${app} is ${found.id ? `the application ${found.id}` : "an application"}, and it was left as it is: open it from Launchpad or Finder`);
+      return result;
+    }
     mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
     mkdirSync(join(app, "Contents", "Resources"), { recursive: true });
     const icns = placeLauncherIcon(icnsSrc, join(app, "Contents", "Resources"));
-    writeFileSync(join(app, "Contents", "Info.plist"), macPlist(o.version, icns ? basename(icns) : undefined));
+    writeFileSync(join(app, "Contents", "Info.plist"), macPlist(o.version, icns ? basename(icns) : undefined, source ? SOURCE_LAUNCHER_NAME : "viberoom"));
     const exe = join(app, "Contents", "MacOS", "viberoom");
     writeFileSync(exe, `#!/bin/sh\ncd "${o.dataDir}" 2>/dev/null\nexec "${o.node}" "${main}" start\n`);
     chmodSync(exe, 0o755);
@@ -304,8 +337,8 @@ export function refreshLauncherIcons(o: LauncherIconOptions): LauncherIconChange
     return { icon: ico, launchers, removed: removeCopies(older) };
   }
   if (platform === "darwin") {
-    const app = join(home, "Applications", "viberoom.app");
-    if (!startsThisBuild(join(app, "Contents", "MacOS", "viberoom"))) return null;
+    const app = [sourceLauncherPath(home), macAppPath(home)].find((a) => startsThisBuild(join(a, "Contents", "MacOS", "viberoom")));
+    if (!app) return null;
     const resources = join(app, "Contents", "Resources");
     const icns = placeLauncherIcon(join(o.root, "assets", "icon.icns"), resources);
     if (!icns) return null;
@@ -314,7 +347,7 @@ export function refreshLauncherIcons(o: LauncherIconOptions): LauncherIconChange
     const older = otherCopies(resources, MAC_ICON, icns);
     if (named && !older.length) return null;
     if (!named) {
-      writeFileSync(plist, macPlist(o.version, basename(icns)));
+      writeFileSync(plist, macPlist(o.version, basename(icns), app === sourceLauncherPath(home) ? SOURCE_LAUNCHER_NAME : "viberoom"));
       (o.notify ?? touch)([app]);
     }
     return { icon: icns, launchers: named ? [] : [app], removed: removeCopies(older) };

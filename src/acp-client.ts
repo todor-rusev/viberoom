@@ -5,6 +5,7 @@ import { createInterface } from "node:readline";
 import { spawnManaged, stopManaged } from "./managed-process.js";
 export { childEnvironment } from "./child-environment.js";
 import { JsonRpcPeer, MethodNotFound } from "./jsonrpc.js";
+import { BACKGROUND_MESSAGE_CAPABILITY } from "./acp-message-delivery.js";
 import type {
   ContentBlock,
   InitializeResult,
@@ -100,7 +101,10 @@ export class AcpAgent {
   async initialize(clientInfo: { name: string; version: string }): Promise<InitializeResult> {
     const result = (await this.peer.request("initialize", {
       protocolVersion: PROTOCOL_VERSION,
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      clientCapabilities: {
+        fs: { readTextFile: false, writeTextFile: false }, terminal: false,
+        _meta: { [BACKGROUND_MESSAGE_CAPABILITY]: 1 },
+      },
       clientInfo,
     })) as InitializeResult;
     this.initResult = result;

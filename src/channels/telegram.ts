@@ -35,6 +35,9 @@ interface TelegramUpdate {
     document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
     voice?: { file_id: string; duration?: number; mime_type?: string; file_size?: number };
     audio?: { file_id: string; duration?: number; title?: string; file_name?: string; mime_type?: string; file_size?: number };
+    video?: { file_id: string; duration?: number; file_name?: string; mime_type?: string; file_size?: number };
+    video_note?: { file_id: string; duration?: number; file_size?: number };
+    animation?: { file_id: string; duration?: number; file_name?: string; mime_type?: string; file_size?: number };
     reply_to_message?: { message_id: number; text?: string; entities?: { type: string; offset: number; length: number }[]; from?: { id: number; is_bot?: boolean } };
   };
   callback_query?: {
@@ -375,11 +378,14 @@ export function toInbound(update: TelegramUpdate): InboundMessage | null {
   if (!m || m.chat.type !== "private" || !m.from || m.from.is_bot) return null;
   const text = m.text ?? m.caption ?? "";
   const largest = m.photo?.length ? m.photo[m.photo.length - 1] : undefined;
+  const clip = m.video ?? m.animation;
   const file: InboundFile | undefined = largest
     ? { kind: "photo", fileId: largest.file_id, mime: "image/jpeg", size: largest.file_size }
     : m.voice ? { kind: "sound", voice: true, fileId: m.voice.file_id, mime: m.voice.mime_type ?? "audio/ogg", size: m.voice.file_size, ...(m.voice.duration ? { seconds: m.voice.duration } : {}) }
     : m.audio ? { kind: "sound", fileId: m.audio.file_id, name: m.audio.file_name ?? m.audio.title, mime: m.audio.mime_type, size: m.audio.file_size, ...(m.audio.duration ? { seconds: m.audio.duration } : {}) }
-    : m.document ? { kind: m.document.mime_type?.startsWith("audio/") ? "sound" : "document", fileId: m.document.file_id, name: m.document.file_name, mime: m.document.mime_type, size: m.document.file_size } : undefined;
+    : m.video_note ? { kind: "video", fileId: m.video_note.file_id, name: "video message", mime: "video/mp4", size: m.video_note.file_size, ...(m.video_note.duration ? { seconds: m.video_note.duration } : {}) }
+    : clip ? { kind: "video", fileId: clip.file_id, ...(clip.file_name ? { name: clip.file_name } : {}), mime: clip.mime_type ?? "video/mp4", size: clip.file_size, ...(clip.duration ? { seconds: clip.duration } : {}) }
+    : m.document ? { kind: m.document.mime_type?.startsWith("audio/") ? "sound" : m.document.mime_type?.startsWith("video/") ? "video" : "document", fileId: m.document.file_id, name: m.document.file_name, mime: m.document.mime_type, size: m.document.file_size } : undefined;
   const attachment = file?.kind ?? (!m.text && !m.caption ? "other" : undefined);
   const quoted = quotedAuthor(m.reply_to_message);
   return {

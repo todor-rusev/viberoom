@@ -2,8 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { dayInZone, nextOccurrence, parseAutomation, type AutomationDefinition } from "./automation-schedule.js";
+import { TimedDatabase } from "./timed-db.js";
 
 export interface AutomationJob extends AutomationDefinition {
   id: string; roomKey: string; revision: number; createdAt: number; updatedAt: number;
@@ -27,12 +27,12 @@ function alive(pid: number): boolean {
 }
 
 export class AutomationStore {
-  private readonly db: DatabaseSync;
+  private readonly db: TimedDatabase;
   private readonly owner = randomUUID();
   private closed = false;
   constructor(file: string, now = Date.now()) {
     mkdirSync(dirname(file), { recursive: true });
-    this.db = new DatabaseSync(file);
+    this.db = TimedDatabase.open(file);
     try {
       const version = Number(this.db.prepare("PRAGMA user_version").get()?.user_version);
       if (version > 1) throw new Error("This automation store requires a newer viberoom.");
@@ -66,6 +66,7 @@ export class AutomationStore {
   jobs(roomKey?: string): AutomationJob[] {
     return (roomKey ? this.db.prepare("SELECT body FROM jobs WHERE room=?").all(roomKey) : this.db.prepare("SELECT body FROM jobs").all()).map(row => JSON.parse(String(row.body)));
   }
+  jobCount(): number { return Number(this.db.prepare("SELECT COUNT(*) AS n FROM jobs").get()?.n ?? 0); }
   get(roomKey: string, id: string): AutomationJob {
     const row = this.db.prepare("SELECT body FROM jobs WHERE id=? AND room=?").get(id, roomKey);
     if (!row) throw new Error("This automation no longer exists in this room.");

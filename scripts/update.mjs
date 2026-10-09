@@ -21,7 +21,8 @@ function run(cmd, cmdArgs, opts = {}) {
   if (r.status !== 0) throw new Error(`${cmd} ${cmdArgs.join(" ")} failed with exit code ${r.status}`);
 }
 
-run("npm", [args.has("--clean") && existsSync(join(root, "package-lock.json")) ? "ci" : "install", "--no-audit", "--no-fund"]);
+const clean = args.has("--clean") && existsSync(join(root, "package-lock.json"));
+run("npm", clean ? ["ci", "--no-audit", "--no-fund"] : ["install", "--no-save", "--no-audit", "--no-fund"]);
 run("npm", ["run", "build"]);
 
 if (!args.has("--no-restart")) {

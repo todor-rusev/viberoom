@@ -6,7 +6,7 @@ import { AcpAgent } from "./acp-client.js";
 import { spawnManaged, stopManaged } from "./managed-process.js";
 import type { LoginState } from "./agent-health.js";
 import type { WatchedTerminal } from "./agent-terminal.js";
-import { stripAnsi } from "./login-status.js";
+import { signInRefused, stripAnsi } from "./login-status.js";
 
 export type LoginFlowSpec =
   | { kind: "command"; command?: string | null; args: string[]; hint: string; scene?: "browser" | "code" }
@@ -22,6 +22,7 @@ export interface LoginFlow {
   purpose?: "login" | "install" | "update";
   looked?: boolean;
   state: "running" | "done" | "failed" | "cancelled";
+  failedBecause?: "sign-in";
   startedAt: number;
   endedAt?: number;
   lines: string[];
@@ -73,6 +74,7 @@ export interface LoginTarget {
   launch: { command: string; args: string[]; env?: Record<string, string> };
   purpose?: "login" | "install" | "update";
   verify?: (signal: AbortSignal) => Promise<void>;
+  vendorUpdater?: boolean;
 }
 
 export class LoginFlows extends EventEmitter {
@@ -226,7 +228,13 @@ export class LoginFlows extends EventEmitter {
         });
       }
       else if (code === 0) this.end(entry, "done", installing ? `${target.vendor}'s installer finished. Looking for ${target.vendor}…` : `${target.vendor} says it is signed in. Checking…`);
-      else this.end(entry, "failed", `${target.vendor}'s ${thing} ended without success (exit ${code})${entry.flow.lines.length ? `: ${entry.flow.lines[entry.flow.lines.length - 1]}` : ""}.`);
+      else {
+        const refused = target.purpose === "update" && target.vendorUpdater ? signInRefused(entry.flow.lines) : null;
+        if (refused) entry.flow.failedBecause = "sign-in";
+        this.end(entry, "failed", refused
+          ? `${target.vendor}'s server did not accept its login, so it could not update (${refused}). Log in to ${target.vendor} again, then update.`
+          : `${target.vendor}'s ${thing} ended without success (exit ${code})${entry.flow.lines.length ? `: ${entry.flow.lines[entry.flow.lines.length - 1]}` : ""}.`);
+      }
     });
     entry.timer = setTimeout(() => { if (entry.flow.state === "running") this.end(entry, "failed", `${target.vendor}'s ${thing} got no answer in ten minutes.`); }, COMMAND_TIMEOUT_MS);
   }

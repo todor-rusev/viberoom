@@ -29,10 +29,11 @@ export interface AutostartStatus {
   lastAutoStartAt: number | null;
   log: string;
   note?: string;
+  unavailable?: string;
 }
 
 export interface AutostartControl {
-  status(): AutostartStatus;
+  status(): AutostartStatus | null;
   setEnabled(enabled: boolean): AutostartStatus | Promise<AutostartStatus>;
 }
 

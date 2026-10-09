@@ -1,6 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { createServer, type Server } from "node:http";
+import type { Server } from "node:http";
+import { createObservedTestServer } from "../owned-native-test-resources.js";
 
 export interface HonchoSeen { method: string; path: string; body: Record<string, unknown> | null }
 
@@ -11,11 +12,14 @@ export class HonchoDouble {
   url = "";
   requests: HonchoSeen[] = [];
   force = new Map<string, { status: number; body: unknown }>();
+  hold = new Map<string, number>();
+  cut = 0;
+  forceHeaders = new Map<string, Record<string, string>>();
   messages = new Map<string, StoredMessage[]>();
   private counter = 0;
 
   constructor() {
-    this.server = createServer((req, res) => {
+    this.server = createObservedTestServer((req, res) => {
       let data = "";
       req.on("data", chunk => (data += chunk));
       req.on("end", () => {
@@ -24,8 +28,12 @@ export class HonchoDouble {
         this.requests.push({ method: req.method ?? "", path, body });
         const forced = [...this.force.entries()].find(([prefix]) => path.startsWith(prefix));
         const answer = forced ? forced[1] : this.answer(req.method ?? "", path, body);
-        res.writeHead(answer.status, { "content-type": "application/json" });
-        res.end(JSON.stringify(answer.body));
+        const headers = (forced && this.forceHeaders.get(forced[0])) ?? {};
+        const held = [...this.hold.entries()].find(([prefix]) => path.startsWith(prefix))?.[1] ?? 0;
+        const send = () => { if (res.destroyed) return; res.writeHead(answer.status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(answer.body)); };
+        if (!held) return send();
+        const timer = setTimeout(send, held);
+        res.on("close", () => { if (!res.writableEnded) { this.cut++; clearTimeout(timer); } });
       });
     });
   }

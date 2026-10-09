@@ -25,6 +25,11 @@ This product bundles the following third-party material:
   - Victor Mono: Copyright 2019 The Victor Mono Project Authors.
   - Anonymous Pro: Copyright 2009 The Anonymous Pro Project Authors.
   - Cascadia Code: Copyright 2019 Microsoft Corporation.
+  - Playfair Display: Copyright 2017 The Playfair Display Project Authors
+    (https://github.com/clauseggers/Playfair-Display), with Reserved Font Name
+    "Playfair Display".
+  - Source Serif 4: Copyright 2014-2021 Adobe (http://www.adobe.com/), with
+    Reserved Font Name "Source".
 
 - Vendor icons (assets/vendors/): the logos of Claude, Codex, Gemini, Cursor,
   OpenCode, GitHub Copilot and Grok, as published in the Agent Client Protocol

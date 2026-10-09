@@ -1,7 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import type { ChatMessage } from "./room.js";
+import type { TimedDatabase } from "./timed-db.js";
 import { canonicalResourceFile, withAttachmentLists } from "./files.js";
 
 export interface CarryRevision { revision: string; id: string; hash: string; parents: string[] }
@@ -31,7 +31,7 @@ export function carryRevision(id: string, hash: string, parents: string[] = []):
 }
 
 export class CarryHistory {
-  constructor(private readonly db: DatabaseSync) {
+  constructor(private readonly db: TimedDatabase) {
     db.exec(`
       create table if not exists carry_revisions(room text not null, revision text not null, id text not null, hash text not null, parents text not null, primary key(room, revision));
       create index if not exists carry_revision_message on carry_revisions(room, id);
@@ -86,6 +86,14 @@ export class CarryHistory {
   }
 
   ensure(room: string, message: ChatMessage, deletedAt: number | null = null): CarryHead { return this.record(room, message, deletedAt); }
+
+  knows(room: string, id: string, hash: string): boolean {
+    return !!this.db.prepare(`with recursive lineage(revision) as (
+      select revision from carry_heads where room=? and id=?
+      union select j.value from lineage l join carry_revisions r on r.room=? and r.revision=l.revision, json_each(r.parents) j
+    ) select 1 from carry_revisions where room=? and id=? and hash=? and revision in (select revision from lineage) limit 1`)
+      .get(room, id, room, room, id, hash);
+  }
 
   revisions(room: string): CarryRevision[] {
     return this.db.prepare("select revision,id,hash,parents from carry_revisions where room=?").all(room).map(r => ({ revision: String(r.revision), id: String(r.id), hash: String(r.hash), parents: JSON.parse(String(r.parents)) }));

@@ -43,6 +43,7 @@ export interface PlannedRoom {
   uuid: string;
   stored: StoredRoom; setup: boolean; aliases: string[]; changed: boolean;
   made: boolean;
+  repair?: boolean;
   memory?: PortableMemory;
   memoryMode?: "merge" | "replace";
   added: number;
@@ -218,11 +219,14 @@ export function prepareCarryPlan(job: CarryPlanJob): CarryPlanPreview {
       const knownAliases = new Set(store.carry.aliases(stored.id));
       const aliases = [...new Set([room.uuid, ...room.aliases])].filter(uuid => uuid !== stored.uuid && !knownAliases.has(uuid));
       const numbers = numbersToLearn(incoming, job.source.uuid, new Set(localized.map(s => s.message.id)), store.carry.numbers(choice.target.id));
+      const repairData = choice.conversation && room.parts.includes("conversation") ? stage.memoryRepair(room.uuid) : undefined;
+      const repair = !!repairData;
+      const repairChanges = !!(repairData && (repairData.graphs.length || repairData.unknownSources.length));
       planned.push({ uuid: room.uuid, rows: { state: states, head: heads, revision: revisions, alternative: changedAlternatives, resource: writes, number: numbers } });
-      plans.push({ uuid: room.uuid, stored, setup: replaceSetup, made: choice.made, aliases, added: merged.counts.added,
+      plans.push({ uuid: room.uuid, stored, setup: replaceSetup, made: choice.made, aliases, added: merged.counts.added, repair,
         rows: { state: states.length, head: heads.length, revision: revisions.length, alternative: changedAlternatives.length, resource: writes.length, number: numbers.length },
         ...(useMemory ? { memory: room.memory, memoryMode: memoryChoice === "both" ? "merge" as const : "replace" as const } : {}),
-        changed: !!(useMemory || replaceSetup || states.length || heads.length || revisions.length || changedAlternatives.length || aliases.length || writes.length || numbers.length) });
+        changed: !!(repairChanges || useMemory || replaceSetup || states.length || heads.length || revisions.length || changedAlternatives.length || aliases.length || writes.length || numbers.length) });
     }
     const takeDependencies: PlannedDependency[] = [];
     const relevant = new Set(plans.filter((_, i) => job.choices[i].settings).flatMap(p => p.stored.participants.flatMap(person => person.skills ?? [])).map(name => name.toLowerCase()));

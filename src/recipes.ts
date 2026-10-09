@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RUN_AS_NODE } from "./own-runtime.js";
 import { loginState, type LoginProbe, type LoginState } from "./agent-health.js";
-import { readClaudeStatus, readCodexStatus, readGrokStatus, readHermesStatus, readOpenCodeStatus, type LoginCheck, type LoginStatusSpec } from "./login-status.js";
+import { readClaudeStatus, readCodexStatus, readCursorStatus, readGrokStatus, readHermesStatus, readOpenCodeStatus, type LoginCheck, type LoginStatusSpec } from "./login-status.js";
 import type { LoginFlowSpec } from "./login-flow.js";
 import { commandLine as terminalLine, type TerminalShell } from "./terminal.js";
 
@@ -77,9 +77,11 @@ function buildRecipes(): AgentRecipe[] {
   const shellHere: TerminalShell = isWindows ? "cmd" : "sh";
   const npmCli = agentDiscovery.npm();
   const npmInstall = (pkg: string, vendor: string): InstallSpec => {
-    const line = npmCli ? terminalLine(/\.(?:mjs|cjs|js)$/i.test(npmCli) ? [process.execPath, npmCli, "install", "-g", pkg] : [npmCli, "install", "-g", pkg]) : `npm install -g ${pkg}`;
-    const note = npmCli ? `${vendor} is installed with the npm found on this machine.` : `Install Node.js and npm first, then return and press Check again.`;
-    return npmCli ? { kind: "command", command: npmCli, args: ["install", "-g", pkg], shell: shellHere, line, note } : { kind: "url", url: "https://nodejs.org/en/download", note };
+    const args = agentDiscovery.npmGlobal(["install", "-g", pkg]);
+    const line = npmCli ? terminalLine(/\.(?:mjs|cjs|js)$/i.test(npmCli) ? [process.execPath, npmCli, ...args] : [npmCli, ...args]) : `npm install -g ${pkg}`;
+    const into = agentDiscovery.ownPrefix;
+    const note = !npmCli ? `Install Node.js and npm first, then return and press Check again.` : into ? `${vendor} is installed for viberoom, into ${into}.` : `${vendor} is installed with the npm found on this machine.`;
+    return npmCli ? { kind: "command", command: npmCli, args, shell: shellHere, line, note } : { kind: "url", url: "https://nodejs.org/en/download", note };
   };
   const scriptInstall = (vendor: string, unix: string, windows: string): InstallSpec =>
     isWindows ? { kind: "terminal", shell: "powershell", line: windows, note: `${vendor}'s own installer, from its website.` } : { kind: "terminal", shell: "sh", line: unix, note: `${vendor}'s own installer, from its website.` };
@@ -146,6 +148,7 @@ function buildRecipes(): AgentRecipe[] {
       modePresets: ["read-only", "agent", "agent-full-access"],
       defaultMode: "read-only",
       bypassMode: "agent-full-access",
+      systemPromptAppend: true,
       unavailableReason: codexExe ? null : "Codex CLI not found",
       installedAt: codexExe,
       installHint: "install Codex (npm install -g @openai/codex) and log in with `codex login`",
@@ -209,7 +212,7 @@ function buildRecipes(): AgentRecipe[] {
       install: { kind: "url", url: "https://cursor.com/cli", note: "Cursor's CLI is installed from cursor.com: follow the steps there, then come back and press \"Check again\"." },
       loginCommand: "cursor-agent login",
       login: { env: ["CURSOR_API_KEY"], files: [], command: "cursor-agent login" },
-      loginStatus: { kind: "acp" },
+      loginStatus: { kind: "command", command: cursorAgent?.node ?? null, args: [cursorAgent?.index ?? "", "status"], read: readCursorStatus },
       loginFlow: { kind: "command", command: cursorAgent?.node ?? null, args: [cursorAgent?.index ?? "", "login"], hint: "Cursor opens your browser: sign in there and come back." },
       loginTerminalLine: terminalLines.cursor,
       loginState: "unknown",
@@ -380,12 +383,13 @@ function buildRecipes(): AgentRecipe[] {
   return recipes;
 }
 
-let recipes = buildRecipes();
+let recipes: AgentRecipe[] | null = null;
+const current = (): AgentRecipe[] => (recipes ??= buildRecipes());
 
-export function rescanRecipes(): void {
-  agentDiscovery.refresh();
-  recipes = buildRecipes();
+export function installVendorsInto(prefix: string | null): void {
+  if (agentDiscovery.installInto(prefix)) recipes = null;
 }
+
 export async function rescanRecipesAsync(signal?: AbortSignal): Promise<void> {
   await agentDiscovery.refreshAsync(signal);
   if (!signal?.aborted) recipes = buildRecipes();
@@ -397,6 +401,7 @@ function loginEvidence(): { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; e
 
 export function listRecipes(): AgentRecipe[] {
   const evidence = loginEvidence();
+  const recipes = current();
   for (const recipe of recipes) {
     recipe.loginState = recipe.unavailableReason ? "unknown" : loginState(recipe.login, evidence);
     const checked = loginChecks.get(recipe.id);

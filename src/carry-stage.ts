@@ -2,7 +2,6 @@
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import { closeSync, createReadStream, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { HistoryStore } from "./history-store.js";
 import { CarryHistory, carryHash, carryRevision, type CarryAlternative, type CarryHead, type CarryRevision } from "./carry-history.js";
 import { readCarry, writeCarry } from "./carry-format.js";
@@ -13,12 +12,15 @@ import { canonicalResourceFile, isRoomResourceName, isStoredFileName, messageAtt
 import type { ChatMessage } from "./room.js";
 import type { CarryState, MergeInput } from "./carry-merge.js";
 import { validateDependencies } from "./carry-dependencies.js";
+import { TimedDatabase } from "./timed-db.js";
 import { portableMemory, validatePortableMemory, type PortableMemory } from "./shared-memory.js";
+import { validateMemoryRepair, type PortableMemoryRepair } from "./memory/carry.js";
 
 export interface PortableRoom {
   uuid: string; id: string; name: string; aliases: string[]; workspaceHint?: string;
   parts: (ExportPartName | "memory")[];
   memory?: PortableMemory;
+  memoryRepair?: PortableMemoryRepair;
   settings?: Record<string, unknown>; participants?: Record<string, unknown>[];
   counts: { messages: number; graves: number; files: number };
   missing: string[];
@@ -60,10 +62,10 @@ function checkedBytes(value: Record<string, unknown>): Buffer {
 export type PlanRowKind = "state" | "head" | "revision" | "alternative" | "resource" | "number";
 
 export class CarryStage {
-  readonly db: DatabaseSync;
+  readonly db: TimedDatabase;
   constructor(readonly dir: string) {
     mkdirSync(join(dir, "blobs"), { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(join(dir, "stage.sqlite"));
+    this.db = TimedDatabase.open(join(dir, "stage.sqlite"));
     this.db.exec(`
       create table if not exists meta(key text primary key,value text not null);
       create table if not exists rooms(uuid text primary key,body text not null);
@@ -80,6 +82,7 @@ export class CarryStage {
   setMeta(key: string, value: unknown): void { this.db.prepare("insert into meta(key,value) values(?,?) on conflict(key) do update set value=excluded.value").run(key, JSON.stringify(value)); }
   rooms(): PortableRoom[] { return this.db.prepare("select body from rooms").all().map(r => JSON.parse(String(r.body))); }
   room(uuid: string): PortableRoom | undefined { const r = this.db.prepare("select body from rooms where uuid=?").get(uuid); return r ? JSON.parse(String(r.body)) : undefined; }
+  memoryRepair(uuid: string): PortableMemoryRepair | undefined { return this.meta<PortableMemoryRepair>(`repair:${uuid}`); }
   values<T>(table: "states" | "revisions" | "alternatives" | "resources", room: string): T[] { return this.db.prepare(`select body from ${table} where room=?`).all(room).map(r => JSON.parse(String(r.body))); }
   dependencies(): CarryDependency[] { return this.db.prepare("select body from dependencies").all().map(r => JSON.parse(String(r.body))); }
   input(uuid: string): MergeInput { return { source: this.meta<CarrySource>("source")!.uuid, states: this.values<CarryState>("states", uuid), revisions: this.values<CarryRevision>("revisions", uuid), alternatives: this.values<CarryAlternative>("alternatives", uuid) }; }
@@ -123,6 +126,12 @@ export class CarryStage {
         if (!room.parts.includes("memory")) throw new Error("Room memory must be declared in the archive.");
         room.memory = validatePortableMemory(room.memory);
       } else if (room.parts.includes("memory")) throw new Error("The declared room memory is missing.");
+      if (room.memoryRepair !== undefined) {
+        if (!room.parts.includes("conversation")) throw new Error("Memory repair must travel with the conversation.");
+        const repair = validateMemoryRepair(room.memoryRepair, [room.uuid, ...room.aliases]);
+        if (repair) this.setMeta(`repair:${room.uuid}`, repair);
+        delete room.memoryRepair;
+      }
       this.db.prepare("insert into rooms(uuid,body) values(?,?)").run(room.uuid, JSON.stringify(room));
     } else if (["state", "revision", "alternative"].includes(String(record.type))) {
       if (!isIdentity(record.room) || !this.room(record.room)) throw new Error("An archive record refers to an unknown room.");
@@ -185,11 +194,16 @@ export class CarryStage {
     if (!source || !this.rooms().length && !this.meta("userMemory")) throw new Error("The archive contains no source, rooms or user memory.");
     for (const room of this.rooms()) {
       const input = this.input(room.uuid), files = this.values<CarryResource>("resources", room.uuid);
+      const repair = this.memoryRepair(room.uuid);
+      if (repair?.unknownSources.length) {
+        const known = new Set(input.states.map(s => s.message.id));
+        if (repair.unknownSources.some(id => !known.has(id))) throw new Error("Carried unknown impact refers to a source outside its conversation.");
+      }
       const messages = input.states.filter(s => s.deletedAt === null).map(s => s.message);
       const graves = input.states.filter(s => s.deletedAt !== null).map(s => ({ message: s.message, deletedAt: s.deletedAt! }));
       if (room.counts.messages !== messages.length || room.counts.graves !== graves.length || room.counts.files !== files.length) throw new Error("The archive's room counts do not match its contents.");
       validateExportContents({ manifest: { schema: 2, product: this.meta<string>("product") ?? "", at: this.meta<string>("at") ?? "", range: { firstSeq: null, lastSeq: null, firstAt: null, lastAt: null }, checksum: "", room, folder: source.uuid, counts: { ...room.counts, participants: room.participants?.length ?? 0, files: 0 }, parts: room.parts.filter((p): p is ExportPartName => p !== "memory") }, messages: messages as unknown as Record<string, unknown>[], graves: graves as unknown as ExportContents["graves"], settings: room.settings ?? null, participants: room.participants ?? [], files: [], unknownParts: 0 });
-      const db = new DatabaseSync(":memory:"), history = new CarryHistory(db);
+      const db = TimedDatabase.open(":memory:"), history = new CarryHistory(db);
       try {
         history.importRevisions(room.uuid, input.revisions);
         for (const state of input.states) {
@@ -293,6 +307,7 @@ export async function exportCarry(job: ExportJob): Promise<{ bytes: number; encr
       const metadata: PortableRoom = { uuid: held.uuid, id: held.id, name: held.name, aliases: store.carry.aliases(held.id), workspaceHint: held.dir, parts,
         ...(job.choice.settings !== false ? portable : {}),
         ...(parts.includes("memory") ? { memory } : {}),
+        ...(parts.includes("conversation") ? { memoryRepair: store.memoryOutbox.carry.portable(held.id, [held.uuid, ...store.carry.aliases(held.id)]) } : {}),
         counts: { messages: parts.includes("conversation") ? all.filter(s => s.deletedAt === null).length : 0, graves: parts.includes("conversation") ? all.filter(s => s.deletedAt !== null).length : 0, files: files.length },
         missing: [...wanted].filter(file => !allFiles.includes(file)),
         ...(job.choice.settings !== false ? { missingSkills: held.missingSkills ?? [] } : {}),

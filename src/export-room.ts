@@ -208,10 +208,10 @@ export function importRoom(hub: Hub, text: string, agreedAt?: { version: string 
   const id = existing?.id ?? hub.importedRoomAddress(plan.room.name);
   const stored: StoredRoom = existing?.toStored() ?? { id, uuid: plan.room.uuid, name: plan.room.name, dir: join(hub.dataDir, "rooms", id, "workspace"), createdAt: Date.now(), settings: plan.contents.settings ?? {}, participants: plan.contents.participants as unknown as StoredRoom["participants"] };
   if (!existing || plan.take.length || plan.bury.length || plan.put.length) hub.commitRoomTransfer([{ stored, setup: !existing }], plan.put.map(file => ({ path: join("rooms", id, "files", file.file), data: Buffer.from(file.data, "base64") })), () => {
-    for (const message of plan.take) hub.history.upsert(id, message);
+    for (const message of plan.take) hub.history.upsert(id, message, { track: false });
     for (const grave of plan.bury) {
-      hub.history.upsert(id, grave.message);
-      hub.history.markDeleted(id, [grave.id], grave.at);
+      hub.history.upsert(id, grave.message, { track: false });
+      hub.history.markDeleted(id, [grave.id], grave.at, { track: false });
     }
   });
   const room = hub.getRoom(id);

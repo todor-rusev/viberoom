@@ -12,7 +12,7 @@ export const IMAGE_TYPES: Record<string, string> = {
   "image/gif": "gif",
 };
 
-export const IMAGES_PER_MESSAGE = 6;
+export const IMAGES_PER_MESSAGE = 10;
 
 export const AUDIO_TYPES: Record<string, string> = {
   "audio/webm": "weba",

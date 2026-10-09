@@ -60,10 +60,14 @@ export async function writeArrivingRoom(task: ArrivingRoomTask, progress: (step:
     durable(join(folder, ARRIVING), JSON.stringify({ uuid: task.uuid, at: new Date().toISOString() }));
     marked = true;
     const { target, uuid, rows } = task;
-    if (rows.revision) store.transaction(() => store.carry.importRevisions(target, stage.planRows<CarryRevision>(uuid, "revision")));
+    const revisions = stage.planRows<CarryRevision>(uuid, "revision");
+    const revisionMap = new Map(revisions.map(r => [r.revision, r]));
+    const repair = stage.memoryRepair(uuid);
+    if (rows.revision) store.transaction(() => store.carry.importRevisions(target, revisions));
     for (let from = 0; from < rows.state; from += PORTION) {
       const states = stage.planRows<CarryState>(uuid, "state", from, PORTION);
       store.transaction(() => {
+        if (!repair) store.importMemoryRepair(target, uuid, undefined, states, revisionMap, task.aliases);
         for (const state of states) {
           store.upsert(target, state.message, { track: false });
           if (state.deletedAt !== null) store.markDeleted(target, [state.message.id], state.deletedAt, { track: false });

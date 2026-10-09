@@ -1,9 +1,10 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { redact } from "./redact.js";
-import { forgetTranscriptBudgets, reserveTranscript, TRANSCRIPT_LIMITS } from "./transcript-budget.js";
+import { TRANSCRIPT_LIMITS } from "./transcript-budget.js";
+import { transcriptWriter, type TranscriptLine, type TranscriptWriteResult } from "./transcript-writer.js";
 
 let sink: (line: string) => void = (line) => void process.stderr.write(line);
 
@@ -190,6 +191,8 @@ export class Transcript {
   private omitted = 0;
   private opened = false;
   private lost = 0;
+  private failed = 0;
+  private overflow = 0;
   private told = false;
   private readonly directory: string;
   private generation: number;
@@ -197,7 +200,7 @@ export class Transcript {
   static forgetDirectory(directory: string): void {
     const key = directoryKey(directory);
     clearedDirectories.set(key, (clearedDirectories.get(key) ?? 0) + 1);
-    forgetTranscriptBudgets();
+    transcriptWriter.forgetDirectory(directory);
   }
 
   private forgetClearedBuffer(): void {
@@ -207,10 +210,12 @@ export class Transcript {
     this.recentBytes = 0;
     this.omitted = 0;
     this.opened = false;
+    this.lost = this.failed = this.overflow = 0;
+    this.told = false;
     this.generation = generation;
   }
 
-  constructor(directory: string, name: string, mode: TranscriptMode = "full", private readonly budgetRoot?: string) {
+  constructor(directory: string, name: string, mode: TranscriptMode = "full", readonly budgetRoot?: string) {
     this.mode = mode;
     this.directory = directoryKey(directory);
     this.generation = clearedDirectories.get(this.directory) ?? 0;
@@ -267,23 +272,35 @@ export class Transcript {
   }
 
   private write(line: string): void {
-    try {
-      const missed = this.lost;
-      const prefix = missed ? JSON.stringify({ t: Date.now(), dir: "note", msg: { note: `${missed} line${missed === 1 ? "" : "s"} could not be written here: the file was busy.` } }) + "\n" : "";
-      const text = prefix + line;
-      const reservation = reserveTranscript(this.path, Buffer.byteLength(text), this.budgetRoot);
-      appendFileSync(this.path, text);
-      reservation.commit();
-      if (reservation.pruned) transcriptTrouble.info(`removed ${reservation.pruned} old diagnostic file(s) to keep the retention budget`);
-      this.lost = 0;
+    const records = line.split("\n").length - 1;
+    if (transcriptWriter.enqueue(this, { text: line, records, omitted: this.overflow })) this.overflow = 0;
+    else { this.overflow += records; this.lost += records; this.warn("diagnostic queue is full or recording has stopped"); }
+  }
+
+  prepare(lines: TranscriptLine[]): { text: string; missed: number } {
+    const note = (n: number) => n ? JSON.stringify({ t: Date.now(), dir: "note", msg: { note: `${n} line${n === 1 ? "" : "s"} could not be written here: the file was busy or the diagnostic queue was full.` } }) + "\n" : "";
+    const missed = this.failed + lines.reduce((n, line) => n + line.omitted, 0);
+    return { text: note(this.failed) + lines.map(line => note(line.omitted) + line.text).join(""), missed };
+  }
+
+  settled(lines: TranscriptLine[], missed: number, result: TranscriptWriteResult): void {
+    if (result.ok) {
+      this.lost -= missed;
+      this.failed = 0;
       this.told = false;
-    } catch (error) {
-      this.lost++;
-      if (this.told) return;
-      this.told = true;
-      const why = error instanceof Error ? error.message : String(error);
-      transcriptTrouble.warn(`a transcript could not be written (${why}); its lines are dropped while that lasts. The conversation itself is in the store and is not affected: ${this.path}`);
+      if (result.pruned) transcriptTrouble.info(`removed ${result.pruned} old diagnostic file(s) to keep the retention budget`);
+    } else {
+      const records = lines.reduce((n, line) => n + line.records, 0);
+      this.failed += records + lines.reduce((n, line) => n + line.omitted, 0);
+      this.lost += records;
+      this.warn(result.error ?? "diagnostic file refused");
     }
+  }
+
+  private warn(why: string): void {
+    if (this.told) return;
+    this.told = true;
+    transcriptTrouble.warn(`a transcript could not be written (${why}); its lines are dropped while that lasts. The conversation itself is in the store and is not affected: ${this.path}`);
   }
 
   get droppedLines(): number {

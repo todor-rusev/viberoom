@@ -5,6 +5,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { withRunAsNode } from "./own-runtime.js";
 import { semanticVersion, compareSemanticVersions } from "./agent-version.js";
+import { BUILD_STAMP, readBuildStamp } from "./build-stamp.js";
 
 export interface UpdateInfo {
   current: string;
@@ -14,6 +15,25 @@ export interface UpdateInfo {
   error: string | null;
   stage?: "downloading" | "ready";
   progress?: number;
+  parts?: UpdateParts;
+}
+
+export interface UpdateParts {
+  acts?: "application" | "product" | null;
+  product: {
+    current: string;
+    latest: string | null;
+    stage: "downloading" | "ready" | "waiting" | null;
+    progress?: number;
+    runnableAt?: string;
+    waitsForApplication?: string;
+    checking: boolean;
+    outcome?: "current" | "found" | "too-new" | "later" | "refused" | "needs-application";
+    checkedAt?: string;
+    reason: string | null;
+  };
+  application: { current: string; latest: string | null; available: boolean; stage?: "downloading" | "ready"; progress?: number; error: string | null } | null;
+  byStore: boolean;
 }
 
 export interface UpdateChannel {
@@ -121,22 +141,9 @@ export function newerSourceThanBuild(mainModuleUrl: string): string | null {
 }
 
 export function newerBuildThanRunning(mainModuleUrl: string, runningBuild: string): string | null {
-  const running = Date.parse(runningBuild);
-  if (!Number.isFinite(running)) return null;
-  const dir = join(fileURLToPath(mainModuleUrl), "..");
-  let newest: { path: string; mtime: number } | null = null;
-  const walk = (at: string): void => {
-    for (const entry of readdirSync(at, { withFileTypes: true })) {
-      const path = join(at, entry.name);
-      if (entry.isDirectory()) walk(path);
-      else if (entry.name.endsWith(".js")) {
-        const mtime = statSync(path).mtimeMs;
-        if (mtime > running + 1000 && (!newest || mtime > newest.mtime)) newest = { path, mtime };
-      }
-    }
-  };
-  try { walk(dir); } catch { return null; }
-  return newest ? (newest as { path: string }).path : null;
+  const dir = fileURLToPath(new URL(".", mainModuleUrl));
+  const onDisk = readBuildStamp(dir);
+  return onDisk && onDisk !== runningBuild ? join(dir, BUILD_STAMP) : null;
 }
 
 export function installCommandLine(version: string): string {

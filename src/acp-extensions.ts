@@ -1,5 +1,8 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
+import { BACKGROUND_MESSAGE_METHOD, type BackgroundMessage } from "./acp-message-delivery.js";
+export type { BackgroundMessage } from "./acp-message-delivery.js";
+
 export interface AgentAuthStatus {
   kind: string;
   label: string;
@@ -28,6 +31,17 @@ export function readAuthStatusUpdate(params: unknown): AgentAuthStatus | null {
 
 export interface ExtensionHandlers {
   onAuthStatus?(status: AgentAuthStatus): void;
+  onBackgroundMessage?(message: BackgroundMessage): void;
+}
+
+export function readBackgroundMessage(params: unknown): BackgroundMessage | null {
+  if (!params || typeof params !== "object" || Array.isArray(params)) return null;
+  const p = params as Record<string, unknown>;
+  if (typeof p.sessionId !== "string" || !p.sessionId || p.sessionId.length > 1024
+      || typeof p.messageId !== "string" || !p.messageId || p.messageId.length > 1024
+      || typeof p.text !== "string"
+      || typeof p.stopReason !== "string" || !["end_turn", "cancelled", "error"].includes(p.stopReason)) return null;
+  return { sessionId: p.sessionId, messageId: p.messageId, text: p.text, stopReason: p.stopReason as BackgroundMessage["stopReason"] };
 }
 export interface ExtensionLog {
   info(text: string): void;
@@ -45,6 +59,12 @@ export class ExtensionRouter {
   }
 
   notification(method: string, params: unknown): void {
+    if (method === BACKGROUND_MESSAGE_METHOD) {
+      const message = readBackgroundMessage(params);
+      if (message) this.handlers.onBackgroundMessage?.(message);
+      else this.once(`malformed:${method}`, () => this.log.warn(`extension ${method} arrived with a payload this hub does not recognise; it is ignored`));
+      return;
+    }
     if (method === "_auth/status_update") {
       const status = readAuthStatusUpdate(params);
       if (status) this.handlers.onAuthStatus?.(status);

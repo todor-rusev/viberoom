@@ -2,11 +2,22 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const out = join(root, "vendor", "acp");
+const args = process.argv.slice(2);
+const unpatched = args.includes("--unpatched");
+const outAt = args.indexOf("--out");
+if (outAt >= 0 && !args[outAt + 1]) throw new Error("--out needs a folder");
+const out = outAt >= 0 ? resolve(args[outAt + 1]) : join(root, "vendor", "acp");
+if (unpatched && outAt < 0) throw new Error("--unpatched writes elsewhere than vendor/acp/: give --out");
+const vendorRoot = join(root, "vendor");
+if (unpatched && (out === vendorRoot || out.startsWith(vendorRoot + sep))) throw new Error("--unpatched does not write into vendor/, which the npm package carries: give a folder outside it");
+const VENDORED = new Set(["claude-agent-acp", "claude-agent-sdk", "codex-acp"]);
+if (outAt >= 0 && existsSync(out) && readdirSync(out).some((name) => !VENDORED.has(name))) {
+  throw new Error(`--out ${out} holds other things; give a new or empty folder`);
+}
 function packageDir(name) {
   const dir = join(root, "node_modules", name);
   if (!existsSync(join(dir, "package.json"))) throw new Error(`${name} is not installed; run npm install first`);
@@ -44,12 +55,20 @@ rmSync(out, { recursive: true, force: true });
   cpSync(join(from, "dist", "index.js"), join(to, "dist", "index.js"));
   writeManifest(to, readJson(join(from, "package.json")));
   copyLicence(from, to);
+  if (!unpatched) {
+    patchCodexAdapter(join(to, "dist", "index.js"));
+    patchCodexStandingBrief(join(to, "dist", "index.js"));
+    patchCodexBackgroundDelivery(join(to, "dist", "index.js"));
+  }
 }
 
 {
   const sdkFrom = packageDir("@anthropic-ai/claude-agent-sdk");
   const sdkTo = join(out, "claude-agent-sdk");
   const sdkPkg = readJson(join(sdkFrom, "package.json"));
+  const adapterPkg = readJson(join(packageDir("@agentclientprotocol/claude-agent-acp"), "package.json"));
+  const pinned = adapterPkg.dependencies?.["@anthropic-ai/claude-agent-sdk"];
+  if (pinned !== sdkPkg.version) throw new Error(`claude-agent-acp ${adapterPkg.version} is built against @anthropic-ai/claude-agent-sdk ${pinned}, but ${sdkPkg.version} is installed; set the SDK's devDependency in package.json to ${pinned}`);
   mkdirSync(sdkTo, { recursive: true });
   for (const file of sdkPkg.files ?? []) {
     if (existsSync(join(sdkFrom, file))) cpSync(join(sdkFrom, file), join(sdkTo, file), { recursive: true });
@@ -79,11 +98,233 @@ rmSync(out, { recursive: true, force: true });
       rewritten += 1;
     }
   }
-  patchClaudeAdapter(join(to, "dist", "acp-agent.js"));
-  console.log(`vendored claude-agent-acp ${readJson(join(to, "package.json")).version} (${rewritten} files point at the vendored SDK ${sdkPkg.version})`);
+  if (!unpatched) {
+    patchClaudeAdapter(join(to, "dist", "acp-agent.js"));
+    patchClaudeBackgroundDelivery(join(to, "dist", "acp-agent.js"));
+  }
+  console.log(`vendored claude-agent-acp ${readJson(join(to, "package.json")).version} (${rewritten} files point at the vendored SDK ${sdkPkg.version})${unpatched ? ", unpatched" : ""}`);
 }
 
-console.log(`vendored codex-acp ${readJson(join(out, "codex-acp", "package.json")).version}`);
+console.log(`vendored codex-acp ${readJson(join(out, "codex-acp", "package.json")).version}${unpatched ? ", unpatched" : ""}`);
+
+function backgroundPatcher(file, vendor) {
+  let source = readFileSync(file, "utf8");
+  return {
+    once(anchor, replacement) {
+      const first = source.indexOf(anchor);
+      if (first < 0 || source.indexOf(anchor, first + 1) >= 0) throw new Error(`${vendor} changed: background-delivery anchor missing or ambiguous: ${anchor.slice(0, 80)}`);
+      source = source.replace(anchor, replacement);
+    },
+    finish(imports) {
+      const shebang = source.startsWith("#!") ? source.slice(0, source.indexOf("\n") + 1) : "";
+      writeFileSync(file, shebang + `import { ${imports} } from "../../../../dist/acp-message-delivery.js";\n` + source.slice(shebang.length));
+    },
+  };
+}
+
+function patchClaudeBackgroundDelivery(file) {
+  const patch = backgroundPatcher(file, "claude-agent-acp");
+  patch.once('        let stopReason = "end_turn";', `        let stopReason = "end_turn";
+        const backgroundDelivery = new ClaudeMessageDelivery(backgroundMessagesEnabled(this.clientCapabilities),
+            notification => sendUpdate(notification),
+            message => this.client.extNotification(BACKGROUND_MESSAGE_METHOD, message));`);
+  patch.once('            if (update.sessionUpdate === "agent_message_chunk") {', `            if (routedNotification.sessionId === params.sessionId && backgroundDelivery.capture(routedNotification)) return;
+            if (update.sessionUpdate === "agent_message_chunk") {`);
+  patch.once('                if (session.emitRawSDKMessages &&', `                // An active request alone does not own SDK prose. The native UUID stamp does.
+                if (message.parent_tool_use_id === null && (message.type === "stream_event" || message.type === "assistant")) {
+                    const stamps = Array.isArray(message.user_message_uuids) ? message.user_message_uuids
+                        : typeof message.user_message_uuid === "string" ? [message.user_message_uuid] : [];
+                    if (stamps.some(uuid => (session.turnQueue ?? []).some(turn => turn.promptUuid === uuid && !turn.settled &&
+                        !["discarded", "refused", "cancelled"].includes(turn.commandFinished)))) backgroundDelivery.bindOwned();
+                }
+                if (session.emitRawSDKMessages &&`);
+  patch.once('                            session.orphanCommands.delete(message.user_message_uuid);', `                            backgroundDelivery.reset();
+                            session.orphanCommands.delete(message.user_message_uuid);`);
+  patch.once('                            if (viberoomResults.has(message.uuid)) {', `                            if (viberoomResults.has(message.uuid)) {
+                                backgroundDelivery.reset();`);
+  patch.once('                            const deliveredAssistantText = session.emittedAssistantText;', `                            // Final attribution follows the existing absorbed/orphan result contract.
+                            // Flush before delivery tracking and before resolving the ACP prompt.
+                            if (session.cancelled) backgroundDelivery.reset();
+                            else if (isAutonomousResult) {
+                                await backgroundDelivery.deliverBackground({ sessionId: params.sessionId,
+                                    messageId: typeof message.uuid === "string" ? message.uuid : "",
+                                    stopReason: ["cancelled"].includes(message.stop_reason) || ["aborted_streaming", "aborted_tools"].includes(message.terminal_reason) ? "cancelled"
+                                        : message.is_error || message.subtype !== "success" || ["refusal", "max_tokens"].includes(message.stop_reason) ? "error" : "end_turn" },
+                                    typeof message.result === "string" && message.num_turns !== 0 ? message.result : "");
+                            } else if (session.activeTurn && !session.activeTurn.settled) await backgroundDelivery.deliverOwned();
+                            else backgroundDelivery.reset();
+                            const deliveredAssistantText = session.emittedAssistantText;`);
+  patch.once('                        finally {\n                            if (!isAutonomousResult) {', `                        finally {
+                            backgroundDelivery.reset();
+                            if (!isAutonomousResult) {`);
+  patch.once('                steering: {', `                "viberoom.backgroundMessages": 1,
+                steering: {`);
+  patch.finish("ClaudeMessageDelivery, backgroundMessagesEnabled, BACKGROUND_MESSAGE_METHOD");
+}
+
+function patchCodexBackgroundDelivery(file) {
+  const patch = backgroundPatcher(file, "codex-acp");
+  patch.once('    this.session = new ACPSessionConnection(connection, sessionState.sessionId);', `    this.session = new ACPSessionConnection(connection, sessionState.sessionId);
+    this.backgroundDelivery = sessionState.viberoomBackgroundDelivery ??= new CodexMessageDelivery(
+      backgroundMessagesEnabled(sessionState.viberoomClientCapabilities), sessionState.sessionId,
+      notification => this.session.update(notification.update, notification.sessionId),
+      message => connection.notify(BACKGROUND_MESSAGE_METHOD, message));`);
+  patch.once('    if (updateEvent) {\n      await this.session.update(updateEvent, this.subagents.notificationSessionId(notification));\n    }', `    if (updateEvent) {
+      const targetSession = this.subagents.notificationSessionId(notification);
+      if (targetSession !== this.sessionState.sessionId || notification.params?.threadId !== this.sessionState.sessionId || !this.backgroundDelivery.capture(notification.params?.turnId,
+        { sessionId: targetSession, update: updateEvent })) await this.session.update(updateEvent, targetSession);
+    }
+    if (notification.params?.threadId === this.sessionState.sessionId && notification.method === "item/completed" && notification.params.item.type === "agentMessage") {
+      await this.backgroundDelivery.completedItem(notification.params.turnId, notification.params.item.id, notification.params.item.text);
+    }
+    if (notification.params?.threadId === this.sessionState.sessionId && notification.method === "turn/completed") {
+      await this.backgroundDelivery.terminal(notification.params.turn.id,
+        notification.params.turn.status === "interrupted" ? "cancelled" : notification.params.turn.status === "completed" ? "end_turn" : "error");
+    }`);
+  patch.once('    const activePrompt = this.trackActivePrompt(params.sessionId);', `    sessionState.viberoomClientCapabilities = this.clientCapabilities;
+    // The handler creates the persistent delivery registry before turn/start can emit any event.
+    const activePrompt = this.trackActivePrompt(params.sessionId);`);
+  patch.once('      eventHandler = promptEventHandler;', `      eventHandler = promptEventHandler;
+      promptEventHandler.backgroundDelivery.beginPrompt();
+      let backgroundStartPending = true;
+      activePrompt.viberoomBackgroundStart = async (turnId) => {
+        // The native start returned an exact ID even if replaying buffered ACP text now fails.
+        activePrompt.viberoomBackgroundNativeStart = false;
+        await promptEventHandler.backgroundDelivery.claimPrompt(turnId);
+        if (backgroundStartPending) {
+          backgroundStartPending = false;
+          await promptEventHandler.backgroundDelivery.endPromptStart();
+        }
+      };
+      activePrompt.viberoomBackgroundEnd = async () => {
+        if (backgroundStartPending) {
+          backgroundStartPending = false;
+          await promptEventHandler.backgroundDelivery.endPromptStart(activePrompt.viberoomBackgroundNativeStart === true);
+        }
+      };
+      activePrompt.viberoomBackgroundPrepare = () => {
+        if (!backgroundStartPending) {
+          promptEventHandler.backgroundDelivery.beginPrompt();
+          backgroundStartPending = true;
+        }
+      };`);
+  patch.once('      onTurnStarted?.(turnStarted.turn.id);', '      await onTurnStarted?.(turnStarted.turn.id);');
+  patch.once('      onTurnStarted?.(reviewStarted.turn.id, reviewStarted.reviewThreadId);', '      await onTurnStarted?.(reviewStarted.turn.id, reviewStarted.reviewThreadId);');
+  patch.once('        this.handleCommandTurnStarted(sessionState, options, turnId, threadId);', '        return this.handleCommandTurnStarted(sessionState, options, turnId, threadId);');
+  patch.once('      options.onTurnStarted(turnId, threadId);', '      return options.onTurnStarted(turnId, threadId);');
+  patch.once('      const commandPromise = this.availableCommands.tryHandleCommand(params.prompt, sessionState, {', `      // /goal's native response has no turn ID. Keep its existing command lane isolated; the
+      // bridge resumes after the command's explicit completion for later goal continuations.
+      const viberoomLegacyGoal = this.availableCommands.parseCommand(params.prompt)?.name === "goal";
+      if (viberoomLegacyGoal) promptEventHandler.backgroundDelivery.beginLegacyCommand();
+      activePrompt.viberoomBackgroundLegacyEnd = () => {
+        if (viberoomLegacyGoal) promptEventHandler.backgroundDelivery.endLegacyCommand();
+      };
+      const commandPromise = this.availableCommands.tryHandleCommand(params.prompt, sessionState, {`);
+  patch.once('        onTurnStartPending: () => {\n          sessionState.lastTokenUsage = null;', `        onTurnStartPending: () => {
+          activePrompt.viberoomBackgroundNativeStart = true;
+          sessionState.lastTokenUsage = null;`);
+  patch.once('        onTurnStarted: (turnId, threadId) => {\n          const turn = { threadId, turnId };', `        onTurnStarted: async (turnId, threadId) => {
+          if (!viberoomLegacyGoal) await activePrompt.viberoomBackgroundStart(turnId);
+          const turn = { threadId, turnId };`);
+  patch.once('      if (commandResult.handled) {\n        promptNotificationsActive = false;', `      if (!commandResult.handled) {
+        activePrompt.viberoomBackgroundLegacyEnd?.();
+        activePrompt.viberoomBackgroundLegacyEnd = undefined;
+      }
+      if (commandResult.handled) {
+        if (viberoomLegacyGoal) activePrompt.viberoomBackgroundNativeStart = false;
+        promptNotificationsActive = false;`);
+  patch.once('      const sendPromptPromise = this.runWithProcessCheck(', `      activePrompt.viberoomBackgroundNativeStart = true;
+      const sendPromptPromise = this.runWithProcessCheck(`);
+  patch.once('              (turnId) => {\n                const turn = { threadId: params.sessionId, turnId };', `              async (turnId) => {
+                await activePrompt.viberoomBackgroundStart(turnId);
+                const turn = { threadId: params.sessionId, turnId };`);
+  patch.once('          (turnId) => {\n            const turn = { threadId: params.sessionId, turnId };', `          async (turnId) => {
+            await activePrompt.viberoomBackgroundStart(turnId);
+            const turn = { threadId: params.sessionId, turnId };`);
+  patch.once('          const implementationPromise = this.runWithProcessCheck(', `          activePrompt.viberoomBackgroundPrepare();
+          activePrompt.viberoomBackgroundNativeStart = true;
+          const implementationPromise = this.runWithProcessCheck(`);
+  patch.once('      promptNotificationsActive = false;\n      try {\n        await this.codexAcpClient.waitForSessionNotifications(params.sessionId);', `      promptNotificationsActive = false;
+      activePrompt.viberoomBackgroundLegacyEnd?.();
+      await activePrompt.viberoomBackgroundEnd?.();
+      try {
+        await this.codexAcpClient.waitForSessionNotifications(params.sessionId);`);
+  patch.once('      _meta: {\n        steering: {', `      _meta: {
+        "viberoom.backgroundMessages": 1,
+        steering: {`);
+  patch.finish("CodexMessageDelivery, backgroundMessagesEnabled, BACKGROUND_MESSAGE_METHOD");
+}
+
+function patchCodexAdapter(file) {
+  let source = readFileSync(file, "utf8");
+  const once = (anchor, replacement) => {
+    const first = source.indexOf(anchor);
+    if (first < 0 || source.indexOf(anchor, first + 1) >= 0) throw new Error(`codex-acp changed: the console-window patch anchor is missing or ambiguous: ${anchor.slice(0, 70)}`);
+    source = source.replace(anchor, replacement);
+  };
+  once(
+    'codex = process.platform === "win32" ? spawn(`"${codexPath}" app-server`, { shell: true, env: spawnEnv }) : spawn(codexPath, ["app-server"], { env: spawnEnv });',
+    'codex = process.platform === "win32" && /\\.(?:cmd|bat)$/i.test(codexPath) ? spawn(`"${codexPath}" app-server`, { shell: true, env: spawnEnv, windowsHide: true }) : spawn(codexPath, ["app-server"], { env: spawnEnv, windowsHide: true });',
+  );
+  once(
+    'codex = spawn(process.execPath, [bundledCodexPath, "app-server"], { env: spawnEnv });',
+    'codex = spawn(process.execPath, [bundledCodexPath, "app-server"], { env: spawnEnv, windowsHide: true });',
+  );
+  writeFileSync(file, source);
+  console.log("patched codex-acp: codex app-server starts without a console window on Windows, an .exe without cmd.exe");
+}
+
+function patchCodexStandingBrief(file) {
+  let source = readFileSync(file, "utf8");
+  const once = (anchor, replacement) => {
+    const first = source.indexOf(anchor);
+    if (first < 0 || source.indexOf(anchor, first + 1) >= 0) throw new Error(`codex-acp changed: the standing-brief patch anchor is missing or ambiguous: ${anchor.slice(0, 70)}`);
+    source = source.replace(anchor, replacement);
+  };
+  once(
+    "  async newSession(request) {\n",
+    `  /** viberoom: the session's config with \`_meta.systemPrompt.append\` added to the developer instructions it has. */
+  async viberoomStanding(config, request) {
+    const append = request?._meta?.systemPrompt?.append;
+    if (typeof append !== "string" || !append.trim()) return config;
+    let own = config?.developer_instructions;
+    if (typeof own !== "string") {
+      try {
+        own = (await this.codexClient.configRead({ includeLayers: false, cwd: request.cwd }))?.config?.developer_instructions;
+      } catch (error) {
+        own = void 0;
+        // the room's rules still go; that the person's own instructions could not be kept is said, in the room's record
+        console.error("viberoom: config/read failed (" + (error?.message ?? error) + "); the thread's developer instructions are the room's alone");
+      }
+    }
+    return { ...config, developer_instructions: typeof own === "string" && own.trim() ? own + "\\n\\n" + append : append };
+  }
+  async newSession(request) {
+`,
+  );
+  once(
+    "      config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers),\n",
+    "      config: await this.viberoomStanding(await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers), request),\n",
+  );
+  for (const method of ["resumeSession", "loadSession"]) {
+    once(
+      `  async ${method}(request, onSubscribed) {
+    const additionalDirectories = readAdditionalDirectories(request.cwd, request.additionalDirectories, request._meta);
+    await this.refreshSkills(request.cwd, additionalDirectories);
+    const response = await this.resumeThread({
+      excludeTurns: true,
+      config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? []),`,
+      `  async ${method}(request, onSubscribed) {
+    const additionalDirectories = readAdditionalDirectories(request.cwd, request.additionalDirectories, request._meta);
+    await this.refreshSkills(request.cwd, additionalDirectories);
+    const response = await this.resumeThread({
+      excludeTurns: true,
+      config: await this.viberoomStanding(await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? []), request),`,
+    );
+  }
+  writeFileSync(file, source);
+  console.log("patched codex-acp: the standing part of the brief joins the developer instructions of every thread");
+}
 
 function patchClaudeAdapter(file) {
   let source = readFileSync(file, "utf8");
@@ -186,9 +427,10 @@ function patchClaudeAdapter(file) {
                                             resolve(value);
                                             share(value.stopReason === "cancelled" ? "cancelled" : "notReported", (extra) => extra.resolve(value));
                                         };
-                                        dispatchedOwner.reject = (error) => {
-                                            reject(error);
-                                            share("providerError", (extra) => extra.reject(error));
+                                        // the error and its title (0.86.0 rejects with both), for the owner and each absorbed command
+                                        dispatchedOwner.reject = (error, title) => {
+                                            reject(error, title);
+                                            share("providerError", (extra) => extra.reject(error, title));
                                         };
                                     }
                                 }`,
@@ -215,12 +457,14 @@ function patchClaudeAdapter(file) {
   once(
     `            if (isSteering(session.activeTurn)) {
                 session.activeTurn.steeredSettle = outcome;
+                session.activeTurn.steeredAwaitingResult = false;
                 return;
             }`,
     `            if (isSteering(session.activeTurn)) {
                 session.activeTurn.viberoomHeldAt ??= Date.now();
                 console.error("viberoom-trace held store=steeredSettle reason=steered");
                 session.activeTurn.steeredSettle = outcome;
+                session.activeTurn.steeredAwaitingResult = false;
                 return;
             }`,
   );
