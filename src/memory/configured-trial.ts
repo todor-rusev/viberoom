@@ -14,6 +14,23 @@ export interface ConfiguredTrialSelection {
 
 export type ConfiguredTrialAccountSelection = Pick<ConfiguredTrialSelection, "answerKeyOwner" | "answerEndpoint" | "answerModel">;
 
+export function configuredAnswerContext(owners: { memoryStore: Pick<MemoryConfigStore, "get" | "trialRevision"> }, input: ConfiguredTrialAccountSelection) {
+  if (input.answerKeyOwner !== "memory.filter.apiKey" || !input.answerEndpoint || !input.answerModel)
+    throw new Error("configured_trial_answer_owner_required");
+  if (Object.keys(input).sort().join(",") !== ["answerKeyOwner", "answerEndpoint", "answerModel"].sort().join(","))
+    throw new Error("configured_trial_account_selection_fields");
+  const selection = Object.freeze({ ...input });
+  const snapshot = () => {
+    const revision = owners.memoryStore.trialRevision(), config = owners.memoryStore.get();
+    let endpoint: string;
+    try { endpoint = chatCompletionsUrl(config.filter.baseUrl).href; }
+    catch { return null; }
+    if (endpoint !== selection.answerEndpoint || revision !== owners.memoryStore.trialRevision()) return null;
+    return { configurationRevision: revision, answer: { owner: selection.answerKeyOwner, endpoint, model: selection.answerModel }, selection };
+  };
+  return Object.freeze({ snapshot });
+}
+
 export function configuredTrialAccountContext(owners: {
   memory: Pick<MemoryPipeline, "inspectLoadedTrialAccount" | "loadedTrialPreparation">;
   memoryStore: Pick<MemoryConfigStore, "get" | "trialRevision">;

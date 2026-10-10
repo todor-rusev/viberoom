@@ -30,6 +30,7 @@ export interface MessageCheckResult {
   messages: CheckedMessage[]; nextCursor: string; more: boolean; reset: boolean; hint: string;
   counts?: MessageCheckCounts; headers?: MessageHeader[]; previewed?: number; moreHeaders?: boolean; nextPage?: string; snapshotThrough?: number;
   vibemates?: CheckedVibemate[]; vibematesOmitted?: number; liveDraft?: LiveDraft;
+  hopLimitReached?: boolean; hopLimitNotice?: string;
 }
 
 export function parseMessageCheckArgs(params: Record<string, unknown>, query = false): MessageCheckArgs {
@@ -150,7 +151,7 @@ export function messageCheckHeader(message: CheckedMessage): MessageHeader {
 export function packMessageCheck(
   args: MessageCheckArgs, position: { seq: number; reset: boolean; pageSeq?: number; pagePriority?: number }, rows: CheckedMessage[],
   cursors: { read: (seq: number) => string; headers: (seq: number, priority: number) => string }, latest: number, checkedAt = new Date().toISOString(),
-  extras: Pick<MessageCheckResult, "vibemates" | "vibematesOmitted" | "liveDraft"> = {},
+  extras: Pick<MessageCheckResult, "vibemates" | "vibematesOmitted" | "liveDraft" | "hopLimitReached" | "hopLimitNotice"> = {},
 ): MessageCheckResult {
   const cursor = cursors.read;
   let result: MessageCheckResult = {

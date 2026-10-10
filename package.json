@@ -1,6 +1,6 @@
 {
   "name": "viberoom",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "description": "viberoom: bring your AI assistants together in one conversation",
   "repository": {
     "type": "git",
@@ -13,7 +13,7 @@
   "viberoom": {
     "contract": 1,
     "minShell": "1.0.0",
-    "format": 2
+    "format": 4
   },
   "bin": {
     "viberoom": "dist/main.js"
@@ -244,6 +244,8 @@
     "src/message-numbers.ts",
     "src/message-read.ts",
     "src/name-directory.ts",
+    "src/native-note-state.ts",
+    "src/native-reports.ts",
     "src/net/hosts.ts",
     "src/net/outbound.ts",
     "src/new-room.ts",
@@ -498,6 +500,8 @@
     "dist/message-numbers.js",
     "dist/message-read.js",
     "dist/name-directory.js",
+    "dist/native-note-state.js",
+    "dist/native-reports.js",
     "dist/net/hosts.js",
     "dist/net/outbound.js",
     "dist/new-room.js",
@@ -557,6 +561,8 @@
     "dist/ws.js",
     "dist/build.json",
     "tsconfig.json",
+    "private-trial/answers-only-resident.d.mts",
+    "private-trial/answers-only-resident.mjs",
     "private-trial/canonical-files.mjs",
     "private-trial/memory-deletion-refresh-b18d/core.mjs",
     "private-trial/memory-deletion-refresh-b18d/plan.mjs",
@@ -565,12 +571,14 @@
     "private-trial/memory-retrieval-comparison-d3/entity-projection.mjs",
     "private-trial/memory-retrieval-comparison-d3/envelope-projection.mjs",
     "private-trial/memory-retrieval-comparison-d3/episode-projection.mjs",
+    "private-trial/memory-retrieval-comparison-d3/input-contract.mjs",
     "private-trial/memory-retrieval-comparison-d3/lineage.mjs",
     "private-trial/memory-retrieval-comparison-d3/native-projection.mjs",
     "private-trial/memory-retrieval-comparison-d3/ports.mjs",
     "private-trial/memory-retrieval-comparison-d3/prepare.mjs",
     "private-trial/memory-retrieval-comparison-d3/run.mjs",
     "private-trial/memory-retrieval-comparison-d3/wire-projection.mjs",
+    "private-trial/memory-retrieval-trial-d5/answers-only.mjs",
     "private-trial/memory-retrieval-trial-d5/budget-recorder.mjs",
     "private-trial/memory-retrieval-trial-d5/comparison-bridge.mjs",
     "private-trial/memory-retrieval-trial-d5/configured-caller.mjs",
@@ -612,6 +620,8 @@
     "experiments/memory-retrieval-comparison-d3/entity-projection.mjs",
     "experiments/memory-retrieval-comparison-d3/envelope-projection.mjs",
     "experiments/memory-retrieval-comparison-d3/episode-projection.mjs",
+    "experiments/memory-retrieval-comparison-d3/input-contract.mjs",
+    "experiments/memory-retrieval-comparison-d3/input-contract.test.mjs",
     "experiments/memory-retrieval-comparison-d3/lineage.mjs",
     "experiments/memory-retrieval-comparison-d3/native-projection.mjs",
     "experiments/memory-retrieval-comparison-d3/ports.mjs",

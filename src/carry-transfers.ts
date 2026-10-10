@@ -360,10 +360,7 @@ export class CarryTransfers {
           }
           if (room.made) continue;
           history.carry.importRevisions(id, revisions);
-          for (const state of states) {
-            history.upsert(id, state.message, { track: false });
-            if (state.deletedAt !== null) history.markDeleted(id, [state.message.id], state.deletedAt, { track: false });
-          }
+          history.applyCarriedStates(id, states);
           for (const head of stage.planRows<CarryHead>(room.uuid, "head")) history.carry.acceptHead(id, head);
           for (const alternative of stage.planRows<CarryAlternative>(room.uuid, "alternative")) history.carry.archive(id, alternative);
           history.carry.addAliases(id, room.aliases);

@@ -1,6 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { DatabaseSync, backup as sqliteBackup } from "node:sqlite";
+import { DatabaseSync, backup as sqliteBackup, type StatementSync } from "node:sqlite";
 import { CarryHistory, carryHash, type CarryRevision } from "./carry-history.js";
 import type { PortableMemoryRepair } from "./memory/carry.js";
 import { memoryVersion } from "./memory/version.js";
@@ -18,6 +18,10 @@ import { Logger } from "./log.js";
 import { TimedDatabase, type TimedStatement } from "./timed-db.js";
 import { openObservedTestDatabase } from "./owned-native-test-resources.js";
 import type { NameUse } from "./name-directory.js";
+import { NativeReportError, nativeDataHash, nativeInteger, nativeObligationTransition, parseNativeDecision,
+  parseNativeEnvelope, parseNativeHoldReason, parseNativeOperation, parseNativeRecord, parseNativeSubject,
+  type NativeDecision, type NativeDivertOp, type NativeEnvelope, type NativeHoldReason, type NativeObligation, type NativeObligationPhase,
+  type NativePendingOp, type NativeReceipt, type NativeRecord, type NativeSubject } from "./native-reports.js";
 
 export const HISTORY_DB_FILE = "history.db";
 
@@ -57,7 +61,7 @@ function removeHalfCopies(store: string): void {
     try { rmSync(join(folder, name), { force: true }); } catch { }
   }
 }
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 4;
 
 export function newerFormatMessage(): string {
   return [
@@ -175,9 +179,10 @@ const LATER_APPLIED_COLUMNS: Array<[string, string]> = [
   ["message_id", "text"],
   ["seq", "integer"],
   ["kind", "text"],
+  ["payload_hash", "text"],
 ];
 
-export type PendingOp = (
+export type LegacyPendingOp = (
   | { kind: "upsert"; message: StoredMessage }
   | { kind: "truncate"; fromSeq: number; deletedAt: number }
   | { kind: "bury"; ids: string[]; deletedAt: number }
@@ -186,6 +191,7 @@ export type PendingOp = (
   opId?: string;
   accept?: true;
 };
+export type PendingOp = LegacyPendingOp | NativePendingOp;
 export type DivertOp = PendingOp & { opId: string };
 
 export interface AppliedReceipt {
@@ -240,6 +246,21 @@ create table if not exists messages(
 );
 create index if not exists idx_messages_room_seq on messages(room, seq);
 create index if not exists idx_messages_room_author on messages(room, author, author_name);
+create table if not exists native_reports(
+  room_uuid text not null,
+  id text not null,
+  room_address text not null,
+  participant text not null,
+  accept_order integer not null check(accept_order > 0),
+  generation integer not null check(generation >= 0),
+  state text not null check(state in ('pending','held','published','consumed','tombstoned')),
+  state_revision integer not null check(state_revision >= 0),
+  delivery_pending integer not null default 1 check(delivery_pending in (0,1)),
+  body text not null,
+  primary key(room_uuid,id),
+  unique(room_uuid,accept_order)
+);
+create index if not exists idx_native_reports_pending on native_reports(room_address,participant,state,accept_order);
 create virtual table if not exists messages_fts using fts5(
   text, author_name, content='messages', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2');
 create virtual table if not exists messages_trigram using fts5(
@@ -343,6 +364,7 @@ export class HistoryStore {
       });
       this.cards = new RoomCards(this.db);
       this.reconcileColumns();
+      this.reconcileNativeDeliveryIndex();
       const version = this.meta("schema_version");
       if (version === null || Number(version) < SCHEMA_VERSION) this.setMeta("schema_version", String(SCHEMA_VERSION));
       this.db.exec("commit");
@@ -410,6 +432,28 @@ export class HistoryStore {
     this.log.info(`history.db: added ${added.map(([n]) => n).join(", ")} and filled the existing rows`);
   }
 
+  private reconcileNativeDeliveryIndex(): void {
+    const version = this.meta("schema_version");
+    const upgrading = version === null || Number(version) < SCHEMA_VERSION;
+    this.transaction(() => {
+      const columns = this.db.prepare("pragma table_info(native_reports)").all() as Row[];
+      if (!columns.some(row => row.name === "delivery_pending")) {
+        if (!upgrading) throw new NativeReportError("native_state_corrupt", "The native delivery index column is missing.");
+        this.db.exec("alter table native_reports add column delivery_pending integer not null default 1 check(delivery_pending in (0,1))");
+      }
+      if (upgrading) {
+        const fill = this.db.prepare("update native_reports set delivery_pending = ? where room_uuid = ? and id = ?");
+        for (const row of this.db.prepare("select * from native_reports order by room_uuid,accept_order,id").all() as Row[]) {
+          const record = this.decodeNative(row, false);
+          fill.run(this.nativeDeliveryPending(record), row.room_uuid as string, row.id as string);
+        }
+      }
+      this.db.exec(`create index if not exists idx_native_delivery_room on native_reports(room_address,accept_order,room_uuid,id) where delivery_pending = 1;
+        create index if not exists idx_native_delivery_author on native_reports(room_address,participant,accept_order,room_uuid,id) where delivery_pending = 1`);
+      if (upgrading) this.setMeta("schema_version", String(SCHEMA_VERSION));
+    });
+  }
+
   meta(key: string): string | null {
     const row = this.db.prepare("select value from meta where key = ?").get(key) as Row | undefined;
     return row ? String(row.value) : null;
@@ -425,12 +469,20 @@ export class HistoryStore {
 
   private transactionDepth = 0;
 
+  assertTransactionSettled(): void {
+    if (this.db.isTransaction !== false) throw new Error("transaction_outcome_unknown: the SQLite transaction is still open");
+  }
+
   markFileTransaction(id: string): void { this.db.prepare("insert into file_transactions(id) values (?)").run(id); }
-  hasFileTransaction(id: string): boolean { return !!this.db.prepare("select 1 from file_transactions where id = ?").get(id); }
+  hasFileTransaction(id: string): boolean {
+    this.assertTransactionSettled();
+    return !!this.db.prepare("select 1 from file_transactions where id = ?").get(id);
+  }
   forgetFileTransaction(id: string): void { this.db.prepare("delete from file_transactions where id = ?").run(id); }
 
   transaction<T>(work: () => T): T {
     if (this.transactionDepth > 0) return work();
+    this.assertTransactionSettled();
     this.db.exec("begin immediate");
     this.transactionDepth++;
     try {
@@ -584,6 +636,22 @@ export class HistoryStore {
     });
   }
 
+  applyCarriedStates(roomId: string, states: readonly { message: StoredMessage; deletedAt: number | null }[]): void {
+    this.transaction(() => {
+      const before = this.db.prepare("select body, deleted_at from messages where room = ? and id = ?");
+      const destructive = states.some(state => {
+        const row = before.get(roomId, state.message.id) as Row | undefined;
+        return !!row && carryHash(this.decode(row), row.deleted_at === null ? null : Number(row.deleted_at))
+          !== carryHash(state.message, state.deletedAt);
+      });
+      if (destructive) this.advanceNativeGeneration(roomId);
+      for (const state of states) {
+        this.upsert(roomId, state.message, { track: false });
+        if (state.deletedAt !== null) this.markDeleted(roomId, [state.message.id], state.deletedAt, { track: false });
+      }
+    });
+  }
+
   reconcile(roomId: string, live: StoredMessage[], deletedAt = Date.now(), opts: { markUpToSeq?: number } = {}): { upserted: number; marked: number } {
     return this.transaction(() => {
       const known = new Map<string, { body: string; seq: number }>();
@@ -604,8 +672,11 @@ export class HistoryStore {
   }
 
   truncateFrom(roomId: string, fromSeq: number, deletedAt = Date.now()): number {
-    const ids = this.db.prepare("select id from messages where room=? and seq>? and deleted_at is null").all(roomId, fromSeq).map(r => String(r.id));
-    return this.markDeleted(roomId, ids, deletedAt);
+    return this.transaction(() => {
+      this.advanceNativeGeneration(roomId);
+      const ids = this.db.prepare("select id from messages where room=? and seq>? and deleted_at is null").all(roomId, fromSeq).map(r => String(r.id));
+      return this.markDeleted(roomId, ids, deletedAt);
+    });
   }
 
   rewrite(roomId: string, message: StoredMessage, fromSeq: number, deletedAt = Date.now()): number {
@@ -639,6 +710,9 @@ export class HistoryStore {
           this.carry.record(roomId, message, deletedAt);
         }
         changed += this.db.prepare(`update messages set deleted_at = ? where room = ? and id in (${placeholders(batch.length)}) and deleted_at is null`).run(deletedAt, roomId, ...batch).changes as number;
+        for (const row of this.db.prepare(`select * from native_reports where room_address = ? and id in (${placeholders(batch.length)})`).all(roomId, ...batch) as Row[]) {
+          this.tombstoneNativeRecord(this.decodeNative(row), nativeInteger(deletedAt));
+        }
       }
       return changed;
     });
@@ -656,6 +730,10 @@ export class HistoryStore {
       this.memoryOutbox.episodeIndex.dropRoom(roomId);
       this.memoryOutbox.deliveries.detachLocal(roomId);
       this.memoryDebug.forgetRoom(roomId);
+      const uuids = this.db.prepare("select distinct room_uuid from native_reports where room_address = ?").all(roomId) as Row[];
+      this.db.prepare("delete from native_reports where room_address = ?").run(roomId);
+      for (const row of uuids) this.deleteMeta(`native-order:${String(row.room_uuid)}`);
+      this.advanceNativeGeneration(roomId);
       this.db.prepare("delete from messages where room = ?").run(roomId);
       this.carry.drop(roomId);
       this.memoryOutbox.carry.dropRoom(roomId);
@@ -747,6 +825,243 @@ export class HistoryStore {
   getById(roomId: string, id: string, includeDeleted = false): StoredMessage | null {
     const row = this.db.prepare(`select body from messages where room=? and id=?${includeDeleted ? "" : " and deleted_at is null"}`).get(roomId, id) as Row | undefined;
     return row ? this.decode(row) : null;
+  }
+
+
+  nativeJournalSafety(roomId: string): boolean {
+    this.nativeRoomId(roomId);
+    const value = this.meta(`native-journal-safe:${roomId}`);
+    if (value === null) return false;
+    if (value !== "1") throw new NativeReportError("native_state_corrupt", "The native journal safety marker is unreadable.");
+    return true;
+  }
+
+  enableNativeJournalSafety(roomId: string): void {
+    this.nativeRoomId(roomId);
+    this.transaction(() => { this.nativeJournalSafety(roomId); this.setMeta(`native-journal-safe:${roomId}`, "1"); });
+  }
+
+  nativeGeneration(roomId: string): number {
+    this.nativeRoomId(roomId);
+    return this.nativeMetaInteger(`native-generation:${roomId}`);
+  }
+
+  advanceNativeGeneration(roomId: string): number {
+    this.nativeRoomId(roomId);
+    return this.transaction(() => {
+      const next = this.nativeNext(this.nativeGeneration(roomId));
+      this.setMeta(`native-generation:${roomId}`, String(next));
+      for (const row of this.db.prepare("select * from native_reports where room_address = ? and state in ('pending','held')").all(roomId) as Row[]) {
+        const record = this.decodeNative(row);
+        record.state = "held"; record.holdReason = "stale_generation"; record.stateRevision = this.nativeNext(record.stateRevision);
+        this.writeNative(record);
+      }
+      return next;
+    });
+  }
+
+  nativeHighWater(roomUuid: string): number {
+    this.nativeUuid(roomUuid);
+    const meta = this.nativeMetaInteger(`native-order:${roomUuid}`);
+    const row = this.db.prepare("select max(accept_order) as n from native_reports where room_uuid = ?").get(roomUuid) as Row;
+    const maximum = row.n === null ? 0 : nativeInteger(row.n, 1);
+    if (meta !== maximum) throw new NativeReportError("native_state_corrupt", "The native acceptance high-water differs from its retained records.");
+    return meta;
+  }
+
+  nativeDisplayHighWater(roomId: string): number {
+    this.nativeRoomId(roomId);
+    const row = this.db.prepare("select coalesce(max(coalesce(display_order,seq)),0) as n from messages where room = ?").get(roomId) as Row;
+    return nativeInteger(row.n);
+  }
+
+  nativeReceipt(roomId: string, roomUuid: string, id: string): NativeReceipt | null {
+    this.nativeRoomId(roomId); this.nativeUuid(roomUuid); this.nativeId(id);
+    const row = this.db.prepare("select * from native_reports where room_uuid = ? and id = ?").get(roomUuid, id) as Row | undefined;
+    if (row) {
+      const record = this.decodeNative(row);
+      if (record.envelope.owner.roomId !== roomId) throw new NativeReportError("native_conflict", "The native receipt belongs to another room address.");
+      return { type: "native", record };
+    }
+    const legacy = this.agentMessageReceipt(roomId, id);
+    return legacy ? { type: "legacy", receipt: legacy } : null;
+  }
+
+  enqueueNative(roomId: string, input: NativeEnvelope): { status: "enqueued" | "duplicate" | "legacy_hash_unknown"; receipt: NativeReceipt } {
+    const envelope = parseNativeEnvelope(input);
+    if (envelope.owner.roomId !== roomId) throw new NativeReportError("native_conflict", "The native envelope belongs to another room.");
+    return this.transaction(() => {
+      const previous = this.nativeReceipt(roomId, envelope.owner.roomUuid, envelope.id);
+      if (previous) {
+        const storedHash = previous.type === "native" ? previous.record.envelope.reportHash : previous.receipt.hash;
+        if (storedHash !== null && storedHash !== envelope.reportHash) throw new NativeReportError("native_conflict", "The native ID already names another completed report.");
+        if (previous.type === "native" && JSON.stringify(previous.record.envelope.owner) !== JSON.stringify(envelope.owner)) {
+          return { status: "duplicate", receipt: previous };
+        }
+        return { status: storedHash === null ? "legacy_hash_unknown" : "duplicate", receipt: previous };
+      }
+      if (envelope.owner.generation !== this.nativeGeneration(roomId)) throw new NativeReportError("native_generation_changed", "The native envelope's history generation is no longer current.");
+      if (envelope.acceptOrder !== this.nativeNext(this.nativeHighWater(envelope.owner.roomUuid))) throw new NativeReportError("native_conflict", "The native acceptance order is not the next retained ordinal.");
+      this.enableNativeJournalSafety(roomId);
+      const record: NativeRecord = { envelope, state: "pending", stateRevision: 0, holdReason: null,
+        decision: null, receipt: null, obligations: [], deletedAt: null };
+      this.writeNative(record);
+      this.setMeta(`native-order:${envelope.owner.roomUuid}`, String(envelope.acceptOrder));
+      return { status: "enqueued", receipt: { type: "native", record } };
+    });
+  }
+
+  listPendingNative(roomId: string, participantId?: string): NativeRecord[] {
+    this.nativeRoomId(roomId);
+    if (participantId !== undefined && (typeof participantId !== "string" || !participantId)) throw new NativeReportError("invalid_native_data", "The native participant ID is empty.");
+    const sql = "select * from native_reports where room_address = ? and state in ('pending','held')";
+    const rows = participantId === undefined
+      ? this.db.prepare(sql + " order by accept_order,room_uuid,id").all(roomId)
+      : this.db.prepare(sql + " and participant = ? order by accept_order,room_uuid,id").all(roomId, participantId);
+    return (rows as Row[]).map(row => this.decodeNative(row));
+  }
+
+  listNativeDelivery(roomId: string, participantId?: string): NativeRecord[] {
+    this.nativeRoomId(roomId);
+    if (participantId !== undefined && (typeof participantId !== "string" || !participantId)) throw new NativeReportError("invalid_native_data", "The native participant ID is empty.");
+    const rows = this.db.prepare(`select * from native_reports where room_address = ? and delivery_pending = 1${participantId === undefined ? "" : " and participant = ?"} order by accept_order, room_uuid, id`)
+      .all(roomId, ...(participantId === undefined ? [] : [participantId])) as Row[];
+    return rows.map(row => this.decodeNative(row));
+  }
+
+  holdNative(roomId: string, subject: NativeSubject, expectedRevision: number, reason: NativeHoldReason, at: number): NativeRecord {
+    parseNativeHoldReason(reason); nativeInteger(at);
+    return this.transaction(() => {
+      const record = this.requireNative(roomId, subject, expectedRevision);
+      if (record.state !== "pending" && record.state !== "held") throw new NativeReportError("native_conflict", "A final native receipt cannot become pending evidence.");
+      record.state = "held"; record.holdReason = reason; record.stateRevision = this.nativeNext(record.stateRevision);
+      this.writeNative(record); return record;
+    });
+  }
+
+  releaseNative(roomId: string, subject: NativeSubject, expectedRevision: number): NativeRecord {
+    return this.transaction(() => {
+      const record = this.requireNative(roomId, subject, expectedRevision);
+      this.requireNativeGeneration(record);
+      if (record.state !== "held") throw new NativeReportError("native_conflict", "Only held native evidence can be reconsidered.");
+      record.state = "pending"; record.holdReason = null; record.stateRevision = this.nativeNext(record.stateRevision);
+      this.writeNative(record); return record;
+    });
+  }
+
+  tombstoneNative(roomId: string, subject: NativeSubject, expectedRevision: number, deletedAt: number): NativeRecord {
+    nativeInteger(deletedAt);
+    return this.transaction(() => {
+      const record = this.requireNative(roomId, subject, expectedRevision);
+      if (record.receipt && record.state !== "tombstoned") {
+        this.markDeleted(roomId, [record.envelope.id], deletedAt);
+        const receipt = this.nativeReceipt(roomId, record.envelope.owner.roomUuid, record.envelope.id);
+        if (!receipt || receipt.type !== "native") throw new NativeReportError("native_state_corrupt", "The native tombstone lost its retained receipt.");
+        return receipt.record;
+      }
+      return this.tombstoneNativeRecord(record, deletedAt);
+    });
+  }
+
+  finalizeNative(roomId: string, subject: NativeSubject, expectedRevision: number, input: NativeDecision, message: StoredMessage | null): NativeRecord {
+    return this.transaction(() => {
+      const record = this.requireNative(roomId, subject, expectedRevision);
+      this.requireNativeGeneration(record);
+      if (record.state !== "pending") throw new NativeReportError("native_conflict", "The native report is not eligible for its first final decision.");
+      const decision = parseNativeDecision(input, record.envelope);
+      if (decision.obligations.some(o => o.phase !== "pending")) throw new NativeReportError("invalid_native_data", "A new native decision must begin with unattempted obligations.");
+      const visible = ["visible_complete", "visible_cancelled_human", "visible_error_human", "referee_hidden"].includes(decision.kind);
+      if (visible !== (message !== null)) throw new NativeReportError("invalid_native_data", "The native decision and publication receipt disagree.");
+      if (message) {
+        const expectedKind = decision.kind === "referee_hidden" ? "hidden" : "chat";
+        if (message.id !== record.envelope.id || message.kind !== expectedKind || message.from !== record.envelope.owner.participantId || message.streaming
+          || message.details?.reportHash !== record.envelope.reportHash) throw new NativeReportError("invalid_native_data", "The native message is not bound to its exact report decision.");
+        nativeInteger(message.seq, 1); nativeInteger(message.ts);
+        if (message.displayOrder !== undefined) nativeInteger(message.displayOrder, 1);
+        if (this.hasMessageId(roomId, message.id)) throw new NativeReportError("native_conflict", "A retained native message cannot be overwritten by finalization.");
+        const max = this.db.prepare("select max(seq) as n from messages where room = ?").get(roomId) as Row;
+        if (max.n !== null && message.seq <= nativeInteger(max.n, 1)) throw new NativeReportError("native_conflict", "A native publication must receive a new record sequence at drain.");
+        if ((message.displayOrder ?? message.seq) <= this.nativeDisplayHighWater(roomId)) throw new NativeReportError("native_conflict", "A native publication must receive a new display position at drain.");
+        if (expectedKind === "chat" && (message.text !== decision.text || JSON.stringify(message.to) !== JSON.stringify(decision.to) || JSON.stringify(message.toNames) !== JSON.stringify(decision.toNames))) throw new NativeReportError("invalid_native_data", "The native visible decision and message differ.");
+        if (decision.kind === "referee_hidden" && (message.details?.original !== decision.text || JSON.stringify(message.details?.corrections) !== JSON.stringify(decision.corrections))) throw new NativeReportError("invalid_native_data", "The hidden native receipt lost its original correction subject.");
+        if (["visible_cancelled_human", "visible_error_human"].includes(decision.kind) && message.audience !== "human") throw new NativeReportError("invalid_native_data", "An interrupted native report is human-only.");
+        this.upsert(roomId, message);
+        record.receipt = { messageId: message.id, seq: message.seq, kind: expectedKind };
+      }
+      record.state = message ? "published" : "consumed"; record.decision = decision;
+      record.obligations = decision.obligations.map(o => ({ ...o })); record.stateRevision = this.nativeNext(record.stateRevision);
+      this.writeNative(record); return record;
+    });
+  }
+
+  updateNativeObligation(roomId: string, subject: NativeSubject, expectedRevision: number, obligationId: string, next: NativeObligationPhase): NativeRecord {
+    return this.transaction(() => {
+      const record = this.requireNative(roomId, subject, expectedRevision);
+      if (record.state !== "published" && record.state !== "consumed") throw new NativeReportError("native_conflict", "The native receipt has no eligible delivery obligation.");
+      const obligation = record.obligations.find(o => o.id === obligationId);
+      if (!obligation || !nativeObligationTransition(obligation.phase, next)) throw new NativeReportError("invalid_native_data", "The native obligation transition is not supported.");
+      if (next === "pending" || next === "attempt_started" || next === "applied_local") this.requireNativeGeneration(record);
+      if (next === obligation.phase) return record;
+      obligation.phase = next; record.stateRevision = this.nativeNext(record.stateRevision);
+      this.writeNative(record); return record;
+    });
+  }
+
+  private nativeRoomId(roomId: string): void {
+    if (this.transactionDepth === 0) this.assertTransactionSettled();
+    if (typeof roomId !== "string" || !roomId) throw new NativeReportError("invalid_native_data", "A native room address is required.");
+  }
+  private nativeUuid(roomUuid: string): void {
+    if (this.transactionDepth === 0) this.assertTransactionSettled();
+    if (typeof roomUuid !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(roomUuid)) throw new NativeReportError("invalid_native_data", "A native room UUID is required.");
+  }
+  private nativeId(id: string): void {
+    if (typeof id !== "string" || !/^acp-[0-9a-f]{64}$/.test(id)) throw new NativeReportError("invalid_native_data", "A stable native ID is required.");
+  }
+  private nativeNext(value: number): number { return nativeInteger(value + 1, 1); }
+  private nativeMetaInteger(key: string): number {
+    const value = this.meta(key);
+    if (value === null) return 0;
+    if (!/^(0|[1-9][0-9]*)$/.test(value)) throw new NativeReportError("native_state_corrupt", "The native metadata counter is unreadable.");
+    return nativeInteger(Number(value));
+  }
+  private nativeDeliveryPending(record: NativeRecord): 0 | 1 {
+    if (record.state === "tombstoned") return 0;
+    return record.state === "pending" || record.state === "held"
+      || record.obligations.some(o => o.phase === "pending" || o.phase === "attempt_started" || o.phase === "held_owner") ? 1 : 0;
+  }
+  private decodeNative(row: Row, checkDeliveryIndex = true): NativeRecord {
+    try {
+      const record = parseNativeRecord(JSON.parse(String(row.body)));
+      const e = record.envelope;
+      if (row.room_uuid !== e.owner.roomUuid || row.id !== e.id || row.room_address !== e.owner.roomId || row.participant !== e.owner.participantId
+        || row.accept_order !== e.acceptOrder || row.generation !== e.owner.generation || row.state !== record.state || row.state_revision !== record.stateRevision
+        || (checkDeliveryIndex && row.delivery_pending !== this.nativeDeliveryPending(record))) throw new Error("tuple");
+      return record;
+    } catch { throw new NativeReportError("native_state_corrupt", "A retained native record is not a consistent closed tuple."); }
+  }
+  private writeNative(input: NativeRecord): void {
+    const r = parseNativeRecord(input), e = r.envelope;
+    this.db.prepare(`insert into native_reports(room_uuid,id,room_address,participant,accept_order,generation,state,state_revision,delivery_pending,body)
+      values (?,?,?,?,?,?,?,?,?,?) on conflict(room_uuid,id) do update set state=excluded.state,state_revision=excluded.state_revision,delivery_pending=excluded.delivery_pending,body=excluded.body`)
+      .run(e.owner.roomUuid, e.id, e.owner.roomId, e.owner.participantId, e.acceptOrder, e.owner.generation, r.state, r.stateRevision, this.nativeDeliveryPending(r), JSON.stringify(r));
+  }
+  private requireNative(roomId: string, input: NativeSubject, expectedRevision: number): NativeRecord {
+    const subject = parseNativeSubject(input); nativeInteger(expectedRevision);
+    const receipt = this.nativeReceipt(roomId, subject.roomUuid, subject.id);
+    if (!receipt || receipt.type !== "native" || receipt.record.envelope.reportHash !== subject.reportHash) throw new NativeReportError("native_conflict", "The native subject does not match retained evidence.");
+    if (receipt.record.stateRevision !== expectedRevision) throw new NativeReportError("native_revision_changed", "The native state revision has changed.");
+    return receipt.record;
+  }
+  private requireNativeGeneration(record: NativeRecord): void {
+    if (record.envelope.owner.generation !== this.nativeGeneration(record.envelope.owner.roomId)) throw new NativeReportError("native_generation_changed", "The native history generation has changed.");
+  }
+  private tombstoneNativeRecord(record: NativeRecord, deletedAt: number): NativeRecord {
+    if (record.state === "tombstoned") return record;
+    record.state = "tombstoned"; record.holdReason = null; record.deletedAt = deletedAt;
+    record.obligations = record.obligations.map((o): NativeObligation => ({ ...o, phase: o.phase === "attempt_started" ? "attempt_unknown" : ["pending", "held_owner"].includes(o.phase) ? "suppressed_deleted" : o.phase }));
+    record.stateRevision = this.nativeNext(record.stateRevision);
+    this.writeNative(record); return record;
   }
 
   chatAfter(roomId: string, afterSeq: number, limit: number): StoredMessage[] {
@@ -892,15 +1207,42 @@ export class HistoryStore {
   }
 
 
+  nativeOperationApplied(roomId: string, input: NativeDivertOp): boolean {
+    this.nativeRoomId(roomId);
+    const op = parseNativeOperation(input);
+    if (!op || op.opId === undefined) throw new NativeReportError("invalid_native_data", "A native replay lookup requires its exact closed operation.");
+    const row = this.db.prepare("select room, kind, payload_hash from applied_ops where op_id = ?").get(op.opId) as Row | undefined;
+    if (!row) return false;
+    if (row.room !== roomId || row.kind !== "divert" || row.payload_hash !== nativeDataHash(op)) throw new NativeReportError("native_conflict", "The native journal operation ID already names different retained data.");
+    return true;
+  }
+
   applyOp(roomId: string, op: DivertOp): "applied" | "skipped" {
     return this.transaction(() => {
+      const native = parseNativeOperation(op);
+      if (native) {
+        if (native.opId === undefined) throw new NativeReportError("invalid_native_data", "A native journal operation requires its exact stable operation ID.");
+        const payloadHash = nativeDataHash(native);
+        if (this.nativeOperationApplied(roomId, native as NativeDivertOp)) return "skipped";
+        this.enableNativeJournalSafety(roomId);
+        if (native.kind === "native_enqueue_v1") {
+          const previous = this.nativeReceipt(roomId, native.envelope.owner.roomUuid, native.envelope.id);
+          if (previous?.type === "native" && JSON.stringify(previous.record.envelope) !== JSON.stringify(native.envelope)) throw new NativeReportError("native_conflict", "The native journal replay changed its immutable acceptance tuple.");
+          this.enqueueNative(roomId, native.envelope);
+        } else if (native.kind === "native_hold_v1") this.holdNative(roomId, native.subject, native.expectedRevision, native.reason, native.at);
+        else this.tombstoneNative(roomId, native.subject, native.expectedRevision, native.deletedAt);
+        this.db.prepare("insert into applied_ops(op_id, room, applied_at, message_id, seq, kind, payload_hash) values (?, ?, ?, null, null, 'divert', ?)")
+          .run(native.opId, roomId, Date.now(), payloadHash);
+        return "applied";
+      }
+      const legacy = op as LegacyPendingOp & { opId: string };
       if (this.db.prepare("select 1 from applied_ops where op_id = ?").get(op.opId)) return "skipped";
-      if (op.kind === "upsert") this.upsert(roomId, op.message);
-      else if (op.kind === "rewrite") this.rewrite(roomId, op.message, op.fromSeq, op.deletedAt);
-      else if (op.kind === "bury") this.markDeleted(roomId, op.ids, op.deletedAt);
-      else this.truncateFrom(roomId, op.fromSeq, op.deletedAt);
-      const message = op.kind === "truncate" || op.kind === "bury" ? null : op.message;
-      const kind = op.accept ? "accept" : "divert";
+      if (legacy.kind === "upsert") this.upsert(roomId, legacy.message);
+      else if (legacy.kind === "rewrite") this.rewrite(roomId, legacy.message, legacy.fromSeq, legacy.deletedAt);
+      else if (legacy.kind === "bury") this.markDeleted(roomId, legacy.ids, legacy.deletedAt);
+      else this.truncateFrom(roomId, legacy.fromSeq, legacy.deletedAt);
+      const message = legacy.kind === "truncate" || legacy.kind === "bury" ? null : legacy.message;
+      const kind = legacy.accept ? "accept" : "divert";
       this.db
         .prepare("insert into applied_ops(op_id, room, applied_at, message_id, seq, kind) values (?, ?, ?, ?, ?, ?)")
         .run(op.opId, roomId, Date.now(), message?.id ?? null, message?.seq ?? null, kind);

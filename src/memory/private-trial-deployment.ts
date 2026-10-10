@@ -18,10 +18,12 @@ function input<T>(read: () => T): T {
 const lstat = (file: string) => input(() => lstatSync(file));
 const readBytes = (file: string): Buffer => input(() => readFileSync(file));
 const parse = (bytes: Buffer): unknown => input(() => JSON.parse(bytes.toString("utf8")));
+export const TRIAL_PURPOSES = Object.freeze(["approved-paid-trial", "local-fixture", "approved-paid-answers-only"] as const);
+export type TrialPurpose = (typeof TRIAL_PURPOSES)[number];
 export interface TrialReview {
   schema: typeof PRIVATE_TRIAL_REVIEW_SCHEMA;
   decision: "RUN_TRIAL";
-  purpose: "approved-paid-trial" | "local-fixture";
+  purpose: TrialPurpose;
   reviewer: { name: string; kind: "human" | "agent" };
 }
 export interface ClosedResidentDeployment { deployment: Readonly<ResidentDeployment>; review: Readonly<TrialReview>; reviewFile: string }
@@ -63,11 +65,11 @@ export function validateTrialReview(value: unknown): Readonly<TrialReview> {
   fields(value, ["schema", "decision", "purpose", "reviewer"]);
   assert.equal(value.schema, PRIVATE_TRIAL_REVIEW_SCHEMA, "private_trial_deployment_refused");
   assert.equal(value.decision, "RUN_TRIAL", "private_trial_deployment_refused");
-  assert.ok(value.purpose === "approved-paid-trial" || value.purpose === "local-fixture", "private_trial_deployment_refused");
+  assert.ok((TRIAL_PURPOSES as readonly unknown[]).includes(value.purpose), "private_trial_deployment_refused");
   fields(value.reviewer, ["name", "kind"]);
   assert.ok(typeof value.reviewer.name === "string" && value.reviewer.name.length > 0 && value.reviewer.name.length <= 200 &&
     ["human", "agent"].includes(String(value.reviewer.kind)), "private_trial_deployment_refused");
-  return Object.freeze({ schema: PRIVATE_TRIAL_REVIEW_SCHEMA, decision: "RUN_TRIAL", purpose: value.purpose,
+  return Object.freeze({ schema: PRIVATE_TRIAL_REVIEW_SCHEMA, decision: "RUN_TRIAL", purpose: value.purpose as TrialPurpose,
     reviewer: Object.freeze({ name: value.reviewer.name, kind: value.reviewer.kind as "human" | "agent" }) });
 }
 export const trialReviewBytes = (review: unknown): Buffer => {

@@ -97,8 +97,8 @@ export const OPERATIONS: OperationSpec[] = [
   },
   {
     name: "post_message", exposure: "deferred",
-    summary: "Publish a completed independent message in this room, including between requested turns.",
-    description: "Publish a complete independent message under your name in this room, including between requested turns. The text uses the room's usual @ addressing. A stable messageId identifies the message: repeating the same ID and text returns its receipt; reusing the ID with changed text is rejected. Publication does not start an ACP prompt for the author, advance the author's room-reading cursor or settle an automation. This operation publishes completed text; it does not itself resume the author's model after a background task. The receipt names the saved message and its current posted, held or deleted state.",
+    summary: "Publish a completed independent message in this room, between requested turns.",
+    description: "Publish a complete independent message under your name in this room, between requested turns. While your current reply is active or being finalized, this operation refuses with reply_in_progress: include the text in that reply, or finish it before posting a separate message. The text uses the room's usual @ addressing. A stable messageId identifies the message: repeating the same ID and text returns its receipt; reusing the ID with changed text is rejected. Publication does not start an ACP prompt for the author, advance the author's room-reading cursor or settle an automation. This operation publishes completed text; it does not itself resume the author's model after a background task. The receipt names the saved message and its current posted, held or deleted state.",
     inputSchema: { type: "object", additionalProperties: false, required: ["messageId", "text"], properties: {
       messageId: { type: "string", minLength: 1, maxLength: 128, pattern: "\\S", description: "Stable caller-assigned ID for this complete message; an unchanged retry uses the same ID." },
       text: { type: "string", minLength: 1, maxLength: 200000, pattern: "\\S", description: "The complete message text, with the room's usual @ addressing." },
@@ -459,7 +459,7 @@ export const OPERATIONS: OperationSpec[] = [
   {
     name: "check_room",
     exposure: "direct",
-    summary: "Check new messages, current participant status and optionally a live reply draft.",
+    summary: "Check new messages, participant status, whether the hop limit has been reached, and optionally a live reply draft.",
     chip: () => "Checking room messages",
     description: "Check what is new and who is doing what, while you work. Beside the messages the answer carries a line per vibemate: its state, elapsed working time at this snapshot, how long nothing new has come from it, and the clock time its turn began Only when requested with draft.name, liveDraft contains that vibemate's unfinished visible text, clearly marked provisional. It is a separate observation, never a final reply; a draft cursor pages one revision and resets if it changes. Check new messages while working. status (default) gives snapshot-wide counts and headers: direct to you first, then broadcast, other, event; no bodies or acknowledgement. Broadcast includes @All and unaddressed chat. You decide whether to check and what to read: use read_message for a chosen seq, or mode=read for chronological bodies. nextCursor continues as after; status leaves it unchanged. nextPage continues headers as page with the same after; omit page for a fresh snapshot. Addressees are a clue, not grounds to ignore others or interrupt immediately. Responses stay within 16 KiB; truncation is explicit. Cursors belong to one turn; edits reset them. Normal next-turn delivery stays unchanged; do not poll in a waiting loop.",
     inputSchema: {

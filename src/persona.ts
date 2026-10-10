@@ -450,7 +450,7 @@ function skillsSection(skills: SkillsForPrompt): string[] {
   lines.push("");
   if (skills.channel === "tool") {
     lines.push(DISCOVERY_INSTRUCTIONS);
-    lines.push("The deferred post_message operation publishes a completed independent message under your name, with the room's usual @ addressing, including between requested turns.");
+    lines.push("The deferred post_message operation publishes a completed independent message under your name, with the room's usual @ addressing, between requested turns. While your current reply is active or being finalized, include the text in that reply, or finish it before posting a separate message; otherwise the hub refuses with error code reply_in_progress.");
     lines.push("The deferred register_background_task operation returns a task key and a separate completion URL/token for an independent worker. Registration does not execute the worker. Its terminal JSON callback {key,token,status,result} saves the complete result and brings it to you in a new turn without a human request, subject to the room's work and wake permissions. list_background_tasks reads the 50 most recent task states; get_background_task reads one complete saved task; cancel_background_task cancels delivery without stopping an operating-system process.");
   }
   if (!skills.items.length && !skills.canCreate) return lines;
@@ -558,7 +558,7 @@ export function buildBrief(settings: RoomSettings, persona: Persona, roster: Ros
   const tool = skills?.channel === "tool";
   lines.push("How the room and you reach each other:");
   lines.push(`- A turn begins with everything posted since your previous turn. While you work, nothing new reaches you: what ${human} or an agent writes meanwhile, a correction or a stop too, waits for your next turn${tool ? " unless you check_room" : ""}.`);
-  if (tool) lines.push("- check_room shows what was posted since your turn began and who is writing; draft.name reads an agent's unfinished reply, not yet its final one.");
+  if (tool) lines.push("- check_room shows what was posted since your turn began and who is writing; draft.name reads an agent's unfinished reply, not yet its final one. Each check also says whether the room's hop limit has been reached.");
   lines.push(`- Everything you write in a turn, the lines between your tool calls too, is posted to the room under your name as you write it: ${human} reads it live, the agents once your turn ends.`);
   lines.push(
     settings.agentsWakeEachOther

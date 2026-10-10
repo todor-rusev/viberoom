@@ -11,18 +11,18 @@ const app=fileURLToPath(new URL('../../',import.meta.url));
 const callerDependencies=['experiments/memory-retrieval-trial-d5/configured-caller.mjs','experiments/memory-retrieval-trial-d5/private-launch.mjs','experiments/trial-journal/policy-assert.mjs',
   'dist/hub.js','dist/memory/configured-trial.js','dist/memory/chat-endpoint.js','dist/memory/service.js','dist/memory/config.js','dist/memory/zep.js','dist/memory/change-token-cache.js','dist/memory/policy-refusal.js'];
 
-export function configuredCredentialClosure({hub,selected,ownerRoot,profile,readSnapshot}){return async({claimId,signal})=>{
+export function configuredCredentialClosure({hub,selected,ownerRoot,profile,readSnapshot,answerOnly=false}){return async({claimId,signal})=>{
       const actual=RunJournal.inspect(ownerRoot);require(actual.state.run.claim===claimId&&actual.state.run.stopped===null&&canonical(actual.policy.identity)===canonical(profile));
       signal.throwIfAborted();const before=readSnapshot();let zepSettings,answerKey;
       try{
         const config=hub.memoryStore.get(),zep=config.providers.zep;
-        require(config.provider==='zep'&&selected.answerKeyOwner==='memory.filter.apiKey');
-        zepSettings={apiKey:zep.apiKey,...(typeof zep.baseUrl==='string'&&zep.baseUrl?{baseUrl:zep.baseUrl}:{})};
+        require(selected.answerKeyOwner==='memory.filter.apiKey');
+        if(!answerOnly){require(config.provider==='zep');zepSettings={apiKey:zep.apiKey,...(typeof zep.baseUrl==='string'&&zep.baseUrl?{baseUrl:zep.baseUrl}:{})};}
         answerKey=config.filter.apiKey;
-        require(typeof zepSettings.apiKey==='string'&&typeof answerKey==='string');
+        require((answerOnly||typeof zepSettings.apiKey==='string')&&typeof answerKey==='string');
       }catch{throw new Held('private_credentials_load_failed');}
       signal.throwIfAborted();require(canonical(before.account)===canonical(readSnapshot().account));
-      return {zepSettings,answerKey};
+      return answerOnly?{answerKey}:{zepSettings,answerKey};
     };}
 
 export function createConfiguredCaller({hub,selection,projectAssociationPin=null}){

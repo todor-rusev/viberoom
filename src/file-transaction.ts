@@ -165,6 +165,7 @@ function notImported(error: unknown, undoError?: unknown): Error {
 }
 
 export function commitFiles(rootPath: string, store: HistoryStore, changes: FileChange[], writeRecord: () => void, ops: FileOps = {}): void {
+  store.assertTransactionSettled();
   const root = resolve(rootPath), id = randomUUID(), dir = inside(root, join(JOURNALS, id));
   const seen = new Set<string>();
   for (const change of changes) {
@@ -227,9 +228,17 @@ export function commitFiles(rootPath: string, store: HistoryStore, changes: File
       try { clean(root, id, null); } catch { }
       throw error;
     }
-    try { restore(root, dir, journal, steps); } catch (undoError) { throw notImported(error, undoError); }
-    try { clean(root, id, journal); } catch { }
-    throw notImported(error);
+    let recorded: boolean;
+    try { recorded = store.hasFileTransaction(id); }
+    catch {
+      throw new Error("The file transaction outcome could not be confirmed. Its journal and backups were kept until the conversation store can be read.");
+    }
+    if (recorded) committed = true;
+    else {
+      try { restore(root, dir, journal, steps); } catch (undoError) { throw notImported(error, undoError); }
+      try { clean(root, id, journal); } catch { }
+      throw notImported(error);
+    }
   }
   if (committed) {
     try { clean(root, id, journal); store.forgetFileTransaction(id); } catch { }

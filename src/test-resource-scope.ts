@@ -107,6 +107,12 @@ function identity(path: string): DirectoryIdentity {
   return { path, device: String(state.dev), inode: String(state.ino), birthtimeNs: String(state.birthtimeNs), platform: process.platform };
 }
 function inside(child: string, parent: string): boolean { const name = relative(parent, child); return name !== "" && name !== ".." && !name.startsWith(".." + sep) && !isAbsolute(name); }
+export function canonicalTestTempDirectory(path: string, parent: string = tmpdir()): string {
+  const root = realpathSync(parent), target = realpathSync(path), name = relative(root, target);
+  assert.ok(name !== ".." && !name.startsWith(".." + sep) && !isAbsolute(name), "native-test-temp-boundary-refused");
+  assert.ok(statSync(root).isDirectory() && statSync(target).isDirectory(), "native-test-temp-directory-required");
+  return target;
+}
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
 function frozenCopy<T>(value: T): T {
   const copy: T = JSON.parse(JSON.stringify(value));

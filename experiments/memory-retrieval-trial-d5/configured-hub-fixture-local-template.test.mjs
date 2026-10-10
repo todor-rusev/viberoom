@@ -28,9 +28,29 @@ const rowView=w=>w.selection.opIds.map(id=>w.hub.history.memoryOutbox.deliveries
 const project=(w,prior=load(),projection=w.registeredTemplate)=>projectRegisteredFixtureTemplate({
   prior,projection,rooms:w.rooms,history:w.hub.history,rows:rowView(w)});
 
+function withExpectedBindings(prior){
+  const sources=JSON.parse(fs.readFileSync(privateInputs.sources,'utf8')).sources;
+  const bound=json(prior),sequences=new Map();
+  for(const planned of bound.payloads.rows){
+    const source=sources.find(s=>s.id===planned.sourceId);assert.ok(source);
+    assert.equal(sha256(source.text),planned.sourceBodySha256);
+    const roomId=planned.members[0].identity.roomId,seq=(sequences.get(roomId)??0)+1;
+    sequences.set(roomId,seq);
+    const ts=Date.parse(source.at);assert.ok(Number.isFinite(ts));
+    for(const member of planned.members){
+      assert.equal(member.identity.roomId,roomId);assert.equal(member.identity.sourceId,source.id);
+      assert.equal(member.identity.version,planned.sourceVersion);
+      member.payload.binding={seq,source:{kind:'message',version:planned.sourceVersion,
+        authorId:source.author,authorName:source.author,ts}};
+    }
+  }
+  return bound;
+}
+
 for(const [name,create] of [['experiment',createConfiguredNativeCaller],['private',createPrivateCaller]]){
   test(`LT01 ${name} registered legacy template uses legal public names and exact persisted serializer payloads`,async t=>{
-    const pins=inheritedPins(),prior=load(),before=canonical(prior),w=await legacyWorld(t,create),local=project(w,prior);
+    const pins=inheritedPins(),prior=load(),before=canonical(prior),expectedPrior=withExpectedBindings(prior),
+      w=await legacyWorld(t,create),local=project(w,expectedPrior);
     assert.equal(w.rooms.length,20);assert.equal(w.registeredTemplate.names.length,20);
     assert.ok(prior.payloads.physicalAddresses.every(a=>a.room.name.length>60),'actual pinned incompatible historical input');
     assert.ok(w.rooms.every(r=>r.name.length>0&&r.name.length<=60));
@@ -58,7 +78,8 @@ for(const [name,create] of [['experiment',createConfiguredNativeCaller],['privat
 }
 
 test('LT02 whole inherited/projected payload refuses content/type/time/provenance/part/version/description drift',async t=>{
-  const w=await legacyWorld(t),original=load(),before=canonical(original),rowsBefore=canonical(rowView(w));
+  const w=await legacyWorld(t),original=withExpectedBindings(load()),before=canonical(original),rowsBefore=canonical(rowView(w));
+  assert.doesNotThrow(()=>project(w,original),'binding mutations start from a valid independently bound template');
   const mutations=[
     p=>{p.payloads.rows[0].sourceId='different-planned-source-id';},
     p=>{p.payloads.rows[0].members[0].payload.request.data+=' changed';},
@@ -72,13 +93,15 @@ test('LT02 whole inherited/projected payload refuses content/type/time/provenanc
     p=>{p.payloads.rows[0].members[0].identity.version='sha256:'+'f'.repeat(64);},
     p=>{p.payloads.rows[0].sourceVersion='sha256:'+'f'.repeat(64);},
     p=>{p.payloads.rows[0].sourceBodySha256='f'.repeat(64);},
-    p=>{p.payloads.rows[0].members[0].payload.binding.seq++;},
-    p=>{p.payloads.rows[0].members[0].payload.binding.source.authorName='foreign';},
     p=>{p.payloads.rows[0].members[0].payload.format='changed-format';},
     p=>{p.payloads.rows[0].members[0].payload.estimatedCredits++;},
     p=>{p.payloads.rows[0].members[0].payload.request.extra='not-a-name-substitution';},
   ];
   for(const change of mutations){const changed=json(original);change(changed);assert.throws(()=>project(w,changed));}
+  for(const [change,refusal] of [
+    [p=>{p.payloads.rows[0].members[0].payload.binding.seq++;},/fixture_planned_seq_changed/],
+    [p=>{p.payloads.rows[0].members[0].payload.binding.source.authorName='foreign';},/fixture_projected_payload_changed/],
+  ]){const changed=json(original);change(changed);assert.throws(()=>project(w,changed),refusal);}
   const map=json(w.registeredTemplate);map.names[0].localName+=' alternate';assert.throws(()=>project(w,original,map));
   assert.equal(canonical(original),before);assert.equal(canonical(rowView(w)),rowsBefore);
   assert.equal(w.HTTP.length,0);assert.equal(w.answerCopies.length,0);

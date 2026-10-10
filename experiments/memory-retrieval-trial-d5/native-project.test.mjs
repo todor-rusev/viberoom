@@ -80,9 +80,30 @@ for(const [name,mutate] of [
   ['native null project',body=>{body.project_uuid=null;}],['missing native project',body=>{delete body.project_uuid;}],
   ['raw alias collision',body=>{body.projectUuid='different-camel-project';}],
 ])test(`${name} refuses before LIST of that graph or any retrieval/model and retains one consumed Graph read`,async t=>{
-  const w=await nativeWorld(t),result=await w.launch({fetchImpl:enrichedFetch(w,{changeGraph:({body})=>mutate(body)})});
+  const w=await nativeWorld(t),observationReads=[];
+  const result=await w.launch({fetchImpl:enrichedFetch(w,{changeGraph:({body,graphId})=>{
+    if(!saved(w,'ingestion-acks'))return;
+    observationReads.push({graphId,attemptId:w.HTTP.at(-1).attemptId});mutate(body);
+  }})});
   assert.equal(result.status,'held');assert.equal(saved(w,'native-project-binding-set'),null);assertNoRetrievalOrModel(w);
+  assert.equal(observationReads.length,1,'one T0 Graph read consumes its allowance before the refusal');
+  const state=RunJournal.inspect(w.ownerRoot).state,attempt=state.attempts.find(a=>a.id===observationReads[0].attemptId);
+  const permit=state.permits.find(p=>p.id===attempt.permit);assert.equal(permit.kind,'read');assert.equal(permit.consumed,1);
+  assert.equal(w.HTTP.filter(r=>r.attemptId>=attempt.id).length,1,'no LIST or other HTTP follows that Graph refusal');
   assert.ok(RunJournal.inspect(w.ownerRoot).state.run.stopped);const before=w.HTTP.length;await assert.rejects(w.launch());assert.equal(w.HTTP.length,before);
+});
+
+test('a raw Graph alias during C ingestion fails the launch before any episode POST, binding or model and cannot resume',async t=>{
+  const w=await nativeWorld(t),graphReads=[];
+  await assert.rejects(w.launch({fetchImpl:enrichedFetch(w,{changeGraph:({body,graphId})=>{
+    graphReads.push({graphId,attemptId:w.HTTP.at(-1).attemptId});body.projectUuid='different-camel-project';
+  }})}),error=>error.name==='MemoryProviderError'&&error.message==='Zep graph coordination failed (transport)');
+  assert.equal(graphReads.length,1,'the first C route read is refused');
+  assert.equal(saved(w,'ingestion-acks'),null);assert.equal(saved(w,'native-project-binding-set'),null);assertNoRetrievalOrModel(w);
+  assert.equal(w.HTTP.some(r=>r.method==='POST'&&r.path.endsWith('/graph')),false,'no episode was sent');
+  const state=RunJournal.inspect(w.ownerRoot).state,attempt=state.attempts.find(a=>a.id===graphReads[0].attemptId);
+  const permit=state.permits.find(p=>p.id===attempt.permit);assert.equal(permit.kind,'read');assert.equal(permit.consumed,1);
+  assert.ok(state.run.stopped);const before=w.HTTP.length;await assert.rejects(w.launch());assert.equal(w.HTTP.length,before);
 });
 
 test('mixed native projects cannot publish a complete set or retrieval/model allowance',async t=>{

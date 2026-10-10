@@ -55,6 +55,29 @@ function freeze<T>(value: T): T {
 const digest = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
 const TRIAL_REQUEST_KINDS = ["episode", "graph", "model", "ontology", "read"];
 const count = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+export const TRIAL_DISCLOSURES = Object.freeze(["whole-private-trial-budget-disclosure-v2", "answers-only-budget-disclosure-v1"] as const);
+type TrialDisclosure = (typeof TRIAL_DISCLOSURES)[number];
+function wholeShape(whole: BudgetData): boolean {
+  const policy = whole.policy as BudgetData, limits = policy?.limits as BudgetData, kinds = policy?.kinds as BudgetData;
+  const disclosure = whole.disclosure as BudgetData;
+  if (!digest(whole.cardSha256) || budgetDigest({ root: whole.root, policy }) !== whole.cardSha256 || !whole.root || !disclosure ||
+    limits?.runMs !== TRIAL_RUN_MS || !count(limits.localEstimatedCredits) || !kinds || !Object.values(kinds).every(count)) return false;
+  const schema = disclosure.schema as string;
+  if (!(TRIAL_DISCLOSURES as readonly string[]).includes(schema)) return false;
+  const known = schema as TrialDisclosure;
+  switch (known) {
+    case "whole-private-trial-budget-disclosure-v2":
+      return digest(whole.scopeSha256) && digest(whole.bindingSha256) && limits.localEstimatedCredits !== 0 &&
+        Object.keys(kinds).sort().join(",") === TRIAL_REQUEST_KINDS.join(",");
+    case "answers-only-budget-disclosure-v1": {
+      const zep = disclosure.zep as BudgetData, requests = disclosure.requests as BudgetData;
+      return Object.keys(whole).sort().join(",") === "cardSha256,disclosure,policy,root" && limits.localEstimatedCredits === 0 &&
+        Object.keys(kinds).join(",") === "model" && requests?.model === kinds.model && zep?.requests === 0 && zep?.credits === 0 &&
+        count(disclosure.maxOutputTokensPerRequest) && disclosure.maxOutputTokens === (disclosure.maxOutputTokensPerRequest as number) * (kinds.model as number);
+    }
+    default: { const unchecked: never = known; void unchecked; return false; }
+  }
+}
 export function trialBudgetDecision(value: unknown): TrialBudgetDecision {
   const data = plain(value) as BudgetData;
   if (!data || Array.isArray(data) || Object.keys(data).sort().join(",") !== "cardSha256,decision,viewSha256" ||
@@ -71,12 +94,8 @@ export class TrialBudgetCard {
   #reason: string | null = null;
   constructor(private readonly subject: TrialBudgetSubject, private readonly now = Date.now) {
     if (subject.ready() !== true || subject.current() !== true) throw new Error("trial_budget_not_ready");
-    const whole = freeze(subject.snapshot()), policy = whole.policy as BudgetData;
-    const limits = policy?.limits as BudgetData, kinds = policy?.kinds as BudgetData;
-    if (!digest(whole.cardSha256) || budgetDigest({ root: whole.root, policy }) !== whole.cardSha256 || !digest(whole.scopeSha256) || !digest(whole.bindingSha256) ||
-      !whole.root || !whole.disclosure || limits?.runMs !== TRIAL_RUN_MS || !count(limits.localEstimatedCredits) || limits.localEstimatedCredits === 0 ||
-      !kinds || Object.keys(kinds).sort().join(",") !== TRIAL_REQUEST_KINDS.join(",") || !Object.values(kinds).every(count))
-      throw new Error("trial_budget_whole_profile_refused");
+    const whole = freeze(subject.snapshot());
+    if (!wholeShape(whole)) throw new Error("trial_budget_whole_profile_refused");
     const offeredAt = now();
     if (!Number.isSafeInteger(offeredAt) || offeredAt < 0) throw new Error("trial_budget_clock_refused");
     this.#whole = whole;

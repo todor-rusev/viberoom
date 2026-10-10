@@ -243,7 +243,7 @@
     refresh() {
       if (this.composing || !/[@[]/.test(this.text)) return;
       const sel = this.selection();
-      this.draw();
+      if (!this.draw()) return;
       this.saved = sel;
       if (this.focused()) this.place();
     }

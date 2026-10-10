@@ -8,7 +8,9 @@ import { memoryBlock } from "./shared-memory.js";
 import { instructionBlock, planInstructionDelivery, type InstructionRevisions } from "./instruction-delivery.js";
 import { randomUUID } from "node:crypto";
 import { AgentMessageError, agentMessageId, agentMessageHash, parsePostMessage, type PostMessageReceipt } from "./agent-message.js";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { captureNativeNoteSubject, nativeNoteDisposition, nextNotesRevision, planNativeNoteEffect, type NativeNoteDisposition } from "./native-note-state.js";
+import { isNativeOperation, makeNativeEnvelope, nativeDivertOp, nativeInteger, nativeObligationId, nativeSubject, parseNativeOperation, type NativeDecision, type NativeEnvelope, type NativeHoldReason, type NativeNoteEffect, type NativeObligation, type NativeRecord, type NativeSubject } from "./native-reports.js";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { NameDirectory } from "./name-directory.js";
 import type { CardKind, StoredCard } from "./room-cards.js";
 import { citedNumbers, numbersNote, type CitedNumber } from "./message-numbers.js";
@@ -30,7 +32,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 import { AGENT_MESSAGE_MAX_BYTES, PromptBudget, type AgentView, type PictureTag } from "./agent-images.js";
 import { AcpAgent } from "./acp-client.js";
-import { ExtensionRouter, type AgentAuthStatus, type BackgroundMessage } from "./acp-extensions.js";
+import { ExtensionRouter, readBackgroundMessage, type AgentAuthStatus, type BackgroundMessage } from "./acp-extensions.js";
 import { errorCode, errorDetail, RemoteError } from "./jsonrpc.js";
 import { getRecipe, listRecipes, publicRecipes, type AgentRecipe } from "./recipes.js";
 import { recipeStamp } from "./install-stamp.js";
@@ -171,6 +173,8 @@ export interface Participant {
   notesAt?: number;
   notesSeq?: number;
   notesWrittenAt?: number;
+  notesRevision?: number;
+  nativeNoteReceipt?: string;
   formerNames?: string[];
   notesTurn?: boolean;
   contextEvent?: { kind: "threshold" | "compacted" | "full"; at: number; used?: number; size?: number };
@@ -220,6 +224,8 @@ export interface StoredParticipant {
   notesAt?: number;
   notesSeq?: number;
   notesWrittenAt?: number;
+  notesRevision?: number;
+  nativeNoteReceipt?: string;
 }
 
 export interface ReconnectOptions {
@@ -296,15 +302,23 @@ export function hubChangeNote(seen: { runSeen?: string; buildSeen?: string }, ru
   return `${head} It runs the build from ${run.build}; you were running under the build from ${seen.buildSeen}.`;
 }
 
-export function readJournal(text: string): { ops: DivertOp[]; unreadable: number } {
+export function readJournal(text: string, nativeSafety = false): { ops: DivertOp[]; unreadable: number; blocked?: boolean } {
   const ops: DivertOp[] = [];
   let unreadable = 0;
   for (const line of text.split(String.fromCharCode(10))) {
     if (!line.trim()) continue;
     try {
-      ops.push(JSON.parse(line) as DivertOp);
+      const raw: unknown = JSON.parse(line);
+      const native = parseNativeOperation(raw);
+      if (native) ops.push(nativeDivertOp(native));
+      else {
+        if (nativeSafety && (!raw || typeof raw !== "object" || !["upsert", "truncate", "bury", "rewrite"].includes(String((raw as { kind?: unknown }).kind))))
+          return { ops, unreadable, blocked: true };
+        ops.push(raw as DivertOp);
+      }
     } catch {
       unreadable++;
+      if (nativeSafety || /"kind"\s*:\s*"native_/.test(line)) return { ops, unreadable, blocked: true };
     }
   }
   return { ops, unreadable };
@@ -559,6 +573,8 @@ export interface RoomOptions {
   skills?: SkillsBridge;
   history: HistoryStore;
   onHistoryFailure?: (roomId: string, error: unknown) => void;
+  commitNativeNoteDecision?: (room: Room, participantId: string, effect: NativeNoteEffect, writeRecord: () => void) => NativeNoteDisposition;
+  onNativePending?: (roomId: string) => void;
   heldParticipantIds?: () => Iterable<string>;
 }
 
@@ -575,12 +591,18 @@ interface AgentRuntime {
   pendingConfig?: { configId: string; value: string | boolean; from?: string }[];
   workBusy?: boolean;
   workSettled?: { promise: Promise<void>; resolve: () => void };
+  nativeDraining?: boolean;
+  nativeHold?: boolean;
+  nativePromptObligations?: NativeObligationRef[];
+  nativeHeaderObligations?: NativeObligationRef[];
   notesPending?: boolean;
+  deferredNotesTurn?: boolean;
   workCancelled?: boolean;
   roomStopped?: boolean;
   usageSeenThisTurn?: boolean;
   fixedDiagramThisTurn?: boolean;
   pendingTurn: boolean;
+  independentPendingTurn?: boolean;
   missedNotice?: boolean;
   promptedThisWork?: boolean;
   turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; lastSignAt?: number; lastWorkAt?: number; published: boolean; publishedAt?: number; hidden?: boolean; messagesFromSeq: number; shownLength?: number } | null;
@@ -624,6 +646,31 @@ interface RetryRequest {
   original: string;
   corrections: string[];
   record: ChatMessage;
+  nativeObligation?: NativeObligationRef;
+}
+
+interface NativeObligationRef { subject: NativeSubject; obligationId: string }
+
+interface OrdinaryWakeClaim { independent: boolean; native: NativeObligationRef[] }
+type PreparationField = "missedNotice" | "promptedThisWork" | "turnStartSeq" | "lastSeenSeq" | "notesDue" | "notesAskedThisTurn"
+  | "instructionRevisions" | "skillCatalogPending" | "memoryStamp" | "memoryGraphStamp" | "briefPending" | "turnsSinceBrief"
+  | "briefSentThisTurn" | "lastBriefSeq" | "resumeNotes" | "firstTurnDone" | "replayOwnUntilSeq";
+type PreparationFields = Pick<AgentRuntime, PreparationField>;
+interface OrdinaryPromptPreparation {
+  wake: OrdinaryWakeClaim;
+  expected: PreparationFields;
+  next: PreparationFields;
+  headerArray: string[];
+  headers: string[];
+  skillArray: AgentRuntime["pendingSkills"];
+  skills: AgentRuntime["pendingSkills"];
+  nativeHeaders: NativeObligationRef[];
+  bodies: ChatMessage[];
+  sourceRevision: number;
+  sourceRows: { row: ChatMessage; stamp: string }[];
+  brief: boolean;
+  repairs: { messageId: string; block: number; delivered: boolean }[];
+  completion?: QueuedBackgroundCompletion;
 }
 
 export interface BackgroundCompletion {
@@ -642,6 +689,8 @@ interface TurnExtras {
   historyNoticeOffered?: boolean;
   supplied?: BodyRef[];
   memorySearch?: PromptMemoryNote;
+  nativeHeaderOffered?: boolean;
+  ordinaryPreparation?: OrdinaryPromptPreparation;
 }
 
 interface PermissionEntry extends PendingPermission {
@@ -742,6 +791,17 @@ export class Room extends EventEmitter {
   private closing = false;
   private readonly runtimes = new Map<string, AgentRuntime>();
   private readonly unconfirmedBackground = new Map<string, RetryRequest | null>();
+  private readonly nativeHandles = new Map<string, AcpAgent>();
+  private readonly nativeLocalEffects = new Set<string>();
+  private readonly unsavedNative = new Map<string, NativeEnvelope>();
+  private readonly retainedNativeArrivals = new Map<string, {
+    report: BackgroundMessage; agent: AcpAgent; acceptedName: string; at: number;
+    owner: NativeEnvelope["owner"] | null;
+  }>();
+  private static readonly NATIVE_ARRIVAL_LIMIT = 64;
+  private static readonly NATIVE_ARRIVAL_BYTES = 32 * 1024 * 1024;
+  private readonly nativeFaultReasons = new Map<string, string>();
+  private nativeRecoveryHold = false;
   private readonly backgroundCompletions = new Map<string, QueuedBackgroundCompletion[]>();
   private readonly activeBackgroundCompletions = new Map<string, QueuedBackgroundCompletion>();
   private readonly automationTasks = new Map<string, {
@@ -791,6 +851,8 @@ export class Room extends EventEmitter {
     this.skills = options.skills;
     this.history = options.history;
     this.onHistoryFailure = options.onHistoryFailure;
+    this.commitNativeNoteDecision = options.commitNativeNoteDecision;
+    this.onNativePending = options.onNativePending;
     this.heldParticipantIds = options.heldParticipantIds;
     this.settings = { ...DEFAULT_ROOM_SETTINGS, ...(options.settings ?? {}), name: options.name, humanName: options.humanName };
     this.log = options.log;
@@ -805,6 +867,7 @@ export class Room extends EventEmitter {
       color: "#111827",
     });
     this.loadHistory();
+    if (this.hasPendingNativeDelivery()) this.onNativePending?.(this.id);
     for (const text of this.loadNotices) this.postSystem(text, "human");
   }
 
@@ -823,6 +886,8 @@ export class Room extends EventEmitter {
 
   private readonly history: HistoryStore;
   private readonly onHistoryFailure?: (roomId: string, error: unknown) => void;
+  private readonly commitNativeNoteDecision?: RoomOptions["commitNativeNoteDecision"];
+  private readonly onNativePending?: (roomId: string) => void;
   private readonly heldParticipantIds?: () => Iterable<string>;
   private divertPending = false;
 
@@ -864,7 +929,9 @@ export class Room extends EventEmitter {
     }
     if (this.divertPending) {
       const journal = this.journalOps();
-      if (journal.unreadable) {
+      if (journal.blocked) {
+        this.loadNotices.push("The native pending-changes journal is held unreadable or unsupported; its original bytes are retained.");
+      } else if (journal.unreadable) {
         this.loadNotices.push(`${journal.unreadable} line(s) of this room's pending-changes journal could not be read and were skipped; everything else in it is here.`);
         this.log.warn(`divert.jsonl: ${journal.unreadable} unreadable line(s) skipped`);
       }
@@ -904,14 +971,16 @@ export class Room extends EventEmitter {
     catch (error) { this.log.warn(`the card ${key} could not be kept with the record (it is shown until the hub stops): ${describeError(error)}`); }
   }
 
-  private journalOps(): { ops: DivertOp[]; unreadable: number } {
+  private journalOps(): { ops: DivertOp[]; unreadable: number; blocked?: boolean } {
     const path = this.divertPath();
     if (!existsSync(path)) return { ops: [], unreadable: 0 };
-    return readJournal(readFileSync(path, "utf8"));
+    try { return readJournal(readFileSync(path, "utf8"), this.history.nativeJournalSafety(this.id)); }
+    catch { return { ops: [], unreadable: 0, blocked: true }; }
   }
 
   private opApplied(op: DivertOp): boolean {
     try {
+      if (isNativeOperation(op)) return this.history.nativeOperationApplied(this.id, nativeDivertOp(op as Parameters<typeof nativeDivertOp>[0]));
       return this.history.isApplied(op.opId);
     } catch {
       return false;
@@ -960,7 +1029,8 @@ export class Room extends EventEmitter {
           else if (op.kind === "upsert") this.history.upsert(this.id, op.message);
           else if (op.kind === "rewrite") this.history.rewrite(this.id, op.message, op.fromSeq, op.deletedAt);
           else if (op.kind === "bury") this.history.markDeleted(this.id, op.ids, op.deletedAt);
-          else this.history.truncateFrom(this.id, op.fromSeq, op.deletedAt);
+          else if (op.kind === "truncate") this.history.truncateFrom(this.id, op.fromSeq, op.deletedAt);
+          else this.history.applyOp(this.id, nativeDivertOp(op));
         }
       };
       if (ops.length === 1) apply();
@@ -975,12 +1045,23 @@ export class Room extends EventEmitter {
     const why = describeError(error);
     let journaled = false;
     try {
-      appendFileSync(this.divertPath(), JSON.stringify(op) + "\n");
+      if (isNativeOperation(op)) {
+        this.history.enableNativeJournalSafety(this.id);
+        const closed = nativeDivertOp(op as Parameters<typeof nativeDivertOp>[0]);
+        const fd = openSync(this.divertPath(), "a");
+        try { writeFileSync(fd, JSON.stringify(closed) + "\n", "utf8"); fsyncSync(fd); }
+        finally { closeSync(fd); }
+      } else appendFileSync(this.divertPath(), JSON.stringify(op) + "\n");
       this.divertPending = true;
       journaled = true;
       this.log.warn(`the conversation store refused a write (${why}); kept in divert.jsonl to apply later`);
       this.notice(`The conversation store refused a write (${why}). The change is kept in the room's divert journal and applied when the store answers again.`, "error");
     } catch (second) {
+      if (isNativeOperation(op) && existsSync(this.divertPath())) {
+        this.divertPending = true;
+        this.nativeRecoveryHold = true;
+        this.onNativePending?.(this.id);
+      }
       this.log.error(`the conversation store refused a write (${why}) and divert.jsonl could not be written either: ${describeError(second)}`);
       this.notice(`The conversation store refused a write (${why}) and the divert journal could not be written either: this change is NOT saved.`, "error");
     }
@@ -1021,15 +1102,25 @@ export class Room extends EventEmitter {
       return;
     }
     const journal = this.journalOps();
+    if (journal.blocked) {
+      this.nativeRecoveryHold = true;
+      this.divertPending = true;
+      this.onNativePending?.(this.id);
+      this.log.warn("The native pending-changes journal is unreadable or unsupported; it is retained without replay or deletion.");
+      return;
+    }
     try {
       for (const op of journal.ops) this.history.applyOp(this.id, op);
     } catch (error) {
+      try { if (this.history.nativeJournalSafety(this.id) || journal.ops.some(isNativeOperation)) this.nativeRecoveryHold = true; }
+      catch { this.nativeRecoveryHold = true; }
       this.divertPending = true;
       this.log.warn(`divert.jsonl could not be applied yet: ${describeError(error)}`);
       return;
     }
     rmSync(path, { force: true });
     this.divertPending = false;
+    this.nativeRecoveryHold = false;
     if (journal.ops.length) this.log.info(`divert.jsonl applied: ${journal.ops.length} operation(s)${journal.unreadable ? `, ${journal.unreadable} unreadable line(s) dropped` : ""}`);
     for (const [opId, entry] of this.unsavedExternal) if (entry.stored === "journal") this.unsavedExternal.delete(opId);
   }
@@ -1045,6 +1136,8 @@ export class Room extends EventEmitter {
         p.colorSlot = s.colorSlot ?? p.colorSlot;
         p.muted = s.muted; p.replyDelay = s.replyDelay; p.launch = s.launch;
         p.createdByVibemate = s.createdByVibemate;
+        p.notes = s.notes; p.notesAt = s.notesAt; p.notesSeq = s.notesSeq; p.notesWrittenAt = s.notesWrittenAt;
+        p.notesRevision = s.notesRevision; p.nativeNoteReceipt = s.nativeNoteReceipt;
         continue;
       }
       const recipe = getRecipe(s.agentType);
@@ -1082,6 +1175,8 @@ export class Room extends EventEmitter {
         notesAt: s.notesAt,
         notesSeq: s.notesSeq,
         notesWrittenAt: s.notesWrittenAt,
+        notesRevision: s.notesRevision,
+        nativeNoteReceipt: s.nativeNoteReceipt,
         violations: 0,
         briefsSent: 0,
         failedTurns: 0,
@@ -1161,6 +1256,8 @@ export class Room extends EventEmitter {
           notesAt: p.notesAt,
           notesSeq: p.notesSeq,
           notesWrittenAt: p.notesWrittenAt,
+          notesRevision: p.notesRevision,
+          nativeNoteReceipt: p.nativeNoteReceipt,
         })),
     };
   }
@@ -1680,7 +1777,7 @@ export class Room extends EventEmitter {
     if (!runtime?.agent.alive) return "The selected vibemate is offline.";
     if (this.focused || participant.muted || this.closing || this.recordHold) return "The room paused while the vibemate was connecting.";
     if (runtime.workCancelled) return "The selected vibemate was stopped. Speak to it to resume work.";
-    if (runtime.turnActive || runtime.workBusy || runtime.pendingTurn || runtime.delayTimer || runtime.retiring || this.automationTasks.has(id)
+    if (runtime.turnActive || runtime.workBusy || this.nativeLaneBlocked(runtime) || runtime.pendingTurn || runtime.delayTimer || runtime.retiring || this.automationTasks.has(id)
         || this.backgroundCompletions.get(id)?.length || participant.status !== "idle") return "Waiting for the selected vibemate to finish.";
     return null;
   }
@@ -2087,6 +2184,8 @@ export class Room extends EventEmitter {
   private dropNotesAfter(seq: number): void {
     for (const participant of this.participants.values()) {
       if (!participant.notes || (participant.notesSeq ?? seq) < seq) continue;
+      participant.notesRevision = nextNotesRevision(participant.notesRevision);
+      participant.nativeNoteReceipt = undefined;
       participant.notes = participant.notesAt = participant.notesSeq = participant.notesWrittenAt = undefined;
       this.push({ type: "participant", participant });
       this.log.info(`${participant.name}: notes dropped, the conversation was rewritten from #${seq}`);
@@ -2097,6 +2196,8 @@ export class Room extends EventEmitter {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
     const text = notes.trim().slice(0, 4000);
+    participant.notesRevision = nextNotesRevision(participant.notesRevision);
+    participant.nativeNoteReceipt = undefined;
     participant.notes = text || undefined;
     participant.notesAt = text ? this.runtimes.get(id)?.lastUsed ?? participant.notesAt : undefined;
     participant.notesSeq = text ? this.seq : undefined;
@@ -2111,11 +2212,12 @@ export class Room extends EventEmitter {
     const runtime = this.runtimes.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
     if (!runtime || !runtime.agent.alive) throw new Error(`${participant.name} is not online`);
-    if (runtime.turnActive || runtime.workBusy) throw new Error(`${participant.name} is in the middle of a reply; try again when it is idle`);
+    if (runtime.turnActive || runtime.workBusy || this.nativeLaneBlocked(runtime)) throw new Error(`${participant.name} is in the middle of a reply or held native delivery; try again when it is idle`);
     const header = buildHeader(this.effectiveSettings(), this.personaOf(participant), this.roster(), this.hops, ["hidden turn: notes only, nothing is posted"]);
     this.takeWork(runtime);
     runtime.workCancelled = false;
     runtime.notesPending = false;
+    runtime.deferredNotesTurn = false;
     if (runtime.delayTimer) clearTimeout(runtime.delayTimer);
     runtime.delayTimer = null;
     const queued = this.floorQueue.indexOf(id);
@@ -2138,6 +2240,8 @@ export class Room extends EventEmitter {
 
   private keepNotes(participant: Participant, runtime: AgentRuntime, notes: string | null, via: "reply" | "hidden turn"): boolean {
     if (!notes) return false;
+    participant.notesRevision = nextNotesRevision(participant.notesRevision);
+    participant.nativeNoteReceipt = undefined;
     participant.notes = notes.slice(0, 4000);
     participant.notesAt = runtime.lastUsed;
     participant.notesSeq = this.seq;
@@ -2915,6 +3019,8 @@ export class Room extends EventEmitter {
       this.restoredSeen.delete(id);
       this.push({ type: "participant", participant });
       runtime.turnStartSeq = runtime.lastSeenSeq;
+      this.rebindNativeReports(id, runtime, origin === "loaded");
+      this.drainNativeReports(id, runtime);
       log.info(`ready: session ${session.sessionId}`);
     } catch (error) {
       agent.kill();
@@ -3056,7 +3162,7 @@ export class Room extends EventEmitter {
     const option = participant.configOptions?.find(o => o.id === configId)
       ?? participant.configOptions?.find(o => o.category === configId);
     if (option) configId = option.id;
-    if (runtime.turnActive || runtime.workBusy) {
+    if (runtime.turnActive || runtime.workBusy || runtime.nativeDraining) {
       runtime.pendingConfig = [...(runtime.pendingConfig ?? []).filter((p) => p.configId !== configId), { configId, value, ...(from ? { from } : {}) }];
       this.push({ type: "participant", participant });
       this.postSystem(`${participant.name}: ${this.configName(participant, configId)} → ${configShown(value)}; when this reply is finished${from ? ` (${from})` : ""}`, "human", false, { agentId: participant.id });
@@ -3092,12 +3198,13 @@ export class Room extends EventEmitter {
       if (!recipe.modePresets.includes(String(value))) throw new Error(`${participant.name}: no mode "${value}" (${recipe.modePresets.join(", ")})`);
       participant.launch = { model: participant.launch?.model ?? null, effort: participant.launch?.effort ?? null, mode: String(value) };
       this.push({ type: "participant", participant });
-      const pendingTurn = runtime.pendingTurn, addressed = runtime.addressed;
+      const pendingTurn = runtime.pendingTurn, independentPendingTurn = runtime.independentPendingTurn, addressed = runtime.addressed;
       await this.respawnAgent(id, { memory: true, reason: "its mode changed" });
       const replacement = this.runtimes.get(id);
       if (!replacement) throw new Error("the vibemate could not restart with its new mode");
       this.takeWork(replacement);
       replacement.pendingTurn ||= pendingTurn;
+      replacement.independentPendingTurn ||= independentPendingTurn;
       replacement.addressed ||= addressed;
       replacement.pendingConfig = [...(runtime.pendingConfig || []), ...(replacement.pendingConfig || [])];
       runtime.pendingConfig = undefined;
@@ -3205,6 +3312,8 @@ export class Room extends EventEmitter {
       if (runtime.delayTimer) clearTimeout(runtime.delayTimer);
       runtime.delayTimer = null;
       runtime.pendingTurn = false;
+      runtime.independentPendingTurn = false;
+      runtime.deferredNotesTurn = false;
     }
     for (const [id, task] of this.automationTasks) if (!task.runtime.workBusy && !task.runtime.turnActive) this.finishAutomation(id, { status: "interrupted", detail: "The room stopped before the task began." });
   }
@@ -3614,13 +3723,18 @@ export class Room extends EventEmitter {
     this.push({ type: "toolcall", id: turn.message.id, toolCall: view });
   }
 
-  private checkRoomExtras(participantId: string, callerTurn: string, args: MessageCheckArgs): Pick<MessageCheckResult, "vibemates" | "vibematesOmitted" | "liveDraft"> {
+  private checkRoomExtras(participantId: string, callerTurn: string, args: MessageCheckArgs): Pick<MessageCheckResult, "vibemates" | "vibematesOmitted" | "liveDraft" | "hopLimitReached" | "hopLimitNotice"> {
     const all = this.whoIsBusy(), vibemates: typeof all = [];
     for (const entry of all) {
       if (Buffer.byteLength(JSON.stringify([...vibemates, entry], null, 2)) > 3 * 1024) break;
       vibemates.push(entry);
     }
-    const extras: ReturnType<Room["checkRoomExtras"]> = { vibemates, ...(all.length > vibemates.length ? { vibematesOmitted: all.length - vibemates.length } : {}) };
+    const hopLimitReached = this.hops >= this.hopLimit;
+    const extras: ReturnType<Room["checkRoomExtras"]> = {
+      vibemates, ...(all.length > vibemates.length ? { vibematesOmitted: all.length - vibemates.length } : {}),
+      hopLimitReached,
+      ...(hopLimitReached ? { hopLimitNotice: `The room's hop limit has been reached. Agents will not be prompted by other agents until ${this.humanName} writes again. Already active turns continue.` } : {}),
+    };
     if (!args.draft) return extras;
     const writer = this.findByName(args.draft.name);
     if (!writer || writer.kind !== "agent" || writer.id === participantId || writer.status === "left") throw new Error("Choose another vibemate in this room for draft.name.");
@@ -4261,15 +4375,17 @@ export class Room extends EventEmitter {
     this.runtimes.delete(id);
   }
 
-  private requestTurn(id: string, addressed = false, missedNotice = false, backgroundCorrection = false): void {
+  private requestTurn(id: string, addressed = false, missedNotice = false, backgroundCorrection = false, cause: "ordinary" | "native" | "resume" = "ordinary"): void {
     if (this.recordHold) return;
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
     if (!runtime || !participant) return;
+    if (!backgroundCorrection && cause === "ordinary") runtime.independentPendingTurn = true;
     if (!backgroundCorrection && runtime.backgroundCorrections?.length) runtime.backgroundBacklogPending = true;
     runtime.pendingTurn = true;
     runtime.missedNotice = missedNotice;
     if (runtime.retiring) return;
+    if (participant.muted || this.focused) return;
     if (participant.status === "error") {
       const trouble = participant.trouble;
       const canResume = addressed && runtime.agent.alive && trouble?.stage === "turn" && trouble.kind !== "crash";
@@ -4283,7 +4399,7 @@ export class Room extends EventEmitter {
         this.enqueueForFloor(id);
       }
     }
-    if (runtime.turnActive || runtime.workBusy || runtime.delayTimer || this.floorQueue.includes(id)) return;
+    if (runtime.turnActive || runtime.workBusy || this.nativeLaneBlocked(runtime) || runtime.delayTimer || this.floorQueue.includes(id)) return;
     const others = [...this.runtimes.keys()].filter((otherId) => otherId !== id && this.participants.get(otherId)?.status !== "left").length;
     const roomDelay = others >= 1 ? (this.settings.replyDelay ?? 0) : 0;
     const maxMs = Math.max(0, participant.replyDelay ?? roomDelay) * 1000;
@@ -4301,7 +4417,7 @@ export class Room extends EventEmitter {
 
   private tryStartTurn(id: string): void {
     const runtime = this.runtimes.get(id);
-    if (!runtime || !runtime.pendingTurn || runtime.turnActive || runtime.workBusy) return;
+    if (!runtime || !runtime.pendingTurn || runtime.turnActive || runtime.workBusy || this.nativeLaneBlocked(runtime)) return;
     if (this.humanIsTyping()) {
       this.enqueueForFloor(id);
       this.armTypingTimer();
@@ -4364,7 +4480,7 @@ export class Room extends EventEmitter {
       const id = this.floorQueue.shift()!;
       const runtime = this.runtimes.get(id);
       const participant = this.participants.get(id);
-      if (!runtime || !participant || !runtime.pendingTurn || runtime.turnActive || runtime.workBusy || participant.muted || this.focused || participant.status === "error") continue;
+      if (!runtime || !participant || !runtime.pendingTurn || runtime.turnActive || runtime.workBusy || this.nativeLaneBlocked(runtime) || participant.muted || this.focused || participant.status === "error") continue;
       void this.runTurn(id);
       if (oneAtATime) return;
     }
@@ -4376,6 +4492,8 @@ export class Room extends EventEmitter {
     if (!runtime?.workBusy && !runtime?.turnActive) this.finishAutomation(id, { status: "cancelled", detail: "Stopped before the task began." });
     if (runtime) {
       runtime.pendingTurn = false;
+      runtime.independentPendingTurn = false;
+      runtime.deferredNotesTurn = false;
       runtime.addressed = false;
       if (runtime.delayTimer) {
         clearTimeout(runtime.delayTimer);
@@ -4393,7 +4511,7 @@ export class Room extends EventEmitter {
   private async runTurn(id: string): Promise<void> {
     const participant = this.participants.get(id);
     const runtime = this.runtimes.get(id);
-    if (!participant || !runtime || runtime.turnActive || runtime.workBusy) return;
+    if (!participant || !runtime || runtime.turnActive || runtime.workBusy || this.nativeLaneBlocked(runtime)) return;
     this.takeWork(runtime);
     runtime.workCancelled = false;
     this.speaking = id;
@@ -4450,6 +4568,9 @@ export class Room extends EventEmitter {
   private resumeRuntimeWork(id: string, runtime: AgentRuntime): void {
     this.releaseWork(runtime);
     if (this.closing || runtime.retiring || this.runtimes.get(id) !== runtime || !runtime.agent.alive) return;
+    this.drainNativeReports(id, runtime);
+    if (runtime.workBusy || this.nativeLaneBlocked(runtime)) return;
+    if (this.resumeDeferredNotes(id, runtime)) return;
     const participant = this.participants.get(id);
     if (!participant || participant.muted || this.focused || participant.status === "error" || this.recordHold) {
       runtime.promptedThisWork = false;
@@ -4463,7 +4584,7 @@ export class Room extends EventEmitter {
       runtime.notesPending = false;
       void this.takeNotes(id).catch(error => runtime.log.warn(`notes: hidden turn failed: ${describeError(error)}`));
     } else if (runtime.pendingTurn) {
-      this.requestTurn(id);
+      this.requestTurn(id, false, false, false, "resume");
     } else if (this.missedWhileWorking(id, runtime)) {
       this.requestTurn(id, false, true);
     }
@@ -4510,6 +4631,63 @@ export class Room extends EventEmitter {
     return `${clauses.join("; ")}.`;
   }
 
+  private ordinaryWakeDisposition(wake: OrdinaryWakeClaim, participant: Participant, runtime: AgentRuntime): "allowed" | "suppressed" | "held" {
+    if (wake.independent) return "allowed";
+    try { return wake.native.some(ref => this.nativePromptEligible(ref, participant, runtime)) ? "allowed" : "suppressed"; }
+    catch { this.nativeFault(participant.id, "native_route_authority_unknown"); return "held"; }
+  }
+
+  private consumeNativeWake(runtime: AgentRuntime, captured: readonly NativeObligationRef[]): void {
+    const same = (a: NativeObligationRef, b: NativeObligationRef) => a.obligationId === b.obligationId && a.subject.id === b.subject.id
+      && a.subject.roomUuid === b.subject.roomUuid && a.subject.reportHash === b.subject.reportHash;
+    runtime.nativePromptObligations = (runtime.nativePromptObligations ?? []).filter(ref => !captured.some(old => same(old, ref)));
+  }
+
+  private dispatchOwnerCurrent(participant: Participant, runtime: AgentRuntime, hidden: boolean): boolean {
+    return !this.closing && !this.readOnly && this.participants.get(participant.id) === participant && this.runtimes.get(participant.id) === runtime
+      && runtime.agent.alive && !runtime.retiring && !runtime.workCancelled
+      && (hidden || !participant.muted && !this.focused);
+  }
+
+  private resumeDeferredNotes(id: string, runtime: AgentRuntime): boolean {
+    if (!runtime.deferredNotesTurn || this.closing || this.readOnly || runtime.workCancelled || runtime.retiring
+      || this.runtimes.get(id) !== runtime || !runtime.agent.alive || runtime.workBusy || runtime.turnActive || this.nativeLaneBlocked(runtime)) return false;
+    runtime.deferredNotesTurn = false;
+    runtime.notesPending = false;
+    void this.takeNotes(id).catch(error => runtime.log.warn(`notes: deferred hidden turn failed: ${describeError(error)}`));
+    return true;
+  }
+
+  private ordinaryPreparationCurrent(plan: OrdinaryPromptPreparation): boolean {
+    return plan.sourceRevision === this.messageCheckRevision && plan.sourceRows.every(({ row, stamp }) =>
+      this.messages.find(current => current.id === row.id) === row && JSON.stringify(row) === stamp);
+  }
+
+  private preparationFields(runtime: AgentRuntime): PreparationFields {
+    return { missedNotice: runtime.missedNotice, promptedThisWork: runtime.promptedThisWork, turnStartSeq: runtime.turnStartSeq,
+      lastSeenSeq: runtime.lastSeenSeq, notesDue: runtime.notesDue, notesAskedThisTurn: runtime.notesAskedThisTurn,
+      instructionRevisions: runtime.instructionRevisions, skillCatalogPending: runtime.skillCatalogPending, memoryStamp: runtime.memoryStamp,
+      memoryGraphStamp: runtime.memoryGraphStamp, briefPending: runtime.briefPending, turnsSinceBrief: runtime.turnsSinceBrief,
+      briefSentThisTurn: runtime.briefSentThisTurn, lastBriefSeq: runtime.lastBriefSeq, resumeNotes: runtime.resumeNotes,
+      firstTurnDone: runtime.firstTurnDone, replayOwnUntilSeq: runtime.replayOwnUntilSeq };
+  }
+
+  private commitOrdinaryPreparation(participant: Participant, runtime: AgentRuntime, plan: OrdinaryPromptPreparation): void {
+    const effects: PreparationFields = runtime;
+    const apply = <K extends PreparationField>(field: K): void => {
+      if (effects[field] === plan.expected[field]) effects[field] = plan.next[field];
+    };
+    apply("missedNotice"); apply("promptedThisWork"); apply("turnStartSeq"); apply("lastSeenSeq");
+    apply("notesDue"); apply("notesAskedThisTurn"); apply("instructionRevisions"); apply("skillCatalogPending");
+    apply("memoryStamp"); apply("memoryGraphStamp"); apply("briefPending"); apply("turnsSinceBrief");
+    apply("briefSentThisTurn"); apply("lastBriefSeq"); apply("resumeNotes"); apply("firstTurnDone"); apply("replayOwnUntilSeq");
+    if (runtime.headerNotes === plan.headerArray && plan.headers.every((line, i) => runtime.headerNotes[i] === line)) runtime.headerNotes.splice(0, plan.headers.length);
+    if (runtime.pendingSkills === plan.skillArray && plan.skills.every((skill, i) => runtime.pendingSkills[i] === skill)) runtime.pendingSkills.splice(0, plan.skills.length);
+    if (plan.brief) participant.briefsSent = (participant.briefsSent ?? 0) + 1;
+    for (const task of plan.repairs) if (this.repairTasks.get(participant.id)?.includes(task)) task.delivered = true;
+    if (plan.completion) { plan.completion.continuing = false; plan.completion.confirmed = false; }
+  }
+
   private async runTurnInner(id: string, participant: Participant, runtime: AgentRuntime): Promise<void> {
     runtime.pendingTurn = false;
     if (!runtime.agent.alive || participant.muted || this.focused || runtime.workCancelled) return;
@@ -4518,7 +4696,17 @@ export class Room extends EventEmitter {
       const backlogPending = runtime.backgroundBacklogPending;
       runtime.backgroundBacklogPending = false;
       await this.executeTurn(participant, runtime, [{ type: "text", text: correction.prompt }], correction);
+      if (runtime.backgroundCorrections?.includes(correction)) runtime.backgroundBacklogPending ||= backlogPending;
       if (backlogPending || runtime.backgroundCorrections?.length) runtime.pendingTurn = true;
+      return;
+    }
+    const wake: OrdinaryWakeClaim = { independent: !!runtime.independentPendingTurn || this.automationTasks.has(id)
+      || this.repairTasks.has(id) || !!this.backgroundCompletions.get(id)?.length, native: [...(runtime.nativePromptObligations ?? [])] };
+    runtime.independentPendingTurn = false;
+    const admission = this.ordinaryWakeDisposition(wake, participant, runtime);
+    if (admission !== "allowed") {
+      if (admission === "suppressed") this.consumeNativeWake(runtime, wake.native);
+      else runtime.pendingTurn = true;
       return;
     }
     await this.awaitSkillChannel(participant, runtime);
@@ -4545,6 +4733,7 @@ export class Room extends EventEmitter {
         if (!completion.claim(completion.messageId)) {
           this.removeFinishedBackgroundCompletion(id, completion);
           runtime.pendingTurn = true;
+          runtime.independentPendingTurn ||= wake.independent;
           return;
         }
       } catch (error) {
@@ -4556,22 +4745,27 @@ export class Room extends EventEmitter {
       this.activeBackgroundCompletions.set(id, completion);
     }
 
+    const beforePreparation = this.ordinaryWakeDisposition(wake, participant, runtime);
+    if (beforePreparation !== "allowed") {
+      if (beforePreparation === "suppressed") this.consumeNativeWake(runtime, wake.native);
+      else runtime.pendingTurn = true;
+      return;
+    }
+
     const unreadAll = this.messages.filter(
       (m) => m.kind !== "hidden" && m.audience !== "human" && m.seq > runtime.lastSeenSeq && (m.kind === "system" || m.from !== id || m.seq <= runtime.replayOwnUntilSeq),
     );
     if (!unreadAll.some((m) => m.kind === "chat" || m.wakes) && !this.automationTasks.has(id) && !this.repairTasks.has(id) && !completion) return;
     const missed = this.noticeOnly(id, runtime) ? this.missedChat(id, runtime).length : 0;
-    runtime.missedNotice = false;
-    runtime.promptedThisWork = !missed;
+    const expected = this.preparationFields(runtime), preparedThrough = this.seq;
+    const sourceRevision = this.messageCheckRevision, sourceRows = unreadAll.map(row => ({ row, stamp: JSON.stringify(row) }));
+    const headerArray = runtime.headerNotes, headers = [...headerArray];
+    const skillArray = runtime.pendingSkills, attached = [...skillArray];
+    const nativeHeaders = [...(runtime.nativeHeaderObligations ?? [])];
     const cap = this.settings.backlogCap;
     const omitted = missed ? 0 : Math.max(0, unreadAll.length - cap);
     const unread = missed ? [] : omitted ? unreadAll.slice(omitted) : unreadAll;
-    if (!missed) this.registerPendingBodies(participant, unreadAll);
     const supplied = bodyRefs(unread);
-    if (!missed) {
-      runtime.turnStartSeq = runtime.lastSeenSeq;
-      runtime.lastSeenSeq = this.seq;
-    }
 
     const persona = this.personaOf(participant);
     const roster = this.roster();
@@ -4592,14 +4786,12 @@ export class Room extends EventEmitter {
     const memoryGraph = this.settings.remembers ? this.memoryGraph(this.id, this.addressedIn(id, unread), unread.map(m => m.seq)) : null;
     const sendMemoryGraph = !!memoryGraph && (delivery.full || runtime.memoryGraphStamp !== memoryGraph.revision);
 
-    const notes = [...runtime.headerNotes];
-    runtime.headerNotes = [];
+    const notes = [...headers];
     if (missed) notes.push(`${missed} message${missed === 1 ? "" : "s"} arrived while you were working; none was addressed to you. Read ${missed === 1 ? "it" : "them"} with check_room if the conversation may concern you, then answer or reply [silent]. Either way ${missed === 1 ? "it arrives" : "they arrive"} again with your next turn.`);
     const parallelNote = this.parallelWorkNote(id);
     if (parallelNote) notes.push(parallelNote);
-    if (briefReason && overThreshold(runtime.lastUsed, participant.contextSize ?? 0)) this.askForNotes(runtime);
-    runtime.notesAskedThisTurn = runtime.notesDue;
-    if (runtime.notesDue) notes.push(NOTES_REQUEST);
+    const notesDue = runtime.notesDue || !!(this.settings.autoNotes && briefReason && overThreshold(runtime.lastUsed, participant.contextSize ?? 0));
+    if (notesDue) notes.push(NOTES_REQUEST);
     if (briefReason && runtime.firstTurnDone) {
       if (briefReason.startsWith("requested")) notes.push("full brief re-sent as requested");
       else notes.push(`full brief re-attached (${briefReason})`);
@@ -4612,7 +4804,6 @@ export class Room extends EventEmitter {
     }
     notes.push(`instruction versions: room-rules=${delivery.revisions.roomRules}, vibio=${delivery.revisions.vibio}`);
     if (runtime.skillCatalogPending) notes.push("your skill library changed; reload an affected skill before using its instructions again");
-    const attached = runtime.pendingSkills.splice(0);
     for (const s of attached) {
       notes.push(s.invokedBy ? `${s.invokedBy} invoked your skill "${s.name}"; its instructions are attached below, follow them` : `skill "${s.name}" attached below as you asked; the same messages follow`);
     }
@@ -4658,22 +4849,13 @@ export class Room extends EventEmitter {
       personaName: participant.name,
       replyLanguage: replyLanguageClause(settings),
     });
-    runtime.instructionRevisions = delivery.revisions;
-    runtime.skillCatalogPending = false;
-    if (sendMemory) runtime.memoryStamp = memoryStamp;
-    if (sendMemoryGraph) runtime.memoryGraphStamp = memoryGraph!.revision;
-    if (delivery.full) {
-      runtime.briefPending = null;
-      runtime.turnsSinceBrief = 0;
-      runtime.briefSentThisTurn = true;
-    }
-    if (delivery.brief) {
-      runtime.lastBriefSeq = this.seq;
-      runtime.resumeNotes = null;
-      participant.briefsSent = (participant.briefsSent ?? 0) + 1;
-    }
-    runtime.firstTurnDone = true;
-    runtime.replayOwnUntilSeq = -1;
+    const next: PreparationFields = { ...expected, missedNotice: false, promptedThisWork: !missed,
+      turnStartSeq: missed ? expected.turnStartSeq : expected.lastSeenSeq, lastSeenSeq: missed ? expected.lastSeenSeq : preparedThrough,
+      notesDue, notesAskedThisTurn: notesDue, instructionRevisions: delivery.revisions, skillCatalogPending: false,
+      memoryStamp: sendMemory ? memoryStamp : expected.memoryStamp, memoryGraphStamp: sendMemoryGraph ? memoryGraph!.revision : expected.memoryGraphStamp,
+      briefPending: delivery.full ? null : expected.briefPending, turnsSinceBrief: delivery.full ? 0 : expected.turnsSinceBrief,
+      briefSentThisTurn: delivery.full ? true : expected.briefSentThisTurn, lastBriefSeq: delivery.brief ? preparedThrough : expected.lastBriefSeq,
+      resumeNotes: delivery.brief ? null : expected.resumeNotes, firstTurnDone: true, replayOwnUntilSeq: -1 };
     const memoryWords = !this.settings.remembers ? "off"
       : memoryGraph ? `${sendMemoryGraph ? "sent" : "unchanged, not sent again"} for #${memoryGraph.search?.seq ?? "?"}`
       : this.memoryWhy(this.id, this.addressedIn(id, unread));
@@ -4682,20 +4864,22 @@ export class Room extends EventEmitter {
     const blocks = await this.promptBlocks(prompt, runtime);
     const automation = this.automationTasks.get(id);
     if (completion) {
-      completion.continuing = false;
-      completion.confirmed = false;
       blocks.push({ type: "text", text: `<background-task-completion>\n${JSON.stringify({ taskId: completion.taskId,
         description: completion.description, status: completion.status, result: completion.result }).replaceAll("<", "\\u003c")}\n</background-task-completion>` });
     }
+    const repairs: OrdinaryPromptPreparation["repairs"] = [];
     for (const task of this.repairTasks.get(id) ?? []) {
       if (task.delivered) continue;
       const text = this.repairTaskBlock(task);
-      task.delivered = true;
+      repairs.push(task);
       if (text) blocks.push({ type: "text", text });
     }
     if (automation) blocks.unshift({ type: "text", text: `<automation-task>\nSaved by ${this.humanName}: ${automation.run.job.name}\n${automation.run.job.text}\n\nThis task is assigned to you using this room's context and existing permissions. Your final reply will be shown in the room without waking other participants. Finish with the result, or [silent] if there is nothing to report.\n</automation-task>` });
     const memorySearch = memoryGraph?.search ? { ...memoryGraph.search, sent: sendMemoryGraph } : undefined;
-    const retry = await this.executeTurn(participant, runtime, blocks, null, { historyNoticeOffered: offerHistoryNotice, supplied, ...(memorySearch ? { memorySearch } : {}) });
+    const ordinaryPreparation: OrdinaryPromptPreparation = { wake, expected, next, headerArray, headers, skillArray, skills: attached,
+      nativeHeaders, bodies: missed ? [] : unreadAll, sourceRevision, sourceRows, brief: !!delivery.brief, repairs, ...(completion ? { completion } : {}) };
+    const retry = await this.executeTurn(participant, runtime, blocks, null, { historyNoticeOffered: offerHistoryNotice, nativeHeaderOffered: true,
+      ordinaryPreparation, supplied, ...(memorySearch ? { memorySearch } : {}) });
     if (retry) {
       await this.executeTurn(participant, runtime, [{ type: "text", text: retry.prompt }], retry);
     }
@@ -4765,16 +4949,9 @@ export class Room extends EventEmitter {
 
   private async executeTurn(participant: Participant, runtime: AgentRuntime, blocks: ContentBlock[], retry: RetryRequest | null, extras: TurnExtras = {}): Promise<RetryRequest | null> {
     const { hidden = false, historyNoticeOffered = false, supplied = [], memorySearch } = extras;
-    if (runtime.turnActive || runtime.turn) throw new Error(`${participant.name} is already answering`);
+    if (runtime.turnActive || runtime.turn || this.nativeLaneBlocked(runtime)) throw new Error(`${participant.name} is already answering or has held native delivery`);
     const id = participant.id;
-    if (!hidden) {
-      const completion = this.activeBackgroundCompletions.get(id);
-      if (completion) completion.confirmed = false;
-    }
     runtime.turnActive = true;
-    runtime.usageSeenThisTurn = false;
-    runtime.fixedDiagramThisTurn = false;
-    this.watchForSilence();
     participant.status = "thinking";
     participant.statusDetail = undefined;
 
@@ -4799,15 +4976,96 @@ export class Room extends EventEmitter {
     let result: PromptResult | null = null;
     let failure: string | null = null;
     let failureCode = "";
+    const nativeCorrection = retry?.nativeObligation;
+    const nativePrompts = extras.ordinaryPreparation?.wake.native ?? (extras.nativeHeaderOffered ? [...(runtime.nativePromptObligations ?? [])] : []);
+    const startedNative: NativeObligationRef[] = [];
+    const discardUndispatchedTurn = (): null => {
+      this.drafts.delete(draft.id);
+      if (runtime.turn !== turn) return null;
+      runtime.turn = null;
+      runtime.turnActive = false;
+      if (this.runtimes.get(id) === runtime && this.participants.get(id) === participant && participant.status === "thinking") {
+        participant.status = "idle";
+        this.push({ type: "participant", participant });
+      }
+      return null;
+    };
     try {
       const epoch = participant.deliveryEpoch;
+      if (!this.dispatchOwnerCurrent(participant, runtime, hidden)) return discardUndispatchedTurn();
+      if (this.nativeLaneBlocked(runtime)) {
+        if (extras.ordinaryPreparation) {
+          runtime.independentPendingTurn ||= extras.ordinaryPreparation.wake.independent;
+          runtime.pendingTurn = true;
+        } else if (retry) {
+          const corrections = runtime.backgroundCorrections ??= [];
+          runtime.backgroundBacklogPending ||= runtime.pendingTurn;
+          if (!corrections.includes(retry)) corrections.unshift(retry);
+          runtime.pendingTurn = true;
+        } else if (hidden) runtime.deferredNotesTurn = true;
+        return discardUndispatchedTurn();
+      }
+      if (extras.ordinaryPreparation) {
+        const disposition = this.ordinaryWakeDisposition(extras.ordinaryPreparation.wake, participant, runtime);
+        if (disposition !== "allowed") {
+          if (disposition === "suppressed") this.consumeNativeWake(runtime, nativePrompts);
+          else runtime.pendingTurn = true;
+          return discardUndispatchedTurn();
+        }
+        if (!this.ordinaryPreparationCurrent(extras.ordinaryPreparation)) {
+          runtime.independentPendingTurn ||= extras.ordinaryPreparation.wake.independent;
+          runtime.pendingTurn = true;
+          return discardUndispatchedTurn();
+        }
+      }
+      if (nativeCorrection && !this.nativePromptEligible(nativeCorrection, participant, runtime)) return discardUndispatchedTurn();
       if (this.recordPrompts) this.recordPrompt(draft.id, participant, blocks, hidden, retry !== null, memorySearch);
+      if (extras.ordinaryPreparation) {
+        this.commitOrdinaryPreparation(participant, runtime, extras.ordinaryPreparation);
+        turn.messagesFromSeq = runtime.lastSeenSeq;
+      }
+      if (extras.nativeHeaderOffered) {
+        const captured = extras.ordinaryPreparation?.nativeHeaders ?? [...(runtime.nativeHeaderObligations ?? [])];
+        for (const ref of captured) this.nativeTransition(ref, "applied_local");
+        runtime.nativeHeaderObligations = (runtime.nativeHeaderObligations ?? []).filter(ref => !captured.some(old => old.obligationId === ref.obligationId));
+      }
+      for (const ref of nativePrompts) if (this.startNativePrompt(ref, participant, runtime)) startedNative.push(ref);
+      if (extras.nativeHeaderOffered) this.consumeNativeWake(runtime, nativePrompts);
+      if (nativeCorrection) {
+        if (!this.startNativePrompt(nativeCorrection, participant, runtime)) return discardUndispatchedTurn();
+        startedNative.push(nativeCorrection);
+      }
+      if (!hidden) {
+        const completion = this.activeBackgroundCompletions.get(id);
+        if (completion) completion.confirmed = false;
+      }
+      runtime.usageSeenThisTurn = false;
+      runtime.fixedDiagramThisTurn = false;
+      this.watchForSilence();
       const pending = runtime.agent.prompt(runtime.sessionId, blocks);
-      if (!hidden && this.runtimes.get(id) === runtime) this.recordBodySupply(id, supplied, epoch);
-      result = await pending;
+      const metadataFailures: unknown[] = [];
+      if (extras.ordinaryPreparation && this.runtimes.get(id) === runtime) {
+        try { this.registerPendingBodies(participant, extras.ordinaryPreparation.bodies); }
+        catch (error) { metadataFailures.push(error); }
+      }
+      if (!hidden && this.runtimes.get(id) === runtime) {
+        try { this.recordBodySupply(id, supplied, epoch); }
+        catch (error) { metadataFailures.push(error); }
+      }
+      try { result = await pending; }
+      finally {
+        for (const error of metadataFailures) {
+          try { runtime.log.warn(`prompt body metadata failed after dispatch: ${describeError(error)}`); }
+          catch { }
+        }
+      }
     } catch (error) {
       failureCode = errorName(error);
       failure = describeError(error);
+    }
+    for (const ref of startedNative) {
+      try { this.nativeTransition(ref, result ? "completed" : "attempt_unknown"); }
+      catch { this.nativeFault(id, "native_attempt_unknown"); }
     }
 
     if (runtime.turn !== turn) {
@@ -5209,6 +5467,10 @@ export class Room extends EventEmitter {
     const runtime = this.runtimes.get(id);
     if (!runtime || runtime.mcpToken !== token || !token || !this.liveAgentSession(id, runtime.agent, runtime.sessionId))
       throw new AgentMessageError(403, "session_unavailable", "This agent session cannot publish a message now.");
+    if (runtime.workBusy || runtime.turnActive || runtime.turn)
+      throw new AgentMessageError(409, "reply_in_progress", "A separate message cannot be posted while your current reply is active. Include this text in the current reply, or publish after that turn has finished.");
+    if (this.nativeLaneBlocked(runtime))
+      throw new AgentMessageError(409, "native_delivery_pending", "A previously completed native report is held for storage or delivery recovery. A separate message cannot be published until that pending delivery is resolved.");
     const input = parsePostMessage(raw);
     const visible = extractNotes(input.text).visible.trim();
     if (!visible || visible.toLowerCase() === SILENT_MARKER || visible.toLowerCase() === REQUEST_BRIEF_MARKER || skillPull(visible))
@@ -5253,6 +5515,7 @@ export class Room extends EventEmitter {
   }
 
   private onBackgroundMessage(id: string, agent: AcpAgent, report: BackgroundMessage, transport: "acp" | "mcp" = "acp"): void {
+    if (transport === "acp") { this.acceptNativeReport(id, agent, report); return; }
     if (!this.liveAgentSession(id, agent, report.sessionId)) return;
     const runtime = this.runtimes.get(id)!;
     const participant = this.participants.get(id)!;
@@ -5281,6 +5544,376 @@ export class Room extends EventEmitter {
     this.publishAgentReply(participant, runtime, draft,
       { stopReason: report.stopReason === "cancelled" ? "cancelled" : "end_turn" }, undefined, null, null,
       report.stopReason === "cancelled" ? "agent" : undefined, true);
+  }
+
+  private nativeLaneBlocked(runtime: AgentRuntime): boolean {
+    return !!runtime.nativeDraining || !!runtime.nativeHold || this.nativeRecoveryHold
+      || [...this.retainedNativeArrivals.values()].some(arrival => arrival.agent === runtime.agent);
+  }
+
+  hasPendingNativeDelivery(): boolean {
+    if (this.unsavedNative.size || this.retainedNativeArrivals.size || this.nativeRecoveryHold) return true;
+    try {
+      if (this.divertPending && this.history.nativeJournalSafety(this.id)) return true;
+      return this.history.listNativeDelivery(this.id).length !== 0;
+    }
+    catch { this.nativeRecoveryHold = true; return true; }
+  }
+
+  retryNativeReports(): boolean {
+    if (this.closing || this.readOnly || this.recordHold) return this.hasPendingNativeDelivery();
+    if (this.divertPending) this.drainDivert();
+    if (this.nativeRecoveryHold && !this.divertPending) {
+      try {
+        this.history.nativeJournalSafety(this.id); this.history.nativeHighWater(this.uuid); this.history.listNativeDelivery(this.id);
+        this.nativeRecoveryHold = false;
+      } catch { return true; }
+    }
+    if (this.nativeRecoveryHold) return true;
+    for (const [id, envelope] of this.unsavedNative) {
+      try {
+        const previous = this.history.nativeReceipt(this.id, this.uuid, id);
+        if (!previous) this.history.enqueueNative(this.id, envelope);
+        else if ((previous.type === "native" ? previous.record.envelope.reportHash : previous.receipt.hash) !== envelope.reportHash) {
+          this.nativeFault(envelope.owner.participantId, "native_conflict"); continue;
+        }
+        this.unsavedNative.delete(id);
+      } catch { }
+    }
+    for (const [messageId, arrival] of this.retainedNativeArrivals) {
+      if (!arrival.owner) break;
+      this.acceptNativeReport(arrival.owner.participantId, arrival.agent, arrival.report);
+      if (this.retainedNativeArrivals.has(messageId)) break;
+    }
+    for (const [id, runtime] of this.runtimes) this.drainNativeReports(id, runtime);
+    return this.hasPendingNativeDelivery();
+  }
+
+  private nativeFault(id: string, reason: string): void {
+    const runtime = this.runtimes.get(id);
+    if (runtime) runtime.nativeHold = true;
+    this.onNativePending?.(this.id);
+    const owner = `${runtime?.sessionId ?? "missing"}:${this.participants.get(id)?.deliveryEpoch ?? "missing"}:${reason}`;
+    if (this.nativeFaultReasons.get(id) === owner) return;
+    this.nativeFaultReasons.set(id, owner);
+    this.log.warn(`native report for ${id}: ${reason}; publication is held`);
+    this.notice(`An autonomous report for ${this.participants.get(id)?.name ?? id} is held (${reason}). No new reply was published.`, "error");
+  }
+
+  private rebindNativeReports(id: string, runtime: AgentRuntime, loaded: boolean): void {
+    if (!loaded) return;
+    try {
+      for (const record of this.history.listNativeDelivery(this.id, id)) {
+        const e = record.envelope;
+        if (!this.nativeOwnerReason(e, runtime)) this.nativeHandles.set(e.id, runtime.agent);
+      }
+    } catch { this.nativeFault(id, "storage_read_unknown"); }
+  }
+
+  private nativeOwnerReason(envelope: NativeEnvelope, runtime: AgentRuntime): NativeHoldReason | null {
+    const owner = envelope.owner, participant = this.participants.get(owner.participantId);
+    if (owner.roomId !== this.id || owner.roomUuid !== this.uuid || owner.folderId !== this.folderId) return "retired_owner";
+    if (!participant || participant.kind !== "agent" || participant.status === "left" || this.runtimes.get(participant.id) !== runtime || runtime.retiring) return "retired_owner";
+    if (!runtime.agent.alive) return "runtime_missing";
+    if (runtime.sessionId !== owner.sessionId) return "stale_session";
+    if (participant.deliveryEpoch !== owner.deliveryEpoch) return "stale_epoch";
+    if (this.history.nativeGeneration(this.id) !== owner.generation) return "stale_generation";
+    if (this.closing || this.readOnly) return "room_closed";
+    if (this.recordHold) return "record_hold";
+    return null;
+  }
+
+  private acceptNativeReport(id: string, agent: AcpAgent, raw: BackgroundMessage): void {
+    const report = readBackgroundMessage(raw);
+    if (!report || !this.liveAgentSession(id, agent, report.sessionId)) return;
+    const runtime = this.runtimes.get(id)!, participant = this.participants.get(id)!;
+    const messageId = agentMessageId(this.uuid, id, report.sessionId, report.messageId, "acp"), hash = agentMessageHash(report);
+    let arrival = this.retainedNativeArrivals.get(messageId);
+    if (arrival && (arrival.agent !== agent || agentMessageHash(arrival.report) !== hash)) {
+      this.nativeFault(id, "native_conflict"); return;
+    }
+    if (!arrival) {
+      const bytes = Buffer.byteLength(report.text, "utf8");
+      const retainedBytes = [...this.retainedNativeArrivals.values()].reduce((sum, held) => sum + Buffer.byteLength(held.report.text, "utf8"), 0);
+      if (this.retainedNativeArrivals.size >= Room.NATIVE_ARRIVAL_LIMIT || retainedBytes + bytes > Room.NATIVE_ARRIVAL_BYTES) {
+        this.nativeFault(id, "not_saved_capacity"); return;
+      }
+      arrival = { report: { ...report }, agent, acceptedName: participant.name, at: Date.now(), owner: null };
+      this.retainedNativeArrivals.set(messageId, arrival);
+      try {
+        if (participant.deliveryEpoch) arrival.owner = { roomId: this.id, roomUuid: this.uuid, participantId: id,
+          sessionId: runtime.sessionId, deliveryEpoch: participant.deliveryEpoch, folderId: this.folderId,
+          generation: this.history.nativeGeneration(this.id) };
+      } catch { }
+    }
+    try {
+      const previous = this.history.nativeReceipt(this.id, this.uuid, messageId);
+      if (previous) {
+        const priorHash = previous.type === "native" ? previous.record.envelope.reportHash : previous.receipt.hash;
+        if (priorHash !== null && priorHash !== hash) { this.nativeFault(id, "native_conflict"); return; }
+        this.retainedNativeArrivals.delete(messageId);
+        if (previous.type === "native" && this.nativeHandles.get(messageId) === agent) this.drainNativeReports(id, runtime);
+        return;
+      }
+      if (!arrival.owner || this.nativeOwnerReason({ owner: arrival.owner } as NativeEnvelope, runtime)) {
+        this.nativeFault(id, "not_saved_original_owner_unknown"); return;
+      }
+      if (this.retainedNativeArrivals.keys().next().value !== messageId) {
+        this.nativeFault(id, "not_saved_order_unknown"); return;
+      }
+      const journal = this.journalOps();
+      if (journal.blocked || this.nativeRecoveryHold) { this.nativeFault(id, "journal_corrupt_not_saved"); return; }
+      if (this.unsavedNative.size) { this.nativeFault(id, "order_unknown_not_saved"); return; }
+      const enqueues = journal.ops.filter((op): op is Extract<DivertOp, { kind: "native_enqueue_v1" }> => op.kind === "native_enqueue_v1");
+      for (const op of enqueues) {
+        if (op.envelope.owner.roomUuid !== this.uuid || op.envelope.owner.roomId !== this.id || op.envelope.owner.folderId !== this.folderId) {
+          this.nativeRecoveryHold = true; this.nativeFault(id, "journal_conflict"); return;
+        }
+        if (op.envelope.id === messageId) {
+          if (op.envelope.reportHash !== hash) this.nativeFault(id, "native_conflict");
+          else { this.retainedNativeArrivals.delete(messageId); this.nativeHandles.set(messageId, agent); this.onNativePending?.(this.id); this.drainNativeReports(id, runtime); }
+          return;
+        }
+      }
+      const epoch = participant.deliveryEpoch;
+      if (!epoch) { this.nativeFault(id, "stale_epoch"); return; }
+      const highWater = Math.max(this.history.nativeHighWater(this.uuid), ...enqueues.map(op => op.envelope.acceptOrder));
+      const envelope = makeNativeEnvelope(arrival.owner, arrival.report, arrival.acceptedName, arrival.at, nativeInteger(highWater + 1, 1));
+      let retained = false;
+      try {
+        if (this.divertPending) this.drainDivert();
+        if (this.divertPending || this.nativeRecoveryHold) throw new Error("earlier_journal_pending");
+        this.history.enqueueNative(this.id, envelope); retained = true;
+      } catch (error) {
+        if (this.nativeRecoveryHold) { this.nativeFault(id, "journal_unknown"); return; }
+        let recovered = false;
+        try {
+          const exact = this.history.nativeReceipt(this.id, this.uuid, messageId);
+          recovered = exact?.type === "native" && JSON.stringify(exact.record.envelope) === JSON.stringify(envelope);
+          if (exact && !recovered) { this.nativeFault(id, "native_conflict"); return; }
+        } catch { this.nativeFault(id, "commit_unknown"); }
+        retained = recovered || this.divert(nativeDivertOp({ kind: "native_enqueue_v1", envelope }), error);
+        if (!retained) {
+          if (this.unsavedNative.size < 64) {
+            this.unsavedNative.set(messageId, envelope);
+            this.retainedNativeArrivals.delete(messageId);
+          }
+          this.nativeHandles.set(messageId, agent);
+          this.nativeFault(id, "not_saved"); return;
+        }
+      }
+      if (retained) {
+        this.retainedNativeArrivals.delete(messageId);
+        this.nativeHandles.set(messageId, agent);
+        this.onNativePending?.(this.id);
+        this.drainNativeReports(id, runtime);
+      }
+    } catch {
+      this.nativeFault(id, "storage_read_unknown_not_saved");
+    }
+  }
+
+  private prepareNativeDecision(envelope: NativeEnvelope, participant: Participant, runtime: AgentRuntime): NativeDecision {
+    const extracted = extractNotes(envelope.text), text = extracted.visible.trim(), at = Date.now();
+    const notes = envelope.stopReason === "end_turn" && extracted.notes
+      ? planNativeNoteEffect(captureNativeNoteSubject(participant), envelope.id,
+        { notes: extracted.notes, notesAt: runtime.lastUsed, notesSeq: this.seq, notesWrittenAt: at }) : null;
+    const silent = !text || text.toLowerCase() === SILENT_MARKER;
+    const marker = text.toLowerCase() === REQUEST_BRIEF_MARKER || !!skillPull(text);
+    const mentions = silent || marker ? { ids: [], names: [] } : this.parseMentions(text);
+    const corrections = silent || marker ? [] : this.referee(participant, text, mentions);
+    const kind: NativeDecision["kind"] = silent ? notes && !text ? "notes_only" : "silent" : marker ? "instruction_marker"
+      : envelope.stopReason === "cancelled" ? "visible_cancelled_human" : envelope.stopReason === "error" ? "visible_error_human"
+      : corrections.length && this.settings.refereeAction === "retry-hidden" ? "referee_hidden" : "visible_complete";
+    const obligations: NativeObligation[] = [];
+    const base = (kind: NativeObligation["kind"], target: string | null = null) => ({ id: nativeObligationId(envelope.id, kind, target), phase: "pending" as const });
+    if (notes) obligations.push({ ...base("note"), kind: "note", effect: notes });
+    if (marker || corrections.length && kind !== "referee_hidden") obligations.push({ ...base("header"), kind: "header",
+      lines: marker ? ["your autonomous report requested room instructions; use the instructions supplied with your next turn"] : corrections });
+    if (kind === "referee_hidden") obligations.push({ ...base("correction"), kind: "correction", original: text, corrections });
+    if (kind === "visible_complete" && !this.focused && this.hops < this.hopLimit) {
+      const live = (id: string) => this.runtimes.has(id) && !this.participants.get(id)?.muted;
+      const targets = mentions.ids.length ? mentions.ids.filter(live)
+        : this.settings.agentsWakeEachOther ? [...this.runtimes.keys()].filter(id => id !== participant.id && live(id)) : [];
+      for (const target of targets) {
+        const owner = this.runtimes.get(target)!, epoch = this.participants.get(target)?.deliveryEpoch;
+        if (epoch) obligations.push({ ...base("route", target), kind: "route", messageId: envelope.id,
+          participantId: target, sessionId: owner.sessionId, deliveryEpoch: epoch });
+      }
+    }
+    return { version: 1, kind, reportHash: envelope.reportHash, owner: envelope.owner, at, text,
+      to: mentions.ids, toNames: mentions.names, corrections, notes, obligations };
+  }
+
+  private nativeMessage(envelope: NativeEnvelope, decision: NativeDecision, participant: Participant): ChatMessage | null {
+    if (["silent", "notes_only", "instruction_marker"].includes(decision.kind)) return null;
+    const hidden = decision.kind === "referee_hidden", interrupted = envelope.stopReason !== "end_turn";
+    return { id: envelope.id, seq: nativeInteger(Math.max(this.seq, this.history.maxSeq(this.id)) + 1, 1), displayOrder: nativeInteger(Math.max(this.displayOrder, this.history.nativeDisplayHighWater(this.id)) + 1, 1),
+      from: participant.id, fromName: participant.name, to: hidden ? [] : decision.to, toNames: hidden ? [] : decision.toNames,
+      text: hidden ? `Reply held back; correction requested: ${decision.corrections.map(c => c.replace(/^reminder:\s*/i, "")).join("; ")}` : decision.text,
+      ts: decision.at, kind: hidden ? "hidden" : "chat", streaming: false, usage: null,
+      details: { reportHash: envelope.reportHash, ...(hidden ? { original: decision.text, corrections: decision.corrections } : {}) },
+      ...(this.folderId ? { origin: this.folderId } : {}), ...(interrupted ? { audience: "human" as const } : {}),
+      ...(envelope.stopReason === "error" ? { failed: "The autonomous agent cycle failed before completing." } : { stopReason: envelope.stopReason }),
+      ...(envelope.stopReason === "cancelled" ? { cancelledBy: "agent" as const } : {}) };
+  }
+
+  private drainNativeReports(id: string, runtime: AgentRuntime): void {
+    if (runtime.nativeDraining || runtime.workBusy || runtime.turnActive || runtime.turn || this.closing || this.readOnly || this.recordHold) return;
+    if (this.runtimes.get(id) !== runtime || !runtime.agent.alive || runtime.retiring) return;
+    runtime.nativeDraining = true;
+    runtime.nativeHold = false;
+    try {
+      if (this.divertPending) this.drainDivert();
+      if (this.nativeRecoveryHold || this.divertPending || [...this.unsavedNative.values()].some(e => e.owner.participantId === id)) { runtime.nativeHold = true; return; }
+      const visited = new Set<string>();
+      while (!runtime.nativeHold) {
+        const batch = this.history.listNativeDelivery(this.id, id).filter(record => !visited.has(record.envelope.id));
+        if (!batch.length) break;
+        for (let record of batch) {
+          visited.add(record.envelope.id);
+          const envelope = record.envelope, reason = this.nativeOwnerReason(envelope, runtime);
+          if (reason || this.nativeHandles.get(envelope.id) !== runtime.agent) {
+            if (record.state === "pending" || record.state === "held") {
+              const hold = reason ?? "runtime_missing";
+              if (record.state !== "held" || record.holdReason !== hold) this.history.holdNative(this.id, nativeSubject(envelope), record.stateRevision, hold, Date.now());
+            } else {
+              for (const obligation of record.obligations) {
+                const ref = { subject: nativeSubject(envelope), obligationId: obligation.id };
+                if (obligation.phase === "pending") this.nativeTransition(ref, "held_owner");
+                else if (obligation.phase === "attempt_started") this.nativeTransition(ref, "attempt_unknown");
+              }
+            }
+            if (!reason) { runtime.nativeHold = true; break; }
+            continue;
+          }
+          if (record.state === "held") {
+            if (["note_subject_changed", "stale_session", "stale_epoch", "stale_generation", "retired_owner"].includes(record.holdReason!)) { runtime.nativeHold = true; break; }
+            record = this.history.releaseNative(this.id, nativeSubject(envelope), record.stateRevision);
+          }
+          if (record.obligations.some(o => o.phase === "held_owner")) {
+            for (const obligation of record.obligations) if (obligation.phase === "held_owner") this.nativeTransition({ subject: nativeSubject(envelope), obligationId: obligation.id }, "pending");
+            const refreshed = this.history.nativeReceipt(this.id, this.uuid, envelope.id);
+            if (!refreshed || refreshed.type !== "native") throw new Error("native_recovery_receipt_unknown");
+            record = refreshed.record;
+          }
+          if (record.state === "pending") {
+            const participant = this.participants.get(id)!, decision = this.prepareNativeDecision(envelope, participant, runtime), message = this.nativeMessage(envelope, decision, participant);
+            let finalized: NativeRecord | undefined;
+            const writeRecord = () => { finalized = this.history.finalizeNative(this.id, nativeSubject(envelope), record.stateRevision, decision, message); };
+            if (decision.notes) {
+              if (!this.commitNativeNoteDecision) { this.nativeFault(id, "note_metadata_unavailable"); break; }
+              const disposition = this.commitNativeNoteDecision(this, id, decision.notes, writeRecord);
+              if (disposition === "changed" || disposition === "superseded") {
+                this.history.holdNative(this.id, nativeSubject(envelope), record.stateRevision, "note_subject_changed", Date.now());
+                runtime.nativeHold = true; break;
+              }
+            } else writeRecord();
+            if (!finalized) throw new Error("native_finalize_not_confirmed");
+            record = finalized;
+          }
+          this.projectNativeDecision(record, runtime);
+        }
+      }
+    } catch {
+      this.nativeFault(id, "commit_unknown");
+    } finally { runtime.nativeDraining = false; }
+    if (!runtime.nativeHold) this.nativeFaultReasons.delete(id);
+    if (!this.nativeLaneBlocked(runtime) && !runtime.workBusy && !runtime.turnActive && !runtime.turn) {
+      if (!this.resumeDeferredNotes(id, runtime)) {
+        if (runtime.backgroundCorrections?.length && !this.participants.get(id)?.muted && !this.focused) this.requestTurn(id, false, false, true);
+        else if (runtime.pendingTurn) this.requestTurn(id, false, false, false, "resume");
+      }
+    }
+    if (this.hasPendingNativeDelivery()) this.onNativePending?.(this.id);
+  }
+
+  private projectNativeDecision(record: NativeRecord, runtime: AgentRuntime): void {
+    const decision = record.decision, envelope = record.envelope, participant = this.participants.get(envelope.owner.participantId);
+    if (!decision || !participant || record.state === "tombstoned") return;
+    const projection = `${envelope.id}:projection`;
+    if (!this.nativeLocalEffects.has(projection)) {
+      if (record.receipt) {
+        const message = this.history.get(this.id, record.receipt.seq);
+        if (!message || message.id !== envelope.id || message.details?.reportHash !== envelope.reportHash) throw new Error("native_publication_unknown");
+        this.seq = Math.max(this.seq, message.seq); this.displayOrder = Math.max(this.displayOrder, message.displayOrder ?? message.seq);
+        if (!this.messages.some(m => m.id === message.id)) this.messages.push(message);
+        this.push({ type: "message", message }); this.numberQuotesOf(message);
+      }
+      if (decision.corrections.length) participant.violations = (participant.violations ?? 0) + decision.corrections.length;
+      if (decision.kind === "referee_hidden") participant.retries = (participant.retries ?? 0) + 1;
+      this.nativeLocalEffects.add(projection);
+      if (decision.corrections.length) this.push({ type: "participant", participant });
+    }
+    for (const obligation of record.obligations) {
+      const ref = { subject: nativeSubject(envelope), obligationId: obligation.id };
+      if (obligation.phase === "attempt_started") {
+        if (!this.nativeLocalEffects.has(obligation.id)) this.nativeTransition(ref, "attempt_unknown");
+        continue;
+      }
+      if (obligation.phase !== "pending" || this.nativeLocalEffects.has(obligation.id)) continue;
+      if (obligation.kind === "note") {
+        const disposition = nativeNoteDisposition(captureNativeNoteSubject(participant), obligation.effect);
+        if (disposition === "apply") {
+          Object.assign(participant, { notes: obligation.effect.next.notes ?? undefined, notesAt: obligation.effect.next.notesAt ?? undefined,
+            notesSeq: obligation.effect.next.notesSeq ?? undefined, notesWrittenAt: obligation.effect.next.notesWrittenAt ?? undefined,
+            notesRevision: obligation.effect.next.notesRevision, nativeNoteReceipt: obligation.effect.next.nativeNoteReceipt ?? undefined });
+          runtime.notesDue = false; runtime.notesMisses = 0; runtime.notesPending = false;
+          this.push({ type: "participant", participant });
+        }
+        this.nativeTransition(ref, disposition === "changed" || disposition === "superseded" ? "superseded" : "applied_local");
+      } else if (obligation.kind === "header") {
+        runtime.headerNotes.push(...obligation.lines);
+        (runtime.nativeHeaderObligations ??= []).push(ref);
+      } else if (obligation.kind === "correction") {
+        const message = this.messages.find(m => m.id === envelope.id);
+        if (!message) throw new Error("native_hidden_receipt_missing");
+        const header = buildHeader(this.effectiveSettings(), this.personaOf(participant), this.roster(), this.hops, ["your last reply was not posted; see the correction below"]);
+        this.queueBackgroundCorrection(participant.id, runtime, { prompt: composeCorrectionPrompt({ header, originalText: obligation.original,
+          corrections: obligation.corrections, personaName: participant.name }), original: obligation.original,
+          corrections: obligation.corrections, record: message, nativeObligation: ref });
+      } else {
+        const target = this.runtimes.get(obligation.participantId), p = this.participants.get(obligation.participantId);
+        const hop = `${envelope.id}:hop`;
+        if (!target || !p || !target.agent.alive || target.retiring || target.sessionId !== obligation.sessionId || p.deliveryEpoch !== obligation.deliveryEpoch || p.muted || this.focused || this.hops >= this.hopLimit && !this.nativeLocalEffects.has(hop)) {
+          this.nativeTransition(ref, "superseded");
+        } else {
+          if (!this.nativeLocalEffects.has(hop)) { this.hops++; this.nativeLocalEffects.add(hop); this.push(this.roomEvent()); }
+          (target.nativePromptObligations ??= []).push(ref);
+          this.requestTurn(p.id, decision.to.includes(p.id), false, false, "native");
+        }
+      }
+      this.nativeLocalEffects.add(obligation.id);
+    }
+  }
+
+  private nativeTransition(ref: NativeObligationRef, phase: NativeObligation["phase"]): void {
+    const receipt = this.history.nativeReceipt(this.id, ref.subject.roomUuid, ref.subject.id);
+    if (!receipt || receipt.type !== "native" || receipt.record.envelope.reportHash !== ref.subject.reportHash) throw new Error("native_obligation_unknown");
+    this.history.updateNativeObligation(this.id, ref.subject, receipt.record.stateRevision, ref.obligationId, phase);
+  }
+
+  private nativePromptEligible(ref: NativeObligationRef, participant: Participant, runtime: AgentRuntime): boolean {
+    const receipt = this.history.nativeReceipt(this.id, ref.subject.roomUuid, ref.subject.id);
+    if (!receipt || receipt.type !== "native" || receipt.record.envelope.reportHash !== ref.subject.reportHash) throw new Error("native_prompt_subject_unknown");
+    const record = receipt.record;
+    if (record.state === "tombstoned") return false;
+    const source = this.runtimes.get(record.envelope.owner.participantId);
+    if (!source || this.nativeOwnerReason(record.envelope, source) || this.nativeHandles.get(record.envelope.id) !== source.agent) throw new Error("native_prompt_owner_changed");
+    const obligation = record.obligations.find(o => o.id === ref.obligationId);
+    if (!obligation) throw new Error("native_prompt_obligation_unknown");
+    if (["suppressed_deleted", "superseded", "completed", "attempt_unknown"].includes(obligation.phase)) return false;
+    if (obligation.phase !== "pending") throw new Error("native_prompt_already_attempted");
+    if (obligation.kind === "route") {
+      if (obligation.participantId !== participant.id || obligation.sessionId !== runtime.sessionId || obligation.deliveryEpoch !== participant.deliveryEpoch) throw new Error("native_route_owner_changed");
+    } else if (obligation.kind !== "correction" || record.envelope.owner.participantId !== participant.id) throw new Error("native_prompt_kind_changed");
+    return true;
+  }
+
+  private startNativePrompt(ref: NativeObligationRef, participant: Participant, runtime: AgentRuntime): boolean {
+    if (!this.nativePromptEligible(ref, participant, runtime)) return false;
+    this.nativeTransition(ref, "attempt_started");
+    return true;
   }
 
   private finishBackgroundDelivery(id: string, runtime: AgentRuntime, messageId: string, deleted: boolean): void {

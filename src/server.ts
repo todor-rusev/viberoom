@@ -638,7 +638,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     if (req.method === "GET" && path === "/api/version") {
       const mine = keyMatches(localKey.value, keyFrom(req.headers));
-      sendJson(res, 200, { ...info, ...hostFields(host), keyed: mine, staleBuild: newerBuildThanRunning(new URL("./main.js", import.meta.url).href, info.build), ...(mine ? { dataDir: hub.dataDir, pid: process.pid, startedAt, startedAs, stopsWithinMs: hub.shutdownWithinMs() } : {}) });
+      sendJson(res, 200, { ...info, ...hostFields(host), keyed: mine, staleBuild: newerBuildThanRunning(new URL("./main.js", import.meta.url).href, info.build), ...(mine ? { dataDir: hub.dataDir, pid: process.pid, startedAt, startedAs, stopsWithinMs: hub.shutdownWithinMs(), stopChecksRun: true } : {}) });
       return;
     }
 
@@ -1894,6 +1894,23 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     if (path === "/api/restart/cancel") {
       hub.cancelRestart(hub.settings.humanName || "The human");
       sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (path === "/api/shutdown-run") {
+      const expected = body.expect as { pid?: unknown; startedAt?: unknown } | undefined;
+      if (expected === null || typeof expected !== "object" || !Number.isInteger(expected.pid) || typeof expected.startedAt !== "number") {
+        sendJson(res, 400, { ok: false, reason: "no-run-named" });
+        return;
+      }
+      if (expected.pid !== process.pid || expected.startedAt !== startedAt) {
+        log.info("shutdown requested over the API for another run of these rooms; this one goes on");
+        sendJson(res, 409, { ok: false, reason: "another-run" });
+        return;
+      }
+      log.info("shutdown of this run requested over the API");
+      sendJson(res, 200, { ok: true, stopsWithinMs: hub.shutdownWithinMs() });
+      setTimeout(onShutdownRequest, 50);
       return;
     }
 

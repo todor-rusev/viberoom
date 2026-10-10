@@ -9936,17 +9936,27 @@
       && Number.isSafeInteger(offer.offerExpiresAt) && Number.isSafeInteger(offer.runMs) && offer.runMs > 0
       && offer.whole && typeof offer.whole === "object" && !Array.isArray(offer.whole)
       && Number.isFinite(offer.whole.policy?.limits?.localEstimatedCredits) && Number.isSafeInteger(offer.whole.policy?.kinds?.model);
+    const disclosure = offer?.whole?.disclosure, schema = disclosure?.schema;
+    const known = schema === "whole-private-trial-budget-disclosure-v2" || schema === "answers-only-budget-disclosure-v1";
     dialog.dataset.card = card.id;
     delete dialog.dataset.trialCardSha256; delete dialog.dataset.trialViewSha256;
-    if (!valid) {
+    if (!valid || !known) {
       body.innerHTML = `<h3>Graph-memory comparison</h3><p class="lead">This offer is unavailable. Review a new card before approving a run.</p>
         <div class="actions">${UI.html("button", { label: "Close", kind: "ghost", act: "secret-close" })}</div>`;
     } else {
       const whole = offer.whole, limits = whole.policy?.limits || {}, kinds = whole.policy?.kinds || {};
-      body.innerHTML = `<h3><span class="h-ico">${ic("graph")}</span>One whole graph-memory comparison</h3>
+      const expiry = `<p>The offer expires at ${esc(new Date(offer.offerExpiresAt).toLocaleString())}. This one run may last up to ${esc(String(offer.runMs / 60000))} minutes. Approval does not renew or resume an earlier run.</p>`;
+      const told = schema === "answers-only-budget-disclosure-v1"
+        ? `<h3><span class="h-ico">${ic("graph")}</span>Model answers only, once</h3>
+        <p class="lead">Approve ${esc(String(kinds.model))} requests to ${esc(String(disclosure.answer?.model))} (${esc(String(disclosure.answer?.endpoint))}), each at most ${esc(String(disclosure.maxOutputTokensPerRequest))} output tokens (${esc(String(disclosure.maxOutputTokens))} in all), over ${esc(String(disclosure.inputTextUtf8Bytes))} bytes of input text. Zep is not asked: 0 requests, 0 credits.</p>
+        <p class="field-note">Input tokens are not counted in advance; for reference, ${esc(String(disclosure.inputTokensReference))}.</p>
+        ${expiry}
+        <details open><summary>Exact inputs, model, request profile and limits</summary><pre>${esc(JSON.stringify(whole, null, 2))}</pre></details>`
+        : `<h3><span class="h-ico">${ic("graph")}</span>One whole graph-memory comparison</h3>
         <p class="lead">Approve this whole trial once. Estimated DATA credits: ${esc(String(limits.localEstimatedCredits))}. Model jobs: ${esc(String(kinds.model))}. The estimate is not an invoice ceiling.</p>
-        <p>The offer expires at ${esc(new Date(offer.offerExpiresAt).toLocaleString())}. This one run may last up to ${esc(String(offer.runMs / 60000))} minutes. Approval does not renew or resume an earlier run.</p>
-        <details open><summary>Exact scope, providers, model, costs and limits</summary><pre>${esc(JSON.stringify(whole, null, 2))}</pre></details>
+        ${expiry}
+        <details open><summary>Exact scope, providers, model, costs and limits</summary><pre>${esc(JSON.stringify(whole, null, 2))}</pre></details>`;
+      body.innerHTML = `${told}
         <p class="field-note" id="sd-error" ${card.refusal ? "" : "hidden"}><b>${esc(card.refusal || "")}</b></p>
         <div class="actions">${UI.html("button", { label: "Not now", kind: "ghost", act: "trial-budget-reject" })}${UI.html("button", { label: "Approve this whole trial and run once", kind: "primary", act: "trial-budget-approve" })}</div>`;
       dialog.dataset.trialCardSha256 = offer.cardSha256;
@@ -14042,6 +14052,7 @@
   const WAVE_STEP = 280;
   const WAVE_RETIME = 420;
   let waveEpoch = null;
+  let waveFrame = 0;
   let twiceNoted = "";
   const bobOf = (el) => el.getAnimations().find((a) => a.animationName === "wn-bob") || null;
   function wavePlace(anim, i) {
@@ -14055,8 +14066,10 @@
     return target + Math.round((mine - target) / WAVE_PERIOD) * WAVE_PERIOD;
   }
   function swimTo(el, i) {
+    if (el.waveSlot === i) return;
     const anim = bobOf(el);
     if (!anim || waveEpoch === null) return;
+    el.waveSlot = i;
     const target = wavePlace(anim, i);
     const from = anim.startTime;
     if (from === null || Math.abs(target - from) < 1) {
@@ -14096,7 +14109,7 @@
       const face = `${p.avatar || ""}|${p.color || ""}|${p.name}`;
       const kept = have.get(p.id);
       if (kept) {
-        kept.title = title;
+        if (kept.title !== title) kept.title = title;
         if (kept.classList.contains("leaving")) {
           kept.classList.remove("leaving");
           clearTimeout(kept.leaveTimer);
@@ -14116,21 +14129,29 @@
       el.innerHTML = avatar(p, 22, {});
       workingNow.appendChild(el);
       if (waveEpoch === null) waveEpoch = document.timeline.currentTime ?? 0;
+      el.addEventListener("animationstart", (e) => {
+        if (e.target !== el || e.animationName !== "wn-bob") return;
+        el.waveSlot = undefined;
+        formWaveSoon();
+      });
       el.addEventListener("animationend", (e) => {
         if (e.animationName === "wn-join") el.classList.remove("joining");
       });
     });
-    formWave();
+    formWaveSoon();
     updateWorkingNow();
   }
   function leaveWave(el) {
     el.classList.add("leaving");
     el.leaveTimer = setTimeout(() => {
       el.remove();
-      formWave();
+      formWaveSoon();
       updateWorkingNow();
     }, 220);
-    formWave();
+    formWaveSoon();
+  }
+  function formWaveSoon() {
+    if (!waveFrame) waveFrame = requestAnimationFrame(() => { waveFrame = 0; formWave(); });
   }
   function formWave() {
     const staying = [...workingNow.children].filter((el) => !el.classList.contains("leaving"));

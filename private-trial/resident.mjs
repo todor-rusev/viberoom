@@ -57,6 +57,7 @@ export function createResidentPreparation(hub,deployment){
     requireTrue(canonical(snapshot)===canonical(context.snapshot()),'configured_owner_changed');
     const inputs=readOwnedTrialInputs({hub});
     requireTrue(inputs.current()===true,'resident_owned_inputs_changed');
+    requireTrue(d.review.purpose==='approved-paid-trial'||d.review.purpose==='local-fixture','resident_purpose_not_whole_trial');
     return {d,chosen,context,snapshot,inputs,paid:d.review.purpose==='approved-paid-trial'};
   }
   function status(input){

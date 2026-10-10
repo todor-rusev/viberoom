@@ -7,6 +7,8 @@ import { AutomationStore } from "./automation-store.js";
 import { Automations } from "./automations.js";
 import { BackgroundTaskStore, BackgroundTaskError } from "./background-task-store.js";
 import { AgentMessageError } from "./agent-message.js";
+import type { NativeNoteEffect } from "./native-reports.js";
+import { captureNativeNoteSubject, nativeNoteDisposition, type NativeNoteDisposition } from "./native-note-state.js";
 import { validArguments } from "./tool-validation.js";
 import { parseAutomation, parseSchedule, previewSchedule } from "./automation-schedule.js";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -64,7 +66,7 @@ import { VoiceService } from "./voice/service.js";
 import { MEMORY_PROVIDERS, coerceProviderSettings, providerEntry } from "./memory/registry.js";
 import { MemoryPipeline, type MemoryStatus } from "./memory/service.js";
 import { MemoryRecoveryActions } from "./memory/recovery-actions.js";
-import { configuredTrialContext, configuredTrialAccountContext, type ConfiguredTrialSelection, type ConfiguredTrialAccountSelection } from "./memory/configured-trial.js";
+import { configuredAnswerContext, configuredTrialContext, configuredTrialAccountContext, type ConfiguredTrialSelection, type ConfiguredTrialAccountSelection } from "./memory/configured-trial.js";
 import { sourceVersion } from "./memory/provenance.js";
 import { visibleToAgents } from "./quotes.js";
 import { QUESTION_FORMS, isQuestionForm } from "./memory/questions.js";
@@ -312,6 +314,8 @@ export class Hub extends EventEmitter {
   private readonly automationBoot = randomUUID();
   private backgroundTasks: BackgroundTaskStore | null = null;
   private backgroundTaskTimer: ReturnType<typeof setInterval> | null = null;
+  private nativeReportTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly pendingNativeRooms = new Set<string>();
   private readonly backgroundTaskResults = new Map<string, { confirmed: boolean; messageId: string }>();
   private backgroundTaskFault = "";
   private roomFolderMemo: { key: string; names: ReadonlySet<string> } | null = null;
@@ -458,6 +462,12 @@ export class Hub extends EventEmitter {
       this.backgroundTaskTimer = setInterval(() => this.flushBackgroundTasks(), 1000);
       this.backgroundTaskTimer.unref();
     } catch (error) { this.backgroundTaskFailure(error); }
+    for (const room of this.rooms.values()) {
+      try { if (room.hasPendingNativeDelivery()) this.pendingNativeRooms.add(room.id); }
+      catch { this.pendingNativeRooms.add(room.id); }
+    }
+    this.nativeReportTimer = setInterval(() => this.retryNativeDeliveries(), 1000);
+    this.nativeReportTimer.unref();
     this.tellRoomsWhatEndedTheLastRun();
     if (this.renamedAttachments) this.saveRooms();
     let vault: Vault | null | undefined;
@@ -562,6 +572,10 @@ export class Hub extends EventEmitter {
 
   memoryTrialAccountContext(selection: ConfiguredTrialAccountSelection) {
     return configuredTrialAccountContext({ memory: this.memory, memoryStore: this.memoryStore }, selection);
+  }
+
+  memoryAnswerContext(selection: ConfiguredTrialAccountSelection) {
+    return configuredAnswerContext({ memoryStore: this.memoryStore }, selection);
   }
 
   privateTrialNamespaceUnregistered(roomIds: readonly string[], roomUuids: readonly string[], options: { fresh?: boolean } = {}): boolean {
@@ -1789,6 +1803,68 @@ export class Hub extends EventEmitter {
     writeJson(this.roomsPath(), file);
   }
 
+  commitNativeNoteDecision(room: Room, participantId: string, effect: NativeNoteEffect, writeRecord: () => void): NativeNoteDisposition {
+    const participant = room.participants.get(participantId);
+    const currentOwner = (): boolean => this.rooms.get(room.id) === room && !this.leaving.signal.aborted
+      && !room.readOnly && room.participants.get(participantId) === participant
+      && participant?.kind === "agent" && participant.status !== "left";
+    if (!currentOwner() || !participant) return "changed";
+    const readSavedParticipant = (): StoredParticipant | null => {
+      const saved = JSON.parse(readFileSync(this.roomsPath(), "utf8")) as RoomsFile;
+      if (saved.version !== 1 || !Array.isArray(saved.rooms)) throw new Error("native_note_rooms_file_invalid");
+      const matches = saved.rooms.filter(row => row.id === room.id);
+      if (matches.length !== 1 || matches[0].uuid !== room.uuid || matches[0].dir !== room.dir) return null;
+      const participants = matches[0].participants.filter(row => row.id === participantId);
+      return participants.length === 1 && typeof participants[0].agentType === "string" ? participants[0] : null;
+    };
+    const liveDisposition = nativeNoteDisposition(captureNativeNoteSubject(participant), effect);
+    if (liveDisposition === "changed" || liveDisposition === "superseded") return liveDisposition;
+    const savedParticipant = readSavedParticipant();
+    if (!savedParticipant) return "changed";
+    const savedDisposition = nativeNoteDisposition(captureNativeNoteSubject(savedParticipant), effect);
+    if (savedDisposition === "changed" || savedDisposition === "superseded") return savedDisposition;
+    if (liveDisposition === "already_applied" && savedDisposition !== "already_applied") return "changed";
+    const assertSubject = (): void => {
+      if (!currentOwner() || nativeNoteDisposition(captureNativeNoteSubject(participant), effect) !== liveDisposition) {
+        throw new Error("native_note_subject_changed");
+      }
+      const saved = readSavedParticipant();
+      if (!saved || nativeNoteDisposition(captureNativeNoteSubject(saved), effect) !== "already_applied") {
+        throw new Error("native_note_saved_subject_changed");
+      }
+    };
+    if (savedDisposition === "already_applied") {
+      this.history.transaction(() => { assertSubject(); writeRecord(); });
+      return "already_applied";
+    }
+    const rooms = [...this.rooms.values()].map(value => value.toStored());
+    const stored = rooms.find(value => value.id === room.id)!.participants.find(value => value.id === participantId)!;
+    const next = effect.next;
+    stored.notesRevision = next.notesRevision;
+    stored.notes = next.notes ?? undefined;
+    stored.notesAt = next.notesAt ?? undefined;
+    stored.notesSeq = next.notesSeq ?? undefined;
+    stored.notesWrittenAt = next.notesWrittenAt ?? undefined;
+    stored.nativeNoteReceipt = next.nativeNoteReceipt ?? undefined;
+    commitFiles(this.dataDir, this.history, [{ path: "rooms.json", data: JSON.stringify({ version: 1, rooms }, null, 2) + "\n" }], () => {
+      assertSubject();
+      writeRecord();
+    });
+    return "apply";
+  }
+
+  private retryNativeDeliveries(): void {
+    if (this.leaving.signal.aborted || !this.pendingNativeRooms.size) return;
+    try { recoverFileTransactions(this.dataDir, this.history); }
+    catch { return; }
+    for (const id of [...this.pendingNativeRooms]) {
+      const room = this.rooms.get(id);
+      if (!room) { this.pendingNativeRooms.delete(id); continue; }
+      try { if (!room.retryNativeReports()) this.pendingNativeRooms.delete(id); }
+      catch { }
+    }
+  }
+
   importedRoomAddress(name: string, reserved: ReadonlySet<string> = new Set()): string {
     let base = slugify(name);
     if (!ROOM_ID_PATTERN.test(base)) base = `room-${randomBytes(6).toString("hex")}`;
@@ -2094,6 +2170,8 @@ export class Hub extends EventEmitter {
       skills: this.skillsBridge,
       history: this.history,
       onHistoryFailure: (roomId) => this.staleHistoryRooms.add(roomId),
+      onNativePending: roomId => this.pendingNativeRooms.add(roomId),
+      commitNativeNoteDecision: (room, participantId, effect, writeRecord) => this.commitNativeNoteDecision(room, participantId, effect, writeRecord),
       heldParticipantIds: () => this.automationTargets(uuid),
       memoryGraph: (roomId, addressed, shown) => this.memory.briefBlock(roomId, addressed, shown),
       memoryGraphReady: (roomId, addressed) => this.memory.briefReady(roomId, addressed),
@@ -2480,6 +2558,8 @@ export class Hub extends EventEmitter {
     this.revokeTrialBudgetCards("hub_shutdown");
     if (this.backgroundTaskTimer) clearInterval(this.backgroundTaskTimer);
     this.backgroundTaskTimer = null;
+    if (this.nativeReportTimer) clearInterval(this.nativeReportTimer);
+    this.nativeReportTimer = null;
     this.automations?.stop();
     this.memory.stop();
     for (const next of this.shutdownStages(plain)) await stage(next.name, next.budget, next.work);

@@ -15,6 +15,16 @@ export function releasesOf(pkg: { repository?: unknown }): string {
   return `https://github.com/${m[1]}/${m[2]}/releases/download`;
 }
 const packageReleases = (): string => releasesOf(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { repository?: unknown });
+
+export function macApplicationTarget(pkg: unknown): string {
+  const version = (pkg as { viberoom?: { minShell?: unknown } } | null)?.viberoom?.minShell;
+  return plainApplicationVersion(version);
+}
+
+function plainApplicationVersion(version: unknown): string {
+  if (typeof version !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error("the product declares no plain minimum application version");
+  return version;
+}
 export const MAC_TEAM_ID = "67265D844B";
 export const MAC_LAUNCHER_ID = "dev.viberoom.launcher";
 export const SYSTEM_APPLICATIONS = "/Applications";
@@ -45,7 +55,11 @@ export function macAppPlaces(home: string, system: string = SYSTEM_APPLICATIONS)
 export function installedMacApp(home: string, o: { system?: string; run?: Run } = {}): { app: string; version: string } | null {
   for (const app of macAppPlaces(home, o.system)) {
     const bundle = bundleOf(app, o.run);
-    if (bundle?.id === MAC_APP_ID) return { app, version: bundle.version };
+    if (bundle?.id === MAC_APP_ID) {
+      try { plainApplicationVersion(bundle.version); }
+      catch { throw new Error(`${app}: the installed application declares no plain release version`); }
+      return { app, version: bundle.version };
+    }
   }
   return null;
 }
@@ -221,12 +235,14 @@ async function download(url: string, dest: string, archive: MacArchive, fetchImp
 }
 
 export async function ensureMacApp(o: MacAppOptions): Promise<MacAppPlaced> {
+  plainApplicationVersion(o.version);
   const run = o.run ?? runCommand;
   const fetchImpl = o.fetch ?? fetch;
   const retired = retireLauncher(o.home, { run });
   const there = installedMacApp(o.home, { system: o.system, run });
   const app = there?.app ?? macAppPath(o.home);
-  if (there && (compareVersions(there.version, o.version) >= 0 || !writablePlace(app))) return { app, version: there.version, fetched: false, retired };
+  if (there && compareVersions(there.version, o.version) >= 0) return { app, version: there.version, fetched: false, retired };
+  if (there && !writablePlace(app)) throw new Error(`the application ${there.version} cannot meet the required ${o.version} and cannot be replaced here`);
   const here = there ? null : bundleOf(app, run);
   if (here && here.id !== MAC_LAUNCHER_ID) throw new Error(`${app} is another application (${here.id || "no identifier"}), and it was left as it is`);
   const base = `${o.releases ?? packageReleases()}/v${o.version}`;

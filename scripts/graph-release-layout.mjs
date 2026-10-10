@@ -1,7 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {lstatSync, readFileSync, readdirSync, openSync, writeFileSync, fsyncSync, closeSync, existsSync} from 'node:fs';
+import {lstatSync, readFileSync, readdirSync, openSync, writeFileSync, fsyncSync, closeSync, existsSync, realpathSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {join, resolve, isAbsolute, win32} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -12,6 +12,7 @@ const BUNDLE='private-trial/BUNDLE-FILES.json', MANIFEST='private-trial/manifest
 const META=['package.json','tsconfig.json','scripts/graph-release-layout.json','scripts/graph-release-layout.mjs','scripts/public-source-policy.mjs'];
 const BASE_FILES=['vendor','ui','templates','assets','!assets/icon-master.png',...PRODUCT_SCRIPTS,'NOTICE'];
 const requiredSelectors=Object.freeze([
+  "experiments/memory-retrieval-comparison-d3/input-contract.test.mjs",
   "experiments/memory-retrieval-comparison-d3/run.test.mjs",
   "experiments/memory-retrieval-comparison-d3/wire-projection.test.mjs",
   "experiments/memory-retrieval-trial-d5/additional-human-server-closure.test.mjs",
@@ -186,7 +187,9 @@ export function assertInstalledGraphReleaseLayout(root,{sdkRoot}={}){
   return {schema:'resident-installed-release-layout-observation-v1',manifestSha256:hash(bytes),
     sourceEmitCount:actual.sourceEmit.length,privateCodeCount:spec.privateCode.length,sourceOracleCount:spec.sourceOracleCode.length,paidAuthority:false,runtimeGO:false};
 }
-if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+let directEntry=false;
+if(process.argv[1])try{directEntry=realpathSync(resolve(process.argv[1]))===realpathSync(fileURLToPath(import.meta.url));}catch{}
+if(directEntry){
   const args=process.argv.slice(2);
   if(args.length===1&&args[0]==='write-package-files')console.log(JSON.stringify(writeGraphReleasePackageFiles()));
   else{

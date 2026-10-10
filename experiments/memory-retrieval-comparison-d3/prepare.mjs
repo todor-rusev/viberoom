@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { json, fields, text, digest, MODES, PROMPT, PROMPT_SHA256, sha256, encode, RunBudget } from './contracts.mjs';
 import { captureAnswerControls, buildAnswerRequest } from './answer-profile.mjs';
+import { inputContract } from './input-contract.mjs';
 
 export const DEFAULT_LIMITS = Object.freeze({ maxReads: 2000, maxModelCalls: 300, maxPagesPerCollection: 2,
   pageSize: 50, maxResponseBytes: 2097152, maxAggregateBytes: 67108864, requestMs: 20000,
@@ -23,7 +24,6 @@ export function prepareConnected({ questions, payloads, preparation, answerContr
   fields(questions, ['schema', 'corpusSha256', 'snapshotAt', 'queries']);
   assert.equal(questions.schema, 'viberoom-retrieval-question-projection-v1'); digest(questions.corpusSha256);
   assert.equal(payloads.schema, 'viberoom-retrieval-offline-payload-plan-v1');
-  const inputs = payloads.variants.map(v => text(v.name)); assert.ok(inputs.length >= 1 && new Set(inputs).size === inputs.length);
   assert.equal(preparation.schema, 'viberoom-retrieval-offline-preparation-v1');
   assert.equal(payloads.corpusSha256, questions.corpusSha256); assert.equal(preparation.corpusSha256, questions.corpusSha256);
   assert.equal(preparation.paidExecutionAllowed, false); assert.equal(preparation.actualD, 'NOT_RUN');
@@ -32,6 +32,7 @@ export function prepareConnected({ questions, payloads, preparation, answerContr
     const expected = preparation.files.filter(f => f.name === name); assert.equal(expected.length, 1);
     assert.equal(sha256(encode(value)), expected[0].sha256, 'D2 prepared input hash differs');
   }
+  const input = inputContract(payloads), inputs = input.variants;
   answerControls = captureAnswerControls(answerControls);
   new RunBudget(limits);
   const ids = new Set();
@@ -43,7 +44,7 @@ export function prepareConnected({ questions, payloads, preparation, answerContr
   const conservativeRequestBytes = emptyRequestBytes + 6 * maxQuestionBytes + 6 * 4096;
   const jobs = [];
   for (const [n, q] of questions.queries.entries()) {
-    const variants = [...inputs.slice(n % inputs.length), ...inputs.slice(0, n % inputs.length)];
+    const variants = input.rotate(n);
     const modes = [...MODES.slice(n % 3), ...MODES.slice(0, n % 3)];
     for (const variant of variants) {
       const matches = payloads.physicalAddresses.filter(p => p.variant === variant && p.logicalRoom === q.room);

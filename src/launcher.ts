@@ -1,6 +1,6 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, posix, resolve, win32 } from "node:path";
 import { KEY_HEADER } from "./local-gate.js";
 import { readKey } from "./local-key.js";
@@ -51,6 +51,10 @@ export interface PidRecord {
 
 export function writePidFile(dataDir: string, record: PidRecord): void {
   writeFileSync(pidFilePath(dataDir), JSON.stringify(record));
+}
+
+export function removePidFileOf(dataDir: string, pid: number): void {
+  if (readPidFile(dataDir)?.pid === pid) rmSync(pidFilePath(dataDir), { force: true });
 }
 
 export function readPidFile(dataDir: string): PidRecord | null {
@@ -359,35 +363,118 @@ export async function recordedHubAnswers(dataDir: string, self: number): Promise
 
 export const STOP_MARGIN_MS = 15_000;
 export const UNSAID_STOP_WAIT_MS = 120_000;
+export const HUB_PATIENCE_MS = 15_000;
+export const HUB_ASK_MS = 1_500;
+export const NEW_HUB_ANSWER_MS = 60_000;
 
 export function stopWaitMs(promised: unknown): number {
   const ms = Number(promised);
   return Number.isFinite(ms) && ms > 0 ? ms + STOP_MARGIN_MS : UNSAID_STOP_WAIT_MS;
 }
 
-export async function stopRunningHub(url: string, dataDir: string, log: { warn(line: string): void }, timeoutMs?: number): Promise<boolean> {
-  const key = readKey(dataDir);
-  let pid: number;
-  let wait: number;
-  try {
-    const identity = await fetch(`${url}api/version`, { headers: key ? { [KEY_HEADER]: key } : {}, signal: AbortSignal.timeout(1500) });
-    const said = await identity.json() as HubIdentity & { name?: string };
-    if (!identity.ok || said.name !== "viberoom" || foreignHub(said, dataDir) || !Number.isInteger(said.pid) || !said.pid || said.pid < 1 || said.pid === process.pid) {
+export interface HubRun {
+  pid: number;
+  startedAt: number | null;
+  checksRun: boolean;
+}
+
+export async function stopRunningHub(url: string, dataDir: string, log: { warn(line: string): void }, timeoutMs?: number, known?: HubRun): Promise<boolean> {
+  const key = readKey(dataDir), auth: Record<string, string> = key ? { [KEY_HEADER]: key } : {};
+  const deadline = Date.now() + HUB_PATIENCE_MS;
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 250));
+  let questions = 0;
+  const bound = (): number | null => {
+    const left = deadline - Date.now();
+    if (left <= 0) return null;
+    return questions++ === 0 ? Math.min(HUB_ASK_MS, left) : left;
+  };
+  const identify = async (): Promise<HubRun | "refused" | null> => {
+    const ms = bound();
+    if (ms === null) return null;
+    let said: HubIdentity & { name?: string; startedAt?: unknown; stopChecksRun?: unknown };
+    try {
+      const identity = await fetch(`${url}api/version`, { headers: auth, signal: AbortSignal.timeout(ms) });
+      said = await identity.json() as typeof said;
+      if (!identity.ok) return "refused";
+    } catch {
+      return null;
+    }
+    if (said.name !== "viberoom" || foreignHub(said, dataDir) || !Number.isInteger(said.pid) || !said.pid || said.pid < 1 || said.pid === process.pid) return "refused";
+    return { pid: said.pid, startedAt: typeof said.startedAt === "number" ? said.startedAt : null, checksRun: said.stopChecksRun === true };
+  };
+  const same = (a: HubRun, b: HubRun): boolean => a.pid === b.pid && a.startedAt === b.startedAt;
+  let run: HubRun | null = known ?? null;
+  if (run && !(run.checksRun && run.startedAt !== null)) {
+    let now = await identify();
+    while (now === null && Date.now() < deadline) { await pause(); now = await identify(); }
+    if (now === "refused" || (now !== null && !same(now, run))) {
+      log.warn("another run of these rooms answers now; it was not asked to stop");
+      return !isProcessAlive(run.pid);
+    }
+    if (now === null && run.startedAt === null) {
+      log.warn(`the run of pid ${run.pid} did not say it is still the one that answers; it was not asked to stop`);
+      return false;
+    }
+  }
+  while (run === null) {
+    const found = await identify();
+    if (found === "refused") {
       log.warn("the running room did not identify its process and this data folder; it was not asked to stop");
       return false;
     }
-    pid = said.pid;
-    const answer = await fetch(`${url}api/shutdown`, { method: "POST", headers: key ? { [KEY_HEADER]: key } : {}, signal: AbortSignal.timeout(1500) });
-    if (!answer.ok) {
-      log.warn(`the running room did not accept the request to stop (${answer.status}): it is not this folder's`);
+    if (found !== null) run = found;
+    else if (Date.now() >= deadline) {
+      log.warn(`the running room did not say who it is within ${Math.round(HUB_PATIENCE_MS / 1000)} s; it was not asked to stop`);
       return false;
-    }
-    wait = timeoutMs ?? stopWaitMs((await answer.json().catch(() => ({})) as { stopsWithinMs?: unknown }).stopsWithinMs);
-  } catch (error) {
-    log.warn(`could not ask the running room to stop: ${String(error)}`);
-    return false;
+    } else await pause();
   }
-  const stopped = await waitUntil(async () => !isProcessAlive(pid) && !(await hubAnswers(url)), wait);
-  if (!stopped) log.warn(`the running room (pid ${pid}) was still running ${wait} ms after it was asked to stop`);
+  const target: HubRun = run;
+  let promised: unknown;
+  if (target.checksRun && target.startedAt !== null) {
+    const body = JSON.stringify({ expect: { pid: target.pid, startedAt: target.startedAt } });
+    for (;;) {
+      const ms = bound();
+      if (ms === null) break;
+      let answer: Response;
+      try {
+        answer = await fetch(`${url}api/shutdown-run`, { method: "POST", headers: { ...auth, "content-type": "application/json" }, body, signal: AbortSignal.timeout(ms) });
+      } catch {
+        if (!isProcessAlive(target.pid)) break;
+        let now: HubRun | "refused" | null = null;
+        while (now === null && Date.now() < deadline) { await pause(); now = await identify(); }
+        if (now === null) break;
+        if (now === "refused" || !same(now, target) || !now.checksRun) {
+          log.warn("another run of these rooms answers now; it was not asked to stop");
+          break;
+        }
+        continue;
+      }
+      if (answer.status === 409 || answer.status === 404) {
+        log.warn("another run of these rooms answered the request to stop; it goes on");
+        return !isProcessAlive(target.pid);
+      }
+      if (!answer.ok) {
+        log.warn(`the running room did not accept the request to stop (${answer.status}): it is not this folder's`);
+        return false;
+      }
+      promised = ((await answer.json().catch(() => ({}))) as { stopsWithinMs?: unknown }).stopsWithinMs;
+      break;
+    }
+  } else {
+    const ms = bound();
+    if (ms !== null) {
+      try {
+        const answer = await fetch(`${url}api/shutdown`, { method: "POST", headers: auth, signal: AbortSignal.timeout(ms) });
+        if (!answer.ok) {
+          log.warn(`the running room did not accept the request to stop (${answer.status}): it is not this folder's`);
+          return false;
+        }
+        promised = ((await answer.json().catch(() => ({}))) as { stopsWithinMs?: unknown }).stopsWithinMs;
+      } catch { }
+    }
+  }
+  const wait = timeoutMs ?? stopWaitMs(promised);
+  const stopped = await waitUntil(async () => !isProcessAlive(target.pid), wait);
+  if (!stopped) log.warn(`the running room (pid ${target.pid}) was still running ${wait} ms after it was asked to stop`);
   return stopped;
 }
