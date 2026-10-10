@@ -1,6 +1,6 @@
 {
   "name": "viberoom",
-  "version": "0.20.1",
+  "version": "0.20.2",
   "description": "viberoom: bring your AI assistants together in one conversation",
   "repository": {
     "type": "git",
@@ -13,7 +13,8 @@
   "viberoom": {
     "contract": 1,
     "minShell": "1.0.0",
-    "format": 4
+    "format": 4,
+    "urgent": true
   },
   "bin": {
     "viberoom": "dist/main.js"
