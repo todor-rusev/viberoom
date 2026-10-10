@@ -1,6 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 import type { ZepClient } from "@getzep/zep-cloud";
 import type { ProviderRateWindow } from "./provider.js";
+import { THROTTLE_WAIT_MS } from "./episode-index.js";
 
 export type ZepFetcher = NonNullable<NonNullable<ConstructorParameters<typeof ZepClient>[0]>["fetcher"]>;
 export type ZepFetcherArgs = Parameters<ZepFetcher>[0];
@@ -82,13 +83,21 @@ export function rateWindowNumbers(headers: Headers): Omit<ProviderRateWindow, "s
 
 export class ZepRateWindow {
   private latest: ProviderRateWindow | null = null;
+  private until = 0;
+  private throttles = 0;
   constructor(private readonly now: () => number = Date.now) {}
   observe(response: { status: number; headers: Headers }): void {
     const numbers = rateWindowNumbers(response.headers);
+    if (response.status === 429) {
+      this.throttles++;
+      const wait = numbers.retryAfterMs ?? THROTTLE_WAIT_MS.first * 2 ** (this.throttles - 1);
+      this.until = Math.max(this.until, this.now() + Math.max(THROTTLE_WAIT_MS.least, Math.min(THROTTLE_WAIT_MS.max, wait)));
+    } else if (response.status > 0) this.throttles = 0;
     if (Object.values(numbers).every(value => value === null)) return;
     this.latest = { ...numbers, status: response.status, at: this.now() };
   }
   get(): ProviderRateWindow | null { return this.latest ? { ...this.latest } : null; }
+  throttledFor(): number { return Math.max(0, this.until - this.now()); }
 }
 
 export const READ_RETRY_WAIT_MS = 500;
@@ -115,6 +124,9 @@ const noResponse = (url: string) => ({ headers: new Headers(), redirected: false
 export function createZepReadFetcher(fetchFn: typeof fetch = fetch, sleep: (ms: number, signal: AbortSignal) => Promise<void> = realSleep, window?: ZepRateWindow): ZepFetcher {
   return async <R>(args: ZepFetcherArgs) => {
     const request = await sdkRequest(args);
+    const paused = window?.throttledFor() ?? 0;
+    if (paused > 0) return { ok: false, error: { reason: "status-code", statusCode: 429, body: { message: "not sent: the account is paused after Zep's 429" } },
+      rawResponse: { ...noResponse(request.url), status: 429, statusText: "Too Many Requests", type: "default" as const, headers: new Headers({ "retry-after": String(Math.ceil(paused / 1000)) }) } };
     const controller = new AbortController(), cancel = () => controller.abort();
     let timedOut = false;
     args.abortSignal?.addEventListener("abort", cancel, { once: true });

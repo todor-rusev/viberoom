@@ -4,6 +4,7 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { importsOf, isBare, packageNamed } from "./module-imports.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -106,6 +107,50 @@ rmSync(out, { recursive: true, force: true });
 }
 
 console.log(`vendored codex-acp ${readJson(join(out, "codex-acp", "package.json")).version}${unpatched ? ", unpatched" : ""}`);
+
+if (!unpatched) checkRuntimeImports();
+
+function checkRuntimeImports() {
+  const owners = {
+    "claude-agent-acp": "@agentclientprotocol/claude-agent-acp",
+    "claude-agent-sdk": "@anthropic-ai/claude-agent-sdk",
+    "codex-acp": "@agentclientprotocol/codex-acp",
+  };
+  const roots = [...jsFiles(join(out, "claude-agent-acp", "dist")), ...jsFiles(join(out, "codex-acp", "dist"))];
+  const seen = new Set();
+  const wanted = new Map();
+  while (roots.length) {
+    const file = roots.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const said = importsOf(readFileSync(file, "utf8"), file);
+    for (const spec of [...said.static, ...said.dynamic].filter((s) => s.startsWith("./") || s.startsWith("../"))) {
+      const target = resolve(dirname(file), spec);
+      if (target.startsWith(out + sep) && existsSync(target)) roots.push(target);
+    }
+    for (const spec of said.static.filter(isBare)) {
+      const name = packageNamed(spec);
+      if (!wanted.has(name)) wanted.set(name, { owner: owners[relative(out, file).split(sep)[0]], file: relative(out, file).split(sep).join("/") });
+    }
+  }
+  const own = readJson(join(root, "package.json")).dependencies ?? {};
+  const problems = [];
+  for (const [name, { owner, file }] of wanted) {
+    const asked = readJson(join(packageDir(owner), "package.json"));
+    const spec = asked.dependencies?.[name] ?? asked.peerDependencies?.[name] ?? "any version";
+    if (!own[name]) {
+      problems.push(`${file} imports ${name}, which viberoom does not carry: add it to "dependencies" in package.json (${owner} asks for ${spec})`);
+      continue;
+    }
+    let dir = packageDir(owner);
+    while (!existsSync(join(dir, "node_modules", name, "package.json")) && dir !== root) dir = dirname(dir);
+    if (dir !== root) {
+      problems.push(`${file} imports ${name}: ${owner} asks for ${spec}, which viberoom's ${name} ${own[name]} does not satisfy (npm nested ${relative(root, join(dir, "node_modules", name))}); align the version in package.json`);
+    }
+  }
+  if (problems.length) throw new Error(`the vendored adapters import what the package does not carry:\n  ${problems.join("\n  ")}`);
+  console.log(`checked the vendored adapters: ${seen.size} files, their bare imports (${[...wanted.keys()].sort().join(", ")}) are viberoom's own dependencies`);
+}
 
 function backgroundPatcher(file, vendor) {
   let source = readFileSync(file, "utf8");

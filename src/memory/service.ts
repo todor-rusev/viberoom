@@ -34,6 +34,7 @@ import { MemorySelectiveReview, type SelectiveReviewRequest, type SelectiveRevie
 import { selectMessages, type SelectionVerdict } from "./selection.js";
 import { ORIGINAL_PRODUCT_PROFILE, originalProductText, originalProductFingerprint } from "./original-product-input.js";
 import type { PartGroupScope } from "./part-group.js";
+import { THROTTLE_WAIT_MS, throttledIndexRead } from "./episode-index.js";
 
 export interface CleanupEntry {
   id: number;
@@ -1664,10 +1665,11 @@ export class MemoryPipeline {
         matchesCurrent: episode => this.sourceVersions.represents(provider.id, room, check.sourceId, episode),
         inMemory: this.ports.outbox.heldSource(provider.id, room.id, check.sourceId),
         excluded: !!row && this.ports.outbox.excludedVersion(room.id, row.id, version) });
-      let decision = decideVersion(facts());
+      let decision = decideVersion(facts()), freshThrottled = false;
       if (decision.kind === "wait" && decision.reason === "listing_incomplete" && !listing && transport?.sources) {
         listing = await transport.sources(room.uuid, signal, now, room.graphId);
         signal.throwIfAborted();
+        if (listing.state === "complete") this.sourceVersions.readBack(room.id);
         if (!this.ports.outbox.versionCheckCurrent(check)) continue;
         row = this.ports.history.getById?.(room.id, check.sourceId) ?? null;
         version = row ? sourceVersion(row) : "";
@@ -1679,7 +1681,7 @@ export class MemoryPipeline {
         if (!this.ports.outbox.versionCheckCurrent(check)) continue;
         row = this.ports.history.getById?.(room.id, check.sourceId) ?? null;
         version = row ? sourceVersion(row) : "";
-        if (fresh.state !== "complete") decision = { kind: "wait", reason: "listing_incomplete" };
+        if (fresh.state !== "complete") { decision = { kind: "wait", reason: "listing_incomplete" }; freshThrottled = throttledIndexRead(fresh.reason); }
         else {
           listing = { ...listing, bySource: new Map(listing.bySource).set(check.sourceId, fresh.episodes) };
           decision = decideVersion(facts());
@@ -1705,6 +1707,13 @@ export class MemoryPipeline {
           break;
         case "wait":
           {
+            if (decision.reason === "listing_incomplete" && (freshThrottled || listing?.state === "unknown" && throttledIndexRead(listing.reason))) {
+              const at = Math.max(now() + 1000, transport?.nextIndexRead?.(room.uuid, room.graphId) ?? now() + THROTTLE_WAIT_MS.first);
+              this.ports.outbox.deferVersionCheck(room.id, check.sourceId, "index_read_failed_429", now(), at, check.revision);
+              this.rewakeAt(room.id, at - now());
+              this.sourceVersions.throttled(room.id);
+              break;
+            }
             const nextIndex = decision.reason === "listing_incomplete" ? transport?.nextIndexRead?.(room.uuid, room.graphId) : null;
             const delay = nextIndex === null || nextIndex === undefined ? VERSION_WAIT_MS[decision.reason]
               : Math.max(1000, Math.min(VERSION_WAIT_MS[decision.reason], nextIndex - now()));

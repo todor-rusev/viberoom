@@ -1,6 +1,6 @@
 {
   "name": "viberoom",
-  "version": "0.20.0",
+  "version": "0.20.1",
   "description": "viberoom: bring your AI assistants together in one conversation",
   "repository": {
     "type": "git",
@@ -39,6 +39,7 @@
     "scripts/update.mjs",
     "scripts/render-icon.mjs",
     "scripts/vendor-acp.mjs",
+    "scripts/module-imports.mjs",
     "scripts/vendor-ui.mjs",
     "scripts/prune-dist.mjs",
     "scripts/stamp-build.mjs",
@@ -706,6 +707,7 @@
     "@jsquash/webp": "1.5.0",
     "ajv": "8.20.0",
     "cron-parser": "5.10.1",
+    "diff": "9.0.0",
     "marked": "^16.4.2",
     "omggif": "1.0.10",
     "prismjs": "^1.30.0",

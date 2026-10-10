@@ -10,11 +10,15 @@ export const EPISODE_INDEX_CLOCK_MARGIN_MS = 10 * 60_000;
 export interface IndexedEpisode { id: string; createdAt: number; opId: string | null; source: ListedEpisode | null }
 export interface IndexPage { episodes: IndexedEpisode[]; next: string | null }
 export interface IndexReader { page(direction: "asc" | "desc", cursor: string | null, signal: AbortSignal): Promise<IndexPage> }
-export class IndexReadError extends Error { constructor(reason: string, readonly restart = false) { super(reason); } }
+export class IndexReadError extends Error {
+  constructor(reason: string, readonly restart = false, readonly throttled = false, readonly retryAfterMs: number | null = null) { super(reason); }
+}
+export const THROTTLE_WAIT_MS = Object.freeze({ first: 30_000, max: 10 * 60_000, least: 1000 });
+export const throttledIndexRead = (reason: string): boolean => reason === "index_read_failed_429";
 interface Walk { id: string; kind: "full" | "recent"; startedAt: number; cursor: string | null; cursorAt: number | null;
   previous: number | null; newest: number | null; target: number | null; from: number | null; pages: number }
 interface Head { baselineAt: number | null; newest: number | null; nextFull: number; walk: Walk | null;
-  nextAt: number | null; reason: string | null; revision: string }
+  nextAt: number | null; reason: string | null; revision: string; throttles?: number }
 export interface IndexRead { complete: boolean; startedAt: number; finishedAt: number; from: number | null; reason: string | null }
 
 export class MemoryEpisodeIndex {
@@ -87,6 +91,7 @@ export class MemoryEpisodeIndex {
         const page = await reader.page(walk.kind === "full" ? "asc" : "desc", walk.cursor, signal);
         signal.throwIfAborted();
         if (this.head(scope, graph).revision !== head.revision) return result(false, null, "index_changed");
+        head.throttles = 0;
         const pageAt = now(), seen = new Set<string>();
         for (const e of page.episodes) {
           if (!e.id || !Number.isSafeInteger(e.createdAt) || seen.has(e.id) ||
@@ -128,7 +133,12 @@ export class MemoryEpisodeIndex {
       if (this.head(scope, graph).revision !== head.revision) return result(false, null, "index_changed");
       const reason = signal.aborted ? "index_read_interrupted" : error instanceof IndexReadError ? error.message : "index_read_failed";
       if (error instanceof IndexReadError && error.restart) this.resetWalk(scope, graph, head, reason, now());
-      else { head.reason = reason; this.continueAt(head, now()); this.save(scope, graph, head); }
+      else if (error instanceof IndexReadError && error.throttled) {
+        head.throttles = (head.throttles ?? 0) + 1;
+        const wait = error.retryAfterMs ?? THROTTLE_WAIT_MS.first * 2 ** (head.throttles - 1);
+        head.reason = reason; head.nextAt = now() + Math.max(THROTTLE_WAIT_MS.least, Math.min(THROTTLE_WAIT_MS.max, wait));
+        this.save(scope, graph, head);
+      } else { head.reason = reason; this.continueAt(head, now()); this.save(scope, graph, head); }
       return result(false, null, reason);
     }
   }

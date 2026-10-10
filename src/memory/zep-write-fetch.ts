@@ -21,6 +21,8 @@ export function createZepWriteFetcher(fetchFn: typeof fetch = fetch, window?: Ze
     const request = await sdkRequest(args);
     request.headers.set("content-type", "application/json");
     if (args.abortSignal?.aborted) throw new ZepWriteFailure({ state: "not_applied", reason: "cancelled_before_fetch" });
+    const paused = window?.throttledFor() ?? 0;
+    if (paused > 0) throw new ZepWriteFailure({ state: "not_applied", reason: "provider_deferred_429", retryAfterMs: paused });
     const controller = new AbortController(), cancel = () => controller.abort();
     args.abortSignal?.addEventListener("abort", cancel, { once: true });
     const timer = setTimeout(cancel, args.timeoutMs); timer.unref?.();

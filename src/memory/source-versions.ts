@@ -7,7 +7,7 @@ import type { MemoryOp, MemoryOutbox } from "./outbox.js";
 import { sourceVersion } from "./provenance.js";
 import type { MemoryProvider } from "./provider.js";
 import { canonicalParts } from "./version-check.js";
-import { EPISODE_INDEX_CLOCK_MARGIN_MS } from "./episode-index.js";
+import { EPISODE_INDEX_CLOCK_MARGIN_MS, THROTTLE_WAIT_MS, throttledIndexRead } from "./episode-index.js";
 import { isDeepStrictEqual } from "node:util";
 import { UNKNOWN_REPLAY_WAIT_MS } from "./delivery.js";
 import { freshCompleteReadTimes } from "./delivery-read-freshness.js";
@@ -33,6 +33,7 @@ type Inspection = { state: "complete"; same: ListedEpisode[]; ancestors: ListedE
   | { state: "unknown"; reason: string };
 
 export class MemorySourceVersions {
+  private readonly throttleNoted = new Set<string>();
   constructor(private readonly ports: Ports) {}
 
   private version(room: string, id: string): string | null {
@@ -119,12 +120,29 @@ export class MemorySourceVersions {
       if (this.ports.outbox.holdSourceVersion(roomId, id, reason, now, retryAt, true, revision)) this.ports.wakeAfter(roomId, Math.max(0, retryAt - now));
       return true;
     }
-    if (this.ports.outbox.holdSourceVersion(roomId, id, `source_check_exhausted:${reason}`, now, undefined, false, revision))
-      this.ports.note?.(roomId, `Long-term memory could not confirm one message in its graph: ${SOURCE_CHECK_RETRY_LIMIT} reads in a row came back incomplete or stale (${reason}), so the message is not confirmed in the long-term memory. Edit the message, or use Check again in the memory registry.`);
+    const first = this.ports.outbox.exhaustedSourceChecks(roomId) === 0;
+    if (this.ports.outbox.holdSourceVersion(roomId, id, `source_check_exhausted:${reason}`, now, undefined, false, revision) && first)
+      this.ports.note?.(roomId, `Long-term memory could not confirm one message in its graph: ${SOURCE_CHECK_RETRY_LIMIT} reads in a row came back incomplete or stale (${reason}), so the message is not confirmed in the long-term memory. Edit the message, or use Check again in the memory registry. Other messages that cannot be confirmed are listed there, not here.`);
     return false;
   }
 
-  private hold(room: Room, id: string, reason: string, reads: WriteTransport): void { this.incompleteRead(room.id, id, reason, this.retryAt(room, reads)); }
+  private hold(room: Room, id: string, reason: string, reads: WriteTransport): void {
+    if (throttledIndexRead(reason)) {
+      const now = this.ports.now(), retryAt = Math.max(now + 1000, reads.nextIndexRead?.(room.uuid, room.graphId) ?? now + THROTTLE_WAIT_MS.first);
+      if (this.ports.outbox.holdSourceVersion(room.id, id, reason, now, retryAt, false)) this.ports.wakeAfter(room.id, retryAt - now);
+      this.throttled(room.id);
+      return;
+    }
+    this.incompleteRead(room.id, id, reason, this.retryAt(room, reads));
+  }
+
+  throttled(roomId: string): void {
+    if (this.throttleNoted.has(roomId)) return;
+    this.throttleNoted.add(roomId);
+    this.ports.note?.(roomId, "Long-term memory is waiting: Zep is limiting this account's requests (429), as it does when the account's rate or usage quota is used up. Nothing is lost; the memory goes on at the pace Zep allows. If this lasts, check the account's usage in Zep.");
+  }
+
+  readBack(roomId: string): void { this.throttleNoted.delete(roomId); }
 
   private wait(room: Room, id: string, reason: string, reads: WriteTransport): void { this.defer(room, id, reason, reads, false); }
 
@@ -145,6 +163,7 @@ export class MemorySourceVersions {
     if (!reads.sources) return true;
     const result = await this.inspect(provider, room, id, reads, signal, listing, true);
     if (result.state !== "complete") { if (result.reason !== "source_changed_during_check") this.hold(room, id, result.reason, reads); return false; }
+    this.readBack(room.id);
     if (result.ancestors.length) {
       this.ports.outbox.ensureForget(provider, room.id, id, room.uuid, room.graphId);
       this.ports.wakeAfter(room.id, 1000);
@@ -166,6 +185,7 @@ export class MemorySourceVersions {
     const abort = signal ?? new AbortController().signal;
     const result = await this.inspect(row.identity.provider, room, row.identity.sourceId, reads, abort, undefined, true);
     if (result.state === "unknown") { if (result.reason !== "source_changed_during_check") this.hold(room, row.identity.sourceId, result.reason, reads); return false; }
+    this.readBack(room.id);
     if (result.ancestors.length) {
       this.ports.outbox.ensureForget(row.identity.provider, room.id, row.identity.sourceId, room.uuid, room.graphId);
       this.ports.wakeAfter(room.id, 1000);

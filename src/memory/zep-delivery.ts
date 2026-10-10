@@ -7,7 +7,7 @@ import type { PreparedDelivery as Delivery, Delivery as AnyDelivery, EpisodeInve
 import type { MemoryEpisode, MemoryFact, MemoryRoom } from "./provider.js";
 import { zepEpisodeRequest, zepFactRequest, zepRoomGraphId } from "./zep-payload.js";
 import { createZepWriteFetcher, ZepWriteFailure } from "./zep-write-fetch.js";
-import { createZepReadFetcher, type ZepFetcher, type ZepRateWindow } from "./zep-sdk-fetch.js";
+import { createZepReadFetcher, retryAfterMs, type ZepFetcher, type ZepRateWindow } from "./zep-sdk-fetch.js";
 import { readZepRecoveryInventory } from "./zep-recovery-sources.js";
 import { readZepRecoveryKnowledge } from "./zep-recovery-knowledge.js";
 import { zepPageCursorMissing } from "./zep-pagination.js";
@@ -132,7 +132,7 @@ export class ZepWriteTransport implements WriteTransport {
   }
 
   constructor(settings: { apiKey: string; baseUrl?: string; fetcher?: ZepFetcher }, limits: Partial<typeof ZEP_DELIVERY_READ_LIMITS> = {}, fetchFn: typeof fetch = fetch,
-    private readonly clock: MemoryClock = systemClock, rateWindow?: ZepRateWindow) {
+    private readonly clock: MemoryClock = systemClock, private readonly rateWindow?: ZepRateWindow) {
     this.bodyReader = new ZepSourceBodyReader(settings, fetchFn, clock);
     this.client = new ZepClient({ fetcher: createZepReadFetcher(fetchFn, undefined, rateWindow), ...settings });
     this.indexScope = `zep:${createHash("sha256").update(JSON.stringify([settings.baseUrl ?? "", settings.apiKey])).digest("hex")}`;
@@ -289,7 +289,9 @@ export class ZepWriteTransport implements WriteTransport {
         } catch (error) {
           if (error instanceof IndexReadError) throw error;
           const status = error instanceof ZepError ? error.statusCode : undefined;
-          throw new IndexReadError(status ? `index_read_failed_${status}` : "index_read_failed", !!cursor && (status === 400 || status === 410));
+          const headers = (error as { rawResponse?: { headers?: Headers } } | null)?.rawResponse?.headers;
+          const wait = status !== 429 ? null : this.rateWindow?.throttledFor() || (headers && typeof headers.get === "function" ? retryAfterMs(headers) : null);
+          throw new IndexReadError(status ? `index_read_failed_${status}` : "index_read_failed", !!cursor && (status === 400 || status === 410), status === 429, wait);
         }
       } }, abort, now, this.limits.maxPages, from);
       if (result.complete) await onSources?.(graph.uuid, sources(graph, result), transport, abort, graph.graphId);

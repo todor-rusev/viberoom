@@ -338,6 +338,11 @@ export class MemoryOutbox {
     return row ? String(row.reason) : null;
   }
 
+  exhaustedSourceChecks(room: string): number {
+    const row = this.db.prepare("select count(*) as n from memory_version_check where room=? and state='held' and reason like 'source_check_exhausted:%'").get(room);
+    return Number(row?.n ?? 0);
+  }
+
   dropVersionChecks(room: string): void {
     this.db.prepare("delete from memory_version_check where room=?").run(room);
   }

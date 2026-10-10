@@ -5,7 +5,7 @@ import {join, isAbsolute, win32} from 'node:path';
 
 export const PRODUCT_SOURCE_POLICY = 'product-typescript-with-explicit-oracles';
 export const PRODUCT_SCRIPTS = Object.freeze([
-  'install.mjs', 'update.mjs', 'render-icon.mjs', 'vendor-acp.mjs', 'vendor-ui.mjs',
+  'install.mjs', 'update.mjs', 'render-icon.mjs', 'vendor-acp.mjs', 'module-imports.mjs', 'vendor-ui.mjs',
   'prune-dist.mjs', 'stamp-build.mjs', 'product-lock.mjs', 'graph-release-layout.mjs',
   'graph-release-layout.json', 'public-source-policy.mjs',
 ].map(p => 'scripts/' + p));
