@@ -13,8 +13,7 @@
   "viberoom": {
     "contract": 1,
     "minShell": "1.0.0",
-    "format": 4,
-    "urgent": true
+    "format": 4
   },
   "bin": {
     "viberoom": "dist/main.js"
