@@ -137,11 +137,34 @@ for(const implementation of implementations){
 
   control('SC06','existing same-store readonly fence false outcome stays a held delegate result without mutation',async t=>{
     const w=await world(t,implementation),db=w.hub.history.db,fence=new SqlReadOnlyFence(db),before=unchanged(w),changes=sqliteTotalChanges(db);
-    let calls=0;const target=w.rooms[0].id;
+    const marker='scope-current-refused-write',queryOnly=db.prepare('pragma query_only').get().query_only;
+    assert.equal(db.isTransaction,false);assert.equal(w.hub.history.meta(marker),null);
+    let calls=0,fenceAnswer;
     const caller=implementation.create({hub:w.hub,selection:w.selection,source:w.source,scopeCurrent:()=>{calls++;
-      return fence.run(()=>{w.hub.history.upsert(target,{id:'scope-current-refused-write',seq:999,room:'local',from:'human',fromName:'Synthetic',ts:0,kind:'chat',text:'refused'});return true;});}});
+      fenceAnswer=fence.run(()=>{db.prepare('insert into meta(key,value) values(?,?)').run(marker,'refused');return true;});
+      return fenceAnswer;}});
     assert.throws(()=>caller.prepare(w.basePrepared),/configured_native_contract_refused/);assert.equal(calls,1);
-    assert.equal(w.hub.history.getById(target,'scope-current-refused-write',true),null);assert.equal(sqliteTotalChanges(db),changes);
+    assert.equal(fenceAnswer,false);assert.equal(db.isTransaction,false);
+    assert.equal(db.prepare('pragma query_only').get().query_only,queryOnly);
+    assert.equal(w.hub.history.meta(marker),null);assert.equal(sqliteTotalChanges(db),changes);
+    assert.equal(unchanged(w),before);noCopyOrDispatch(w);
+  });
+
+  control('SC06-store','same-store transaction refusal leaves the callback error unchanged and restores the readonly connection',async t=>{
+    const w=await world(t,implementation),db=w.hub.history.db,fence=new SqlReadOnlyFence(db),before=unchanged(w),changes=sqliteTotalChanges(db);
+    const target=w.rooms[0].id,id='scope-current-refused-store-write',queryOnly=db.prepare('pragma query_only').get().query_only;
+    assert.equal(db.isTransaction,false);assert.equal(w.hub.history.getById(target,id,true),null);
+    let calls=0,storeError;
+    const caller=implementation.create({hub:w.hub,selection:w.selection,source:w.source,scopeCurrent:()=>{calls++;
+      return fence.run(()=>{
+        try{w.hub.history.upsert(target,{id,seq:999,room:'local',from:'human',fromName:'Synthetic',ts:0,kind:'chat',text:'refused'});}
+        catch(error){storeError=error;throw error;}
+        return true;
+      });}});
+    assert.throws(()=>caller.prepare(w.basePrepared),error=>error===storeError&&error.message==='transaction_outcome_unknown: the SQLite transaction is still open');
+    assert.ok(storeError instanceof Error);assert.equal(calls,1);assert.equal(db.isTransaction,false);
+    assert.equal(db.prepare('pragma query_only').get().query_only,queryOnly);
+    assert.equal(w.hub.history.getById(target,id,true),null);assert.equal(sqliteTotalChanges(db),changes);
     assert.equal(unchanged(w),before);noCopyOrDispatch(w);
   });
 

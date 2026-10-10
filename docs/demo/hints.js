@@ -4,6 +4,7 @@
   const WARM_MS = 600;
   const GAP = 8;
   const EDGE = 8;
+  const START = 12;
 
   function install({ doc = root.document, layout, delayMs, inMenu = (owner) => !!owner.closest(".rail") }) {
     const hint = doc.createElement("div");
@@ -93,7 +94,7 @@
         left = r.right + GAP;
         top = r.top + (r.height - h) / 2;
       } else {
-        left = r.left + (r.width - w) / 2;
+        left = r.width > w + 2 * START ? r.left + START : r.left + (r.width - w) / 2;
         const below = r.bottom + GAP + h <= height - EDGE;
         hint.dataset.side = below ? "below" : "above";
         top = below ? r.bottom + GAP : r.top - GAP - h;

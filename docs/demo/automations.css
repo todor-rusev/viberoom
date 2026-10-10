@@ -6,10 +6,10 @@
 .auto-heading { display: flex; align-items: center; gap: 12px; padding: 20px 24px 10px; }
 .auto-titles { flex: 1; min-width: 0; }
 .auto-heading h3 { margin: 3px 0 0; }
-.auto-eyebrow { font-size: var(--fs-xs); font-weight: 700; color: var(--primary); }
+.auto-eyebrow { font-size: var(--fs-xs); font-weight: var(--w-strong); color: var(--primary); }
 .auto-back { display: inline-grid; place-items: center; flex: none; width: 34px; height: 34px; border: 0; border-radius: var(--r-pill); background: var(--soft); color: var(--ink-2); cursor: pointer; transition: background var(--t-fast) var(--ease-out), transform var(--t-fast) var(--ease-out); }
 .auto-back:hover { background: var(--lav); transform: translateX(-2px); }
-.automations-dialog [data-auto-feedback] { margin: 0 24px 6px; padding: 10px 14px; border-radius: calc(10px * var(--r-scale)); background: var(--lav); color: var(--primary); font-size: var(--fs-sm); font-weight: 650; white-space: pre-wrap; overflow-wrap: anywhere; animation: rise var(--t-base) var(--ease-out) both; }
+.automations-dialog [data-auto-feedback] { margin: 0 24px 6px; padding: 10px 14px; border-radius: calc(10px * var(--r-scale)); background: var(--lav); color: var(--primary); font-size: var(--fs-sm); font-weight: var(--w-text-plus); white-space: pre-wrap; overflow-wrap: anywhere; animation: rise var(--t-base) var(--ease-out) both; }
 .automations-dialog [data-auto-feedback].error { background: var(--warm); color: var(--warm-ink); }
 .auto-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 24px 24px; }
 .auto-screen { min-width: 0; }
@@ -19,7 +19,7 @@
 .auto-intro { display: flex; align-items: center; gap: 18px; padding: 16px 20px; border-radius: calc(18px * var(--r-scale)); background: var(--lav); margin-bottom: 8px; }
 .auto-intro-words { min-width: 0; }
 .auto-intro p { margin: 5px 0; color: var(--ink-2); font-size: var(--fs-sm); line-height: 1.5; }
-.auto-intro .auto-intro-title { font-size: var(--fs-lg); font-weight: 800; color: var(--ink); }
+.auto-intro .auto-intro-title { font-size: var(--fs-lg); font-weight: var(--w-bold); color: var(--ink); }
 .auto-intro .auto-availability { font-size: var(--fs-xs); color: var(--muted); }
 .auto-availability .i { width: 13px; height: 13px; vertical-align: -2px; }
 .auto-intro-actions { margin-top: 10px; }
@@ -41,7 +41,7 @@
 .auto-section-title { display: flex; align-items: center; gap: 8px; margin: 24px 0 12px; font-size: var(--fs-sm); }
 .auto-section-title > .i { color: var(--primary); width: 18px; height: 18px; transition: transform var(--t-base) var(--ease-pop); }
 .auto-section-title:hover > .i { transform: rotate(-12deg) scale(1.15); }
-.auto-section-title > .auto-count { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; margin-inline-start: auto; }
+.auto-section-title > .auto-count { color: var(--muted); font-size: var(--fs-xs); font-weight: var(--w-text); margin-inline-start: auto; }
 .auto-section-title > [data-ui="button"] { margin-inline-start: 4px; }
 .automations-dialog .auto-section-hint { margin: -6px 0 12px; }
 .auto-cards { display: grid; gap: 12px; }
@@ -57,7 +57,7 @@
 .auto-card-heading { display: flex; align-items: center; gap: 12px; }
 .auto-card-title { flex: 1; min-width: 0; }
 .auto-card-title h4 { margin: 0; font-size: var(--fs-md); overflow-wrap: anywhere; }
-.auto-card .auto-card-title p { margin: 2px 0 0; color: var(--muted); font-size: var(--fs-xs); font-weight: 650; }
+.auto-card .auto-card-title p { margin: 2px 0 0; color: var(--muted); font-size: var(--fs-xs); font-weight: var(--w-text-plus); }
 .auto-mark { display: inline-grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: calc(11px * var(--r-scale)); background: var(--lav); color: var(--primary); transition: transform var(--t-base) var(--ease-pop); }
 .auto-mark .i { width: 19px; height: 19px; }
 .auto-mark[data-action="reminder"] { background: var(--warm); color: var(--warm-ink); }
@@ -70,16 +70,16 @@
 .auto-card.is-off .auto-mark, .auto-card.is-off .auto-when { opacity: .62; filter: saturate(.4); }
 .auto-card.is-off .auto-card-title h4 { color: var(--ink-3); }
 .auto-card .auto-toolbar [data-auto="delete"] { margin-inline-start: auto; }
-.auto-status { flex: none; padding: 4px 9px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 700; color: var(--muted); background: var(--soft); white-space: nowrap; }
+.auto-status { flex: none; padding: 4px 9px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: var(--w-strong); color: var(--muted); background: var(--soft); white-space: nowrap; }
 .auto-status[data-tone="done"] { background: var(--st-ready); color: var(--st-ready-ink); }
 .auto-status[data-tone="waiting"] { background: var(--lav); color: var(--primary); }
 .auto-status[data-tone="failed"] { background: var(--warm); color: var(--warm-ink); }
 .auto-proposal { border: 1.5px dashed var(--primary); background: color-mix(in srgb, var(--primary) 4%, var(--card)); }
 .automations-dialog .auto-why { position: relative; margin: 12px 0 0; padding: 10px 14px 10px 30px; border-radius: calc(12px * var(--r-scale)); background: var(--soft); color: var(--ink-2); font-style: italic; line-height: 1.5; }
-.auto-why::before { content: "“"; position: absolute; left: 10px; top: 2px; font-size: 26px; font-style: normal; font-weight: 800; color: var(--primary); }
+.auto-why::before { content: "“"; position: absolute; left: 10px; top: 2px; font-size: 26px; font-style: normal; font-weight: var(--w-bold); color: var(--primary); }
 .automations-dialog .auto-instructions { white-space: pre-wrap; max-height: 240px; overflow: auto; padding: 10px 12px; background: var(--soft); border-radius: calc(10px * var(--r-scale)); }
 .automations-dialog details { margin-top: 12px; color: var(--ink-2); font-size: var(--fs-sm); }
-.automations-dialog details > summary { width: fit-content; list-style: none; cursor: pointer; font-weight: 700; transition: color var(--t-fast), transform var(--t-base) var(--ease-out); }
+.automations-dialog details > summary { width: fit-content; list-style: none; cursor: pointer; font-weight: var(--w-strong); transition: color var(--t-fast), transform var(--t-base) var(--ease-out); }
 .automations-dialog details > summary::-webkit-details-marker { display: none; }
 .automations-dialog details > summary::after { content: "›"; display: inline-block; margin-left: 6px; transition: transform var(--t-fast) var(--ease-out); }
 .automations-dialog details[open] > summary::after { transform: rotate(90deg); }
@@ -89,9 +89,9 @@
 .auto-when { display: flex; align-items: center; gap: 14px; margin: 14px 0 0; padding: 10px 12px; border-radius: calc(14px * var(--r-scale)); background: var(--soft); transition: opacity var(--t-base), filter var(--t-base); }
 .auto-when-words { min-width: 0; }
 .auto-card .auto-when-words p { margin: 0; }
-.auto-card .auto-rhythm { font-weight: 800; color: var(--ink); }
+.auto-card .auto-rhythm { font-weight: var(--w-bold); color: var(--ink); }
 .auto-card .auto-next { margin-top: 3px; color: var(--ink-3); font-size: var(--fs-xs); }
-.auto-next b { color: var(--ink-2); font-weight: 700; }
+.auto-next b { color: var(--ink-2); font-weight: var(--w-strong); }
 .auto-card .auto-last { display: flex; align-items: center; gap: 7px; margin: 12px 0 0; font-size: var(--fs-xs); color: var(--ink-3); }
 .auto-last .i { flex: none; width: 15px; height: 15px; }
 .auto-last b { color: var(--ink-2); }
@@ -99,9 +99,9 @@
 .auto-last[data-tone="waiting"] .i { color: var(--primary); }
 .auto-last[data-tone="failed"] .i, .auto-last[data-tone="failed"] b { color: var(--warm-ink); }
 .auto-leaf { display: inline-flex; flex-direction: column; align-items: center; flex: none; width: 76px; overflow: hidden; border: 1px solid var(--border); border-radius: calc(12px * var(--r-scale)); background: var(--card); box-shadow: var(--shadow-tile); text-align: center; line-height: 1.1; transform-origin: 50% 0; }
-.auto-leaf-top { align-self: stretch; padding: 3px 0; background: var(--primary); color: var(--btn-on-primary); font-size: calc(10.5px * var(--fs-scale)); font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
-.auto-leaf b { padding: 6px 0 2px; font-size: calc(24px * var(--fs-scale)); font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
-.auto-leaf small { padding: 0 4px 1px; font-size: calc(10.5px * var(--fs-scale)); font-weight: 700; color: var(--ink-3); white-space: nowrap; }
+.auto-leaf-top { align-self: stretch; padding: 3px 0; background: var(--primary); color: var(--btn-on-primary); font-size: calc(10.5px * var(--fs-scale)); font-weight: var(--w-bold); text-transform: uppercase; letter-spacing: .06em; }
+.auto-leaf b { padding: 6px 0 2px; font-size: calc(24px * var(--fs-scale)); font-weight: var(--w-bold); color: var(--ink); font-variant-numeric: tabular-nums; }
+.auto-leaf small { padding: 0 4px 1px; font-size: calc(10.5px * var(--fs-scale)); font-weight: var(--w-strong); color: var(--ink-3); white-space: nowrap; }
 .auto-leaf .auto-leaf-time { padding-bottom: 7px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .auto-leaf.is-sign b { display: grid; place-items: center; height: 38px; padding: 4px 0 6px; }
 .auto-leaf.is-sign b .i { width: 24px; height: 24px; color: var(--primary); }
@@ -119,11 +119,11 @@
 .auto-idea-emoji { display: inline-grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: calc(12px * var(--r-scale)); background: var(--soft); font-size: 21px; line-height: 1; transition: transform var(--t-base) var(--ease-pop); }
 .auto-idea:hover:not(:disabled) .auto-idea-emoji { animation: auto-wiggle 600ms var(--ease-pop); }
 .auto-idea-words { min-width: 0; }
-.auto-idea-words small { display: block; font-size: calc(10.5px * var(--fs-scale)); font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--primary); }
-.auto-idea-words strong { display: block; margin: 2px 0; font-weight: 800; }
+.auto-idea-words small { display: block; font-size: calc(10.5px * var(--fs-scale)); font-weight: var(--w-bold); letter-spacing: .05em; text-transform: uppercase; color: var(--primary); }
+.auto-idea-words strong { display: block; margin: 2px 0; font-weight: var(--w-bold); }
 .auto-idea-words span { display: block; font-size: var(--fs-xs); color: var(--ink-3); line-height: 1.4; }
 .auto-history { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
-.auto-day-title { margin: 0 0 6px; font-size: calc(11.5px * var(--fs-scale)); font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); }
+.auto-day-title { margin: 0 0 6px; font-size: calc(11.5px * var(--fs-scale)); font-weight: var(--w-bold); letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); }
 .auto-timeline { position: relative; list-style: none; margin: 0; padding: 0; }
 .auto-timeline::before { content: ""; position: absolute; left: 14px; top: 14px; bottom: 14px; width: 2px; border-radius: 2px; background: color-mix(in srgb, var(--muted) 24%, transparent); }
 .auto-run { position: relative; display: flex; gap: 12px; padding: 4px 0; }
@@ -138,7 +138,7 @@
 .auto-run:hover .auto-run-body { background: var(--soft); }
 .automations-dialog .auto-run p { margin: 2px 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 .auto-run-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
-.auto-run-head time { font-weight: 800; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.auto-run-head time { font-weight: var(--w-bold); color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .auto-run-head b { flex: 1 1 140px; min-width: 0; }
 .automations-dialog .auto-run-how { color: var(--ink-3); font-size: var(--fs-xs); }
 .automations-dialog .auto-run-detail { color: var(--ink-2); }
@@ -150,7 +150,7 @@
 .auto-door { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 18px 18px 20px; border: 1px solid var(--border); border-radius: calc(20px * var(--r-scale)); background: var(--card); color: var(--ink); text-align: center; font: inherit; cursor: pointer; box-shadow: var(--shadow-tile); transition: transform var(--t-fast) var(--ease-out), box-shadow var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out); }
 .auto-door .auto-scene { width: 100%; padding: 14px 18px; margin-bottom: 8px; border-radius: calc(16px * var(--r-scale)); background: var(--login-dialog-scene-bg); box-sizing: border-box; }
 .auto-door .auto-scene svg { max-width: 200px; margin: 0 auto; }
-.auto-door strong { font-size: calc(16px * var(--fs-scale)); font-weight: 800; }
+.auto-door strong { font-size: calc(16px * var(--fs-scale)); font-weight: var(--w-bold); }
 .auto-door span { font-size: calc(13px * var(--fs-scale)); color: var(--ink-3); line-height: 1.45; }
 .auto-door:hover:not(:disabled), .auto-door:focus-visible { transform: translateY(-3px); border-color: var(--primary); box-shadow: var(--shadow-pop); }
 .auto-door:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
@@ -174,47 +174,47 @@
 .auto-door:is(:hover, :focus-visible):not(:disabled) .auto-glint { animation: auto-twinkle 700ms var(--ease-pop); }
 .auto-form { display: grid; gap: 14px; min-width: 0; counter-reset: part; }
 .auto-action { display: inline-flex; flex-wrap: wrap; gap: 4px; justify-self: start; padding: 4px; border-radius: var(--r-pill); background: var(--soft); }
-.automations-dialog .auto-action-pick { align-items: center; gap: 7px; padding: 7px 14px; border: 0; border-radius: var(--r-pill); background: transparent; font-weight: 750; }
+.automations-dialog .auto-action-pick { align-items: center; gap: 7px; padding: 7px 14px; border: 0; border-radius: var(--r-pill); background: transparent; font-weight: var(--w-strong-plus); }
 .automations-dialog .auto-action-pick:hover { box-shadow: none; transform: none; color: var(--ink); }
 .automations-dialog .auto-action-pick:has(input:checked) { background: var(--card); color: var(--ink); box-shadow: var(--shadow-tile); }
 .auto-action-pick .i { width: 16px; height: 16px; color: var(--primary); }
 .auto-part { display: grid; gap: 12px; min-width: 0; padding: 16px; border: 1px solid color-mix(in srgb, var(--muted) 20%, transparent); border-radius: calc(16px * var(--r-scale)); counter-increment: part; }
-.auto-part-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-sm); font-weight: 800; }
+.auto-part-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-sm); font-weight: var(--w-bold); }
 .auto-part-title::before { content: counter(part); display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: var(--r-pill); background: var(--lav); color: var(--primary); font-size: var(--fs-xs); }
 .automations-dialog .auto-form textarea { width: 100%; min-width: 0; box-sizing: border-box; height: auto; min-height: 96px; padding: 12px 14px; line-height: 1.5; resize: vertical; }
 .automations-dialog .auto-field { margin: 0; }
-.automations-dialog .auto-field small { color: var(--muted); font-weight: 650; }
+.automations-dialog .auto-field small { color: var(--muted); font-weight: var(--w-text-plus); }
 .automations-dialog .auto-field input:not([type="checkbox"]):not([type="radio"]), .automations-dialog .auto-field select { box-sizing: border-box; }
 .automations-dialog .auto-field input[type="time"] { max-width: 180px; }
-.auto-note { margin: 0; padding: 12px 14px; border-radius: calc(12px * var(--r-scale)); background: var(--warm); color: var(--warm-ink); font-size: var(--fs-sm); font-weight: 650; }
+.auto-note { margin: 0; padding: 12px 14px; border-radius: calc(12px * var(--r-scale)); background: var(--warm); color: var(--warm-ink); font-size: var(--fs-sm); font-weight: var(--w-text-plus); }
 .auto-kind input, .auto-person input, .auto-day input, .auto-event input, .auto-action-pick input { position: absolute; opacity: 0; pointer-events: none; }
 .automations-dialog .choice:has(input:focus-visible) { outline: 2px solid var(--primary); outline-offset: 2px; }
 .auto-kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.automations-dialog .auto-kind { position: relative; flex-direction: column; gap: 6px; margin: 0; padding: 12px; font-weight: 750; line-height: 1.3; }
+.automations-dialog .auto-kind { position: relative; flex-direction: column; gap: 6px; margin: 0; padding: 12px; font-weight: var(--w-strong-plus); line-height: 1.3; }
 .auto-kind .i { width: 22px; height: 22px; color: var(--primary); }
 .auto-kind:has(input:checked) .i, .auto-event:has(input:checked) .i { animation: auto-pop 420ms var(--ease-pop); }
 .auto-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
 .automations-dialog .auto-person { position: relative; align-items: center; gap: 12px; margin: 0; padding: 10px 12px; }
 .auto-person:has(input:checked) [data-ui="face"] { animation: auto-pop 420ms var(--ease-pop); }
 .auto-tile-words { flex: 1; min-width: 0; }
-.auto-tile-words strong { display: block; color: var(--ink); font-weight: 800; overflow-wrap: anywhere; }
-.auto-tile-words small { display: block; margin-top: 2px; color: var(--ink-3); font-size: var(--fs-xs); font-weight: 600; line-height: 1.4; }
+.auto-tile-words strong { display: block; color: var(--ink); font-weight: var(--w-bold); overflow-wrap: anywhere; }
+.auto-tile-words small { display: block; margin-top: 2px; color: var(--ink-3); font-size: var(--fs-xs); font-weight: var(--w-text); line-height: 1.4; }
 .auto-tick { display: grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--primary); color: var(--btn-on-primary); transform: scale(0); transition: transform var(--t-fast) var(--ease-pop); }
 .auto-tick .i { width: 14px; height: 14px; }
 .auto-person:has(input:checked) .auto-tick { transform: scale(1); }
 .auto-days { display: flex; flex-wrap: wrap; gap: 6px; }
-.automations-dialog .auto-day { position: relative; justify-content: center; min-width: 56px; margin: 0; padding: 8px 10px; border-radius: var(--r-pill); font-weight: 800; }
+.automations-dialog .auto-day { position: relative; justify-content: center; min-width: 56px; margin: 0; padding: 8px 10px; border-radius: var(--r-pill); font-weight: var(--w-bold); }
 .automations-dialog .auto-day:has(input:checked) { background: var(--primary); border-color: var(--primary); color: var(--btn-on-primary); animation: auto-pop 360ms var(--ease-pop); }
-.auto-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: calc(12px * var(--fs-scale)); font-weight: 800; color: var(--ink-3); }
+.auto-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: calc(12px * var(--fs-scale)); font-weight: var(--w-bold); color: var(--ink-3); }
 .automations-dialog .auto-inline input { flex: 0 0 110px; width: 110px; }
 .automations-dialog .auto-inline select { flex: 0 0 140px; width: 140px; }
 .auto-events, .auto-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .automations-dialog .auto-event { position: relative; align-items: flex-start; gap: 12px; margin: 0; }
 .auto-event > .i { flex: none; width: 22px; height: 22px; margin-top: 1px; color: var(--primary); }
 .automations-dialog .auto-pair .choice { margin: 0; }
-.auto-caption { display: block; margin-bottom: 8px; font-size: calc(12px * var(--fs-scale)); font-weight: 800; color: var(--ink-3); }
+.auto-caption { display: block; margin-bottom: 8px; font-size: calc(12px * var(--fs-scale)); font-weight: var(--w-bold); color: var(--ink-3); }
 .auto-preview { display: grid; gap: 12px; padding: 14px; border-radius: calc(14px * var(--r-scale)); background: color-mix(in srgb, var(--primary) 6%, var(--soft)); border: 1px solid color-mix(in srgb, var(--primary) 16%, var(--border)); transition: background var(--t-base), border-color var(--t-base); }
-.auto-sentence { margin: 0; font-weight: 750; color: var(--ink); line-height: 1.45; overflow-wrap: anywhere; }
+.auto-sentence { margin: 0; font-weight: var(--w-strong-plus); color: var(--ink); line-height: 1.45; overflow-wrap: anywhere; }
 .auto-preview[data-state="invalid"] { background: var(--warm); border-color: transparent; }
 .auto-preview[data-state="invalid"] .auto-sentence { color: var(--warm-ink); }
 .auto-preview[data-state="loading"] .auto-leaves { opacity: .55; transition: opacity var(--t-base); }

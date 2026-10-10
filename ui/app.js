@@ -4023,7 +4023,8 @@
   function bodySupplied(p, m) {
     if (m.bodyDelivery) {
       const reader = m.bodyDelivery.readers?.[p.id];
-      return !!reader && reader.epoch === p.deliveryEpoch && reader.version === m.bodyDelivery.version;
+      const exact = !!reader && reader.epoch === p.deliveryEpoch && reader.version === m.bodyDelivery.version;
+      if (exact || m.from === "human") return exact;
     }
     return p.lastSeenSeq != null && p.lastSeenSeq >= m.seq;
   }
@@ -4405,7 +4406,7 @@
       const hasLabel = el.querySelector(".meta.seen, .seen-by:not([hidden])");
       const m = HistoryWindow.messageById(room, el.dataset.id);
       if (!m) continue;
-      if (!m.bodyDelivery && seq <= floor && !hasLabel && !el.classList.contains("waiting")) continue;
+      if ((m.from !== "human" || !m.bodyDelivery) && seq <= floor && !hasLabel && !el.classList.contains("waiting")) continue;
       fillSeen(el, room, m);
       if (m.from === "human" && (m.bodyDelivery || seq > floor || el.classList.contains("waiting"))) renderWaiting(el, room, m);
     }

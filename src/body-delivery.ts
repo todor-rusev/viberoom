@@ -9,7 +9,7 @@ export interface BodyEdit {
   id: string; fromVersion: number; version: number; append: boolean; complete: boolean;
 }
 export type BodyRow = {
-  id: string; from: string; kind: string;
+  id: string; from: string; kind: string; streaming?: boolean;
   bodyDelivery?: BodyDelivery;
   bodyEdit?: BodyEdit;
   quotes?: unknown[];
@@ -30,8 +30,11 @@ export function resetBodyDelivery(row: BodyRow): void {
 }
 
 export function bodyRefs(rows: BodyRow[]): BodyRef[] {
-  return rows.map(row => ({ id: row.id, ...(row.from === "human" && row.kind === "chat" ? { version: row.bodyDelivery?.version ?? 1 } : {}) }));
+  return rows.map(row => ({ id: row.id, ...(row.from === "human" && row.kind === "chat" ? { version: row.bodyDelivery?.version ?? 1 }
+    : vibemateReply(row) ? { version: 1 } : {}) }));
 }
+
+const vibemateReply = (row: BodyRow): boolean => row.kind === "chat" && row.from !== "human" && row.from !== "system" && !row.streaming;
 
 export function supplyBodies(rows: BodyRow[], refs: BodyRef[], id: string, epoch: string): BodyRow[] {
   const byId = new Map(rows.map(row => [row.id, row]));
@@ -41,6 +44,14 @@ export function supplyBodies(rows: BodyRow[], refs: BodyRef[], id: string, epoch
     if (!source) continue;
     const edit = source.bodyEdit;
     const row = edit ? byId.get(edit.id) : source;
+    if (!edit && row && vibemateReply(row) && ref.version === 1) {
+      if (row.from === id) continue;
+      const delivery = row.bodyDelivery ?? { version: 1, readers: {} };
+      if (delivery.readers[id]?.epoch === epoch && delivery.readers[id].version >= 1) continue;
+      row.bodyDelivery = { ...delivery, readers: { ...delivery.readers, [id]: { epoch, version: 1 } } };
+      changed.add(row);
+      continue;
+    }
     if (!row?.bodyDelivery || row.from !== "human" || row.kind !== "chat") continue;
     const delivery = row.bodyDelivery;
     const prior = delivery.readers[id]?.epoch === epoch ? delivery.readers[id].version : 0;

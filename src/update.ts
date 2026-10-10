@@ -105,8 +105,8 @@ export async function checkForUpdate(dataDir: string, current: string, options: 
   return toInfo(current, record);
 }
 
-export function hasSourceTree(moduleUrl: string): boolean {
-  return existsSync(fileURLToPath(new URL("../src", moduleUrl)));
+export function hasSourceTree(moduleUrl: string, runtime: Readonly<Record<string, string | undefined>> = process.versions): boolean {
+  return runsFromSourceCheckout(moduleUrl) && !runtime.electron && existsSync(fileURLToPath(new URL("../src", moduleUrl)));
 }
 
 export function runsFromSourceCheckout(mainModuleUrl: string): boolean {
@@ -114,11 +114,10 @@ export function runsFromSourceCheckout(mainModuleUrl: string): boolean {
   return !/\/node_modules\/viberoom\//.test(path);
 }
 
-export function newerSourceThanBuild(mainModuleUrl: string): string | null {
-  if (!runsFromSourceCheckout(mainModuleUrl)) return null;
+export function newerSourceThanBuild(mainModuleUrl: string, runtime: Readonly<Record<string, string | undefined>> = process.versions): string | null {
+  if (!hasSourceTree(mainModuleUrl, runtime)) return null;
   const root = fileURLToPath(new URL("../", mainModuleUrl));
   const src = join(root, "src");
-  if (!existsSync(src)) return null;
   let built: number;
   try {
     built = statSync(fileURLToPath(mainModuleUrl)).mtimeMs;

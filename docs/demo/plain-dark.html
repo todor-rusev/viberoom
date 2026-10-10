@@ -8,7 +8,7 @@
   <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48 64x64 128x128 256x256">
   <link rel="icon" href="icon-256.png" type="image/png" sizes="256x256">
   <link rel="apple-touch-icon" href="icon-256.png">
-  <meta name="theme-color" content="#6d5dfc">
+  <meta name="theme-color" content="#6f6ed2">
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="looks.css">
   <link rel="stylesheet" href="looks-custom.css" id="looks-custom">
@@ -19,6 +19,23 @@
   <link rel="stylesheet" href="motion.css">
 </head>
 <body>
+  <div id="splash" class="splash" aria-hidden="true">
+    <svg class="splash-art" viewBox="0 0 220 220">
+      <circle class="ring r1" cx="110" cy="110" r="70"/>
+      <circle class="ring r2" cx="110" cy="110" r="92"/>
+      <g class="bot">
+        <path class="wireless" pathLength="1" d="M110 62V44"/><circle class="knob" cx="110" cy="40" r="6"/>
+        <rect class="head" pathLength="1" x="66" y="62" width="88" height="70" rx="26"/>
+        <circle class="eye" cx="92" cy="94" r="7.5"/><circle class="eye" cx="128" cy="94" r="7.5"/>
+        <path class="mouth" pathLength="1" d="M94 114h32"/>
+      </g>
+      <g class="mates">
+        <g><rect x="16" y="150" width="34" height="28" rx="10"/><circle cx="26" cy="164" r="2.6"/><circle cx="40" cy="164" r="2.6"/></g>
+        <g><rect x="93" y="166" width="34" height="28" rx="10"/><circle cx="103" cy="180" r="2.6"/><circle cx="117" cy="180" r="2.6"/></g>
+        <g><rect x="170" y="150" width="34" height="28" rx="10"/><circle cx="180" cy="164" r="2.6"/><circle cx="194" cy="164" r="2.6"/></g>
+      </g>
+    </svg>
+  </div>
   <div id="app" class="shell view-rooms">
     <nav class="rail quiet-glyphs" id="rail" aria-label="Main menu">
       <div class="rail-head">
@@ -31,6 +48,8 @@
         <button class="rail-item" data-nav="skills" title="Skills"><span class="ico" data-rig="skills"></span><span class="label">Skills</span></button>
         <button class="rail-item" data-nav="connections" title="Connections"><span class="ico" data-rig="plug"></span><span class="label">Connections</span></button>
         <button class="rail-item" data-nav="settings" title="Settings"><span class="ico" data-rig="settings"></span><span class="label">Settings</span></button>
+        <span class="rail-hr"></span>
+        <button class="rail-item" data-nav="onboarding" title="Onboarding: set viberoom up and get the most out of it"><span class="ico" data-rig="ship"></span><span class="label">Onboarding</span></button>
       </div>
       <div class="rail-foot">
         <div class="rail-pops" id="rail-pops"></div>
@@ -78,6 +97,7 @@
       <section class="chat" id="chat-view" aria-labelledby="side-room-name" hidden>
         <header class="main-head chat-head">
           <div class="chat-toolbar quiet-glyphs">
+            <div class="chat-room-name" id="chat-room-name"></div>
             <div class="chat-sub" id="chat-room-sub"></div>
             <div class="chat-actions">
               <label class="search" title="Search full history"><span class="pad" aria-hidden="true"></span><span class="search-icon" data-rig="search-solid"></span><input id="search" type="search" placeholder="Search…" aria-label="Search full history" autocomplete="off"></label>
@@ -149,11 +169,12 @@
     </div>
   </section>
   <div class="toasts" id="toasts"></div>
-  <dialog id="profile-dialog" class="dialog">
+  <dialog id="profile-dialog" class="dialog welcome">
     <form id="profile-form" method="dialog">
-      <h3><span class="h-ico" data-icon="spark"></span>Welcome to viberoom</h3>
-      <p class="lead">Every room needs a human with a vibe. Set yours: it is how the vibemates will know you. You can change it any time under Your vibe.</p>
-      <label>Vibename <span class="hint">(how you appear in every room)</span><input id="pf-name" type="text" maxlength="24" required autocomplete="off" placeholder="letters, digits, _ or -"></label>
+      <div class="welcome-art scene-art wb-scene" id="pf-art" role="img" aria-label="Three vibemates come up one after another and wave hello; one of them says it with a heart"></div>
+      <h3 class="welcome-title">Welcome to viberoom</h3>
+      <p class="lead welcome-lead">Your vibemates are glad you are here. Start with your name: it is how they will know you in every room. The face and the line are up to you, and you can change all of it later under Your vibe.</p>
+      <label>Vibename <span class="hint">(your name in every room)</span><input id="pf-name" type="text" maxlength="24" required autocomplete="off" placeholder="letters, digits, _ or -"></label>
       <label>Vibeface <span class="hint">(pick one, or type any emoji)</span>
         <div id="pf-avatar-picker"></div>
         <input id="pf-avatar" type="text" maxlength="40" placeholder="custom emoji (optional)"></label>
@@ -190,7 +211,8 @@
   </dialog>
   <dialog id="room-dialog" class="dialog">
     <form id="room-form" method="dialog">
-      <h3><span class="h-ico" data-icon="rooms"></span>Open a room</h3>
+      <div class="door-art scene-art wb-scene door-scene" id="room-art" role="img" aria-label="A door opens on a warm light; a vibemate steps onto the threshold and waves, another peeks round the jamb and waves too"></div>
+      <h3><span class="h-ico" data-icon="rooms"></span>Open a new room</h3>
       <p class="lead">A room is a shared space for you and the vibemates you summon. Give it a name.</p>
       <label>Room name<input id="room-name" type="text" maxlength="60" required placeholder="e.g. Architecture review"></label>
       <label>Working directory <span class="hint">(optional)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The folder the vibemates work in (their cwd). Leave it empty and viberoom keeps a folder per room. Instruction files in it (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules) are read by the vibemates by their own conventions; the room tells you if it finds any.</span>
@@ -364,6 +386,7 @@
   <script src="components.js"></script>
   <script src="hints.js"></script>
   <script src="context-menu.js"></script>
+  <script src="desktop.js"></script>
   <script src="save-file.js"></script>
   <script src="avatars.js"></script>
   <script src="fold.js"></script>
@@ -374,10 +397,12 @@
   <script src="timeline-slots.js"></script>
   <script src="carry.js"></script>
   <script src="memory.js"></script>
+  <script src="memory-recovery.js"></script>
   <script src="automations.js"></script>
   <script src="layout.js"></script>
   <script src="agent-updates.js"></script>
   <script src="composer.js"></script>
+  <script src="drafts.js"></script>
   <script src="voice.js"></script>
   <script src="reader.js"></script>
   <script src="passage.js"></script>

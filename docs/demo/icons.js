@@ -28,6 +28,18 @@
       b: `<circle cx="10.2" cy="7.4" r="1.3" fill="#000" stroke-width=".8"/>`,
       c: `<circle cx="15" cy="7.6" r="1.3" fill="#000" stroke-width=".8"/>`,
     },
+    ship: {
+      waves: `<path stroke-width="1.32" d="M-4 21.8c1.5 0 1.5-1 3-1s1.5 1 3 1 1.5-1 3-1 1.5 1 3 1 1.5-1 3-1 1.5 1 3 1 1.5-1 3-1 1.5 1 3 1 1.5-1 3-1 1.5 1 3 1 1.5-1 3-1 1.5 1 3 1"/>`,
+      hull: `<path stroke-width="1.32" d="M3 14.5h18.5l-2.4 4.1c-.3.5-.9.8-1.5.8H6.9c-.6 0-1.2-.3-1.5-.8z"/><circle cx="11" cy="16.9" r=".7" fill="#000" stroke-width="0"/><circle cx="14" cy="16.9" r=".7" fill="#000" stroke-width="0"/><circle cx="17" cy="16.9" r=".7" fill="#000" stroke-width="0"/>`,
+      mast: `<path stroke-width="1.32" d="M13 14.5V2.4"/>`,
+      sail: `<path stroke-width="1.32" d="M13.7 3.5c3.4 2.7 5.4 6 5.9 9.6h-5.9z"/><path stroke-width=".8" d="M13.9 6.8h3M13.9 10h4.7"/>`,
+      jib: `<path stroke-width="1.32" d="M12.3 4.8 8.2 13.1h4.1z"/>`,
+      flag: `<path fill="#000" stroke-width=".6" d="M13 2.2l3.2 1.1L13 4.4z"/>`,
+      gangway: `<path stroke-width="1.32" d="M3.3 14.5 1.4 17.4"/>`,
+      quay: `<path stroke-width="1.32" d="M-2 17.4h3.6"/>`,
+      gull: `<path stroke-width="1.1" d="M2.6 5.4c.7-.8 1.4-.8 2 0 .6-.8 1.3-.8 2 0"/>`,
+      person: `<circle cx="5.6" cy="9.4" r="1.05" fill="#000" stroke-width="0"/><path stroke-width="1.2" d="M5.6 10.6v2M5.6 11.1l-1 1M5.6 11.1l1.1-1.2M5.6 12.6l-.8 1.8M5.6 12.6l.8 1.8"/>`,
+    },
     bot: {
       head: `<rect x="4.5" y="8.5" width="15" height="11" rx="3.5"/><path d="M2.5 13v2.5M21.5 13v2.5M10 16.6h4"/>`,
       eyes: `<path d="M9.3 12.6v1.4M14.7 12.6v1.4" stroke-width="2.5"/>`,
@@ -51,6 +63,14 @@
       cord: `<path d="M12 17v2.2a2.3 2.3 0 0 0 2.3 2.3H17"/>`,
     },
     power: { ring: `<path d="M17.7 6.9a8 8 0 1 1-11.4 0"/>`, bar: `<path d="M12 3v8.5"/>` },
+    sun: {
+      core: `<circle cx="12" cy="12" r="5"/>`,
+      rays: `<path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/>`,
+    },
+    moon: {
+      crescent: `<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>`,
+      star: `<path d="M17.4 3.6l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6z"/>`,
+    },
     sliders: {
       rails: `<path d="M4 6.5h16M4 12h16M4 17.5h16"/>`,
       a: `<circle cx="8.5" cy="6.5" r="2.2" fill="#000"/>`,
@@ -75,6 +95,8 @@
   const whole = (name) => Object.values(PARTS[name]).join("");
 
   const TRAVELLERS = {
+    plug: { socket: `<rect x="5.5" y="0" width="13" height="6.4" rx="1.6" fill="#000" stroke-width="0"/>`, spark: `<path d="M4.6 3.6 2.2 2.8M4.6 5.2l-2.3 1M19.4 3.6l2.4-.8M19.4 5.2l2.3 1" stroke-width="1.5"/>` },
+    ship: { climber: `<circle cx="1.2" cy="12.3" r="1.05" fill="#000" stroke-width="0"/><path stroke-width="1.2" d="M1.2 13.5v2M1.2 14l-1 1M1.2 14l1.1-1.2M1.2 15.5l-.8 1.8M1.2 15.5l.8 1.8"/>` },
     skills: { leaf: PARTS.skills.right, "leaf-2": PARTS.skills.right },
     settings: { mate: `<g transform="translate(17.7 17.7) scale(.46) rotate(22.5) translate(-12 -12)" stroke-width="3">${GEAR}</g>` },
     "settings-solid": { mate: `<g transform="translate(16.8 16.8) scale(.46) rotate(30) translate(-12 -12)">${SOLID_GEAR}</g>` },
@@ -95,6 +117,7 @@
     transfer: whole("transfer"),
     palette: whole("palette"),
     bot: whole("bot"),
+    ship: whole("ship"),
     phone: whole("phone"),
     graph: whole("graph"),
     code: whole("code"),
@@ -161,7 +184,8 @@
     eye: `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`,
     unplugged: `<path d="M2.5 12h2.5"/><rect x="5" y="7.5" width="6" height="9" rx="2"/><path d="M11 10h3M11 14h3"/><path d="M18 8.5v7M18 12h3.5"/>`,
     lock: `<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>`,
-    sun: `<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/>`,
+    sun: whole("sun"),
+    moon: whole("moon"),
     geek: `<rect x="2.5" y="10" width="8" height="7" rx="2.5"/><rect x="13.5" y="10" width="8" height="7" rx="2.5"/><path d="M10.5 13h3M2.5 12l1.8-4.5M21.5 12l-1.8-4.5"/>`,
     clock: `<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>`,
     calendar: `<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M7 15h10" stroke-width="2.4"/>`,
@@ -222,6 +246,21 @@
     if (glyph.classList.contains("play")) return;
     glyph.classList.add("play");
     Promise.allSettled(glyph.getAnimations({ subtree: true }).map((a) => a.finished)).then(() => glyph.classList.remove("play"));
+  }
+
+  function waver({ face, rx, antenna = "M0 -116v-8.5", bulb = [0, -128.5] }) {
+    const eyes = face === "happy"
+      ? `<g class="wb-blink"><rect class="ink-fill" x="-12" y="-96.5" width="5.5" height="9" rx="2.75"/><rect class="ink-fill" x="6.5" y="-96.5" width="5.5" height="9" rx="2.75"/></g><path class="stroke" d="M-8 -84.6q8 5.6 16 0" stroke-width="2.2"/>`
+      : `<g class="wb-blink"><circle class="ink-fill" cx="-9" cy="-92" r="3.2"/><circle class="ink-fill" cx="9" cy="-92" r="3.2"/></g><path class="stroke" d="M-6 -84.8q6 4 12 0" stroke-width="2"/>`;
+    return [
+      `<rect class="paper" x="-17" y="-30" width="12" height="24" rx="5"/><rect class="paper" x="5" y="-30" width="12" height="24" rx="5"/><rect class="paper" x="-22" y="-8" width="19" height="8" rx="4"/><rect class="paper" x="3" y="-8" width="19" height="8" rx="4"/>`,
+      `<path class="paper" d="M-29 -24V-50c0-9 6-14 15-14h28c9 0 15 5 15 14v26z"/><rect class="chrome" x="-10" y="-57" width="20" height="12" rx="3.5"/><circle class="accent-fill" cx="-4.5" cy="-51" r="2.2"/><path class="stroke" d="M0.5 -53h5M0.5 -49h3.5" stroke-width="1.6"/><rect class="chrome" x="-7" y="-74" width="14" height="11" rx="2"/>`,
+      `<g class="wb-head"><path class="stroke" d="${antenna}"/><circle class="accent-fill" cx="${bulb[0]}" cy="${bulb[1]}" r="4"/><rect class="paper" x="-35" y="-102" width="8" height="17" rx="4"/><rect class="paper" x="27" y="-102" width="8" height="17" rx="4"/><rect class="paper" x="-29" y="-116" width="58" height="45" rx="${rx}"/><rect class="chrome" x="-22" y="-109" width="44" height="31" rx="${rx - 4}"/>${eyes}</g>`,
+      `<path class="stroke" d="M-26 -52L-31.5 -38L-22.5 -26" stroke-width="7.6"/><path class="paper-line" d="M-26 -52L-31.5 -38L-22.5 -26" stroke-width="3.2"/><circle class="paper" cx="-31.5" cy="-38" r="3.8"/><circle class="paper" cx="-22.5" cy="-26" r="4.6"/>`,
+      `<path class="stroke" d="M26 -52L39 -62" stroke-width="7.6"/><path class="paper-line" d="M26 -52L39 -62" stroke-width="3.2"/>`,
+      `<g class="wb-fore"><path class="stroke" d="M39 -62L44 -79" stroke-width="7.6"/><path class="paper-line" d="M39 -62L44 -79" stroke-width="3.2"/><circle class="paper" cx="39" cy="-62" r="3.8"/><path class="paper" d="M40.4 -82.6c-2.6-.6-4.2.7-4.2 2.4s1.6 2.6 4 2.1"/><rect class="paper" x="39.5" y="-93" width="9.5" height="15.5" rx="4.75"/><path class="stroke" d="M42.6 -92v3.4M45.9 -92v3.4" stroke-width="1.2"/></g>`,
+      `<circle class="paper" cx="-26" cy="-52" r="5.2"/><circle class="paper" cx="26" cy="-52" r="5.2"/>`,
+    ].join("");
   }
 
   const SCENES = {
@@ -289,8 +328,38 @@
       `<g transform="translate(140 62)"><g class="cp-sheet k3"><path class="paper" d="M0 0h10l4 4v13H0z"/><path class="chrome" d="M3 8h8M3 12h4" stroke-width="1.4"/></g></g>`,
       `<g class="cp-ask"><path class="paper" d="M6 1h26a6 6 0 0 1 6 6v10a6 6 0 0 1-6 6H22l-3 5-3-5H6a6 6 0 0 1-6-6V7a6 6 0 0 1 6-6z"/><path class="accent" d="M8.5 9a3.5 3.5 0 1 1 4.9 3.2c-.9.5-1.4 1-1.4 2" stroke-width="2"/><circle class="accent-fill" cx="12" cy="18" r="1.2"/><g class="cp-yes"><circle class="ok-fill" cx="27" cy="12" r="6"/><path class="on-ok" d="M24 12l2.1 2.1 4-4.2" stroke-width="1.8"/></g></g>`,
     ].join(""),
+    summon: [
+      `<path class="chrome" d="M40 164h180" stroke-width="2"/>`,
+      `<g class="sm-ghost" transform="translate(130 162)"><path class="sm-dash" d="M-29 -24V-50c0-9 6-14 15-14h28c9 0 15 5 15 14v26z"/><rect class="sm-dash" x="-29" y="-116" width="58" height="45" rx="15"/><path class="sm-dash" d="M0 -116v-8.5"/><rect class="sm-dash" x="-17" y="-30" width="12" height="24" rx="5"/><rect class="sm-dash" x="5" y="-30" width="12" height="24" rx="5"/></g>`,
+      `<g transform="translate(130 162) scale(-1 1)"><g class="sm-mate">${waver({ face: "happy", rx: 15 })}</g></g>`,
+      `<g class="sm-spark"><path class="accent" d="M130 18v14M123 25h14" stroke-width="2.4"/><path class="accent" d="M92 60v9M87.5 64.5h9" stroke-width="2"/><path class="accent" d="M170 88v9M165.5 92.5h9" stroke-width="2"/></g>`,
+      `<g class="sm-bubble"><path class="paper" d="M180 34h46a8 8 0 0 1 8 8v14a8 8 0 0 1-8 8h-34l-14 9 4-9h-2a8 8 0 0 1-8-8V42a8 8 0 0 1 8-8z"/>`,
+      `<circle class="accent-fill sm-dot d1" cx="191" cy="49" r="3.2"/><circle class="accent-fill sm-dot d2" cx="203" cy="49" r="3.2"/><circle class="accent-fill sm-dot d3" cx="215" cy="49" r="3.2"/></g>`,
+    ].join(""),
+    welcome: [
+      `<path class="chrome" d="M40 174h380" stroke-width="2"/>`,
+      `<g transform="translate(132 172) scale(-1 1)"><g class="wb-bot b1">${waver({ face: "round", rx: 22 })}</g></g>`,
+      `<g transform="translate(230 172)"><g class="wb-bot b2">${waver({ face: "happy", rx: 15 })}</g></g>`,
+      `<g transform="translate(328 172)"><g class="wb-bot b3">${waver({ face: "round", rx: 9, antenna: "M0 -116v-5l6-5", bulb: [7.5, -128.5] })}</g></g>`,
+      `<g class="wb-bubble"><path class="paper" d="M134 4h88a8 8 0 0 1 8 8v16a8 8 0 0 1-8 8h-8l2 8-9-8H134a8 8 0 0 1-8-8V12a8 8 0 0 1 8-8z"/>`,
+      `<clipPath id="wb-typed"><rect class="wb-type" x="135" y="9" width="85.8" height="22"/></clipPath><text class="wb-hello" x="135" y="24.2" clip-path="url(#wb-typed)">Hello, world!</text></g>`,
+      `<path class="accent wb-spark" d="M420 50v14M413 57h14" stroke-width="2.4"/>`,
+      `<path class="accent wb-spark s2" d="M40 70v10M35 75h10" stroke-width="2"/>`,
+      `<path class="accent wb-spark s3" d="M298 18v8M294 22h8" stroke-width="1.8"/>`,
+    ].join(""),
+    door: [
+      `<path class="chrome" d="M40 192h360" stroke-width="2"/><rect class="accent-soft" x="160" y="190" width="120" height="7" rx="3.5"/>`,
+      `<rect class="accent-soft ds-glow" x="135" y="22" width="170" height="168"/>`,
+      `<clipPath id="ds-in"><rect x="135" y="22" width="170" height="168"/></clipPath><g clip-path="url(#ds-in)">`,
+      `<g transform="translate(182 190) scale(-1 1)"><g class="ds-peek p1 b1">${waver({ face: "happy", rx: 15 })}</g></g>`,
+      `<g transform="translate(258 190)"><g class="ds-peek p2 b2">${waver({ face: "round", rx: 22 })}</g></g></g>`,
+      `<path class="stroke" d="M129 192V26a10 10 0 0 1 10-10h160a10 10 0 0 1 10 10v166" stroke-width="2.6"/>`,
+      `<path class="paper ds-leaf" d="M135 22L97 8L97 206L135 190Z" stroke-width="2.4"/><circle class="accent-fill ds-knob" cx="106" cy="110" r="4"/>`,
+      `<g class="ds-closed"><rect class="outline" x="151" y="38" width="138" height="58" rx="4" stroke-width="1.6"/><rect class="outline" x="151" y="110" width="138" height="64" rx="4" stroke-width="1.6"/><circle class="accent-fill" cx="292" cy="104" r="4.5"/></g>`,
+      `<path class="accent ds-spark" d="M66 64v12M60 70h12" stroke-width="2.2"/><path class="accent ds-spark s2" d="M360 44v9M355.5 48.5h9" stroke-width="2"/>`,
+    ].join(""),
   };
-  const BOXES = { "memory-scribe": "0 0 240 150", "no-peek": "0 0 64 64", "connect-plug": "0 0 240 150" };
+  const BOXES = { "memory-scribe": "0 0 240 150", "no-peek": "0 0 64 64", "connect-plug": "0 0 240 150", summon: "0 0 260 170", welcome: "0 0 460 180", door: "0 0 440 212" };
 
   function scene(name) {
     const body = SCENES[name] || SCENES.failed;

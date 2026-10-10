@@ -2,6 +2,24 @@
 (function (root) {
   const MAX_BODIES = 256, MAX_BYTES = 8 * 1024 * 1024;
   const weights = new WeakMap();
+  const bodyIndexes = new WeakMap();
+  function bodyIndex(room) {
+    const rows = room.messages;
+    let index = bodyIndexes.get(rows);
+    if (!index || index.length !== rows.length) {
+      index = { length: rows.length, loaded: new Set(rows.filter(m => !m.bodyMissing)) };
+      bodyIndexes.set(rows, index);
+    }
+    return index;
+  }
+  function changed(room, message) {
+    weights.delete(message);
+    const index = bodyIndexes.get(room.messages);
+    if (index && index.length === room.messages.length) {
+      if (message.bodyMissing) index.loaded.delete(message);
+      else index.loaded.add(message);
+    }
+  }
   function bytes(message) {
     if (!weights.has(message)) weights.set(message, new TextEncoder().encode(JSON.stringify(message)).length);
     return weights.get(message);
@@ -19,7 +37,8 @@
   function trim(room, protectedIds = new Set(), maxBodies = MAX_BODIES, maxBytes = MAX_BYTES) {
     if (!room.history?.indexed) return { count: 0, bytes: 0 };
     const uses = room.bodyUses ||= new Map();
-    const loaded = room.messages.filter(m => !m.bodyMissing);
+    const index = bodyIndex(room);
+    const loaded = [...index.loaded];
     let count = loaded.length, total = loaded.reduce((n, m) => n + bytes(m), 0);
     const evicted = new Set();
     for (const m of loaded.sort((a, b) => (uses.get(a.id) || 0) - (uses.get(b.id) || 0))) {
@@ -27,14 +46,14 @@
       if (m.streaming || m.pending || protectedIds.has(m.id)) continue;
       evicted.add(m.id); count--; total -= bytes(m); uses.delete(m.id);
     }
-    if (evicted.size) for (const m of room.messages) if (evicted.has(m.id)) {
+    if (evicted.size) for (const m of loaded) if (evicted.has(m.id)) {
       const header = indexEntry(m);
       for (const key of Object.keys(m)) delete m[key];
       Object.assign(m, header);
       weights.delete(m);
+      index.loaded.delete(m);
     }
-    const known = new Set(room.messages.map(m => m.id));
-    for (const id of uses.keys()) if (!known.has(id)) uses.delete(id);
+    for (const id of uses.keys()) if (!root.HistoryWindow.heldMessageById(room, id)) uses.delete(id);
     return { count, bytes: total };
   }
   function merge(room, page, generation) {
@@ -53,5 +72,5 @@
     const known = new Map(previous.messages.filter(m => !m.bodyMissing && !m.streaming).map(m => [m.id, m]));
     fresh.messages = fresh.messages.map(m => m.bodyMissing && known.has(m.id) ? known.get(m.id) : m);
   }
-  root.WindowBodies = { MAX_BODIES, MAX_BYTES, indexEntry, touch, trim, merge, retain, invalidate: m => weights.delete(m) };
+  root.WindowBodies = { MAX_BODIES, MAX_BYTES, indexEntry, touch, trim, merge, retain, changed, invalidate: m => weights.delete(m) };
 })(typeof window !== "undefined" ? window : globalThis);
