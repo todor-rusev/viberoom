@@ -219,8 +219,8 @@ export function commitFiles(rootPath: string, store: HistoryStore, changes: File
         else if ("data" in change && change.data === null) rmSync(target, { force: true });
         else steps.file(after, target, marker);
       });
-      writeRecord();
       store.markFileTransaction(id);
+      writeRecord();
     });
     committed = true;
   } catch (error) {

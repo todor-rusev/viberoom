@@ -6,7 +6,8 @@ if (window.self !== window.top) {
 }
 for (const el of document.querySelectorAll("[data-scene]")) el.innerHTML = Icons.scene(el.dataset.scene);
 fetch("/api/settings", { signal: AbortSignal.timeout(8000) }).then((r) => r.json()).then((res) => {
-  const a = ((res && res.settings) || {}).appearance || {};
+  const a = (res && res.appearance) || {};
+  const TOKENS = globalThis.VIBEROOM_TOKENS;
   const look = TOKENS.looks[a.look] ? a.look : TOKENS.current.id;
   if (look !== TOKENS.current.id) document.documentElement.dataset.look = look;
 }).catch(() => {});

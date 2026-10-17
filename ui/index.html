@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="/motion.css">
 </head>
 <body>
+  <div id="viberoom-root" class="viberoom-root">
   <div id="splash" class="splash" aria-hidden="true">
     <svg class="splash-art" viewBox="0 0 220 220">
       <circle class="ring r1" cx="110" cy="110" r="70"/>
@@ -38,27 +39,7 @@
     </svg>
   </div>
   <div id="app" class="shell view-rooms">
-    <nav class="rail quiet-glyphs" id="rail" aria-label="Main menu">
-      <div class="rail-head">
-        <button class="rail-logo" id="rail-logo" title="viberoom"><img class="mark" src="/icon-256.png?v=12" alt=""><span class="word">viberoom</span></button>
-      </div>
-      <div class="rail-items">
-        <button class="rail-item new" id="rail-new-room" title="Open a room"><span class="ico" data-rig="plus"></span><span class="label">Open a room</span></button>
-        <button class="rail-item" data-nav="rooms" title="Rooms"><span class="ico" data-rig="rooms"></span><span class="label">Rooms</span></button>
-        <div class="rail-rooms-wrap" id="rail-rooms-wrap" hidden><span class="rail-hr"></span><div class="rail-rooms" id="rail-rooms" aria-label="Open rooms"></div><span class="rail-hr"></span></div>
-        <button class="rail-item" data-nav="skills" title="Skills"><span class="ico" data-rig="skills"></span><span class="label">Skills</span></button>
-        <button class="rail-item" data-nav="connections" title="Connections"><span class="ico" data-rig="plug"></span><span class="label">Connections</span></button>
-        <button class="rail-item" data-nav="settings" title="Settings"><span class="ico" data-rig="settings"></span><span class="label">Settings</span></button>
-        <span class="rail-hr"></span>
-        <button class="rail-item" data-nav="onboarding" title="Onboarding: set viberoom up and get the most out of it"><span class="ico" data-rig="ship"></span><span class="label">Onboarding</span></button>
-      </div>
-      <div class="rail-foot">
-        <div class="rail-pops" id="rail-pops"></div>
-        <button class="rail-item me" data-nav="me" title="Your vibe" id="rail-me"><span class="ico" id="rail-me-avatar"></span><span class="label" id="rail-me-label">You</span></button>
-        <div class="rail-status"><span class="conn" id="conn" title="Connection to the room"></span><span class="label conn-label" id="conn-label">connected</span></div>
-        <button class="rail-toggle" id="rail-toggle" title="Expand the menu"><span data-rig="expand"></span></button>
-      </div>
-    </nav>
+    <nav class="rail quiet-glyphs" id="rail" aria-label="Main menu"></nav>
     <aside class="side" id="side">
       <div class="side-rooms" id="side-rooms">
         <div class="side-head">
@@ -170,216 +151,25 @@
     </div>
   </section>
   <div class="toasts" id="toasts"></div>
-  <dialog id="profile-dialog" class="dialog welcome">
-    <form id="profile-form" method="dialog">
-      <div class="welcome-art scene-art wb-scene" id="pf-art" role="img" aria-label="Three vibemates come up one after another and wave hello; one of them says it with a heart"></div>
-      <h3 class="welcome-title">Welcome to viberoom</h3>
-      <p class="lead welcome-lead">Your vibemates are glad you are here. Start with your name: it is how they will know you in every room. The face and the line are up to you, and you can change all of it later under Your vibe.</p>
-      <label>Vibename <span class="hint">(your name in every room)</span><input id="pf-name" type="text" maxlength="24" required autocomplete="off" placeholder="letters, digits, _ or -"></label>
-      <label>Vibeface <span class="hint">(pick one, or type any emoji)</span>
-        <div id="pf-avatar-picker"></div>
-        <input id="pf-avatar" type="text" maxlength="40" placeholder="custom emoji (optional)"></label>
-      <label>Your vibe line <span class="hint">(a sentence or two about you)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The vibemates get this line in every room's brief, so they know who they are talking to. A room can add its own line or replace it (Your vibe, in the room).</span>
-        <textarea id="pf-desc" rows="3" maxlength="200" placeholder="e.g. software engineer, enjoys learning; likes short answers"></textarea></label>
-      <p class="error" id="pf-error" hidden></p>
-      <div class="actions"><button type="submit" data-ui="button" data-kind="primary" data-size="lg">Start vibing</button></div>
-    </form>
-  </dialog>
-  <dialog id="look-dialog" class="dialog wide">
-    <form id="look-form" method="dialog">
-      <h3><span class="h-ico" data-icon="eye"></span>Pick a look</h3>
-      <p class="lead">How viberoom is drawn. A click tries a look on the window at once; change it, or fine-tune it, any time under Settings → Appearance.</p>
-      <div class="look-cards" id="look-dialog-cards"></div>
-      <div class="actions"><button type="submit" data-ui="button" data-kind="primary" data-size="lg">Keep this look</button></div>
-    </form>
-  </dialog>
-  <dialog id="login-dialog" class="dialog">
-    <form id="login-form" method="dialog"><div id="ld-body"></div></form>
-  </dialog>
-  <dialog id="secret-dialog" class="dialog">
-    <form id="secret-form" method="dialog"><div id="sd-body"></div></form>
-  </dialog>
-  <dialog id="setup-dialog" class="dialog wide">
-    <form id="setup-form" method="dialog"><div id="su-body"></div></form>
-  </dialog>
-  <dialog id="confirm-dialog" class="dialog narrow">
-    <form method="dialog">
-      <h3 id="cf-title">Are you sure?</h3>
-      <p class="lead" id="cf-text"></p>
-      <div id="cf-extra" hidden></div>
-      <div class="actions"><button data-ui="button" data-kind="ghost" id="cf-cancel" value="cancel" type="submit">Cancel</button><button data-ui="button" data-kind="ghost" id="cf-alt" value="alt" type="submit" hidden>Alt</button><button data-ui="button" data-kind="primary" id="cf-ok" value="ok" type="submit">OK</button></div>
-    </form>
-  </dialog>
-  <dialog id="room-dialog" class="dialog">
-    <form id="room-form" method="dialog">
-      <div class="door-art scene-art wb-scene door-scene" id="room-art" role="img" aria-label="A door opens on a warm light; a vibemate steps onto the threshold and waves, another peeks round the jamb and waves too"></div>
-      <h3><span class="h-ico" data-icon="rooms"></span>Open a new room</h3>
-      <p class="lead">A room is a shared space for you and the vibemates you summon. Give it a name.</p>
-      <label>Room name<input id="room-name" type="text" maxlength="60" required placeholder="e.g. Architecture review"></label>
-      <label>Working directory <span class="hint">(optional)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The folder the vibemates work in (their cwd). Leave it empty and viberoom keeps a folder per room. Instruction files in it (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules) are read by the vibemates by their own conventions; the room tells you if it finds any.</span>
-        <span class="dir-row"><input id="room-dir" type="text" placeholder="C:\projects\my-app"><button type="button" data-ui="button" data-kind="ghost" class="browse-btn" id="room-dir-browse" title="Choose a folder"><span data-icon="folder"></span>Browse</button></span></label>
-      <div id="room-options"></div>
-      <p class="error" id="room-error" hidden></p>
-      <div class="actions"><button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button><button type="submit" data-ui="button" data-kind="primary">Open the room</button></div>
-    </form>
-  </dialog>
-  <dialog id="template-dialog" class="dialog wide">
-    <form id="template-form" method="dialog">
-      <h3><span class="h-ico" data-icon="rooms"></span>Start from a template</h3>
-      <p class="lead">A template is a room's rules and its vibemates, ready to summon. Pick one, choose who runs each vibemate, name the room.</p>
-      <div class="tpl-layout">
-        <div class="tpl-pane"><div class="tpl-list" id="tpl-list"></div></div>
-        <div class="tpl-pane"><div class="tpl-detail" id="tpl-detail"></div></div>
-      </div>
-      <label>Room name<input id="tpl-room-name" type="text" maxlength="60" required placeholder="e.g. Payments refactor"></label>
-      <label>Working directory <span class="hint">(optional)</span>
-        <span class="dir-row"><input id="tpl-room-dir" type="text" placeholder="C:\projects\my-app"><button type="button" data-ui="button" data-kind="ghost" class="browse-btn" id="tpl-dir-browse" title="Choose a folder"><span data-icon="folder"></span>Browse</button></span></label>
-      <p class="error" id="tpl-error" hidden></p>
-      <div class="actions"><button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button><button type="submit" data-ui="button" data-kind="primary" id="tpl-create">Create the room</button></div>
-    </form>
-  </dialog>
-  <dialog id="save-template-dialog" class="dialog wide">
-    <form id="save-template-form" method="dialog">
-      <h3><span class="h-ico" data-icon="rooms"></span>Turn this room into a template</h3>
-      <p class="lead">Everything below goes into the template: the room's settings and rules, its folder, and each vibemate with the coding agent it runs on. Check it, name it, create it.</p>
-      <label>Template name<input id="stp-name" type="text" maxlength="60" required placeholder="e.g. Payments refactor"></label>
-      <label>Description <span class="hint">(optional)</span><textarea id="stp-desc" rows="2" maxlength="400" placeholder="what this setup is good for"></textarea></label>
-      <div class="stp-preview" id="stp-preview"></div>
-      <p class="error" id="stp-error" hidden></p>
-      <div class="actions"><button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button><button type="submit" data-ui="button" data-kind="primary" id="stp-create">Create the template</button></div>
-    </form>
-  </dialog>
-  <dialog id="invite-dialog" class="dialog wide">
-    <form id="invite-form" method="dialog">
-      <h3><span class="h-ico" data-icon="spark"></span>Summon a Vibemate</h3>
-      <p class="lead">Pick a vibemate, give it a vibename and a character, and it joins the room.</p>
-      <div class="agent-grid" id="inv-agents"></div>
-      <p class="hint inv-tools">Each tile says whether that agent is installed and logged in, in its own words. <button type="button" data-ui="button" data-kind="ghost" data-size="sm" id="inv-recheck" title="Look for every agent on this machine again, and ask each one whether it is logged in">Check again</button></p>
-      <div id="inv-login" class="login-host" hidden></div>
-      <p class="hint" id="inv-none" hidden></p>
-      <select id="inv-type" hidden></select>
-      <div id="inv-options" hidden>
-        <div class="choice-row"><span class="label">Model</span><div class="chips" data-for="inv-model"></div><select id="inv-model" hidden></select><input id="inv-model-custom" type="text" placeholder="or type a model name" hidden></div>
-        <div class="choice-row"><span class="label">Effort</span><div class="chips" data-for="inv-effort"></div><select id="inv-effort" hidden></select></div>
-        <div class="choice-row"><span class="label">Mode</span><div class="chips" data-for="inv-mode"></div><select id="inv-mode" hidden></select></div>
-      </div>
-      <div class="two-col">
-        <label>Vibename <span class="hint req">(required)</span><input id="inv-name" type="text" maxlength="24" required autocomplete="off" placeholder="letters, digits, _ or -"></label>
-        <label>Vibersona <span class="hint">(optional; a few words under the vibename)</span><input id="inv-tagline" type="text" maxlength="80" placeholder="e.g. curious analyst"></label>
-      </div>
-      <label>Vibeface <span class="hint">(pick one, or type any emoji)</span>
-        <div id="inv-avatar-picker"></div>
-        <input id="inv-avatar" type="text" maxlength="40" placeholder="custom emoji (optional)"></label>
-      <label>Vibio <span class="hint">(only this vibemate reads it)</span><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Who it is, how it speaks, what it cares about. It reaches the vibemate as instructions in its brief; the other participants never see it. You can change it later in the vibemate's panel.</span>
-        <textarea id="inv-role" rows="4" maxlength="4000" placeholder="e.g. A calm team lead who asks one question at a time."></textarea></label>
-      <details class="geek" id="inv-geek">
-        <summary><span data-icon="geek"></span>for geeks<span class="g-hint">reply delay, skills, where the vibemate lives</span><span class="chev" data-icon="down"></span></summary>
-        <div class="geek-body">
-          <label>Reply delay override, seconds<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Empty: the room's delay. A value here overrides it for this vibemate only. Before each turn the vibemate waits a random 0–N seconds, so replies cross less often; messages that arrive meanwhile land in its backlog.</span><span data-ui="number-field"><input class="input" id="inv-delay" type="number" min="0" max="120" step="0.5" placeholder="the room's"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span></label>
-          <label>Skills <span class="hint">(from the library)</span><div id="inv-skills" class="check-list"></div></label>
-          <p class="hint" id="inv-where"></p>
-          <p class="hint" id="inv-note"></p>
-          <p class="hint accent" id="inv-status"></p>
-          <div class="row-btns start"><button type="button" id="inv-refresh" data-ui="button" data-kind="ghost" data-size="sm" title="Ask the vibemate again what it offers"><span data-icon="refresh"></span>Ask the vibemate again what it offers</button></div>
-        </div>
-      </details>
-      <p class="error" id="inv-error" hidden></p>
-      <div class="actions">
-        <button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button>
-        <button type="submit" id="inv-submit" data-ui="button" data-kind="primary">Summon</button>
-      </div>
-    </form>
-  </dialog>
-  <div id="lightbox" class="lightbox" hidden><img alt=""></div>
-  <div id="diagram-view" class="diagram-view" hidden>
-    <div class="dv-stage" id="dv-stage"></div>
-    <div class="dv-bar" id="dv-bar">
-      <button type="button" class="dv-btn" id="dv-out" title="Zoom out (−)"><span data-icon="zoom-out"></span></button>
-      <button type="button" class="dv-level" id="dv-level" title="Fit the diagram to the window">100%</button>
-      <button type="button" class="dv-btn" id="dv-in" title="Zoom in (+)"><span data-icon="zoom-in"></span></button>
-      <span class="dv-hint">drag to move · double-click to fit</span>
-      <button type="button" class="dv-btn" id="dv-close" title="Close (Esc)"><span data-icon="minimize"></span></button>
-    </div>
+  <dialog id="profile-dialog" class="dialog welcome"></dialog>
+  <dialog id="look-dialog" class="dialog wide"></dialog>
+  <dialog id="login-dialog" class="dialog"></dialog>
+  <dialog id="secret-dialog" class="dialog"></dialog>
+  <dialog id="setup-dialog" class="dialog wide"></dialog>
+  <dialog id="confirm-dialog" class="dialog narrow"></dialog>
+  <dialog id="folder-change-dialog" class="dialog folder-change-dialog"></dialog>
+  <dialog id="room-dialog" class="dialog"></dialog>
+  <dialog id="template-dialog" class="dialog wide"></dialog>
+  <dialog id="save-template-dialog" class="dialog wide"></dialog>
+  <dialog id="invite-dialog" class="dialog wide"></dialog>
+  <div id="lightbox" class="lightbox" hidden></div>
+  <div id="diagram-view" class="diagram-view" hidden></div>
+  <dialog id="edit-dialog" class="dialog"></dialog>
+  <dialog id="reconnect-dialog" class="dialog wide"></dialog>
+  <dialog id="erase-dialog" class="dialog narrow"></dialog>
+  <dialog id="folder-dialog" class="dialog wide folder-dialog"></dialog>
+  <dialog id="file-dialog" class="dialog wide file-dialog light-dismiss"></dialog>
   </div>
-  <dialog id="edit-dialog" class="dialog">
-    <form id="edit-form" method="dialog">
-      <h3><span class="h-ico" data-icon="pencil"></span>Edit your message</h3>
-      <p class="lead" id="ed-summary"></p>
-      <div class="choice-list">
-        <div class="choice"><span><strong>Notify vibemates</strong> — the message changes in place; the vibemates that read the old version are told.<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>The vibemates that already read the old version get a room event with the change and reply only if it matters to them. Cheap; their memory still holds the old wording.</span></span></div>
-        <div class="choice"><span><strong>Rewrite from here</strong> — <span id="ed-rewrite-detail"></span> The vibemates that read the old version start over from this message.<button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Those vibemates restart with a fresh session and the conversation up to this message; they lose their working memory (tool results, reasoning). The removed messages are kept for you in <code>history.deleted.jsonl</code>.</span></span></div>
-      </div>
-      <p class="error" id="ed-error" hidden></p>
-      <div class="actions">
-        <button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button>
-        <button type="button" id="ed-rewrite" data-ui="button" data-kind="danger">Rewrite from here</button>
-        <button type="button" id="ed-notify" data-ui="button" data-kind="primary" autofocus>Notify vibemates</button>
-      </div>
-    </form>
-  </dialog>
-  <dialog id="reconnect-dialog" class="dialog wide">
-    <form id="reconnect-form" method="dialog">
-      <h3><span class="h-ico" data-icon="refresh"></span>Welcome back</h3>
-      <p class="lead" id="rc-intro"></p>
-      <div class="choice-list">
-        <label class="choice"><input type="radio" name="rc-mode" value="replay" checked> <span><strong>Replay the last</strong> <span data-ui="number-field" class="rc-num"><input class="input" id="rc-replay" type="number" min="0" max="500" value="10"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span> <strong>chat messages</strong> — a fresh start with the recent history.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="replay" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>A new vibemate session that reads the recent room history (room events in between come along), like a person coming back from a break. Cheap and works for every vibemate.</span></span></label>
-        <label class="choice"><input type="radio" name="rc-mode" value="load"> <span><strong>Restore the full session</strong> — the vibemate continues its saved session.<span class="rc-is-default" hidden>default</span><button type="button" class="link-btn rc-default" data-mode="load" hidden>Make default</button><button type="button" class="geek-tip" title="For geeks"><span data-icon="geek"></span>for geeks</button><span class="geek-text" hidden>Continue the vibemate's saved conversation, including its previous work. A long conversation can make the next reply more costly. If it cannot be restored, the vibemate starts a new session with recent messages from this room.</span></span></label>
-      </div>
-      <table class="rc-table" id="rc-table"></table>
-      <p class="error" id="rc-error" hidden></p>
-      <div class="actions">
-        <button type="button" data-ui="button" data-kind="ghost" data-close>Later</button>
-        <button type="submit" id="rc-submit" data-ui="button" data-kind="primary">Reconnect</button>
-      </div>
-    </form>
-  </dialog>
-  <dialog id="erase-dialog" class="dialog narrow">
-    <form id="erase-form" method="dialog">
-      <h3><span class="h-ico danger" data-icon="alert"></span>Erase my vibe</h3>
-      <p class="lead">This wipes <strong>everything</strong> in this viberoom: your vibe, all rooms and their history, every vibemate session, your skills (the built-in ones come back). The next start asks you to set a vibe again.</p>
-      <label>Type <code>erase</code> to confirm<input id="erase-word" type="text" autocomplete="off" placeholder="erase"></label>
-      <p class="error" id="erase-error" hidden></p>
-      <div class="actions"><button type="button" data-ui="button" data-kind="ghost" data-close>Keep my vibe</button><button type="submit" id="erase-submit" data-ui="button" data-kind="danger-solid" disabled>Erase everything</button></div>
-    </form>
-  </dialog>
-  <dialog id="folder-dialog" class="dialog wide folder-dialog">
-    <div class="file-head">
-      <h3><span class="h-ico" data-icon="folder"></span>Choose a folder</h3>
-      <div class="fp-bar">
-        <input id="fp-path" type="text" spellcheck="false" placeholder="Type a path and press Enter, or pick one below">
-        <button type="button" data-ui="button" data-kind="ghost" id="fp-home" title="Your home folder"><span data-icon="user"></span>Home</button>
-        <button type="button" data-ui="button" data-kind="ghost" id="fp-new" title="New folder inside the selected one"><span data-icon="plus"></span>New folder</button>
-      </div>
-      <div class="fp-recent" id="fp-recent"></div>
-    </div>
-    <div class="fp-body">
-      <ul class="tree" id="fp-tree"></ul>
-    </div>
-    <p class="error" id="fp-error" hidden></p>
-    <div class="actions">
-      <span class="fp-selected" id="fp-selected"></span>
-      <button type="button" data-ui="button" data-kind="ghost" data-close>Cancel</button>
-      <button type="button" data-ui="button" data-kind="primary" id="fp-choose">Choose this folder</button>
-    </div>
-  </dialog>
-  <dialog id="file-dialog" class="dialog wide file-dialog light-dismiss">
-    <div class="file-head">
-      <h3><span class="h-ico" data-icon="link"></span><span id="fv-title">File</span></h3>
-      <p class="lead" id="fv-path"></p>
-      <div class="fv-tools" id="fv-tools" hidden>
-        <label class="search fv-find"><span class="search-icon" data-icon="search"></span><input id="fv-search" type="search" placeholder="Find in this file…" autocomplete="off"></label>
-        <span class="fv-hits" id="fv-hits"></span>
-        <label class="fv-goto">line <span data-ui="number-field" class="fv-num"><input class="input" id="fv-line" type="number" min="1" step="1" placeholder="1"><span class="steps" aria-hidden="true"><button type="button" data-act="up" tabindex="-1" title="More"></button><button type="button" data-act="down" tabindex="-1" title="Less"></button></span></span></label>
-        <label class="fv-wrap"><input id="fv-wrap" type="checkbox"> wrap</label>
-        <span class="fv-count" id="fv-count"></span>
-      </div>
-    </div>
-    <div id="fv-body" class="file-view"></div>
-    <div class="actions">
-      <button type="button" id="fv-open" data-ui="button" data-kind="ghost">Open in editor</button>
-      <button type="button" data-ui="button" data-kind="primary" data-close>Close</button>
-    </div>
-  </dialog>
   <script src="/vendor/marked.umd.js"></script>
   <script src="/tokens.js"></script>
   <script src="/icons.js"></script>
@@ -407,6 +197,111 @@
   <script src="/voice.js"></script>
   <script src="/reader.js"></script>
   <script src="/passage.js"></script>
+  <script src="/app-lifetime.js"></script>
+  <script src="/app-screen-lifetime.js"></script>
+  <script src="/app-dom-lifetime.js"></script>
+  <script src="/app-transport.js"></script>
+  <script src="/app-requests.js"></script>
+  <script src="/app-owned-json.js"></script>
+  <script src="/app-settings-model.js"></script>
+  <script src="/app-hub-status-model.js"></script>
+  <script src="/app-service-facts-model.js"></script>
+  <script src="/app-vendor-flow-model.js"></script>
+  <script src="/app-picture-status-model.js"></script>
+  <script src="/app-room-facts.js"></script>
+  <script src="/app-room-directory.js"></script>
+  <script src="/app-room-reader.js"></script>
+  <script src="/app-history-loading.js"></script>
+  <script src="/app-history-reconciliation.js"></script>
+  <script src="/app-conversation-state.js"></script>
+  <script src="/app-message-projections.js"></script>
+  <script src="/app-conversation-reader.js"></script>
+  <script src="/app-timeline-reader.js"></script>
+  <script src="/app-conversation-list-reader.js"></script>
+  <script src="/app-tool-details.js"></script>
+  <script src="/app-message-text-work.js"></script>
+  <script src="/app-settings-commands.js"></script>
+  <script src="/app-room-commands.js"></script>
+  <script src="/app-room-dialog.js"></script>
+  <script src="/app-room-mark.js"></script>
+  <script src="/app-rail.js"></script>
+  <script src="/app-room-panel.js"></script>
+  <script src="/app-confirm-dialog.js"></script>
+  <script src="/app-folder-picker.js"></script>
+  <script src="/app-folder-change.js"></script>
+  <script src="/app-file-viewer.js"></script>
+  <script src="/app-message-parts.js"></script>
+  <script src="/app-message-tools.js"></script>
+  <script src="/app-message-text.js"></script>
+  <script src="/app-message-bubble.js"></script>
+  <script src="/app-message-actions.js"></script>
+  <script src="/app-message-devtools.js"></script>
+  <script src="/app-message-renderer.js"></script>
+  <script src="/app-code-colours.js"></script>
+  <script src="/app-diagram-renderer.js"></script>
+  <script src="/app-message-previews.js"></script>
+  <script src="/app-message-copy.js"></script>
+  <script src="/app-lightbox.js"></script>
+  <script src="/app-diagram-view.js"></script>
+  <script src="/app-composer-menu.js"></script>
+  <script src="/app-rules-editor.js"></script>
+  <script src="/app-attachment-trays.js"></script>
+  <script src="/app-composer-sizing.js"></script>
+  <script src="/app-corner-notes.js"></script>
+  <script src="/app-wedge-card.js"></script>
+  <script src="/app-attention-view.js"></script>
+  <script src="/app-timeline-view.js"></script>
+  <script src="/app-conversation-list.js"></script>
+  <script src="/app-empty-conversation.js"></script>
+  <script src="/app-message-reference.js"></script>
+  <script src="/app-message-waiting.js"></script>
+  <script src="/app-inline-editor.js"></script>
+  <script src="/app-conversation-search.js"></script>
+  <script src="/app-quote-selection.js"></script>
+  <script src="/app-conversation-selection.js"></script>
+  <script src="/app-working-now.js"></script>
+  <script src="/app-pins.js"></script>
+  <script src="/app-context-ring.js"></script>
+  <script src="/app-panel-width.js"></script>
+  <script src="/app-dialog-sizing.js"></script>
+  <script src="/app-panel-view.js"></script>
+  <script src="/app-panel-navigation.js"></script>
+  <script src="/app-setting-fold.js"></script>
+  <script src="/app-skill-checks.js"></script>
+  <script src="/app-guide-view.js"></script>
+  <script src="/app-controls.js"></script>
+  <script src="/app-composer-emoji.js"></script>
+  <script src="/app-toast-view.js"></script>
+  <script src="/app-runtime-notices.js"></script>
+  <script src="/app-participants.js"></script>
+  <script src="/app-agent-panel.js"></script>
+  <script src="/app-agent-config.js"></script>
+  <script src="/app-invite-dialog.js"></script>
+  <script src="/app-login-dialog.js"></script>
+  <script src="/app-edit-dialog.js"></script>
+  <script src="/app-secret-dialog.js"></script>
+  <script src="/app-home.js"></script>
+  <script src="/app-rooms.js"></script>
+  <script src="/app-skills-page.js"></script>
+  <script src="/app-connections-page.js"></script>
+  <script src="/app-onboarding-page.js"></script>
+  <script src="/app-template-form.js"></script>
+  <script src="/app-template-dialog.js"></script>
+  <script src="/app-template-picker.js"></script>
+  <script src="/app-reconnect.js"></script>
+  <script src="/app-profile-dialog.js"></script>
+  <script src="/app-look-dialog.js"></script>
+  <script src="/app-me-page.js"></script>
+  <script src="/app-erase-dialog.js"></script>
+  <script src="/app-settings-view.js"></script>
+  <script src="/app-feature-consent.js"></script>
+  <script src="/app-voice-settings.js"></script>
+  <script src="/app-memory-settings.js"></script>
+  <script src="/app-diagnostics-settings.js"></script>
+  <script src="/app-channels-settings.js"></script>
+  <script src="/app-telegram-setup.js"></script>
+  <script src="/app-settings-screen.js"></script>
+  <script src="/app-settings-form.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

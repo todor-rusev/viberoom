@@ -5,6 +5,7 @@
   const details = (label, value) => `<details><summary>${esc(label)}</summary><pre>${esc(JSON.stringify(value, null, 2))}</pre></details>`;
   const button = (action, label, disabled = false) => `<button data-ui="button" data-kind="secondary" data-recovery-action="${action}"${disabled ? " disabled" : ""}>${esc(label)}</button>`;
   const PAGE = 20;
+  let dialogNumber = 0;
   const criteria = { assertion: "Claim matches the originals", validity_start_end_expiry: "Start, end and expiry match the evidence; unknown dates stay unknown",
     supporting_originals: "Originals support the claim", attributes: "Additional properties are supported", entity_identity: "The person or thing is identified correctly",
     summary: "The summary follows from the originals", labels_and_attributes: "Categories and properties are supported",
@@ -15,24 +16,50 @@
   const stateLabel = value => ({ prepared: "Awaiting budget approval", approved: "Budget approved", building: "Building", paused: "Paused",
     inputs_processed: "Ready for knowledge review", cancelled: "Cancelled" })[value] || value;
   async function open(roomId, ports = {}) {
-    const dialog = document.createElement("dialog"); dialog.className = "dialog wide recovery-dialog";
-    document.body.appendChild(dialog);
-    let state = null, busy = false, stale = false, notice = "", itemPage = 0, sourcePage = 0;
+    if (ports.signal?.aborted) return;
+    const root = ports.root ?? document.body, doc = root.ownerDocument ?? document;
+    const dialog = doc.createElement("dialog"); dialog.className = "dialog wide recovery-dialog";
+    let state = null, busy = false, stale = false, notice = "", errorNotice = false, itemPage = 0, sourcePage = 0;
+    let limitDraft = "", limitTouched = false;
+    const limitId = `recovery-limit-${++dialogNumber}`, limitHintId = `${limitId}-hint`, limitErrorId = `${limitId}-error`;
     const decisions = new Map(), controller = new AbortController();
-    const ask = ports.confirm || (text => window.confirm(text));
+    let disposed = false;
+    const listeners = [];
+    const listen = (target, type, fn) => { target.addEventListener(type, fn); listeners.push(() => target.removeEventListener(type, fn)); };
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true; controller.abort();
+      for (const remove of listeners.splice(0)) remove();
+      try { if (ports.closeDialog) ports.closeDialog(dialog); else if (dialog.open) dialog.close(); }
+      finally { dialog.remove(); }
+    };
+    const confirmAction = ports.confirm || (text => window.confirm(text));
+    const ask = async text => {
+      if (disposed) return false;
+      try { return await confirmAction(text) && !disposed; }
+      catch (error) {
+        if (!disposed) { notice = error?.message || String(error); errorNotice = true; render(); }
+        return false;
+      }
+    };
     const url = `/api/rooms/${encodeURIComponent(roomId)}/memory-recovery`;
     const request = async (body, after = "") => {
+      controller.signal.throwIfAborted();
       const response = await fetch(url + (after ? `?after=${encodeURIComponent(after)}` : ""), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)]),
         ...(body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
-      const value = await response.json(); if (!response.ok) throw new Error(value.error || "Recovery action failed."); return value;
+      controller.signal.throwIfAborted();
+      const value = await response.json(); controller.signal.throwIfAborted();
+      if (!response.ok) throw new Error(value.error || "Recovery action failed."); return value;
     };
     const dirty = () => decisions.size > 0 && state?.kind === "review";
     const close = async () => {
-      if (dirty() && !await ask("Discard these unsaved review decisions?")) return;
-      controller.abort(); if (ports.closeDialog) ports.closeDialog(dialog); else dialog.close(); dialog.remove();
+      if (disposed || dirty() && !await ask("Discard these unsaved review decisions?")) return false;
+      if (disposed) return false;
+      dispose(); return true;
     };
-    dialog.addEventListener("cancel", event => { event.preventDefault(); void close(); });
-    dialog.addEventListener("close", () => { controller.abort(); dialog.remove(); });
+    listen(dialog, "cancel", event => { event.preventDefault(); void close(); });
+    listen(dialog, "close", dispose);
+    if (ports.signal) listen(ports.signal, "abort", dispose);
     const jobId = () => state?.job?.id || state?.report?.jobId || state?.receipt?.jobId || state?.preview?.jobId || state?.card?.jobId || state?.card?.preview?.jobId || state?.jobId;
     const switchId = () => state?.preparation?.id || state?.card?.switchId || state?.switch?.id || state?.switchId;
     const switchLabel = value => ({ prepared: "Prepared for activation", dispatched: "Request recorded; result unknown", waiting: "Awaiting confirmation",
@@ -87,11 +114,26 @@
         ${item.kind === "repair" ? `<label class="recovery-source-option"><input type="checkbox" data-all-originals${d.sourceIds.length === sources().length ? " checked" : ""}><span>I compared all ${sources().length} eligible originals for the affected knowledge.</span></label>` : ""}
         <label>Explain the support, dates and any omissions<textarea data-decision="explanation" maxlength="4000" rows="3">${esc(d.explanation)}</textarea></label></article>`;
     }
+    function limitProblem() {
+      if (!limitDraft.trim()) return "Choose a credit limit before preparing a quotation.";
+      const value = Number(limitDraft);
+      return Number.isSafeInteger(value) && value > 0 ? "" : "Choose a positive whole number of credits.";
+    }
+    function updateLimit() {
+      const field = dialog.querySelector("[data-recovery-limit]"); if (!field) return;
+      const problem = limitProblem(), shown = limitTouched && !!problem;
+      field.setAttribute("aria-invalid", String(shown));
+      field.setAttribute("aria-describedby", `${limitHintId}${shown ? ` ${limitErrorId}` : ""}`);
+      const error = dialog.querySelector("[data-recovery-limit-error]");
+      error.hidden = !shown; error.textContent = shown ? problem : "";
+      dialog.querySelector('[data-recovery-action="prepare"]').disabled = busy || stale || errorNotice || !!problem;
+    }
     function render() {
       let content = "";
       if (!state) content = "<p>Loading recovery…</p>";
       else if (state.kind === "jobs") content = `<p>Prepare a quotation from eligible originals, approve a budget, then review the rebuilt knowledge.</p>
-        <label>Maximum credits for this rebuild<input data-recovery-limit type="number" min="1" step="1" placeholder="Choose a limit"></label>${button("prepare", "Prepare quotation")}
+        <form data-recovery-prepare novalidate><label for="${limitId}">Maximum credits for this rebuild</label><input id="${limitId}" data-recovery-limit type="number" min="1" step="1" value="${esc(limitDraft)}" placeholder="Choose a limit" aria-describedby="${limitHintId}">
+        <p id="${limitHintId}" class="hint">Enter a positive whole number. Preparing a quotation does not approve spending.</p><p id="${limitErrorId}" class="recovery-field-error" data-recovery-limit-error role="alert" hidden></p><button type="submit" data-ui="button" data-kind="secondary" data-recovery-action="prepare">Prepare quotation</button></form>
         <div class="recovery-jobs">${state.jobs.map(({ job, spent, switches, cancellable }) => `<article><strong>${esc(job.quote.roomName)}</strong> · ${esc(stateLabel(job.state))}<p>${esc(new Date(job.createdAt).toLocaleString())} · ${spent} / ${job.quote.maxCredits} credits reserved${job.reason ? ` · ${esc(job.reason.replaceAll("_", " "))}` : ""}</p>
           ${button(`job:${job.id}`, "Open quotation", job.state === "cancelled")}${job.state === "inputs_processed" ? button(`review:${job.id}`, "Review knowledge") : ""}${job.state !== "cancelled" && cancellable !== false ? button(`cancel:${job.id}`, "Cancel rebuild") : ""}
           ${(switches?.entries || []).map(sw => `<div><p>${esc(switchLabel(sw.state))} · ${esc(new Date(sw.createdAt).toLocaleString())}</p>${sw.state === "prepared" ? button(`activation:${job.id}:${sw.id}`, "Preview activation") : ""}${button(`check:${job.id}:${sw.id}`, "Check switch result")}${sw.state === "confirmed" ? button(`repair:${job.id}:${sw.id}`, "Review repair completion") : ""}${details("Switch identity", { id: sw.id, candidate: sw.wanted.graphId })}</div>`).join("")}${switches?.truncated ? "<p>Only the 50 newest plans are shown. Cancellation is unavailable while older records need review.</p>" : ""}</article>`).join("") || "<p>No rebuilds in this room.</p>"}</div>${state.next ? button(`jobs:${state.next}`, "Next rebuilds") : ""}`;
@@ -130,16 +172,30 @@
         ${details("Completion identity", state.card)}${button("complete-repair", "Approve and complete this repair", stale)}${button("repair-review", "Read current knowledge")}`;
       else if (state.kind === "repair-result") content = `<h4>Repair coverage recorded</h4><p>Coverage was recorded for the verified active generation. It remains valid only while its route and repair context match.</p><p>The old graph and outstanding deletion promises remain. Physical forgetting is unfinished.</p>${button("check-switch", "Check current coverage")}${button("repair-review", "Read current knowledge")}${details("Local repair receipt", state.receipt)}`;
       dialog.innerHTML = `<div class="memory-heading"><h3>Recover room memory</h3><button data-ui="button" data-kind="ghost" data-recovery-close>Close</button></div>
-        <p class="recovery-feedback${stale ? " error" : ""}" role="status">${esc(busy ? "Working…" : notice)}</p><div class="recovery-content">${content}</div><div class="actions">${button("list", "Rebuilds")}${state && state.kind !== "jobs" && state.kind !== "switch-prepared" ? button("refresh", "Read fresh contents") : ""}</div>`;
+        <p class="recovery-feedback${errorNotice && !busy ? " error" : ""}" role="${errorNotice && !busy ? "alert" : "status"}"${!busy && !notice ? " hidden" : ""}>${errorNotice && !busy ? "Error: " : ""}${esc(busy ? "Working…" : notice)}</p><div class="recovery-content">${content}</div><div class="actions">${state?.kind !== "jobs" || stale || errorNotice ? button("list", !state ? "Try again" : state.kind === "jobs" ? "Refresh rebuilds" : "Rebuilds") : ""}${state && state.kind !== "jobs" && state.kind !== "switch-prepared" ? button("refresh", "Read fresh contents") : ""}</div>`;
+      updateLimit();
       if (busy) dialog.querySelectorAll("button, input, select, textarea").forEach(control => { if (!control.hasAttribute("data-recovery-close")) control.disabled = true; });
     }
     async function act(body, after) {
-      busy = true; notice = ""; render();
+      if (disposed) return;
+      busy = true; notice = ""; errorNotice = false; render();
       try { const next = await request(body, after); if (controller.signal.aborted) return; state = next; stale = false; decisions.clear(); itemPage = sourcePage = 0; }
-      catch (error) { if (!controller.signal.aborted) { notice = error.message; stale = true; } }
+      catch (error) { if (!controller.signal.aborted) { notice = error.message; errorNotice = true; stale = true; } }
       finally { busy = false; if (!controller.signal.aborted) render(); }
     }
-    dialog.addEventListener("input", event => {
+    listen(dialog, "submit", event => {
+      if (!event.target.matches("[data-recovery-prepare]")) return;
+      event.preventDefault();
+      if (disposed || busy || stale || errorNotice) return;
+      limitDraft = event.target.querySelector("[data-recovery-limit]").value; limitTouched = true;
+      if (limitProblem()) { updateLimit(); return; }
+      return act({ action: "prepare", maxCredits: Number(limitDraft) });
+    });
+    listen(dialog, "input", event => {
+      if (event.target.hasAttribute("data-recovery-limit")) {
+        if (busy) return;
+        limitDraft = event.target.value; limitTouched = true; updateLimit(); return;
+      }
       const article = event.target.closest("[data-review-item]"); if (!article || busy) return;
       const item = state.report.items.find(item => item.id === article.dataset.reviewItem);
       if (event.target.hasAttribute("data-original-query")) { article.querySelector("[data-source-options]").innerHTML = sourceOptions(item, event.target.value); return; }
@@ -156,21 +212,20 @@
       const preview = dialog.querySelector('[data-recovery-action="switch-preview"], [data-recovery-action="repair-preview"]'); if (preview) preview.disabled = stale || dirty();
       const count = dialog.querySelector("[data-review-count]"); if (count) count.textContent = `${decisions.size} / ${state.report.items.length} items addressed.`;
     });
-    dialog.addEventListener("click", async event => {
+    listen(dialog, "click", async event => {
       const target = event.target.closest("button"); if (!target || target.disabled) return;
       if (target.hasAttribute("data-recovery-close")) return close(); if (busy) return;
       if (target.hasAttribute("data-source-page")) {
         const article = target.closest("[data-review-item]"), item = state.report.items.find(item => item.id === article.dataset.reviewItem);
         article.querySelector("[data-source-options]").innerHTML = sourceOptions(item, article.querySelector("[data-original-query]").value, Number(target.dataset.sourcePage)); return;
       }
-      let action = target.dataset.recoveryAction, id = jobId(); if (!action) return;
+      let action = target.dataset.recoveryAction, id = jobId(); if (!action || action === "prepare") return;
       if (/^(sources|items)-(previous|next)$/.test(action)) { const step = action.endsWith("next") ? 1 : -1; if (action.startsWith("sources")) sourcePage += step; else itemPage += step; render(); return; }
       if (action === "refresh") action = state.kind === "review" ? (state.purpose === "repair" ? "repair-review" : "review") : state.kind === "switch" ? "switch-preview" : state.kind === "activation" ? "activation-preview" : ["switch-result", "repair-result"].includes(state.kind) ? "check-switch" : state.kind === "repair" ? "repair-preview" : "quote";
       if (action === "accept-review" && state.purpose === "repair") action = "accept-repair-review";
       if (dirty() && !["accept-review", "accept-repair-review", "cancel"].includes(action) && !await ask("Discard these unsaved review decisions and read fresh contents?")) return;
       if (action === "list") return act();
       if (action.startsWith("jobs:")) return act(undefined, action.slice(5));
-      if (action === "prepare") { const cap = Number(dialog.querySelector("[data-recovery-limit]").value); if (!Number.isSafeInteger(cap) || cap < 1) { notice = "Choose a positive integer credit limit."; render(); return; } return act({ action, maxCredits: cap }); }
       if (action.startsWith("job:")) { id = action.slice(4); action = "quote"; }
       if (action.startsWith("review:")) { id = action.slice(7); action = "review"; }
       if (action.startsWith("cancel:")) { id = action.slice(7); action = "cancel"; }
@@ -186,8 +241,12 @@
       }
       return act(body);
     });
-    render(); if (ports.openDialog) ports.openDialog(dialog); else dialog.showModal(); await act();
+    if (ports.signal?.aborted) { dispose(); return dialog; }
+    try { root.appendChild(dialog); render(); if (ports.openDialog) ports.openDialog(dialog); else dialog.showModal(); if (!disposed) ports.onOpen?.({ dialog, close, dispose }); }
+    catch (error) { dispose(); throw error; }
+    await act();
     return dialog;
   }
+  Object.defineProperty(open, "scoped", { value: true });
   window.ViberoomRecovery = { open };
 })();

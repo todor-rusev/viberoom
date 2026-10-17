@@ -41,18 +41,31 @@
       ${flow?.lines?.length ? `<details><summary>Updater output</summary><pre>${esc(flow.lines.join("\n"))}</pre></details>` : ""}
     </article>`;
   }
-  function create({ post, recipes, onStatus, onError, onChange = () => {} }) {
+  function create({ post, recipes, onStatus, onError, onChange = () => {}, root: scope, doc = scope?.ownerDocument || (scope?.nodeType === 9 ? scope : root.document) }) {
+    scope = scope || doc;
+    const View = doc.defaultView || root.window;
+    const timers = View?.setInterval ? View : root;
+    const listeners = [], dialogListeners = [];
+    let disposed = false;
+    const on = (target, type, listener, options, cleanups = listeners) => {
+      target.addEventListener(type, listener, options);
+      cleanups.push(() => target.removeEventListener(type, listener, options));
+    };
+    const detachDialog = target => {
+      for (const off of dialogListeners.splice(0)) off();
+      if (target) { target.close(); target.remove(); }
+    };
     let view = null, dialog = null, token = null, claiming = false, lastInput = Date.now(), closedLocallyUntil = 0;
-    const windowId = crypto.randomUUID(), flows = new Map(), busy = new Set(), errors = new Map();
+    const windowId = (View?.crypto || root.crypto).randomUUID(), flows = new Map(), busy = new Set(), errors = new Map();
     let generalError = "", allPending = false, cancelPending = false;
     let pendingAllEntries = [];
     let visibleKeys = [];
     let dialogGeneration = 0, dismissRun = false, renewing = null;
     const dismissals = [];
     let startedHere = false;
-    document.addEventListener("keydown", () => { lastInput = Date.now(); }, { passive: true });
-    document.addEventListener("input", () => { lastInput = Date.now(); }, { passive: true });
-    const safeToShow = () => document.visibilityState === "visible" && document.hasFocus() && !document.querySelector("dialog[open]") && Date.now() - lastInput > 4000;
+    on(doc, "keydown", () => { lastInput = Date.now(); }, { passive: true });
+    on(doc, "input", () => { lastInput = Date.now(); }, { passive: true });
+    const safeToShow = () => !disposed && doc.visibilityState === "visible" && doc.hasFocus() && !doc.querySelector("dialog[open]") && Date.now() - lastInput > 4000;
     const batchActive = () => view?.batch?.state === "running" || view?.batch?.state === "cancelling";
     const active = vendor => busy.has(vendor) || flows.get(vendor)?.state === "running" || batchActive() && view.batch.entries.some(e => e.vendor === vendor);
     const activeVendor = () => [...busy][0] || [...flows.values()].find(flow => flow.state === "running")?.recipeId;
@@ -82,18 +95,21 @@
       return other && other !== vendor ? `Wait for ${recipes().find(r => r.id === other)?.vendor || other}’s update to finish.` : "";
     };
     function fail(error, vendor) {
+      if (disposed) return;
       const message = error?.message || String(error);
       if (vendor) errors.set(vendor, message); else generalError = message;
       render();
       if (vendor) [...(dialog?.querySelectorAll("[data-vendor]") || [])].find(el => el.dataset.vendor === vendor)?.querySelector('[role="alert"]')?.scrollIntoView({ block: "nearest" });
-      if (!dialog) onError(error);
+      if (!disposed && !dialog) onError(error);
     }
     function reveal(vendor) {
+      if (disposed) return;
       const article = [...(dialog?.querySelectorAll("[data-vendor]") || [])].find(el => el.dataset.vendor === vendor);
       article?.scrollIntoView({ block: "nearest" });
       article?.querySelector("button, a")?.focus({ preventScroll: true });
     }
     function tileAction(recipe) {
+      if (disposed) return "";
       if (recipe.unavailableReason) return "";
       const update = view?.updates.find(u => u.vendor === recipe.id), running = active(recipe.id), entry = entryFor(recipe.id), flow = flows.get(recipe.id);
       const problem = errors.get(recipe.id) || (entry?.state === "failed" ? entry.detail : flow?.state === "failed" ? flow.detail : "");
@@ -107,45 +123,53 @@
       return `<button type="button" data-ui="button" data-kind="soft" data-size="xs" data-agent-update="${esc(recipe.id)}" title="${esc(title)}" ${blocked ? "disabled" : ""}>${label}</button>${feedback}`;
     }
     function bulkAction() {
+      if (disposed) return "";
       const count = eligible().length, active = batchActive() || allPending;
       if (!count && !active && !view?.batch) return "";
       return `<div class="agent-grid-update-all"><button type="button" data-ui="button" data-kind="soft" data-size="sm" data-agent-update-all ${!active && (!count || activeVendor()) ? "disabled" : ""}>${active ? "View updates…" : `Update all (${count})`}</button><span role="status">${esc(batchStatus())}</span></div>`;
     }
     async function startAll() {
-      open(); if (batchActive() || allPending || activeVendor()) return;
+      if (disposed) return;
+      open(); if (disposed || batchActive() || allPending || activeVendor()) return;
       const keys = eligible().map(u => u.key); if (!keys.length) return;
       for (const update of eligible()) { errors.delete(update.vendor); if (flows.get(update.vendor)?.state !== "running") flows.delete(update.vendor); }
       pendingAllEntries = eligible().map(u => ({ vendor: u.vendor, key: u.key, state: "queued", detail: "Waiting for Update all to start…" }));
       generalError = ""; allPending = true; startedHere = true; render();
+      if (disposed) return;
       try { const result = await post("/api/agents/updates/start-all", { keys }); setView(result.updates); }
       catch (error) { fail(error); }
       finally { allPending = false; pendingAllEntries = []; render(); }
     }
     async function start(vendor) {
+      if (disposed) return;
       open(vendor);
-      if (active(vendor)) return;
+      if (disposed || active(vendor)) return;
       const update = view?.updates.find(u => u.vendor === vendor);
       if (!update?.canUpdate || update.status !== "available") return;
       const blocked = blockedBy(vendor);
       if (blocked) { fail(new Error(blocked), vendor); return; }
       errors.delete(vendor); flows.delete(vendor); busy.add(vendor); startedHere = true; render(); reveal(vendor);
+      if (disposed) return;
       try { const result = await post("/api/agents/updates/start", { vendor, key: update.key }, { deadline: 180000 }); setFlow(result.flow, true); }
       catch (error) { fail(error, vendor); }
       finally { busy.delete(vendor); render(); }
     }
-    document.addEventListener("click", event => {
+    on(scope, "click", event => {
+      if (disposed) return;
       const all = event.target.closest?.("[data-agent-update-all]");
-      if (all && !all.disabled) { event.preventDefault(); void startAll(); return; }
+      if (all && (scope === doc || scope.contains(all)) && !all.disabled) { event.preventDefault(); void startAll(); return; }
       const button = event.target.closest?.("[data-agent-update]");
-      if (!button || button.disabled) return;
+      if (!button || (scope !== doc && !scope.contains(button)) || button.disabled) return;
       event.preventDefault(); void start(button.dataset.agentUpdate);
     });
     function render() {
+      if (disposed) return;
       onStatus(status(view));
+      if (disposed) return;
       onChange();
-      if (!dialog) return;
-      const focused = document.activeElement?.dataset.update || document.activeElement?.dataset.stop;
-      const answers = new Map([...dialog.querySelectorAll("form[data-answer]")].map(form => [form.dataset.answer, { value: form.elements.answer.value, focus: document.activeElement === form.elements.answer, start: form.elements.answer.selectionStart, end: form.elements.answer.selectionEnd }]));
+      if (disposed || !dialog) return;
+      const focused = doc.activeElement?.dataset.update || doc.activeElement?.dataset.stop;
+      const answers = new Map([...dialog.querySelectorAll("form[data-answer]")].map(form => [form.dataset.answer, { value: form.elements.answer.value, focus: doc.activeElement === form.elements.answer, start: form.elements.answer.selectionStart, end: form.elements.answer.selectionEnd }]));
       const opened = new Set([...dialog.querySelectorAll("details[open]")].map(el => el.closest("[data-vendor]").dataset.vendor));
       const scrollTop = dialog.querySelector(".agent-update-body")?.scrollTop || 0;
       const all = view?.updates || [];
@@ -164,24 +188,26 @@
     function closeDialog(target) {
       if (!target || dialog !== target) return;
       token = null; dialog = null; dialogGeneration++;
-      target.close(); target.remove(); render();
+      detachDialog(target); render();
     }
     async function saveDismissals() {
-      if (dismissRun) return;
+      if (disposed || dismissRun) return;
       dismissRun = true;
       try {
-        while (dismissals.length) {
+        while (!disposed && dismissals.length) {
           const request = dismissals[0], instance = view?.instance;
           if (request.retryAt > Date.now()) break;
           request.attempts++;
           try {
             const result = await post("/api/agents/updates/dismiss", { action: request.action, keys: request.keys });
+            if (disposed) return;
             if (instance !== view?.instance) throw new Error("The room restarted while saving the update reminder pause.");
             dismissals.shift(); setView(result.updates);
             if (request.action === "skip" && dialog === request.dialog) {
               closedLocallyUntil = 0; closeDialog(request.dialog);
             }
           } catch (error) {
+            if (disposed) return;
             if (request.action === "close") {
               if (request.attempts >= 3) {
                 dismissals.shift();
@@ -198,6 +224,7 @@
       } finally { dismissRun = false; }
     }
     function dismiss(action) {
+      if (disposed) return;
       const target = dialog;
       if (!target || dismissals.some(d => d.action === action && d.dialog === target)) return;
       dismissals.push({ action, keys: [...visibleKeys], dialog: target, attempts: 0, retryAt: 0 });
@@ -206,21 +233,26 @@
       void saveDismissals();
     }
     function open(vendor) {
+      if (disposed) return;
       if (dialog) { if (vendor) reveal(vendor); else dialog.focus(); return; }
       visibleKeys = (view?.updates || []).filter(u => u.status === "available").map(u => u.key).filter(Boolean);
       startedHere = false;
       dialogGeneration++;
-      dialog = document.createElement("dialog"); dialog.className = "dialog agent-updates-dialog"; dialog.id = "agent-updates-dialog";
+      dialog = doc.createElement("dialog"); dialog.className = "dialog agent-updates-dialog"; dialog.id = "agent-updates-dialog";
       dialog.setAttribute("aria-labelledby", "agent-update-title");
-      dialog.addEventListener("cancel", event => { event.preventDefault(); void dismiss("close"); });
-      dialog.addEventListener("submit", async event => {
+      const target = dialog;
+      const onDialog = (type, listener) => on(target, type, listener, undefined, dialogListeners);
+      onDialog("cancel", event => { if (disposed) return; event.preventDefault(); void dismiss("close"); });
+      onDialog("submit", async event => {
+        if (disposed) return;
         const form = event.target.closest("form[data-answer]"); if (!form) return;
         event.preventDefault();
         const vendor = [...flows.values()].find(flow => flow.id === form.dataset.answer)?.recipeId;
-        try { const result = await post(`/api/login/${encodeURIComponent(form.dataset.answer)}/input`, { text: form.elements.answer.value }); form.elements.answer.value = ""; if (vendor) errors.delete(vendor); setFlow(result.flow, true); }
+        try { const result = await post(`/api/login/${encodeURIComponent(form.dataset.answer)}/input`, { text: form.elements.answer.value }); if (disposed) return; form.elements.answer.value = ""; if (vendor) errors.delete(vendor); setFlow(result.flow, true); }
         catch (error) { fail(error, vendor); }
       });
-      dialog.addEventListener("click", async event => {
+      onDialog("click", async event => {
+        if (disposed) return;
         const button = event.target.closest("button"); if (!button || button.disabled) return;
         if (button.hasAttribute("data-dismiss")) return void dismiss("close");
         if (button.hasAttribute("data-skip")) return void dismiss("skip");
@@ -229,6 +261,7 @@
         if (button.hasAttribute("data-cancel-all")) {
           if (cancelPending) return;
           cancelPending = true; render();
+          if (disposed) return;
           try { const result = await post("/api/agents/updates/cancel-all", { id: view.batch.id }); setView(result.updates); }
           catch (error) { fail(error); }
           finally { cancelPending = false; render(); }
@@ -236,19 +269,24 @@
         }
         if (button.dataset.stop) {
           const vendor = [...flows.values()].find(flow => flow.id === button.dataset.stop)?.recipeId;
-          try { const result = await post(`/api/login/${encodeURIComponent(button.dataset.stop)}/cancel`); if (vendor) errors.delete(vendor); setFlow(result.flow, true); } catch (error) { fail(error, vendor); }
+          try { const result = await post(`/api/login/${encodeURIComponent(button.dataset.stop)}/cancel`); if (disposed) return; if (vendor) errors.delete(vendor); setFlow(result.flow, true); } catch (error) { fail(error, vendor); }
           return;
         }
         if (button.dataset.update) await start(button.dataset.update);
       });
-      document.body.appendChild(dialog); render(); dialog.showModal(); if (vendor) reveal(vendor);
+      (scope === doc ? doc.body : scope).appendChild(target); render();
+      if (disposed || dialog !== target) return;
+      target.showModal(); if (vendor) reveal(vendor);
     }
     async function check() {
+      if (disposed) return;
       generalError = ""; render();
+      if (disposed) return;
       try { const result = await post("/api/agents/updates/check", {}, { deadline: 180000 }); setView(result.updates); }
       catch (error) { fail(error); }
     }
     function setView(value) {
+      if (disposed) return;
       if (view?.instance && value?.instance === view.instance && value.revision < view.revision) return;
       if (value?.batch?.id && value.batch.id !== view?.batch?.id) pendingAllEntries = [];
       if (view?.instance && value?.instance && value.instance !== view.instance) {
@@ -261,6 +299,7 @@
       view = value; render();
     }
     function setFlow(flow, response = false) {
+      if (disposed) return;
       if (flow?.purpose !== "update") return;
       const known = flows.get(flow.recipeId);
       if (response && known?.id === flow.id && (flow.state === "running" || known.state !== "running")) return;
@@ -268,7 +307,8 @@
       if (known?.id !== flow.id) errors.delete(flow.recipeId);
       flows.set(flow.recipeId, flow); render();
     }
-    const timer = setInterval(async () => {
+    const timer = timers.setInterval(async () => {
+      if (disposed) return;
       if (dismissals.length) void saveDismissals();
       if (dialog && token) {
         const target = dialog, claimedToken = token;
@@ -276,7 +316,7 @@
         const request = renewing = { dialog: target, token: claimedToken };
         try {
           const result = await post("/api/agents/updates/renew", { token: claimedToken });
-          if (!result.ok && dialog === target && token === claimedToken) closeDialog(target);
+          if (!disposed && !result.ok && dialog === target && token === claimedToken) closeDialog(target);
         } catch { }
         finally { if (renewing === request) renewing = null; }
         return;
@@ -286,12 +326,24 @@
       const generation = dialogGeneration, instance = view.instance, notification = view.notification;
       try {
         const answer = await post("/api/agents/updates/claim", { windowId, notification });
-        if (answer.token && generation === dialogGeneration && instance === view?.instance && notification === view?.notification && !dismissals.length && closedLocallyUntil <= Date.now() && safeToShow()) { token = answer.token; open(); }
+        if (!disposed && answer.token && generation === dialogGeneration && instance === view?.instance && notification === view?.notification && !dismissals.length && closedLocallyUntil <= Date.now() && safeToShow()) { token = answer.token; open(); }
       } catch { }
       finally { claiming = false; }
     }, 5000);
-    window.addEventListener("pagehide", () => clearInterval(timer), { once: true });
-    return { open, start, startAll, tileAction, bulkAction, check, setView, setFlow, status: () => status(view) };
+    function dispose() {
+      if (disposed) return;
+      disposed = true; dialogGeneration++;
+      timers.clearInterval(timer);
+      for (const off of listeners.splice(0)) off();
+      const target = dialog;
+      dialog = null; token = null; renewing = null;
+      detachDialog(target);
+      dismissals.length = 0;
+      view = null; flows.clear(); busy.clear(); errors.clear(); pendingAllEntries = []; visibleKeys = [];
+    }
+    on(View, "pagehide", dispose, { once: true });
+    return { open, start, startAll, tileAction, bulkAction, check, setView, setFlow, dispose, status: () => status(view) };
   }
+  Object.defineProperty(create, "disposable", { value: true });
   root.VIBEROOM_AGENT_UPDATES = { create, status, row };
 })(globalThis);

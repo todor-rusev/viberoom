@@ -2,34 +2,52 @@
 (function () {
   "use strict";
   const esc = x => String(x ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-  async function open(roomId, initialScope = "user") {
-    const dialog = document.createElement("dialog"); dialog.className = "dialog wide memory-dialog";
+  async function open(roomId, initialScope = "user", ports = {}) {
+    if (ports.signal?.aborted) return;
+    const root = ports.root ?? document.body, doc = root.ownerDocument ?? document;
+    const dialog = doc.createElement("dialog"); dialog.className = "dialog wide memory-dialog";
     dialog.innerHTML = '<div class="memory-heading"><h3>Shared memory</h3><button data-ui="button" data-kind="ghost" data-memory-close>Close</button></div><p role="status">Loading memory…</p>';
-    document.body.appendChild(dialog); dialog.showModal();
     let state, scope = initialScope, dirty = false, busy = false, warningRequest;
     const controller = new AbortController();
+    let disposed = false;
+    const listeners = [];
+    const listen = (target, type, fn) => { target.addEventListener(type, fn); listeners.push(() => target.removeEventListener(type, fn)); };
+    function dispose() {
+      if (disposed) return;
+      disposed = true; controller.abort();
+      for (const remove of listeners.splice(0)) remove();
+      if (dialog.open) dialog.close();
+      dialog.remove();
+    }
     const request = async body => {
+      controller.signal.throwIfAborted();
       const url = "/api/memory" + (body ? "" : roomId ? `?room=${encodeURIComponent(roomId)}` : "");
       const response = await fetch(url, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]), ...(body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, ...(roomId ? { room: roomId } : {}) }) } : {}) });
-      const value = await response.json(); if (!response.ok) throw new Error(value.error || "Memory could not be saved."); return value;
+      controller.signal.throwIfAborted();
+      const value = await response.json(); controller.signal.throwIfAborted();
+      if (!response.ok) throw new Error(value.error || "Memory could not be saved."); return value;
     };
-    const close = () => { if (busy || dirty && !confirm("Discard the unsaved memory edits?")) return; controller.abort(); dialog.remove(); };
-    dialog.addEventListener("cancel", e => { e.preventDefault(); close(); });
-    function error(e) { const node = dialog.querySelector(".memory-feedback"); if (node) { node.textContent = e.message || String(e); node.hidden = false; } }
+    const close = () => { if (disposed || busy || dirty && !confirm("Discard the unsaved memory edits?")) return false; dispose(); return true; };
+    listen(dialog, "cancel", e => { e.preventDefault(); close(); });
+    listen(dialog, "close", dispose);
+    if (ports.signal) listen(ports.signal, "abort", dispose);
+    function error(e) { if (disposed) return; const node = dialog.querySelector(".memory-feedback"); if (node) { node.textContent = e.message || String(e); node.hidden = false; } }
     function take() {
       return [...dialog.querySelectorAll("[data-memory-note]")].map(el => ({ ...(el.dataset.memoryNote ? { id: el.dataset.memoryNote } : {}), text: el.querySelector("textarea").value, locked: el.querySelector("input[type=checkbox]").checked }));
     }
     function row(note = { text: "", locked: true }) {
-      const item = document.createElement("section"); item.className = "memory-note"; item.dataset.memoryNote = note.id || "";
+      const item = doc.createElement("section"); item.className = "memory-note"; item.dataset.memoryNote = note.id || "";
       item.innerHTML = `<textarea rows="2" maxlength="480" aria-label="Memory note">${esc(note.text)}</textarea><div class="memory-note-tools"><label class="check-row"><input type="checkbox"${note.locked ? " checked" : ""}>Protect from agent edits</label><button data-ui="button" data-kind="ghost" data-memory-remove>Remove</button></div>${note.author ? `<small>Last changed by ${esc(note.author)} · ${esc(new Date(note.updatedAt).toLocaleString())} · ${esc(note.basis)}${note.sources?.length ? ` · Source: ${note.sources.map(s => `${esc(s.room)} #${s.seq}`).join(", ")}` : ""}</small>` : ""}`;
       return item;
     }
     function counts() {
+      if (disposed || !state) return;
       const notes = take(), total = notes.reduce((n, x) => n + [...x.text.trim()].length, 0);
       dialog.querySelector(".memory-count").textContent = `${notes.length} / ${state.limits.notes} notes · ${total} / ${state.limits.scopeChars} characters · up to ${state.limits.noteChars} per note`;
       dialog.querySelector("[data-memory-add]").disabled = notes.length >= state.limits.notes;
     }
     function render() {
+      if (disposed) return;
       const current = state[scope]; dirty = false; warningRequest = null;
       dialog.innerHTML = `<div class="memory-heading"><h3>Shared memory</h3><button data-ui="button" data-kind="ghost" data-memory-close>Close</button></div>
         <nav class="memory-scopes" aria-label="Whose memory"><button data-ui="button" data-kind="${scope === "user" ? "primary" : "ghost"}" data-memory-scope="user">About you · all rooms</button>${roomId ? `<button data-ui="button" data-kind="${scope === "room" ? "primary" : "ghost"}" data-memory-scope="room">This room</button>` : ""}</nav>
@@ -44,23 +62,25 @@
       if (state.warnings?.[scope]?.length) error(state.warnings[scope].map(w => w.message).join("\n"));
     }
     async function save(body) {
+      if (disposed) return;
       busy = true;
       for (const control of dialog.querySelectorAll("button, input, textarea")) control.disabled = true;
       try {
         const value = await request(body);
+        if (disposed) return;
         if (value.saved === false) { warningRequest = { ...body, acknowledge: value.acknowledge }; error(value.warnings.map(w => w.message).join("\n")); dialog.querySelector("[data-memory-ack]").hidden = false; return; }
         state = value; render(); const feedback = dialog.querySelector(".memory-feedback"); feedback.classList.remove("error"); feedback.hidden = false; feedback.textContent = "Memory saved. Vibemates receive it on their next turn.";
-      } catch (e) { error(e); } finally { busy = false; for (const control of dialog.querySelectorAll("button, input, textarea")) control.disabled = false; counts(); }
+      } catch (e) { error(e); } finally { busy = false; if (!disposed) { for (const control of dialog.querySelectorAll("button, input, textarea")) control.disabled = false; counts(); } }
     }
-    dialog.addEventListener("input", event => { if (event.target.matches("textarea")) event.target.closest("[data-memory-note]").querySelector("input[type=checkbox]").checked = true; dirty = true; warningRequest = null; dialog.querySelector("[data-memory-ack]").hidden = true; counts(); });
-    dialog.addEventListener("click", async event => {
+    listen(dialog, "input", event => { if (event.target.matches("textarea")) event.target.closest("[data-memory-note]").querySelector("input[type=checkbox]").checked = true; dirty = true; warningRequest = null; dialog.querySelector("[data-memory-ack]").hidden = true; counts(); });
+    listen(dialog, "click", async event => {
       const button = event.target.closest("button"); if (!button || busy) return;
       try {
         if (button.hasAttribute("data-memory-close")) return close();
         if (button.dataset.memoryScope || button.hasAttribute("data-memory-reload")) {
           if (dirty && !confirm("Discard the unsaved memory edits and reload?")) return;
           if (button.dataset.memoryScope) scope = button.dataset.memoryScope;
-          state = await request(); render(); return;
+          const next = await request(); if (disposed) return; state = next; render(); return;
         }
         if (button.hasAttribute("data-memory-add")) { dialog.querySelector(".memory-notes").appendChild(row()); dirty = true; warningRequest = null; dialog.querySelector("[data-memory-ack]").hidden = true; counts(); return; }
         if (button.hasAttribute("data-memory-remove")) { button.closest("[data-memory-note]").remove(); dirty = true; warningRequest = null; dialog.querySelector("[data-memory-ack]").hidden = true; counts(); return; }
@@ -70,7 +90,13 @@
         if (button.hasAttribute("data-memory-clear") && confirm("Clear all notes and retained revisions in this memory scope?")) return save({ action: "clear", scope, revision: state[scope].revision });
       } catch (e) { error(e); }
     });
-    try { state = await request(); render(); } catch (e) { dialog.innerHTML = `<p class="error">${esc(e.message)}</p><button data-ui="button" data-memory-close>Close</button>`; }
+    const handle = { dialog, close, dispose };
+    if (ports.signal?.aborted) { dispose(); return handle; }
+    try { root.appendChild(dialog); dialog.showModal(); if (!disposed) ports.onOpen?.(handle); }
+    catch (e) { dispose(); throw e; }
+    try { const next = await request(); if (!disposed) { state = next; render(); } } catch (e) { if (!disposed) dialog.innerHTML = `<p class="error">${esc(e.message)}</p><button data-ui="button" data-memory-close>Close</button>`; }
+    return handle;
   }
+  Object.defineProperty(open, "scoped", { value: true });
   window.ViberoomMemory = { open };
 })();

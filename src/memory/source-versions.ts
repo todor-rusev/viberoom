@@ -29,11 +29,12 @@ interface Ports {
 }
 
 export const SOURCE_CHECK_RETRY_LIMIT = 5;
+export const MEMORY_THROTTLE_NOTICE_QUIET_MS = 5 * 60_000;
 type Inspection = { state: "complete"; same: ListedEpisode[]; ancestors: ListedEpisode[]; unknown: ListedEpisode[]; current(): boolean }
   | { state: "unknown"; reason: string };
 
 export class MemorySourceVersions {
-  private readonly throttleNoted = new Set<string>();
+  private readonly throttleNoted = new Map<string | undefined, number>();
   constructor(private readonly ports: Ports) {}
 
   private version(room: string, id: string): string | null {
@@ -137,12 +138,20 @@ export class MemorySourceVersions {
   }
 
   throttled(roomId: string): void {
-    if (this.throttleNoted.has(roomId)) return;
-    this.throttleNoted.add(roomId);
-    this.ports.note?.(roomId, "Long-term memory is waiting: Zep is limiting this account's requests (429), as it does when the account's rate or usage quota is used up. Nothing is lost; the memory goes on at the pace Zep allows. If this lasts, check the account's usage in Zep.");
+    const room = this.ports.room(roomId);
+    if (!room) return;
+    const noted = this.throttleNoted.has(room.account);
+    this.throttleNoted.set(room.account, this.ports.now());
+    if (noted) return;
+    this.ports.note?.(roomId, "Long-term memory is waiting: Zep is limiting this account's requests (429), as it does when the account's rate or usage quota is used up. Nothing is lost; the memory goes on at the pace Zep allows, in every room using this account. If this lasts, check the account's usage in Zep.");
   }
 
-  readBack(roomId: string): void { this.throttleNoted.delete(roomId); }
+  readBack(roomId: string): void {
+    const room = this.ports.room(roomId);
+    if (!room) return;
+    const last = this.throttleNoted.get(room.account);
+    if (last !== undefined && this.ports.now() - last >= MEMORY_THROTTLE_NOTICE_QUIET_MS) this.throttleNoted.delete(room.account);
+  }
 
   private wait(room: Room, id: string, reason: string, reads: WriteTransport): void { this.defer(room, id, reason, reads, false); }
 

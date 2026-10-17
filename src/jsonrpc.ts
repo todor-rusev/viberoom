@@ -152,3 +152,15 @@ export class JsonRpcPeer {
     }
   }
 }
+
+export function errorData(error: unknown): unknown {
+  if (!(error instanceof Error)) return undefined;
+  return (error as Error & { data?: unknown; rpc?: { data?: unknown } }).rpc?.data ?? (error as Error & { data?: unknown }).data;
+}
+
+export function describeError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const data = errorData(error);
+  const detail = errorDetail(data);
+  return detail && !error.message.includes(detail) ? `${error.message}: ${detail}` : error.message;
+}

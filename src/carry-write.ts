@@ -1,5 +1,5 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
-import { closeSync, constants, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, rmSync, type RmOptions } from "node:fs";
+import { closeSync, constants, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, type RmOptions } from "node:fs";
 import { join } from "node:path";
 import { HistoryStore } from "./history-store.js";
 import { CarryStage, type CarryResource, type PlanRowKind } from "./carry-stage.js";
@@ -11,12 +11,24 @@ export const ARRIVING = ".arriving";
 
 export const HELD_FILE_RETRIES = { recursive: true, force: true, maxRetries: 4, retryDelay: 100 } as const;
 
-export function removeArrivingFolder(folder: string, remove: (path: string, options: RmOptions) => void = rmSync): void {
+export function removeArrivingFolder(folder: string, remove: (path: string, options: RmOptions) => void = rmSync, owns: () => boolean = () => true): void {
   const marker = join(folder, ARRIVING);
-  if (!existsSync(marker)) return;
-  for (const entry of readdirSync(folder)) if (entry !== ARRIVING) remove(join(folder, entry), HELD_FILE_RETRIES);
+  if (!existsSync(marker) || !owns()) return;
+  for (const entry of readdirSync(folder)) {
+    if (entry === ARRIVING) continue;
+    remove(join(folder, entry), HELD_FILE_RETRIES);
+    if (!owns()) return;
+  }
   remove(marker, HELD_FILE_RETRIES);
+  if (!owns()) return;
   remove(folder, HELD_FILE_RETRIES);
+}
+
+function markedAttempt(marker: string): string | undefined {
+  try {
+    const attempt = (JSON.parse(readFileSync(marker, "utf8")) as { attempt?: unknown }).attempt;
+    return typeof attempt === "string" ? attempt : undefined;
+  } catch { return undefined; }
 }
 
 export async function takeBackOrSay(failure: unknown, takeBack: () => Promise<void>): Promise<void> {
@@ -37,6 +49,7 @@ export interface ArrivingRoomTask {
   dataDir: string;
   uuid: string;
   target: string;
+  attempt: string;
   aliases: string[];
   rows: Record<PlanRowKind, number>;
 }
@@ -54,17 +67,19 @@ export async function writeArrivingRoom(task: ArrivingRoomTask, progress: (step:
   const folder = join(task.dataDir, "rooms", task.target);
   if (existsSync(folder)) throw new Error("The new room's folder already exists here. Look at the import again.");
   const stage = new CarryStage(task.stageDir), store = new HistoryStore(task.history);
-  let marked = false;
   try {
     mkdirSync(join(folder, "files"), { recursive: true });
-    durable(join(folder, ARRIVING), JSON.stringify({ uuid: task.uuid, at: new Date().toISOString() }));
-    marked = true;
+    durable(join(folder, ARRIVING), JSON.stringify({ uuid: task.uuid, attempt: task.attempt, at: new Date().toISOString() }));
+    const marker = join(folder, ARRIVING);
+    const ours = () => { if (markedAttempt(marker) !== task.attempt) throw new Error("The new room's folder is no longer this import's; nothing more is written to it."); };
     const { target, uuid, rows } = task;
     const revisions = stage.planRows<CarryRevision>(uuid, "revision");
     const revisionMap = new Map(revisions.map(r => [r.revision, r]));
     const repair = stage.memoryRepair(uuid);
+    ours();
     if (rows.revision) store.transaction(() => store.carry.importRevisions(target, revisions));
     for (let from = 0; from < rows.state; from += PORTION) {
+      ours();
       const states = stage.planRows<CarryState>(uuid, "state", from, PORTION);
       store.transaction(() => {
         if (!repair) store.importMemoryRepair(target, uuid, undefined, states, revisionMap, task.aliases);
@@ -77,45 +92,52 @@ export async function writeArrivingRoom(task: ArrivingRoomTask, progress: (step:
       await breathe();
     }
     for (let from = 0; from < rows.head; from += PORTION * 10) {
+      ours();
       const heads = stage.planRows<CarryHead>(uuid, "head", from, PORTION * 10);
       store.transaction(() => { for (const head of heads) store.carry.acceptHead(target, head); });
       await breathe();
     }
     for (let from = 0; from < rows.alternative; from += PORTION) {
+      ours();
       const alternatives = stage.planRows<CarryAlternative>(uuid, "alternative", from, PORTION);
       store.transaction(() => { for (const alternative of alternatives) store.carry.archive(target, alternative); });
       await breathe();
     }
+    ours();
     if (task.aliases.length) store.transaction(() => store.carry.addAliases(target, task.aliases));
     for (let from = 0; from < rows.number; from += PORTION * 10) {
+      ours();
       const numbers = stage.planRows<CarryNumber>(uuid, "number", from, PORTION * 10);
       store.transaction(() => store.carry.learnNumbers(target, numbers));
       await breathe();
     }
     for (let from = 0; from < rows.resource; from += PORTION) {
       const resources = stage.planRows<CarryResource>(uuid, "resource", from, PORTION);
-      for (const resource of resources) durableCopy(join(stage.dir, "blobs", resource.blob), join(folder, "files", resource.file));
+      for (const resource of resources) { ours(); durableCopy(join(stage.dir, "blobs", resource.blob), join(folder, "files", resource.file)); }
+      ours();
       store.transaction(() => { for (const resource of resources) store.carry.resource(target, resource.file, resource.sha256); });
       progress({ phase: "files", done: Math.min(from + PORTION, rows.resource), total: rows.resource });
       await breathe();
     }
     return { messages: rows.state, files: rows.resource };
-  } catch (error) {
-    if (marked) await takeBackOrSay(error, () => takeBackArrivingRoom({ history: store, dataDir: task.dataDir, target: task.target }));
-    throw error;
   } finally {
     store.close();
     stage.close();
   }
 }
 
-export async function takeBackArrivingRoom(where: { history: HistoryStore | string; dataDir: string; target: string }): Promise<void> {
+export async function takeBackArrivingRoom(where: { history: HistoryStore | string; dataDir: string; target: string; attempt: string }): Promise<void> {
+  const folder = join(where.dataDir, "rooms", where.target), marker = join(folder, ARRIVING);
+  let unmarked = false;
+  const ours = () => unmarked || markedAttempt(marker) === where.attempt;
+  if (!ours()) return;
   const store = typeof where.history === "string" ? new HistoryStore(where.history) : where.history;
   try {
-    while (store.dropRoomPortion(where.target, PORTION) > 0) await breathe();
+    while (ours() && store.dropRoomPortion(where.target, PORTION) > 0) await breathe();
+    if (!ours()) return;
     store.dropRoom(where.target);
   } finally {
     if (typeof where.history === "string") store.close();
   }
-  removeArrivingFolder(join(where.dataDir, "rooms", where.target));
+  removeArrivingFolder(folder, (path, options) => { rmSync(path, options); if (path === marker) unmarked = true; }, ours);
 }

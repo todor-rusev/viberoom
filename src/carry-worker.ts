@@ -15,7 +15,7 @@ export type CarryWorkerTask =
   | { type: "plan"; job: CarryPlanJob }
   | { type: "estimate"; snapshot: string; dataDir: string; rooms: ExportJob["rooms"] }
   | { type: "write-room"; room: ArrivingRoomTask }
-  | { type: "take-back-room"; history: string; dataDir: string; target: string };
+  | { type: "take-back-room"; history: string; dataDir: string; target: string; attempt: string };
 
 function dependency(folder: DependencyFolder): CarryDependency {
   const files: CarryDependency["files"] = [];

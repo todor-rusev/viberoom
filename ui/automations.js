@@ -115,49 +115,69 @@
   }
 
   let refreshOpen = null;
-  async function open(roomId, jumpToMessage, confirmAction) {
-    if (!roomId || refreshOpen) return;
-    const dialog = document.createElement("dialog"); dialog.className = "dialog wide automations-dialog";
+  async function open(roomId, jumpToMessage, confirmAction, ports = {}) {
+    if (!roomId || refreshOpen || ports.signal?.aborted) return;
+    const root = ports.root ?? document.body, doc = root.ownerDocument ?? document;
+    const dialog = doc.createElement("dialog"); dialog.className = "dialog wide automations-dialog";
     dialog.setAttribute("aria-label", "Room automations");
     dialog.innerHTML = `<header class="auto-heading"><button type="button" class="auto-back" data-auto="back" aria-label="Back" hidden>${icon("back")}</button><div class="auto-titles"><span class="auto-eyebrow">A little help, right on time</span><h3 data-auto-title>Automations</h3></div>${button("Close", "close")}</header>
       <p data-auto-feedback role="status">Loading…</p><div class="auto-body" data-auto-body><div class="auto-screen" data-auto-content></div></div>`;
-    document.body.appendChild(dialog); dialog.showModal();
     const body = dialog.querySelector("[data-auto-body]"), content = dialog.querySelector("[data-auto-content]");
     const controller = new AbortController();
+    let disposed = false, forced = false;
+    const listeners = [];
+    const listen = (target, type, listener) => { target.addEventListener(type, listener); listeners.push(() => target.removeEventListener(type, listener)); };
     let state, screen = "list", editing = null, dirty = false, busy = false, confirming = false, reading = null, reloadAgain = false, rendered = "";
     let settled = false, seen = new Set(), justSaved = null, historyShown = 10;
     let previewTimer = 0, previewTurn = 0, previewKey = "";
     const previews = new Map();
     const ticking = setInterval(() => {
+      if (disposed) return;
       for (const node of dialog.querySelectorAll("[data-auto-at]")) node.textContent = (node.dataset.autoWords === "next" ? nextWords : whenWords)(Number(node.dataset.autoAt));
     }, 30000);
-    const feedback = (message, error = false) => { const node = dialog.querySelector("[data-auto-feedback]"); node.textContent = message; node.hidden = !message; node.classList.toggle("error", error); };
+    function cleanup() {
+      if (disposed) return;
+      disposed = true; controller.abort(); clearTimeout(previewTimer); clearInterval(ticking); previewTurn++;
+      if (refreshOpen === refresh) refreshOpen = null;
+      for (const remove of listeners.splice(0)) remove();
+      if (dialog.open) dialog.close();
+      dialog.remove();
+    }
+    function dispose() { forced = true; cleanup(); }
+    const feedback = (message, error = false) => { if (disposed) return; const node = dialog.querySelector("[data-auto-feedback]"); node.textContent = message; node.hidden = !message; node.classList.toggle("error", error); };
     const request = async (action, payload) => {
+      controller.signal.throwIfAborted();
       let response, value;
       try { response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/automations${action ? "/" + action : ""}`, {
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]),
         ...(action ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) } : {}),
-      }); value = await response.json(); }
-      catch (error) { if (action && action !== "preview") throw new Error("No confirmation was received. The change may have been applied. Refresh and review the saved tasks and history before trying again."); throw error; }
+      }); controller.signal.throwIfAborted(); value = await response.json(); }
+      catch (error) { controller.signal.throwIfAborted(); if (action && action !== "preview") throw new Error("No confirmation was received. The change may have been applied. Refresh and review the saved tasks and history before trying again."); throw error; }
+      controller.signal.throwIfAborted();
       if (!response.ok) throw new Error(value.error || "The automation request could not be confirmed."); return value;
     };
     async function ask(text, options) {
-      if (confirming) return false;
-      const opener = document.activeElement, action = opener?.dataset.auto, id = opener?.dataset.id;
+      if (disposed || confirming) return false;
+      const opener = doc.activeElement, action = opener?.dataset.auto, id = opener?.dataset.id;
       confirming = true;
-      try { return await confirmAction(text, options); }
+      try { const accepted = await confirmAction(text, options); return !disposed && accepted; }
       finally {
         confirming = false;
-        const restored = opener?.isConnected ? opener : [...dialog.querySelectorAll("[data-auto]")].find(node => node.dataset.auto === action && node.dataset.id === id);
-        restored?.focus({ preventScroll: true });
+        if (!disposed) {
+          const restored = opener?.isConnected ? opener : [...dialog.querySelectorAll("[data-auto]")].find(node => node.dataset.auto === action && node.dataset.id === id);
+          restored?.focus({ preventScroll: true });
+        }
       }
     }
     const discard = () => ask("Your saved automation stays as it is. The edits in this form will be discarded.", { title: "Leave these edits behind?", okLabel: "Discard edits", cancelLabel: "Keep editing", primary: "cancel" });
     async function close() {
-      if (busy || confirming || dirty && !await discard()) return false;
-      controller.abort(); clearTimeout(previewTimer); clearInterval(ticking); refreshOpen = null; dialog.close(); dialog.remove(); return true;
+      if (disposed || busy || confirming || dirty && !await discard()) return false;
+      if (disposed) return false;
+      cleanup(); return true;
     }
-    dialog.addEventListener("cancel", event => { event.preventDefault(); void close().catch(error => feedback(error.message, true)); });
+    listen(dialog, "cancel", event => { event.preventDefault(); void close().catch(error => feedback(error.message, true)); });
+    listen(dialog, "close", dispose);
+    if (ports.signal) listen(ports.signal, "abort", dispose);
 
     const person = id => state.participants.find(p => p.id === id);
     const face = (p, size) => window.Avatars.avatarHtml({ ...p, kind: "agent" }, size, { muted: !!p.muted });
@@ -318,7 +338,7 @@
       content.classList.remove("is-settled");
       body.scrollTop = 0;
     }
-    async function showList() { screenTo("list", "Automations"); editing = null; dirty = false; rendered = ""; await refresh(); }
+    async function showList() { if (disposed) return; screenTo("list", "Automations"); editing = null; dirty = false; rendered = ""; await refresh(); }
     function showKinds() {
       screenTo("kinds", "New automation"); editing = null; dirty = false;
       content.innerHTML = kindsHtml(); feedback("");
@@ -337,6 +357,7 @@
     async function back() {
       if (screen === "edit") {
         if (dirty && !await discard()) return;
+        if (disposed) return;
         dirty = false;
         if (!editing?.id) { showKinds(); return; }
       }
@@ -344,7 +365,7 @@
     }
 
     function render() {
-      if (screen !== "list") return;
+      if (disposed || screen !== "list") return;
       const fingerprint = JSON.stringify([state.available, state.error, state.jobs, state.runs, state.proposals, state.participants, historyShown]);
       if (rendered === fingerprint) return;
       rendered = fingerprint;
@@ -352,7 +373,7 @@
       const oldScroll = body.scrollTop, edge = body.getBoundingClientRect().top;
       const anchor = [...content.querySelectorAll("[data-auto-card]")].find(node => node.getBoundingClientRect().bottom > edge + 30);
       const anchorKey = anchor?.dataset.autoCard, anchorTop = anchor?.getBoundingClientRect().top;
-      const focused = content.contains(document.activeElement) ? document.activeElement : null;
+      const focused = content.contains(doc.activeElement) ? doc.activeElement : null;
       const focusKey = focused?.dataset.auto, focusId = focused?.dataset.id;
       if (!state.available) { content.textContent = state.error || "Automations are unavailable."; return; }
       content.classList.toggle("is-settled", settled);
@@ -364,7 +385,7 @@
       if (focusKey) [...content.querySelectorAll("[data-auto]")].find(node => node.dataset.auto === focusKey && node.dataset.id === focusId)?.focus({ preventScroll: true });
       const saved = cards.find(node => node.dataset.autoCard === `job-${justSaved}`);
       saved?.scrollIntoView?.({ block: "nearest" });
-      if (!dialog.contains(document.activeElement)) (saved?.querySelector('[data-auto="edit"]') ?? content.querySelector('[data-auto="new"]'))?.focus({ preventScroll: true });
+      if (!dialog.contains(doc.activeElement)) (saved?.querySelector('[data-auto="edit"]') ?? content.querySelector('[data-auto="new"]'))?.focus({ preventScroll: true });
       justSaved = null; seen = new Set(cards.map(node => node.dataset.autoCard)); settled = true;
       void proposalTimes();
       if (state.error) feedback(state.error, true);
@@ -374,24 +395,27 @@
         const schedule = p.definition.schedule, key = JSON.stringify(schedule);
         if (schedule.kind === "event" || previews.has(key)) continue;
         previews.set(key, undefined);
-        try { previews.set(key, (await request("preview", { schedule })).times); }
+        try { const result = await request("preview", { schedule }); if (disposed) return; previews.set(key, result.times); }
         catch { if (controller.signal.aborted) return; previews.set(key, null); }
         const node = [...content.querySelectorAll("[data-auto-proposal]")].find(node => node.dataset.autoProposal === p.id);
         if (node) node.innerHTML = proposalWhen(p);
       }
     }
     async function refresh() {
+      if (disposed) return;
       if (reading) { reloadAgain = true; return reading; }
       reading = (async () => {
-        do {
-          reloadAgain = false;
-          state = await request();
-          if (controller.signal.aborted) return;
-          render();
-        } while (reloadAgain && !controller.signal.aborted);
+        try {
+          do {
+            reloadAgain = false;
+            const next = await request();
+            if (disposed) return;
+            state = next; render();
+          } while (reloadAgain && !disposed);
+        } catch (error) { feedback(error.message, true); }
+        finally { reading = null; }
       })();
-      try { await reading; } catch (error) { if (!controller.signal.aborted) feedback(error.message, true); }
-      finally { reading = null; }
+      return reading;
     }
     refreshOpen = refresh;
 
@@ -456,6 +480,7 @@
     }
     const previewSoon = () => { clearTimeout(previewTimer); previewTimer = setTimeout(() => void preview(), 250); };
     async function preview() {
+      if (disposed) return;
       const f = form(); if (!f) return;
       const box = f.querySelector("[data-auto-preview]"), words = box.querySelector("[data-auto-sentence]"), shelf = box.querySelector("[data-auto-leaves]");
       const agent = f.elements.action.value === "agent", who = person(f.querySelector('[name="targetId"]:checked')?.value)?.name;
@@ -471,7 +496,7 @@
       box.dataset.state = "loading";
       try {
         const result = await request("preview", { schedule });
-        if (turn !== previewTurn || !f.isConnected) return;
+        if (disposed || turn !== previewTurn || !f.isConnected) return;
         box.dataset.state = "ok";
         shelf.innerHTML = result.times.length ? result.times.map((at, i) => leaf(at, i)).join("") : '<p class="hint">No time comes up for this schedule.</p>';
       } catch (error) {
@@ -486,28 +511,30 @@
       return job.schedule.kind === "event" ? `${verb}. It waits for its moment.` : `${verb}.`;
     }
     async function mutate(action, payload) {
+      controller.signal.throwIfAborted();
       const held = [...dialog.querySelectorAll("button, input, textarea, select")].filter(control => !control.disabled);
       busy = true; dialog.setAttribute("aria-busy", "true");
       for (const control of held) control.disabled = true;
       try { return await request(action, payload); }
-      finally { busy = false; dialog.removeAttribute("aria-busy"); for (const control of held) control.disabled = false; }
+      finally { busy = false; if (!disposed) { dialog.removeAttribute("aria-busy"); for (const control of held) control.disabled = false; } }
     }
     function changed(event) {
       if (screen !== "edit") return;
       if (event.type === "change" && event.target.name === "cron") switchCron(event.target.checked);
       dirty = true; reveal(); previewSoon();
     }
-    dialog.addEventListener("input", changed);
-    dialog.addEventListener("change", changed);
-    dialog.addEventListener("submit", async event => {
+    listen(dialog, "input", changed);
+    listen(dialog, "change", changed);
+    listen(dialog, "submit", async event => {
       event.preventDefault(); if (busy || confirming) return;
       try {
         const saved = await mutate("save", { definition: take(), ...(editing.id ? { id: editing.id, revision: editing.revision } : {}) });
+        if (disposed) return;
         justSaved = saved?.id ?? null;
         await showList(); feedback(savedWords(saved, "Saved"));
       } catch (error) { feedback(error.message, true); }
     });
-    dialog.addEventListener("click", async event => {
+    listen(dialog, "click", async event => {
       const control = event.target.closest("[data-auto]"); if (!control) return;
       if (busy || confirming) { if (control.type === "checkbox") event.preventDefault(); return; }
       const action = control.dataset.auto, id = control.dataset.id;
@@ -520,14 +547,15 @@
         if (action === "edit") return edit(state.jobs.find(job => job.id === id));
         if (action === "refresh") { rendered = ""; await refresh(); return; }
         if (action === "earlier") { historyShown += 20; render(); return; }
-        if (action === "result") { if (await close()) await jumpToMessage?.(id); return; }
+        if (action === "result") { if (await close() && !forced && !ports.signal?.aborted) await jumpToMessage?.(id); return; }
         if (action === "toggle") {
           const job = state.jobs.find(job => job.id === id);
           try { await mutate("save", { id, revision: job.revision, definition: { ...definition(job), enabled: !job.enabled } }); }
-          catch (error) { control.checked = job.enabled; throw error; }
+          catch (error) { if (!disposed) control.checked = job.enabled; throw error; }
         }
         else if (action === "apply") {
           const job = await mutate("resolve", { id, apply: true });
+          if (disposed) return;
           justSaved = job?.id ?? null; await refresh(); feedback(savedWords(job, "Added")); return;
         }
         else if (action === "reject") await mutate("resolve", { id, apply: false });
@@ -546,7 +574,13 @@
         await refresh(); feedback("");
       } catch (error) { feedback(error.message, true); }
     });
+    const handle = { dialog, close, dispose, refresh };
+    if (ports.signal?.aborted) { dispose(); return; }
+    try { root.appendChild(dialog); dialog.showModal(); if (!disposed) ports.onOpen?.(handle); }
+    catch (error) { dispose(); throw error; }
     await refresh(); if (!state?.error) feedback("");
+    return handle;
   }
+  Object.defineProperty(open, "scoped", { value: true });
   window.ViberoomAutomations = { open, refresh: () => refreshOpen?.(), describe };
 })();

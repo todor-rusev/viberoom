@@ -19,7 +19,7 @@ import { describeNetworkError } from "../net/outbound.js";
 import { type IngestionDebugStore, type IngestionTrace } from "./ingestion-debug.js";
 import { factLines, messageSource, resolveFacts, sourceVersion, untracedLine, withoutShown } from "./provenance.js";
 import { MemoryDeliveryPipeline } from "./delivery-pipeline.js";
-import { MemorySourceVersions } from "./source-versions.js";
+import { MEMORY_THROTTLE_NOTICE_QUIET_MS, MemorySourceVersions } from "./source-versions.js";
 import { ChangeTokenCache } from "./change-token-cache.js";
 import type { Delivery, SourceListing, WriteTransport } from "./delivery.js";
 import { decideVersion, type VersionFacts, type VersionWait } from "./version-check.js";
@@ -75,6 +75,14 @@ export interface MemoryRoomView {
   readsOtherRooms?: "off" | "on-search" | "every-turn";
 }
 
+export function acceptForRecipient(current: { provider: string; uuid: string | undefined; living: boolean }, expected: { uuid: string; provider: string }, work: () => void): void {
+  if (!current.living) throw new Error("viberoom is shutting down or was reset; the room's memory was not forgotten.");
+  if (current.provider !== expected.provider || current.uuid !== expected.uuid) throw new Error("The memory provider or the room changed. Reopen the room settings.");
+  work();
+}
+
+export interface ForgetRecipient { uuid: string; provider: string; life?: number }
+
 export interface MemoryPorts {
   outbox: MemoryOutbox;
   recoveryAuthorized?(job: RecoveryJob): boolean;
@@ -100,6 +108,7 @@ export interface MemoryPorts {
   folderId?: string;
   rooms(): MemoryRoomView[];
   room(id: string): MemoryRoomView | null;
+  accept?(roomId: string, expected: ForgetRecipient, work: () => void): void;
   searchPool?(roomId: string): MemoryRoomView[];
   config(): MemoryConfig;
   provider(config: MemoryConfig): Promise<MemoryProvider>;
@@ -148,7 +157,7 @@ export interface MemoryStatus {
 const DRAIN_PAGE = 24;
 const VERSION_CHECK_PAGE = 64;
 const VERSION_WAIT_MS: Record<VersionWait, number> = { not_processed_yet: 30_000, older_version_leaving: 60_000, listing_incomplete: 5 * 60_000 };
-const RETRY_LADDER_MS = [5_000, 15_000, 60_000, 300_000];
+export const RETRY_LADDER_MS = [5_000, 15_000, 60_000, 300_000];
 const NOTE_AFTER_FAILURES = 2;
 export const CONTEXT_ROWS = 3;
 export const CONTEXT_ROW_CHARS = 300;
@@ -195,6 +204,8 @@ export class MemoryPipeline {
   private configuredProviderKey: string;
   private paused: { reason: string; since: number } | null = null;
   private pausedNoted = new Set<string>();
+  private lastPausedAt: number | null = null;
+  private resumedAt: number | null = null;
   private modelDown: { reason: string; since: number } | null = null;
   private retryStep = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1245,21 +1256,33 @@ export class MemoryPipeline {
     return room ? this.ports.outbox.roomForgetStatus(this.ports.config().provider, roomId, room.uuid) : null;
   }
 
-  forgetRoom(roomId: string): void {
+  forgetRoom(roomId: string, expected?: ForgetRecipient): void {
     this.workSignal(roomId).throwIfAborted();
     const config = this.ports.config();
     if (config.provider === "off") throw new Error("Choose the memory provider in Settings before forgetting its cloud memory.");
     const room = this.ports.room(roomId);
     if (!room) throw new Error("The room must be loaded before requesting cloud deletion.");
+    const provider = expected?.provider ?? config.provider, uuid = expected?.uuid ?? room.uuid;
+    const unlessStopped = (work: () => void) => () => {
+      if (this.stopped) throw new Error("The long-term memory has stopped; the room's memory was not forgotten.");
+      work();
+    };
+    const accept = (work: () => void) => { if (expected) this.accepted(roomId, expected, unlessStopped(work)); else unlessStopped(work)(); };
     if (this.forgettingRoom(roomId)) {
       if (!this.roomForgetStatus(roomId)) throw new Error("A deletion for a previous graph at this local address is still pending.");
-      this.ports.outbox.retryRoomForget(config.provider, roomId, room.uuid);
+      accept(() => this.ports.outbox.retryRoomForget(provider, roomId, uuid));
       this.wake(roomId); return;
     }
+    const seq = this.ports.history.maxSeq(roomId);
+    accept(() => this.ports.outbox.queueRoomForget(provider, roomId, { uuid, name: room.name }, seq));
     this.cancelRoomWork(roomId);
-    this.ports.outbox.queueRoomForget(config.provider, roomId, { uuid: room.uuid, name: room.name }, this.ports.history.maxSeq(roomId));
     this.attachRoom(roomId);
     this.wake(roomId);
+  }
+
+  private accepted(roomId: string, expected: ForgetRecipient, work: () => void): void {
+    if (!this.ports.accept) throw new Error("The memory cannot tell whom a deletion is for here. Reopen the room settings.");
+    this.ports.accept(roomId, expected, work);
   }
 
   briefBlock(roomId: string, addressed: readonly number[], shown: readonly number[] = []): { revision: string; block: string; search?: BriefSearch } | null {
@@ -2081,6 +2104,9 @@ export class MemoryPipeline {
 
   private pause(roomId: string, reason: string): void {
     const now = (this.ports.now ?? Date.now)();
+    if (this.resumedAt !== null && this.lastPausedAt !== null && this.resumedAt >= this.lastPausedAt
+      && now - this.resumedAt >= MEMORY_THROTTLE_NOTICE_QUIET_MS) this.pausedNoted.clear();
+    this.lastPausedAt = now;
     if (!this.paused) {
       this.paused = { reason, since: now };
       this.ports.log.warn(`memory: paused: ${reason}`);
@@ -2107,7 +2133,7 @@ export class MemoryPipeline {
     this.retryStep = 0;
     this.lastError = null;
     this.ports.log.info("memory: resumed; the queue is draining");
-    this.pausedNoted.clear();
+    this.resumedAt = (this.ports.now ?? Date.now)();
   }
 
   private fail(message: string): void {

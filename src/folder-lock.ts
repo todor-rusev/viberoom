@@ -23,6 +23,13 @@ export async function isHeldFolderLock(path: string): Promise<boolean> {
   return [...held.values()].some(owner => owner.dev === file.dev && owner.ino === file.ino);
 }
 
+export function holdsFolder(dataDir: string): boolean {
+  if (!held.size) return false;
+  let file;
+  try { file = statSync(join(dataDir, OWNER_LOCK_FILE), { bigint: true }); } catch { return false; }
+  return [...held.values()].some(owner => owner.dev === file.dev && owner.ino === file.ino);
+}
+
 function isBusy(error: unknown): boolean {
   const e = error as { errcode?: number; message?: string };
   return e?.errcode === 5 || /database is locked/i.test(String(e?.message ?? ""));

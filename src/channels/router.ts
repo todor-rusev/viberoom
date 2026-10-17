@@ -257,8 +257,9 @@ export class ChannelRouter {
     return { url: telegramPairUrl(adapter.account, link.token), link };
   }
 
-  cancelPairLink(platform: Platform): void {
-    if (!this.desk.pending(platform)) return;
+  cancelPairLink(platform: Platform, link?: PairLink): void {
+    const pending = this.desk.pending(platform);
+    if (!pending || (link && pending !== link)) return;
     this.desk.cancel(platform);
     this.host.channelsChanged();
   }

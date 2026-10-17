@@ -13,7 +13,7 @@ export interface AgentReadState {
   online: boolean;
 }
 
-export function partitionHistory(messages: ChatMessage[], editedSeq: number): { kept: ChatMessage[]; removed: ChatMessage[] } {
+export function partitionHistory(messages: readonly ChatMessage[], editedSeq: number): { kept: ChatMessage[]; removed: ChatMessage[] } {
   const kept: ChatMessage[] = [];
   const removed: ChatMessage[] = [];
   for (const m of messages) (m.seq > editedSeq ? removed : kept).push(m);

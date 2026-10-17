@@ -13,7 +13,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "sourceMap": false,
-    "declaration": false
+    "declaration": true
   },
   "include": ["src/**/*.ts"]
 }

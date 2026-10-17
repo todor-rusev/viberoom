@@ -14,8 +14,7 @@ export function appHost(kind: AppKind | null, via: AppVia): Host {
   return { by: "app", kind, via };
 }
 
-export function hostOf(flag: "npm" | "app", insideBox?: InsideBox): Host {
-  if (insideBox) return appHost(insideBox, "insideBox");
+export function hostOf(flag: "npm" | "app"): Host {
   return flag === "app" ? appHost(null, "flag") : NPM_HOST;
 }
 

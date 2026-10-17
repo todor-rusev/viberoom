@@ -1,48 +1,73 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
-import { validArguments } from "./tool-validation.js";
 import type { AutomationJob, AutomationRun } from "./automation-store.js";
 import type { AutomationOutcome } from "./automations.js";
 import { EventEmitter } from "node:events";
-import { memoryBlock } from "./shared-memory.js";
-import { instructionBlock, planInstructionDelivery, type InstructionRevisions } from "./instruction-delivery.js";
+import { isIdentity } from "./identity.js";
 import { randomUUID } from "node:crypto";
 import { AgentMessageError, agentMessageId, agentMessageHash, parsePostMessage, type PostMessageReceipt } from "./agent-message.js";
-import { captureNativeNoteSubject, nativeNoteDisposition, nextNotesRevision, planNativeNoteEffect, type NativeNoteDisposition } from "./native-note-state.js";
-import { isNativeOperation, makeNativeEnvelope, nativeDivertOp, nativeInteger, nativeObligationId, nativeSubject, parseNativeOperation, type NativeDecision, type NativeEnvelope, type NativeHoldReason, type NativeNoteEffect, type NativeObligation, type NativeRecord, type NativeSubject } from "./native-reports.js";
+import { captureNativeNoteSubject, nativeNoteDisposition, planNativeNoteEffect, type NativeNoteDisposition } from "./native-note-state.js";
+import { isNativeOperation, nativeDivertOp, nativeInteger, nativeObligationId, parseNativeOperation, type NativeDecision, type NativeEnvelope, type NativeNoteEffect, type NativeObligation, type NativeRecord, type NativeSubject } from "./native-reports.js";
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { NameDirectory } from "./name-directory.js";
-import type { CardKind, StoredCard } from "./room-cards.js";
 import { citedNumbers, numbersNote, type CitedNumber } from "./message-numbers.js";
 import { HistoryStore, type DivertOp, type PendingOp, cursorOf, type Cursor } from "./history-store.js";
 import { foldIndex } from "./fold.js";
-import { NOTES_ONLY_PROMPT, NOTES_REQUEST, crossedThreshold, emptyUsageReport, extractNotes, isBareContextFullError, isContextFullError, looksCompacted, overThreshold, settledVisible } from "./context.js";
+import { NOTES_ONLY_PROMPT, crossedThreshold, emptyUsageReport, extractNotes, looksCompacted, overThreshold, settledVisible } from "./context.js";
 import { spokenText } from "./spoken-text.js";
 import { MENTION_PATTERN } from "./mentions.js";
+import { RoomSettingsModel, RULE_REF_TOKEN, type ProgramRoomSettings } from "./room/settings.js";
+import { PermissionDesk, roomToolNeedsNoQuestion, type PendingPermission } from "./room/permissions.js";
+import { RoomProposals, type NewRoomProposal, type ProposalPlan, type RoomProposal } from "./room/proposals.js";
+import { RoomDesignTools, type DesignTarget } from "./room/design.js";
+import { RoomMessages, type MessageDraft, type SeqTicket } from "./room/messages.js";
+import * as presence from "./room/presence.js";
+import { TurnLife, type Turn } from "./room/turn-life.js";
+import { DiagramRepairs } from "./room/diagram-repairs.js";
+import { BackgroundCompletions, type QueuedBackgroundCompletion } from "./room/background-completions.js";
+import { AutomationTasks } from "./room/automation-tasks.js";
+import { SilenceWatch, stillQuiet, type SeenQuietTurn } from "./room/silence-watch.js";
+import { AgentConfig, configName, summarizeConfig, type ConfigShortfall } from "./room/agent-config.js";
+import { stillHeld, type SeenVibemate } from "./room/vibemate-seen.js";
+import { decideWake, woken } from "./room/wake-policy.js";
+import { TurnOrder } from "./room/turn-order.js";
+import { DraftStream, applyToolCallUpdate, looksSilent, toolOutputText, type DraftOwner, type DraftTurn } from "./room/draft-stream.js";
+export { applyToolCallUpdate };
+import { NativeReports, type FaultOwner, type NativeHop, type NativeRouteObligation, type UnconfirmedPost } from "./room/native-reports.js";
+import { openSession } from "./room/session-open.js";
+import { probeAgentOptions } from "./room/agent-options.js";
+import { AgentNotes } from "./room/agent-notes.js";
+import { AgentSessions } from "./room/agent-sessions.js";
+import { failStart, loadedPointer, readyLine, replayPointer } from "./room/agent-start.js";
+import { prepareOrdinaryTurn, preparationFields, type TurnPreparationPorts } from "./room/turn-preparation.js";
+import { dispatchTurn, type DispatchOwner, type TurnDispatchPorts } from "./room/turn-dispatch.js";
+import { TurnPublication, type PublicationOwner, type SettledOwner } from "./room/turn-publication.js";
+import { createAgentRuntime, type AgentRuntime, type RuntimeBrief, type RuntimeNotes, type RuntimeQueue, type RuntimeReading, type RuntimeSession, type RuntimeSkills, type RuntimeWork, type WorkHold, holdsWork } from "./room/agent-runtime.js";
+import { pinTitle, withPin, withPinLabel } from "./room/pins.js";
 import { planNewRoom, type NewRoomPlan } from "./new-room.js";
 import { formatDuration } from "./duration.js";
 import { affectedByEdit, editNotice, EDIT_NOTICE_MAX, partitionHistory, rewriteNotice, type AgentReadState, type EditMode } from "./edit.js";
-import { bodyRefs, registerBodyReader, resetBodyDelivery, supplyBodies, type BodyDelivery, type BodyEdit, type BodyRef } from "./body-delivery.js";
+import { bodyRefs, nextBodyVersion, registerBodyReader, suppliedBodies, withBodyReader, type BodyDelivery, type BodyEdit, type BodyRef } from "./body-delivery.js";
 import { isRoomResourceName, saveAudio, saveImages, saveVideo, type Attachment, type AudioAttachment, type HeardSound, type ImageInput, type VideoAttachment, type VideoInput } from "./files.js";
 import { agentReadableWindow, resolveQuotes, visibleToAgents, type Quote, type QuoteInput } from "./quotes.js";
-import { canAutoApproveMessageCheck, isDirectMessageCheck, messageAddressing, messageCheckCursor, messageCheckHeader, messageCheckPageCursor, messageCheckPagePosition, messageCheckPosition, messageCheckTitle, packMessageCheck, packLiveDraft, parseMessageCheckArgs, type MessageCheckArgs, type MessageCheckCounts, type MessageCheckResult } from "./message-check.js";
+import { isDirectMessageCheck, messageAddressing, messageCheckCursor, messageCheckHeader, messageCheckPageCursor, messageCheckPagePosition, messageCheckPosition, messageCheckTitle, packMessageCheck, packLiveDraft, parseMessageCheckArgs, type MessageCheckArgs, type MessageCheckCounts, type MessageCheckResult } from "./message-check.js";
 import { historySearchReceipt, historySearchTitle, parseAgentSearchArgs, type AgentSearchArgs, type AgentSearchResult, type HistorySearchReceipt } from "./agent-history.js";
-import { canAutoApproveRoomTool, isWrappedRoomCall, roomOperation, roomToolChip, roomToolTitle, cursorPermissionInput } from "./room-tool-identity.js";
+import { isWrappedRoomCall, roomOperation, roomToolTitle, cursorPermissionInput } from "./room-tool-identity.js";
 import { basename, dirname, join, resolve } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 import { AGENT_MESSAGE_MAX_BYTES, PromptBudget, type AgentView, type PictureTag } from "./agent-images.js";
 import { AcpAgent } from "./acp-client.js";
-import { ExtensionRouter, readBackgroundMessage, type AgentAuthStatus, type BackgroundMessage } from "./acp-extensions.js";
-import { errorCode, errorDetail, RemoteError } from "./jsonrpc.js";
+import { ExtensionRouter, type AgentAuthStatus, type BackgroundMessage } from "./acp-extensions.js";
+import { describeError, errorCode, errorData } from "./jsonrpc.js";
 import { getRecipe, listRecipes, publicRecipes, type AgentRecipe } from "./recipes.js";
 import { recipeStamp } from "./install-stamp.js";
 import { OptionCatalog } from "./option-catalog.js";
-import { assertAgentAvailable, useAgent } from "./agent-maintenance.js";
-import { classifyStartFailure, classifyTurnFailure, type Trouble } from "./agent-health.js";
+import { assertAgentAvailable } from "./agent-maintenance.js";
+import type { Trouble } from "./agent-health.js";
 import { legacyRowTone } from "./rows.js";
 import { DIAGRAM_REPAIR_WINDOW_MS, boundedError, diagramSourceProblem, fenceFor, giveUp, mermaidBlocks, recordFailure, recordFix, replaceDiagramSource, type DiagramRepair } from "./diagram-repair.js";
 import { cleanFace, freshFace } from "./faces.js";
-import { composeSkillBlock, formatQuoteTime, skillPull, SKILL_TOOL_NAME, type BriefNotes, type NotesSource, type SkillsForPrompt } from "./persona.js";
+import { composeSkillBlock, formatQuoteTime, skillPull, SKILL_TOOL_NAME, type NotesSource, type SkillsForPrompt } from "./persona.js";
 import {
   BUILTIN_AUTHOR,
   parseSkillInvocation,
@@ -56,35 +81,22 @@ import {
 import type { McpServer } from "./acp-types.js";
 import type { BriefSearch } from "./memory/service.js";
 import { runAsNodeEntries } from "./own-runtime.js";
-import { templateId, templateRoomSettings, type TemplateLibrary, type TemplateVibemate } from "./templates.js";
+import { templateRoomSettings, type TemplateLibrary, type TemplateVibemate } from "./templates.js";
 import type { LookCheck, LookSpec } from "./looks.js";
 import type { AppearanceSettings } from "./hub.js";
-import { applyVibemateChanges, diffSettings, lintRoomDesign, ruleLines, type RoomChangeSet, type RoomDesign, type RoomDesignContext, type SettingChange, type VibemateChange } from "./room-design.js";
+import type { RoomChangeSet, RoomDesign, RoomDesignContext } from "./room-design.js";
 import {
-  BRIEF_AFFECTING_SETTINGS,
-  AGENT_SETTINGS,
-  coerceSetting,
-  describeSettings,
-  DEFAULT_ROOM_SETTINGS,
-  ROOM_SETTINGS_SPEC,
   REQUEST_BRIEF_MARKER,
   NAME_PATTERN,
   SILENT_MARKER,
-  buildBrief,
-  buildInstructionContents,
   buildStandingText,
   buildInstructionPreview,
   buildHeader,
   composeCorrectionPrompt,
-  composePrompt,
   countSentences,
-  replyLanguageClause,
   ensureDir,
-  type BacklogImage,
-  type BacklogLine,
   type BacklogAudio,
   type BacklogVideo,
-  type BacklogQuote,
   type Persona,
   type PromptPart,
   type RoomSettings,
@@ -95,17 +107,13 @@ import { WINDOW_RECENT_BODIES } from "./window-wire.js";
 import type {
   ContentBlock,
   NewSessionResult,
-  PermissionOption,
   PlanEntry,
   PromptResult,
   RequestPermissionParams,
   RequestPermissionResponse,
   SessionConfigOption,
-  SessionConfigSelectGroup,
-  SessionConfigSelectOption,
   SessionUpdate,
   StopReason,
-  ToolCallUpdate,
   Usage,
 } from "./acp-types.js";
 
@@ -117,10 +125,41 @@ export interface LaunchPrefs {
   mode: string | null;
 }
 
-interface ConfigShortfall {
-  category: string;
-  log: string;
-  said: string;
+interface StartTicket {
+  readonly id: string;
+  readonly participant: Participant;
+  readonly name: string;
+  readonly recipe: AgentRecipe;
+  readonly launch: LaunchPrefs;
+  readonly fresh: boolean;
+  readonly reconnectOptions?: ReconnectOptions;
+  readonly log: Logger;
+  readonly cwd: string;
+  readonly transcript: Transcript;
+  readonly installStamp: string | null;
+  readonly stderrTail: string[];
+  readonly agent: AcpAgent;
+  readonly abandoned: Error;
+  registered: AgentRuntime | undefined;
+  stillWanted(): boolean;
+  check(): void;
+}
+
+interface StartUnderWay {
+  readonly ticket: StartTicket;
+  readonly settled: Promise<void>;
+}
+
+interface OpenedSession {
+  readonly session: NewSessionResult;
+  readonly origin: NonNullable<Participant["sessionOrigin"]>;
+  readonly mcpToken: string | null;
+  readonly hasMcp: boolean;
+}
+
+interface RegisteredSession {
+  readonly runtime: AgentRuntime;
+  readonly storedSeen: number | undefined;
 }
 
 export interface QuietTurn {
@@ -139,9 +178,9 @@ export interface Participant {
   agentLabel?: string;
   agentVendor?: string;
   agentInfo?: { name?: string | null; version?: string | null };
-  status: ParticipantStatus;
-  statusDetail?: string;
-  trouble?: Trouble;
+  readonly status: ParticipantStatus;
+  readonly statusDetail?: string;
+  readonly trouble?: Trouble;
   model?: string;
   effort?: string;
   mode?: string;
@@ -159,9 +198,9 @@ export interface Participant {
   role?: string;
   avatar?: string;
   muted?: boolean;
-  asleep?: boolean;
-  fell?: true;
-  startupSkipped?: "muted";
+  readonly asleep?: boolean;
+  readonly fell?: true;
+  readonly startupSkipped?: "muted";
   createdByVibemate?: boolean;
   replyDelay?: number;
   skills?: string[];
@@ -183,11 +222,14 @@ export interface Participant {
   failedTurns?: number;
   retries?: number;
   sessionId?: string;
+  sessionDir?: string;
+  folderPending?: boolean;
   supportsLoad?: boolean;
   sessionOrigin?: "new" | "loaded" | "replayed";
   deliveryEpoch?: string;
   suppliedThrough?: number;
   activeTurnId?: string;
+  activeTurnInputThrough?: number;
   lastSignAt?: number;
   pendingSettings?: { id: string; name: string; value: string | boolean }[];
   quiet?: QuietTurn;
@@ -213,6 +255,7 @@ export interface StoredParticipant {
   replyDelay?: number;
   skills?: string[];
   sessionId?: string;
+  sessionDir?: string;
   deliveryEpoch?: string;
   suppliedThrough?: number;
   supportsLoad?: boolean;
@@ -352,7 +395,7 @@ export interface ChatMessage {
   via?: MessageVia;
   pinned?: true;
   pinLabel?: string;
-  diagramRepairs?: DiagramRepair[];
+  diagramRepairs?: readonly DiagramRepair[];
   images?: Attachment[];
   audio?: AudioAttachment[];
   answerFrom?: number;
@@ -378,44 +421,9 @@ export interface ChatMessage {
   durationMs?: number;
 }
 
-export interface PendingPermission {
-  key: string;
-  participantId: string;
-  toolCall: ToolCallUpdate;
-  options: PermissionOption[];
-  ts: number;
-  afterSeq?: number;
-}
+export type { PendingPermission } from "./room/permissions.js";
 
-export interface NewRoomProposal {
-  key: string;
-  participantId: string;
-  participantName: string;
-  ts: number;
-  afterSeq?: number;
-  plan: NewRoomPlan;
-  status: "pending" | "created" | "refused";
-  roomId?: string;
-}
-
-export interface RoomProposal {
-  key: string;
-  participantId: string;
-  participantName: string;
-  ts: number;
-  afterSeq?: number;
-  why: string;
-  room?: { id: string; name: string };
-  settings: SettingChange[];
-  vibemates: VibemateChange[];
-  appearance?: SettingChange[];
-  warnings: string[];
-  touchesOwn: boolean;
-  status: "pending" | "applied" | "rejected";
-  skipped?: string[];
-}
-
-interface ProposalPlan { settings: SettingChange[]; vibemates: TemplateVibemate[]; ops: VibemateChange[]; ids: Record<string, string>; appearance?: Record<string, unknown>; roomId?: string }
+export type { NewRoomProposal, RoomProposal } from "./room/proposals.js";
 
 export interface RoomRecovery {
   rows: number;
@@ -491,8 +499,8 @@ export interface SkillsBridge {
     save: (raw: unknown, options: { author: string; replace?: boolean }) => Promise<LookCheck>;
   };
   rooms?: {
-    list: () => { id: string; name: string }[];
-    find: (selector: string) => Room;
+    list: (callerId: string) => { id: string; name: string }[];
+    find: (callerId: string, selector: string) => Room;
     get: (id: string) => Room | undefined;
     sharesWith: (readerId: string, targetId: string) => boolean;
   };
@@ -524,7 +532,7 @@ export interface AgentSkillInput {
   dryRun?: boolean;
 }
 
-interface PendingSkill {
+export interface PendingSkill {
   name: string;
   text: string;
   invokedBy?: string;
@@ -532,7 +540,6 @@ interface PendingSkill {
 }
 
 const SKILL_TOOL_READY_MS = 5000;
-const AUTH_WAIT_MS = 8000;
 
 export interface DiscoveredOptions {
   recipeId: string;
@@ -551,6 +558,7 @@ export interface RoomOptions {
   id: string;
   uuid: string;
   folderId?: string;
+  scope?: unknown;
   name: string;
   dir: string;
   dataDir: string;
@@ -578,92 +586,35 @@ export interface RoomOptions {
   heldParticipantIds?: () => Iterable<string>;
 }
 
-interface AgentRuntime {
-  agent: AcpAgent;
-  sessionId: string;
-  installStamp: string | null;
-  transcript: Transcript;
-  log: Logger;
-  firstTurnDone: boolean;
-  lastSeenSeq: number;
-  turnStartSeq: number;
-  turnActive: boolean;
-  pendingConfig?: { configId: string; value: string | boolean; from?: string }[];
-  workBusy?: boolean;
-  workSettled?: { promise: Promise<void>; resolve: () => void };
-  nativeDraining?: boolean;
-  nativeHold?: boolean;
-  nativePromptObligations?: NativeObligationRef[];
-  nativeHeaderObligations?: NativeObligationRef[];
-  notesPending?: boolean;
-  deferredNotesTurn?: boolean;
-  workCancelled?: boolean;
-  roomStopped?: boolean;
-  usageSeenThisTurn?: boolean;
-  fixedDiagramThisTurn?: boolean;
-  pendingTurn: boolean;
-  independentPendingTurn?: boolean;
-  missedNotice?: boolean;
-  promptedThisWork?: boolean;
-  turn: { message: ChatMessage; messageId: string | null; sawMessageId: boolean; startedAt: number; lastSignAt?: number; lastWorkAt?: number; published: boolean; publishedAt?: number; hidden?: boolean; messagesFromSeq: number; shownLength?: number } | null;
-  quiet?: { turnId: string; nudge?: "asking" | "answered" | "silent" };
-  strayMessageId: string | null;
-  backgroundMessages?: Set<string>;
-  backgroundCorrections?: RetryRequest[];
-  backgroundBacklogPending?: boolean;
-  turnsSinceBrief: number;
-  usedAtBrief: number;
-  briefSentThisTurn: boolean;
-  lastUsed: number;
-  briefPending: string | null;
-  instructionRevisions?: InstructionRevisions;
-  skillCatalogPending?: boolean;
-  memoryStamp?: string;
-  memoryGraphStamp?: string;
-  headerNotes: string[];
-  historyNoticePending: boolean;
-  briefRequestedAtSeq: number;
-  notesDue: boolean;
-  notesMisses: number;
-  notesAskedThisTurn: boolean;
-  lastBriefSeq: number;
-  resumeNotes: Exclude<NotesSource, "live"> | null;
-  replayOwnUntilSeq: number;
-  delayTimer: NodeJS.Timeout | null;
-  addressed: boolean;
-  retiring: boolean;
-  mcpToken: string | null;
-  sessionStartedAt: number;
-  skillChannel: "tool" | "marker" | "pending";
-  skillReadyWaiters: (() => void)[];
-  pendingSkills: PendingSkill[];
-  skillPulledAtSeq: number;
-  skillPulledName: string;
-}
 
-interface RetryRequest {
+export interface RetryRequest {
   prompt: string;
   original: string;
   corrections: string[];
-  record: ChatMessage;
+  recordId: string;
   nativeObligation?: NativeObligationRef;
 }
 
-interface NativeObligationRef { subject: NativeSubject; obligationId: string }
+export interface NativeObligationRef { subject: NativeSubject; obligationId: string }
 
-interface OrdinaryWakeClaim { independent: boolean; native: NativeObligationRef[] }
-type PreparationField = "missedNotice" | "promptedThisWork" | "turnStartSeq" | "lastSeenSeq" | "notesDue" | "notesAskedThisTurn"
-  | "instructionRevisions" | "skillCatalogPending" | "memoryStamp" | "memoryGraphStamp" | "briefPending" | "turnsSinceBrief"
-  | "briefSentThisTurn" | "lastBriefSeq" | "resumeNotes" | "firstTurnDone" | "replayOwnUntilSeq";
-type PreparationFields = Pick<AgentRuntime, PreparationField>;
-interface OrdinaryPromptPreparation {
+export interface OrdinaryWakeClaim { independent: boolean; native: NativeObligationRef[] }
+export type PreparationFields = Pick<RuntimeQueue, "missedNotice"> & Pick<RuntimeWork, "promptedThisWork">
+  & Pick<RuntimeReading, "turnStartSeq" | "lastSeenSeq" | "replayOwnUntilSeq"> & Pick<RuntimeNotes, "notesDue" | "notesAskedThisTurn" | "resumeNotes">
+  & Pick<RuntimeBrief, "instructionRevisions" | "skillCatalogPending" | "memoryStamp" | "memoryGraphStamp" | "briefPending" | "turnsSinceBrief" | "briefSentThisTurn" | "lastBriefSeq">
+  & Pick<RuntimeSession, "firstTurnDone">;
+
+function compareAndSet<T, K extends keyof T>(group: T, field: K, expected: T[K], next: T[K]): void {
+  if (group[field] === expected) group[field] = next;
+}
+
+export interface OrdinaryPromptPreparation {
   wake: OrdinaryWakeClaim;
   expected: PreparationFields;
   next: PreparationFields;
   headerArray: string[];
   headers: string[];
-  skillArray: AgentRuntime["pendingSkills"];
-  skills: AgentRuntime["pendingSkills"];
+  skillArray: RuntimeSkills["pendingSkills"];
+  skills: RuntimeSkills["pendingSkills"];
   nativeHeaders: NativeObligationRef[];
   bodies: ChatMessage[];
   sourceRevision: number;
@@ -678,13 +629,10 @@ export interface BackgroundCompletion {
   claim(messageId: string): boolean;
   finish(confirmed: boolean, messageId: string): void;
 }
-interface QueuedBackgroundCompletion extends BackgroundCompletion {
-  claimed: boolean; continuing: boolean; confirmed: boolean; messageId: string;
-}
 
-type PromptMemoryNote = BriefSearch & { sent: boolean };
+export type PromptMemoryNote = BriefSearch & { sent: boolean };
 
-interface TurnExtras {
+export interface TurnExtras {
   hidden?: boolean;
   historyNoticeOffered?: boolean;
   supplied?: BodyRef[];
@@ -693,68 +641,31 @@ interface TurnExtras {
   ordinaryPreparation?: OrdinaryPromptPreparation;
 }
 
-interface PermissionEntry extends PendingPermission {
-  resolve: (response: RequestPermissionResponse) => void;
-}
-
 const ADAPTER_TRACE = "viberoom-trace ";
-const SILENCE_CHECK_MS = 60_000;
 const STOP_GRACE_MS = 30_000;
 const SHUTDOWN_TURN_STOP_MS = 2_000;
 const SHUTDOWN_SETTLE_MS = 1_000;
 export const ROOM_SHUTDOWN_WAIT_MS = SHUTDOWN_TURN_STOP_MS + SHUTDOWN_SETTLE_MS;
-const SILENCE_MS = 10 * 60_000;
 const WORK_SIGNS = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan"]);
 const NUDGE_WAIT_MS = 10_000;
 
 const COLORS = ["#6d5dfc", "#16a34a", "#d97706", "#dc2626", "#0891b2", "#be185d", "#4d7c0f", "#7c3aed"];
 export const CAST_SIZE = 8;
-export const PIN_LABEL_MAX = 120;
+export { PIN_LABEL_MAX } from "./room/pins.js";
 export { spokenText };
-const RULE_REF_TOKEN = /@\{p:([^}]+)\}/g;
-const ADAPTER_ERROR_PATTERN =
-  /^(?:Warning: Falling back from WebSockets|unexpected status \d{3}|Error when talking to|API Error|You have exhausted your (?:daily )?quota|Rate limit|429 |5\d\d )/i;
 
 export function sessionMeta(recipe: Pick<AgentRecipe, "systemPromptAppend"> | undefined, settings: RoomSettings, withTools: boolean): Record<string, unknown> | undefined {
   return recipe?.systemPromptAppend ? { systemPrompt: { append: buildStandingText(settings, withTools) } } : undefined;
 }
 
-function needsTheHuman(method: { id: string; name?: string | null; description?: string | null }, recipe?: AgentRecipe): boolean {
-  if (recipe?.loginFlow.kind === "acp" && method.id === recipe.loginFlow.methodId) return true;
-  return /\b(browser|oauth|log ?in with|sign ?in with)\b/i.test(`${method.id} ${method.name ?? ""} ${method.description ?? ""}`);
-}
-
-export function tokensCarried(result: { usage?: { inputTokens?: number | null; cachedReadTokens?: number | null } | null; _meta?: Record<string, unknown> | null }): number | null {
-  const usage = result.usage;
-  if (usage && typeof usage.inputTokens === "number" && usage.inputTokens > 0) return usage.inputTokens + (typeof usage.cachedReadTokens === "number" ? usage.cachedReadTokens : 0);
-  const meta = result._meta as { quota?: { token_count?: { input_tokens?: unknown } } } | null | undefined;
-  const fromMeta = meta?.quota?.token_count?.input_tokens;
-  return typeof fromMeta === "number" && fromMeta > 0 ? fromMeta : null;
-}
-
-const STOPPED_WORK_KINDS = 3;
-
-function callName(call: ToolCallView): string {
-  const named = (call.name ?? "").trim();
-  if (named) return named.split(/[._]/).length > 1 && named.includes(".") ? named.slice(named.lastIndexOf(".") + 1) : named;
-  return (call.kind ?? "").trim() || "tool";
-}
-
-function stoppedWork(message: ChatMessage): string {
-  const calls = message.toolCalls ?? [];
-  if (!calls.length) return "; it had written nothing";
-  const byName = new Map<string, number>();
-  for (const call of calls) byName.set(callName(call), (byName.get(callName(call)) ?? 0) + 1);
-  const ranked = [...byName].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const shown = ranked.slice(0, STOPPED_WORK_KINDS).map(([name, times]) => (times > 1 ? `${name} ×${times}` : name));
-  if (ranked.length > STOPPED_WORK_KINDS) shown.push("…");
-  return `; it had made ${calls.length} tool call${calls.length === 1 ? "" : "s"} (${shown.join(", ")}) and had written nothing`;
-}
+export { tokensCarried } from "./room/turn-publication.js";
 
 export class Room extends EventEmitter {
   readonly id: string;
   readonly uuid: string;
   readonly folderId: string | null;
+  readonly scope: string | null;
+  readonly unreadableScope: unknown;
   name: string;
   dir: string;
   readonly dataDir: string;
@@ -765,18 +676,25 @@ export class Room extends EventEmitter {
   private readonly pictures: RoomOptions["pictures"];
   private readonly connections: (roomUuid: string) => string[];
   readonly createdAt: number;
-  settings: RoomSettings;
-  hops = 0;
-  focused = false;
+  get hops(): number { return this.turnOrder.hops; }
+  set hops(value: number) { this.turnOrder.hops = value; }
+  get focused(): boolean { return this.turnOrder.focused; }
+  set focused(value: boolean) { this.turnOrder.focused = value; }
   readonly participants = new Map<string, Participant>();
-  readonly messages: ChatMessage[] = [];
-  private seq = 0;
-  private displayOrder = 0;
-  private programHumanDescription: string;
-  private bypassPermissionsByDefault: boolean;
-  private programTranscripts: TranscriptMode;
-  private programFoldAfter: number;
-  private recordPrompts: boolean;
+  private readonly roomMessages = new RoomMessages();
+  get messages(): readonly ChatMessage[] {
+    return this.roomMessages.list;
+  }
+  private get seq(): number {
+    return this.roomMessages.seq;
+  }
+  private get displayOrder(): number {
+    return this.roomMessages.displayOrder;
+  }
+  private readonly roomSettings: RoomSettingsModel;
+  get settings(): Readonly<RoomSettings> {
+    return this.roomSettings.value;
+  }
   private readonly historyEpoch = randomUUID();
   private historyRevision = 0;
   private readonly messageCheckKey = randomUUID();
@@ -784,37 +702,207 @@ export class Room extends EventEmitter {
   private historyStreamSequence = 0;
   private readonly skills?: SkillsBridge;
   private readonly earlySkillReady = new Set<string>();
-  private speaking: string | null = null;
-  private readonly floorQueue: string[] = [];
-  private humanTypingUntil = 0;
-  private typingTimer: NodeJS.Timeout | null = null;
+  private readonly turnOrder: TurnOrder = new TurnOrder({
+    current: (id) => ({ participant: this.participants.get(id), runtime: this.runtimes.get(id) }),
+    sessions: () => [...this.runtimes.keys()],
+    settings: () => this.settings,
+    recordHold: () => !!this.recordHold,
+    nativeLaneBlocked: (runtime) => this.nativeLaneBlocked(runtime),
+    showQueued: (participant) => { if (presence.queue(participant)) this.push({ type: "participant", participant }); },
+    showUnqueued: (participant) => { if (presence.unqueue(participant)) this.push({ type: "participant", participant }); },
+    recover: (participant) => this.clearTrouble(participant, "you wrote to it directly"),
+    run: (owner) => { if (this.participants.get(owner.id) === owner.participant && this.runtimes.get(owner.id) === owner.runtime) void this.runTurn(owner.id); },
+    log: (runtime, text) => runtime.session.log.info(text),
+  });
+  private readonly draftStream: DraftStream = new DraftStream({
+    current: (id) => ({ participant: this.participants.get(id), runtime: this.runtimes.get(id), open: !this.closing }),
+    push: (owner, event) => {
+      if (!this.draftHeld(owner)) return false;
+      this.push(event);
+      return true;
+    },
+    placeDraft: (owner) => {
+      if (!this.draftHeld(owner)) return false;
+      this.roomMessages.placeDraft(owner.turn.message);
+      this.push({ type: "message", message: owner.turn.message });
+      return true;
+    },
+  });
+  private draftHeld(owner: DraftOwner): boolean {
+    const id = owner.participant.id;
+    return !this.closing && this.participants.get(id) === owner.participant && this.runtimes.get(id) === owner.runtime
+      && (owner.runtime.work.turn ?? null) === owner.turn;
+  }
+  private get speaking(): string | null { return this.turnOrder.speaking; }
+  private get floorQueue(): readonly string[] { return this.turnOrder.queued(); }
   private closing = false;
   private readonly runtimes = new Map<string, AgentRuntime>();
-  private readonly unconfirmedBackground = new Map<string, RetryRequest | null>();
-  private readonly nativeHandles = new Map<string, AcpAgent>();
-  private readonly nativeLocalEffects = new Set<string>();
-  private readonly unsavedNative = new Map<string, NativeEnvelope>();
-  private readonly retainedNativeArrivals = new Map<string, {
-    report: BackgroundMessage; agent: AcpAgent; acceptedName: string; at: number;
-    owner: NativeEnvelope["owner"] | null;
-  }>();
-  private static readonly NATIVE_ARRIVAL_LIMIT = 64;
-  private static readonly NATIVE_ARRIVAL_BYTES = 32 * 1024 * 1024;
-  private readonly nativeFaultReasons = new Map<string, string>();
-  private nativeRecoveryHold = false;
-  private readonly backgroundCompletions = new Map<string, QueuedBackgroundCompletion[]>();
-  private readonly activeBackgroundCompletions = new Map<string, QueuedBackgroundCompletion>();
-  private readonly automationTasks = new Map<string, {
-    run: AutomationRun; runtime: AgentRuntime; resolve: (outcome: AutomationOutcome) => void;
-    cleanup: () => void; outcome: AutomationOutcome; continuing: boolean;
-  }>();
-  private readonly repairTasks = new Map<string, { messageId: string; block: number; delivered: boolean }[]>();
+  private readonly nativeReports: NativeReports = new NativeReports({
+    identity: () => ({ roomId: this.id, roomUuid: this.uuid, folderId: this.folderId }),
+    current: (id) => ({ participant: this.participants.get(id), runtime: this.runtimes.get(id) }),
+    sessions: () => [...this.runtimes.keys()],
+    state: () => ({ closing: this.closing, readOnly: this.readOnly, recordHold: !!this.recordHold }),
+    liveSession: (id, agent, sessionId) => this.liveAgentSession(id, agent, sessionId),
+    journal: { pending: () => this.divertPending, drain: () => this.drainDivert(), ops: () => this.journalOps(), append: (op, error) => this.divert(op, error) },
+    decide: (envelope, owner) => {
+      const decision = this.prepareNativeDecision(envelope, owner.participant, owner.runtime);
+      return { decision, message: this.nativeMessage(envelope, decision, owner.participant) };
+    },
+    publish: (record) => this.publishNativeRecord(record),
+    counted: (owner, decision) => {
+      if (!this.operationHolds(owner)) return false;
+      const { participant } = owner;
+      if (decision.corrections.length) participant.violations = (participant.violations ?? 0) + decision.corrections.length;
+      if (decision.kind === "referee_hidden") participant.retries = (participant.retries ?? 0) + 1;
+      if (decision.corrections.length) this.push({ type: "participant", participant });
+      return true;
+    },
+    notesApplied: (owner, effect) => {
+      if (!this.operationHolds(owner)) return false;
+      const { participant, runtime } = owner, disposition = nativeNoteDisposition(captureNativeNoteSubject(participant), effect);
+      if (disposition === "apply") {
+        Object.assign(participant, { notes: effect.next.notes ?? undefined, notesAt: effect.next.notesAt ?? undefined,
+          notesSeq: effect.next.notesSeq ?? undefined, notesWrittenAt: effect.next.notesWrittenAt ?? undefined,
+          notesRevision: effect.next.notesRevision, nativeNoteReceipt: effect.next.nativeNoteReceipt ?? undefined });
+        runtime.notes.notesDue = false; runtime.notes.notesMisses = 0; runtime.notes.notesPending = false;
+        this.push({ type: "participant", participant });
+      }
+      return disposition;
+    },
+    header: (owner, lines, ref) => {
+      if (!this.operationHolds(owner)) return false;
+      owner.runtime.brief.headerNotes.push(...lines);
+      (owner.runtime.native.nativeHeaderObligations ??= []).push(ref);
+      return true;
+    },
+    correction: (owner, obligation, ref) => {
+      if (!this.operationHolds(owner)) return false;
+      const message = this.messages.find(m => m.id === ref.subject.id);
+      if (!message) return "unknown";
+      const { participant, runtime } = owner;
+      const header = buildHeader(this.roomSettings.effective(), this.personaOf(participant), this.roster(), this.hops, ["your last reply was not posted; see the correction below"]);
+      this.queueBackgroundCorrection(participant.id, runtime, { prompt: composeCorrectionPrompt({ header, originalText: obligation.original,
+        corrections: obligation.corrections, personaName: participant.name }), original: obligation.original,
+        corrections: obligation.corrections, recordId: message.id, nativeObligation: ref });
+      return true;
+    },
+    route: (obligation, ref, addressed, hop) => this.routeNativeObligation(obligation, ref, addressed, hop),
+    commitNote: (owner, effect, writeRecord) => {
+      if (!this.operationHolds(owner)) return "owner_changed";
+      return this.commitNativeNoteDecision?.(this, owner.participant.id, effect, writeRecord);
+    },
+    drained: (owner) => {
+      if (!this.operationHolds(owner)) return;
+      const { participant, runtime } = owner;
+      if (this.agentNotes.resumeDeferred(participant.id, runtime)) return;
+      if (runtime.native.backgroundCorrections?.length && !participant.muted && !this.focused) this.requestTurn(participant.id, false, false, true);
+      else if (runtime.queue.pendingTurn) this.requestTurn(participant.id, false, false, false, "resume");
+    },
+    fault: (owner, reason, say) => {
+      if (this.closing || this.participants.get(owner.id) !== owner.participant || this.runtimes.get(owner.id) !== owner.runtime) return false;
+      if (owner.runtime) owner.runtime.native.nativeHold = true;
+      if (!say) return true;
+      this.log.warn(`native report for ${owner.id}: ${reason}; publication is held`);
+      this.notice(`An autonomous report for ${owner.participant.name} is held (${reason}). No new reply was published.`, "error");
+      return true;
+    },
+    pending: () => this.onNativePending?.(this.id),
+    routePost: (messageId) => {
+      const message = this.messages.find(message => message.id === messageId);
+      if (message?.kind === "chat" && !message.audience && !message.failed) this.route(message);
+    },
+    correctPost: (post) => {
+      if (!post.retry || !this.operationHolds(post)) return false;
+      this.queueBackgroundCorrection(post.participant.id, post.runtime, post.retry);
+      return true;
+    },
+    log: (level, text) => this.log[level](text),
+  }, () => this.history);
+  private get unconfirmedBackground(): Map<string, UnconfirmedPost> { return this.nativeReports.unconfirmed; }
+  private get retainedNativeArrivals(): NativeReports["arrivals"] { return this.nativeReports.arrivals; }
+  private get nativeRecoveryHold(): boolean { return this.nativeReports.recoveryHold; }
+  private set nativeRecoveryHold(value: boolean) { this.nativeReports.recoveryHold = value; }
+  private readonly completions = new BackgroundCompletions({
+    accepts: (id) => {
+      const participant = this.participants.get(id);
+      return !!participant && participant.kind === "agent" && participant.status !== "left" && !this.closing && !this.readOnly;
+    },
+    wake: (id) => this.requestBackgroundCompletion(id),
+    recorded: (messageId) => this.history.hasMessageId(this.id, messageId),
+    recordNotice: (id, completion) => {
+      const pending = this.messages.find(message => message.id === completion.messageId);
+      if (pending) return this.persist({ kind: "upsert", message: pending });
+      return this.commit({ id: completion.messageId, from: "system", fromName: "",
+        to: [id], toNames: [this.participants.get(id)!.name], text: `Background task finished · ${completion.description}`,
+        ts: Date.now(), kind: "system", audience: "human", details: { agentId: id } }).stored;
+    },
+    closing: () => this.closing,
+  });
+  private readonly automations = new AutomationTasks({
+    runtimeOf: (id) => this.runtimes.get(id),
+    requestTurn: (id) => this.requestTurn(id, true),
+    cancelTurn: (id) => { this.cancelTurn(id); },
+    closing: () => this.closing,
+    humanName: () => this.humanName,
+  });
+  private readonly diagramRepairs = new DiagramRepairs({
+    assertRecordOpen: () => this.assertRecordOpen(),
+    assertRecordOpenForAgents: () => this.assertRecordOpenForAgents(),
+    agentInRoom: (id) => { this.agentInRoom(id); },
+    messages: () => this.messages,
+    messageById: (id) => this.roomMessages.byId(id),
+    revise: (next, store) => { this.reviseRecorded(next, store); },
+    authorCanRepair: (authorId, answeredAt) => this.canRepairDiagram(authorId, answeredAt),
+    requestTurn: (id) => this.requestTurn(id, true),
+    fixedThisTurn: (id) => {
+      const runtime = this.runtimes.get(id);
+      if (runtime?.work.turnActive) runtime.work.fixedDiagramThisTurn = true;
+    },
+    recordHold: () => !!this.recordHold,
+    humanName: () => this.humanName,
+  });
+  private readonly turnLife = this.turnBoundWork();
   private readonly drafts = new Map<string, ChatMessage>();
   private readonly quotesAwaitingNumber = new Map<string, Set<string>>();
-  private readonly permissions = new Map<string, PermissionEntry>();
-  private readonly proposals = new Map<string, RoomProposal>();
-  private readonly newRooms = new Map<string, NewRoomProposal>();
-  private readonly proposalPlans = new Map<string, ProposalPlan>();
+  private readonly permissions = new PermissionDesk({
+    seq: () => this.seq,
+    nameOf: (id) => this.participants.get(id)?.name ?? id,
+    emit: (event) => this.push(event),
+    notice: (text) => this.notice(text, "info"),
+    answered: (id) => { const turn = this.runtimes.get(id)?.work.turn; if (turn) turn.lastSignAt = Date.now(); },
+    log: (text) => this.log.info(text),
+  });
+  private readonly design = new RoomDesignTools({
+    id: () => this.id,
+    dir: () => this.dir,
+    settings: () => this.settings,
+    rulesText: () => this.roomSettings.rulesText(),
+    skills: () => this.skills,
+    agent: (participantId) => this.agentInRoom(participantId),
+    shape: () => this.templateOf(),
+    findByName: (name) => this.findByName(name),
+    otherRoom: (selector): DesignTarget | null => {
+      const wanted = String(selector ?? "").trim();
+      if (!wanted) return null;
+      if (!this.skills?.rooms) throw new Error("the other rooms are not available here");
+      const room = this.skills.rooms.find(this.id, wanted);
+      return room === this ? null : room;
+    },
+    brief: (participant) => buildInstructionPreview(this.roomSettings.effective(), this.personaOf(participant), this.roster(), this.skillsForPrompt(participant, this.runtimes.get(participant.id)!)),
+    skillsForDesign: (participantId) => this.skillsForDesign(participantId),
+    cards: () => this.proposalCards,
+    postSystem: (text) => this.postSystem(text),
+    log: (text) => this.log.info(text),
+  });
+  private readonly proposalCards = new RoomProposals({
+    store: { list: () => this.history.cards.list(this.id), save: (kind, key, ts, body) => this.history.cards.save(this.id, kind, key, ts, body) },
+    emit: (event) => this.push(event),
+    roomLine: (text, forHuman) => (forHuman ? this.postRoomEvent(text, "human", false, { tone: "attention" }) : this.postRoomEvent(text)),
+    seq: () => this.seq,
+    humanName: () => this.settings.humanName,
+    log: (text) => this.log.info(text),
+    warn: (text) => this.log.warn(text),
+  });
   private readonly optionCatalog: OptionCatalog;
   private readonly log: Logger;
   private colorIndex = 0;
@@ -833,28 +921,33 @@ export class Room extends EventEmitter {
     this.id = options.id;
     this.uuid = options.uuid;
     this.folderId = options.folderId ?? null;
+    this.scope = isIdentity(options.scope) ? options.scope : null;
+    this.unreadableScope = options.scope === undefined || isIdentity(options.scope) ? undefined : options.scope;
     this.name = options.name;
     this.dir = options.dir;
     this.dataDir = options.dataDir;
     this.createdAt = options.createdAt;
-    this.programHumanDescription = options.programHumanDescription;
-    this.bypassPermissionsByDefault = options.bypassPermissionsByDefault;
     this.hubRun = options.hubRun ?? (() => null);
     this.memoryGraph = options.memoryGraph ?? (() => null);
     this.pictures = options.pictures;
     this.memoryGraphReady = options.memoryGraphReady ?? (async () => {});
     this.memoryWhy = options.memoryWhy ?? (() => "none");
     this.connections = options.connections ?? (() => []);
-    this.programTranscripts = options.programTranscripts ?? "off";
-    this.programFoldAfter = options.programFoldAfter ?? 1200;
-    this.recordPrompts = options.recordPrompts === true;
     this.skills = options.skills;
     this.history = options.history;
     this.onHistoryFailure = options.onHistoryFailure;
     this.commitNativeNoteDecision = options.commitNativeNoteDecision;
     this.onNativePending = options.onNativePending;
     this.heldParticipantIds = options.heldParticipantIds;
-    this.settings = { ...DEFAULT_ROOM_SETTINGS, ...(options.settings ?? {}), name: options.name, humanName: options.humanName };
+    this.roomSettings = new RoomSettingsModel({
+      findByName: (name) => this.findByName(name),
+      nameOf: (id) => this.participants.get(id)?.name,
+      departedName: (id) => this.departed.get(id),
+    }, {
+      name: options.name, humanName: options.humanName, settings: options.settings,
+      programHumanDescription: options.programHumanDescription, bypassPermissionsByDefault: options.bypassPermissionsByDefault,
+      programTranscripts: options.programTranscripts, programFoldAfter: options.programFoldAfter, recordPrompts: options.recordPrompts,
+    });
     this.log = options.log;
     this.optionCatalog = options.optionCatalog ?? new OptionCatalog();
     mkdirSync(this.dataDir, { recursive: true });
@@ -862,7 +955,7 @@ export class Room extends EventEmitter {
       id: "human",
       name: options.humanName,
       kind: "human",
-      status: "idle",
+      ...presence.humanPresence(),
       turns: 0,
       color: "#111827",
     });
@@ -937,38 +1030,10 @@ export class Room extends EventEmitter {
       }
       for (const op of journal.ops) {
         if (this.opApplied(op)) continue;
-        this.applyOpToMemory(op);
-        if (op.kind === "upsert" || op.kind === "rewrite") {
-          this.seq = Math.max(this.seq, op.message.seq);
-          this.displayOrder = Math.max(this.displayOrder, op.message.displayOrder ?? op.message.seq);
-        }
+        this.roomMessages.applyJournal(op);
       }
     }
-    this.readCards();
-  }
-
-  private readCards(): void {
-    let cards: StoredCard[];
-    try { cards = this.history.cards.list(this.id); }
-    catch (error) { this.log.warn(`the room's cards could not be read: ${describeError(error)}`); return; }
-    for (const card of cards) {
-      const body = card.body as { proposal?: { key?: unknown; status?: unknown }; plan?: unknown };
-      if (!body?.proposal || body.proposal.key !== card.key) { this.log.warn(`card ${card.key} is not readable; left out`); continue; }
-      if (card.kind === "proposal") {
-        const proposal = body.proposal as RoomProposal;
-        if (proposal.status === "pending" && !body.plan) { this.log.warn(`proposal ${card.key} lost its plan; shown as rejected`); proposal.status = "rejected"; }
-        this.proposals.set(card.key, proposal);
-        if (proposal.status === "pending") this.proposalPlans.set(card.key, body.plan as ProposalPlan);
-      } else if (card.kind === "new-room") this.newRooms.set(card.key, body.proposal as NewRoomProposal);
-    }
-  }
-
-  private keepCard(kind: CardKind, key: string): void {
-    const proposal = kind === "proposal" ? this.proposals.get(key) : this.newRooms.get(key);
-    if (!proposal) return;
-    const plan = kind === "proposal" && proposal.status === "pending" ? this.proposalPlans.get(key) : undefined;
-    try { this.history.cards.save(this.id, kind, key, proposal.ts, plan ? { proposal, plan } : { proposal }); }
-    catch (error) { this.log.warn(`the card ${key} could not be kept with the record (it is shown until the hub stops): ${describeError(error)}`); }
+    this.proposalCards.load();
   }
 
   private journalOps(): { ops: DivertOp[]; unreadable: number; blocked?: boolean } {
@@ -984,22 +1049,6 @@ export class Room extends EventEmitter {
       return this.history.isApplied(op.opId);
     } catch {
       return false;
-    }
-  }
-
-  private applyOpToMemory(op: DivertOp): void {
-    if (op.kind === "truncate" || op.kind === "rewrite") {
-      const kept = this.messages.filter((m) => m.seq <= op.fromSeq);
-      this.messages.splice(0, this.messages.length, ...kept);
-    }
-    if (op.kind === "upsert" || op.kind === "rewrite") {
-      const at = this.messages.findIndex((m) => m.id === op.message.id);
-      if (at >= 0) this.messages[at] = op.message;
-      else this.messages.push(op.message);
-    }
-    if (op.kind === "bury") {
-      const gone = new Set(op.ids);
-      this.messages.splice(0, this.messages.length, ...this.messages.filter((m) => !gone.has(m.id)));
     }
   }
 
@@ -1069,7 +1118,7 @@ export class Room extends EventEmitter {
     return journaled;
   }
 
-  private readonly unsavedExternal = new Map<string, { message: ChatMessage; stored: StoreOutcome }>();
+  private readonly unsavedExternal = new Map<string, { id: string; seq: number; stored: StoreOutcome }>();
 
   purgeAcceptReceipts(before = Date.now() - ACCEPT_RECEIPT_KEEP_MS): number {
     try {
@@ -1083,8 +1132,10 @@ export class Room extends EventEmitter {
   retryUnsavedExternal(): number {
     for (const [opId, entry] of this.unsavedExternal) {
       if (entry.stored !== "memory") continue;
+      const message = this.roomMessages.byId(entry.id);
+      if (!message) { this.unsavedExternal.delete(opId); continue; }
       try {
-        this.history.applyOp(this.id, { kind: "upsert", message: entry.message, opId, accept: true });
+        this.history.applyOp(this.id, { kind: "upsert", message, opId, accept: true });
         this.unsavedExternal.delete(opId);
         this.log.info(`an external message kept in memory only is now in the store (${opId})`);
       } catch {
@@ -1121,6 +1172,7 @@ export class Room extends EventEmitter {
     rmSync(path, { force: true });
     this.divertPending = false;
     this.nativeRecoveryHold = false;
+    this.journalApplied();
     if (journal.ops.length) this.log.info(`divert.jsonl applied: ${journal.ops.length} operation(s)${journal.unreadable ? `, ${journal.unreadable} unreadable line(s) dropped` : ""}`);
     for (const [opId, entry] of this.unsavedExternal) if (entry.stored === "journal") this.unsavedExternal.delete(opId);
   }
@@ -1148,9 +1200,7 @@ export class Room extends EventEmitter {
         agentType: s.agentType,
         agentLabel: recipe?.label ?? s.agentType,
         agentVendor: recipe?.vendor ?? s.agentType,
-        status: "offline",
-        statusDetail: s.asleep ? "Asleep" : s.muted ? "Not summoned — muted" : "not connected since the room restarted",
-        ...(s.muted ? { startupSkipped: "muted" as const } : {}),
+        ...presence.restoredPresence(s),
         turns: 0,
         color: s.color,
         colorSlot: s.colorSlot ?? (COLORS.indexOf(s.color) >= 0 ? COLORS.indexOf(s.color) : undefined),
@@ -1165,6 +1215,7 @@ export class Room extends EventEmitter {
         launch: s.launch,
         earlierLaunches: s.earlierLaunches,
         sessionId: s.sessionId,
+        sessionDir: s.sessionDir,
         deliveryEpoch: s.deliveryEpoch,
         suppliedThrough: s.suppliedThrough,
         supportsLoad: s.supportsLoad,
@@ -1188,12 +1239,12 @@ export class Room extends EventEmitter {
     const furthest = Math.max(this.seq, ...this.restoredSeen.values());
     if (furthest > this.seq) {
       this.log.warn(`the record reaches #${this.seq} but a vibemate had read up to #${furthest}: the count continues from there`);
-      this.seq = furthest;
+      this.roomMessages.continueFrom(furthest);
     }
   }
 
   templateOf(): { dir: string; settings: Partial<RoomSettings>; vibemates: TemplateVibemate[] } {
-    const settings = templateRoomSettings({ ...this.settings, customRules: this.renderRuleReferences(this.settings.customRules) });
+    const settings = templateRoomSettings({ ...this.settings, customRules: this.roomSettings.rulesText() });
     const vibemates: TemplateVibemate[] = [];
     for (const p of this.participants.values()) {
       if (p.kind !== "agent" || p.status === "left") continue;
@@ -1217,11 +1268,12 @@ export class Room extends EventEmitter {
     return { dir: this.dir, settings, vibemates };
   }
 
-  toStored(): { id: string; uuid: string; name: string; dir: string; createdAt: number; settings: Partial<RoomSettings>; participants: StoredParticipant[] } {
+  toStored(): { id: string; uuid: string; scope?: unknown; name: string; dir: string; createdAt: number; settings: Partial<RoomSettings>; participants: StoredParticipant[] } {
     const { name: _n, humanName: _h, ...settings } = this.settings;
     return {
       id: this.id,
       uuid: this.uuid,
+      ...(this.scope ? { scope: this.scope } : this.unreadableScope !== undefined ? { scope: this.unreadableScope } : {}),
       name: this.name,
       dir: this.dir,
       createdAt: this.createdAt,
@@ -1245,10 +1297,11 @@ export class Room extends EventEmitter {
           replyDelay: p.replyDelay,
           skills: p.skills && p.skills.length ? [...p.skills] : undefined,
           sessionId: p.sessionId,
+          sessionDir: p.sessionDir,
           deliveryEpoch: p.deliveryEpoch,
           suppliedThrough: p.suppliedThrough,
           supportsLoad: p.supportsLoad,
-          lastSeenSeq: this.runtimes.get(p.id)?.lastSeenSeq ?? this.restoredSeen.get(p.id),
+          lastSeenSeq: this.runtimes.get(p.id)?.reading.lastSeenSeq ?? this.restoredSeen.get(p.id),
           sawFromSeq: p.sawFromSeq,
           runSeen: p.runSeen,
           buildSeen: p.buildSeen,
@@ -1262,10 +1315,23 @@ export class Room extends EventEmitter {
     };
   }
 
-  private commit(message: ChatMessage, opId?: string): StoreOutcome {
-    message.displayOrder ??= ++this.displayOrder;
+  private commit(draft: MessageDraft, opId?: string): { message: ChatMessage; stored: StoreOutcome } {
+    this.markOrigin(draft);
+    const message = this.roomMessages.add(draft);
+    return { message, stored: this.recordNew(message, opId) };
+  }
+
+  private commitReserved(draft: ChatMessage, ticket: SeqTicket, opId?: string): { message: ChatMessage; stored: StoreOutcome } {
+    this.markOrigin(draft);
+    const message = this.roomMessages.addReserved(draft, ticket);
+    return { message, stored: this.recordNew(message, opId) };
+  }
+
+  private markOrigin(message: MessageDraft): void {
     if (this.folderId) message.origin ??= this.folderId;
-    this.messages.push(message);
+  }
+
+  private recordNew(message: ChatMessage, opId?: string): StoreOutcome {
     const stored = this.persist(opId ? { kind: "upsert", message, opId, accept: true } : { kind: "upsert", message });
     this.push({ type: "message", message });
     this.numberQuotesOf(message);
@@ -1288,29 +1354,26 @@ export class Room extends EventEmitter {
     this.quotesAwaitingNumber.delete(landed.id);
     if (!visibleToAgents(landed)) return;
     for (const id of waiting) {
-      const message = this.messages.find((m) => m.id === id);
-      const quotes = (message?.quotes ?? []).filter((q) => q.id === landed.id && q.seq === undefined);
-      if (!message || !quotes.length) continue;
-      for (const quote of quotes) quote.seq = landed.seq;
-      this.persist({ kind: "upsert", message });
-      this.push({ type: "message", message });
+      const message = this.roomMessages.byId(id);
+      const quotes = message?.quotes;
+      if (!message || !quotes?.some((q) => q.id === landed.id && q.seq === undefined)) continue;
+      this.reviseRecorded({ ...message, quotes: quotes.map((q) => (q.id === landed.id && q.seq === undefined ? { ...q, seq: landed.seq } : q)) });
     }
   }
 
   private takeFromRecord(): void {
-    this.messages.splice(0, this.messages.length);
+    const rows: ChatMessage[] = [];
     for (const message of this.history.all(this.id)) {
       if (message.kind === "system" && !message.details?.tone) {
         const tone = legacyRowTone(message.text);
         if (tone) message.details = { ...(message.details ?? {}), tone };
       }
       for (const repair of message.diagramRepairs ?? []) {
-        if (repair.state === "repairing" && !this.repairTasks.get(message.from)?.some((t) => t.messageId === message.id && t.block === repair.block)) repair.state = "failed";
+        if (repair.state === "repairing" && !this.diagramRepairs.isRepairing(message.from, message.id, repair.block)) repair.state = "failed";
       }
-      this.messages.push(message);
-      this.displayOrder = Math.max(this.displayOrder, message.displayOrder ?? message.seq);
+      rows.push(message);
     }
-    this.seq = Math.max(this.seq, this.history.maxSeq(this.id));
+    this.roomMessages.replaceFromRecord(rows, this.history.maxSeq(this.id));
     this.readFormerNames();
   }
 
@@ -1333,7 +1396,7 @@ export class Room extends EventEmitter {
   }
 
   private messagesWithLiveDrafts(): ChatMessage[] {
-    const live = [...this.runtimes.values()].filter((r) => r.turn?.published).map((r) => r.turn!.message);
+    const live = [...this.runtimes.values()].filter((r) => r.work.turn?.published).map((r) => r.work.turn!.message);
     return [...this.messages, ...live].sort((a, b) =>
       (a.displayOrder ?? a.seq) - (b.displayOrder ?? b.seq) || a.seq - b.seq || a.id.localeCompare(b.id),
     );
@@ -1349,14 +1412,14 @@ export class Room extends EventEmitter {
   }
 
   turnProgressMark(participantId: string): string {
-    const turn = this.runtimes.get(participantId)?.turn;
+    const turn = this.runtimes.get(participantId)?.work.turn;
     return turn ? `${turn.message.id}:${turn.lastSignAt ?? turn.startedAt}:${turn.message.text.length}:${turn.message.toolCalls?.length ?? 0}` : "";
   }
 
   messageById(messageId: string): ChatMessage | undefined {
     let message = this.messages.find(m => m.id === messageId);
     if (!message) for (const runtime of this.runtimes.values()) {
-      if (runtime.turn?.published && runtime.turn.message.id === messageId) { message = runtime.turn.message; break; }
+      if (runtime.work.turn?.published && runtime.work.turn.message.id === messageId) { message = runtime.work.turn.message; break; }
     }
     return message;
   }
@@ -1369,13 +1432,13 @@ export class Room extends EventEmitter {
   }
 
   private effectiveFoldAfter(): number {
-    return this.settings.foldAfter ?? this.programFoldAfter;
+    return this.roomSettings.foldAfter;
   }
 
   private handedFromSeq(): number | undefined {
     let from: number | undefined;
     for (const [id, runtime] of this.runtimes) {
-      if (!runtime.agent?.alive) continue;
+      if (!runtime.session.agent?.alive) continue;
       const start = this.participants.get(id)?.sawFromSeq;
       if (start === undefined) continue;
       if (from === undefined || start < from) from = start;
@@ -1423,11 +1486,14 @@ export class Room extends EventEmitter {
         lastChat: lastChat ? { id: lastChat.id, seq: lastChat.seq, from: lastChat.from, fromName: lastChat.fromName, ts: lastChat.ts, text: lastChat.text.slice(0, 160) } : null },
       pinnedOlder: from ? all.slice(0, from).filter((m) => m.pinned && m.kind === "chat").map((m) => this.forWindow(m)) : [],
       id: this.id,
+      uuid: this.uuid,
+      ...(this.scope ? { scope: this.scope } : {}),
       filesDir: this.filesDir(),
       sources: this.history.carry.sources(),
       resourceVersions: this.history.carry.resources(this.id),
       name: this.name,
       dir: this.dir,
+      folderRestartChoice: true,
       createdAt: this.createdAt,
       humanName: this.humanName,
       hopLimit: this.hopLimit,
@@ -1435,14 +1501,13 @@ export class Room extends EventEmitter {
       focused: this.focused,
       startingWithHub: this.startingWithHub,
       settings: this.settings,
-      customRulesText: this.renderRuleReferences(this.settings.customRules),
+      customRulesText: this.roomSettings.rulesText(),
       participants: [...this.participants.values()].map(p => this.participantView(p)),
       messages: request.index
         ? shown.map((m, at) => (at >= shown.length - WINDOW_RECENT_BODIES || m.streaming ? this.forWindow(m) : m))
         : shown.map((m) => this.forWindow(m)),
-      permissions: [...this.permissions.values()].map(({ resolve: _r, ...p }) => p),
-      proposals: [...this.proposals.values()],
-      newRooms: [...this.newRooms.values()],
+      permissions: this.permissions.views(),
+      ...this.proposalCards.views(),
       recovery: this.recovery,
       readOnly: this.readOnly,
       recipes: publicRecipes(),
@@ -1450,57 +1515,17 @@ export class Room extends EventEmitter {
     };
   }
 
-  applyProgramSettings(program: { humanName: string; humanDescription: string; bypassPermissionsByDefault: boolean; transcripts?: TranscriptMode; foldAfter?: number; recordPrompts?: boolean }): void {
-    const changed: string[] = [];
-    this.bypassPermissionsByDefault = program.bypassPermissionsByDefault;
-    if (program.transcripts) this.programTranscripts = program.transcripts;
-    if (program.transcripts) this.updateTranscriptModes();
-    if (program.foldAfter) this.programFoldAfter = program.foldAfter;
-    if (program.recordPrompts !== undefined) this.recordPrompts = program.recordPrompts;
-    if (program.humanName !== this.settings.humanName) {
-      this.settings = { ...this.settings, humanName: program.humanName };
+  applyProgramSettings(program: ProgramRoomSettings): void {
+    const change = this.roomSettings.applyProgram(program);
+    if (change.transcriptsChanged) this.updateTranscriptModes();
+    if (change.humanNameChanged) {
       const human = this.participants.get("human")!;
       human.name = program.humanName;
       this.push({ type: "participant", participant: human });
-      changed.push("human name");
     }
-    if (program.humanDescription !== this.programHumanDescription) {
-      this.programHumanDescription = program.humanDescription;
-      if (this.settings.humanDescriptionMode !== "override") changed.push("human description");
-    }
-    if (changed.length) {
+    if (change.roomEventChanged) {
       this.push(this.roomEvent());
     }
-  }
-
-  private effectiveSettings(): RoomSettings {
-    const own = this.settings.humanDescription.trim();
-    const program = this.programHumanDescription.trim();
-    let humanDescription = own;
-    if (this.settings.humanDescriptionMode === "inherit") humanDescription = program;
-    else if (this.settings.humanDescriptionMode === "append") humanDescription = [program, own].filter(Boolean).join(" ");
-    else if (this.settings.humanDescriptionMode === "none") humanDescription = "";
-    return { ...this.settings, humanDescription, customRules: this.renderRuleReferences(this.settings.customRules) };
-  }
-
-  private resolveRuleReferences(text: string): { stored: string; unknown: string[] } {
-    const unknown: string[] = [];
-    const stored = text.replace(MENTION_PATTERN, (whole, name: string) => {
-      const p = this.findByName(name);
-      if (p) return `@{p:${p.id}}`;
-      if (!unknown.includes(name)) unknown.push(name);
-      return whole;
-    });
-    return { stored, unknown };
-  }
-
-  private renderRuleReferences(stored: string): string {
-    return stored.replace(RULE_REF_TOKEN, (_whole, id: string) => {
-      const p = this.participants.get(id);
-      if (p) return `@${p.name}`;
-      const gone = this.departed.get(id);
-      return gone ? `@${gone} (no longer in the room)` : "@(a participant who left)";
-    });
   }
 
 
@@ -1538,67 +1563,38 @@ export class Room extends EventEmitter {
   }
 
   enqueueBackgroundCompletion(participantId: string, completion: BackgroundCompletion): void {
-    const participant = this.participants.get(participantId);
-    if (!participant || participant.kind !== "agent" || participant.status === "left" || this.closing || this.readOnly) return;
-    const queue = this.backgroundCompletions.get(participantId) ?? [];
-    if (!queue.some(task => task.key === completion.key)) {
-      queue.push({ ...completion, claimed: false, continuing: false, confirmed: false,
-        messageId: `background-task-${completion.key}` });
-      this.backgroundCompletions.set(participantId, queue);
-    }
-    this.requestBackgroundCompletion(participantId);
+    this.completions.enqueue(participantId, completion);
   }
 
   resumeBackgroundCompletions(): void {
-    for (const participantId of this.backgroundCompletions.keys()) this.requestBackgroundCompletion(participantId);
+    this.completions.resume();
   }
 
   private requestBackgroundCompletion(participantId: string): void {
     const participant = this.participants.get(participantId);
     const runtime = this.runtimes.get(participantId);
     if (!participant || participant.status === "left" || this.closing || this.readOnly) return;
-    if (!runtime?.agent.alive || runtime.retiring || runtime.workCancelled || participant.muted
-        || runtime.workBusy || runtime.turnActive || runtime.pendingTurn || runtime.delayTimer
+    if (!runtime?.session.agent.alive || runtime.session.retiring || runtime.work.workCancelled || participant.muted
+        || runtime.work.workBusy || runtime.work.turnActive || runtime.queue.pendingTurn || runtime.queue.delayTimer
         || participant.status === "error" || participant.trouble || this.focused || this.recordHold) return;
     this.requestTurn(participantId);
   }
 
   removeBackgroundCompletion(participantId: string, key: string): void {
-    const queue = this.backgroundCompletions.get(participantId);
-    if (!queue) return;
-    this.backgroundCompletions.set(participantId, queue.filter(task => task.key !== key || task.claimed));
-  }
-
-  private removeFinishedBackgroundCompletion(participantId: string, completion: QueuedBackgroundCompletion): void {
-    const remaining = this.backgroundCompletions.get(participantId)?.filter(task => task !== completion) ?? [];
-    if (remaining.length) this.backgroundCompletions.set(participantId, remaining);
-    else this.backgroundCompletions.delete(participantId);
+    this.completions.remove(participantId, key);
   }
 
   acceptsBackgroundRegistration(participantId: string, token: string): boolean {
     const runtime = this.runtimes.get(participantId);
-    return !!runtime && !!token && runtime.mcpToken === token && this.liveAgentSession(participantId, runtime.agent, runtime.sessionId);
+    return !!runtime && !!token && runtime.session.mcpToken === token && this.liveAgentSession(participantId, runtime.session.agent, runtime.session.sessionId);
   }
 
   askConnectionWrite(participantId: string, call: { title: string; input: Record<string, unknown> }): Promise<boolean> {
-    return new Promise((resolve) => {
-      const entry: PermissionEntry = {
-        key: randomUUID(),
-        participantId,
-        toolCall: { toolCallId: `connection-${randomUUID()}`, title: call.title, kind: "other", rawInput: call.input },
-        options: [
-          { optionId: "allow", name: "Allow once", kind: "allow_once" },
-          { optionId: "deny", name: "Deny", kind: "reject_once" },
-        ],
-        ts: Date.now(),
-        afterSeq: this.seq,
-        resolve: (response) => resolve(response.outcome.outcome === "selected" && response.outcome.optionId === "allow"),
-      };
-      this.permissions.set(entry.key, entry);
-      const { resolve: _r, ...view } = entry;
-      this.push({ type: "permission", permission: view });
-      this.notice(`${this.participants.get(participantId)?.name ?? participantId} asks for permission: ${call.title}`, "info");
-    });
+    return this.permissions.ask(participantId,
+      { toolCallId: `connection-${randomUUID()}`, title: call.title, kind: "other", rawInput: call.input },
+      [{ optionId: "allow", name: "Allow once", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }],
+      call.title,
+    ).then((response) => response.outcome.outcome === "selected" && response.outcome.optionId === "allow");
   }
 
   shownStatus(id: string): ParticipantStatus | "working" | "writing" | "notes" | "asking" {
@@ -1619,7 +1615,7 @@ export class Room extends EventEmitter {
     for (const p of this.participants.values()) {
       if (p.kind !== "agent" || p.status === "left") continue;
       const state = p.asleep ? "asleep" : p.muted ? "muted" : this.shownStatus(p.id);
-      const turn = this.runtimes.get(p.id)?.turn;
+      const turn = this.runtimes.get(p.id)?.work.turn;
       const parts = [state];
       let timing: Pick<import("./message-check.js").CheckedVibemate, "startedAt" | "elapsedSeconds" | "quietSeconds"> = {};
       if (turn && !turn.hidden && Number.isFinite(turn.startedAt)) {
@@ -1641,48 +1637,111 @@ export class Room extends EventEmitter {
     for (const p of this.participants.values()) {
       if (p.kind !== "agent" || p.status === "left") continue;
       const runtime = this.runtimes.get(p.id);
-      if (!runtime || !(runtime.turnActive || runtime.workBusy)) continue;
-      const turn = runtime.turn;
+      if (!runtime || !(runtime.work.turnActive || runtime.work.workBusy)) continue;
+      const turn = runtime.work.turn;
       out.push({ name: p.name, lastSignAt: turn ? (turn.lastSignAt ?? turn.startedAt) : null });
     }
     return out;
   }
 
-  private silenceWatch: NodeJS.Timeout | null = null;
-  private readonly toldOfSilence = new Set<string>();
-
-  private watchForSilence(): void {
-    if (this.silenceWatch) return;
-    this.silenceWatch = setInterval(() => this.checkSilence(), SILENCE_CHECK_MS);
-    this.silenceWatch.unref?.();
-  }
-
-  private checkSilence(): void {
-    let active = false;
-    for (const [id, runtime] of this.runtimes) {
-      const turn = runtime.turn;
-      if (!runtime.turnActive || !turn || turn.hidden) continue;
-      active = true;
-      const quiet = Date.now() - (turn.lastSignAt ?? turn.startedAt);
-      if (quiet < SILENCE_MS) continue;
-      const participant = this.participants.get(id);
-      if (!participant || participant.muted) continue;
-      if (this.askingHuman(id)) continue;
-      if (!runtime.quiet || runtime.quiet.turnId !== turn.message.id) {
-        runtime.quiet = { turnId: turn.message.id };
-        this.push({ type: "participant", participant });
-      }
-      if (this.toldOfSilence.has(turn.message.id)) continue;
-      this.toldOfSilence.add(turn.message.id);
-      const minutes = Math.round(quiet / 60_000);
-      const kept = runtime.transcript.dump(`nothing new from ${participant.name} for ${minutes} minutes`);
+  private readonly silence = new SilenceWatch({
+    runtimes: () => this.runtimes,
+    participant: (id) => this.participants.get(id),
+    askingHuman: (id) => this.askingHuman(id),
+    markQuiet: (seen) => {
+      if (!this.stillQuiet(seen)) return false;
+      seen.runtime.work.quiet = { turnId: seen.turn.message.id };
+      this.push({ type: "participant", participant: seen.participant });
+      return true;
+    },
+    keepRecord: (seen, reason) => {
+      if (!this.stillQuiet(seen)) return false;
+      const kept = seen.runtime.session.transcript.dump(reason);
       if (kept) this.log.info(`protocol kept: ${kept}`);
-      this.postSystem(`${participant.name}: nothing new for ${minutes} minutes; its turn started at ${formatQuoteTime(turn.startedAt).slice(-5)}.`, "human", false, { agentId: id, tone: "attention" });
-    }
-    if (active) return;
-    if (this.silenceWatch) clearInterval(this.silenceWatch);
-    this.silenceWatch = null;
-    this.toldOfSilence.clear();
+      return true;
+    },
+    tell: (seen, text) => {
+      if (!this.stillQuiet(seen)) return false;
+      this.postSystem(text, "human", false, { agentId: seen.id, tone: "attention" });
+      return true;
+    },
+  });
+  private readonly agentConfig = new AgentConfig({
+    current: (id) => ({ participant: this.participants.get(id), runtime: this.runtimes.get(id) }),
+    takeWork: (runtime) => this.takeWork(runtime),
+    finishWork: (id, hold) => this.finishRuntimeWork(id, hold),
+    replaceForMode: (id, hold) => this.replaceForMode(id, hold),
+    pushParticipant: (seen) => {
+      if (!this.vibemateHeld(seen)) return false;
+      this.push({ type: "participant", participant: seen.participant });
+      return true;
+    },
+    tell: (seen, text, tone) => {
+      if (!this.vibemateHeld(seen)) return false;
+      this.postSystem(text, "human", false, { agentId: seen.participant.id, ...(tone ? { tone } : {}) });
+      return true;
+    },
+  });
+  private readonly agentNotes = new AgentNotes({
+    current: (id) => ({ participant: this.participants.get(id), runtime: this.runtimes.get(id) }),
+    participants: () => this.participants.values(),
+    runtimes: () => this.runtimes.values(),
+    seq: () => this.seq,
+    messages: () => this.messages,
+    autoNotes: () => this.settings.autoNotes,
+    open: () => !this.closing && !this.readOnly,
+    assertRecordOpen: () => this.assertRecordOpen(),
+    idle: (_id, runtime) => !runtime.work.turnActive && !runtime.work.workBusy && !this.nativeLaneBlocked(runtime),
+    pushParticipant: (seen) => {
+      if (!this.vibemateHeld(seen)) return false;
+      this.push({ type: "participant", participant: seen.participant });
+      return true;
+    },
+    log: (text) => this.log.info(text),
+    runNotesTurn: (expected) => this.runNotesTurn(expected),
+  });
+  private readonly agentSessions = new AgentSessions({
+    current: (id) => ({ participant: this.participants.get(id), runtime: this.runtimes.get(id) }),
+    closing: () => this.closing,
+    blocked: () => this.readOnly || !!this.recordHold,
+    forget: (id, expected) => this.forgetRuntime(id, expected),
+    pushParticipant: (seen) => {
+      if (this.closing || !this.vibemateHeld(seen)) return false;
+      this.push({ type: "participant", participant: seen.participant });
+      return true;
+    },
+    cancelPermissionsOf: (id) => this.cancelPermissionsOf(id),
+    restoreSeen: (seen, seq) => {
+      if (this.closing || !this.vibemateHeld(seen)) return false;
+      this.restoredSeen.set(seen.participant.id, seq);
+      return true;
+    },
+    notice: (seen, text) => {
+      if (this.closing || !this.vibemateHeld(seen)) return false;
+      this.notice(text, "error");
+      return true;
+    },
+    markForgotten: (seen) => {
+      if (this.closing || !this.vibemateHeld(seen)) return false;
+      presence.forgotten(seen.participant);
+      return true;
+    },
+    markExited: (seen, detail) => {
+      if (this.closing || !this.vibemateHeld(seen)) return false;
+      presence.exited(seen.participant, detail);
+      return true;
+    },
+  });
+  private readonly notesTurns = new Map<string, AgentRuntime>();
+  private operationHolds(seen: SeenVibemate): boolean {
+    return !this.closing && this.vibemateHeld(seen);
+  }
+  private vibemateHeld(seen: SeenVibemate): boolean {
+    const id = seen.participant.id;
+    return stillHeld(seen, { participant: this.participants.get(id), runtime: this.runtimes.get(id) });
+  }
+  private stillQuiet(seen: SeenQuietTurn): boolean {
+    return stillQuiet(seen, { runtime: this.runtimes.get(seen.id), participant: this.participants.get(seen.id), asking: this.askingHuman(seen.id) });
   }
 
   hubRecord(text: string): void {
@@ -1697,9 +1756,7 @@ export class Room extends EventEmitter {
 
   noteMutedStartup(id: string): void {
     const participant = this.participants.get(id);
-    if (!participant?.muted || participant.status !== "offline") return;
-    participant.startupSkipped = "muted";
-    participant.statusDetail = "Not summoned — muted";
+    if (!participant || !presence.skippedMuted(participant)) return;
     this.push({ type: "participant", participant });
   }
 
@@ -1712,11 +1769,11 @@ export class Room extends EventEmitter {
     if (!this.settings.startWithHub || !this.settings.wakeAfterRestart || !text || this.closing || this.focused || this.recordHold) return;
     const targets = [...new Set(restored)].filter(id => {
       const participant = this.participants.get(id), runtime = this.runtimes.get(id);
-      return participant?.kind === "agent" && participant.status === "idle" && !participant.muted && runtime?.agent.alive && !runtime.retiring && !runtime.workCancelled && !runtime.turnActive;
+      return participant?.kind === "agent" && participant.status === "idle" && !participant.muted && runtime?.session.agent.alive && !runtime.session.retiring && !runtime.work.workCancelled && !runtime.work.turnActive;
     });
     if (!targets.length) return;
     this.postRoomEvent(`Automatic restart message, configured by ${this.humanName}:\n${text}`, undefined, true);
-    this.hops = 0;
+    this.turnOrder.resetHops();
     this.push(this.roomEvent());
     for (const id of targets) this.requestTurn(id);
   }
@@ -1753,8 +1810,8 @@ export class Room extends EventEmitter {
   }
 
   postHumanMessage(text: string, images: ImageInput[] = [], quotes: QuoteInput[] = [], audio: HeardSound[] = [], video: VideoInput[] = []): ChatMessage {
-    const message = this.buildHumanMessage(text, images, quotes, audio, video);
-    this.commit(message);
+    const built = this.buildHumanMessage(text, images, quotes, audio, video);
+    const { message } = this.commitReserved(built.message, built.ticket);
     this.route(message);
     this.emit("humanActivity");
     return message;
@@ -1774,11 +1831,11 @@ export class Room extends EventEmitter {
     if (participant.trouble || participant.status === "error") return "The selected vibemate needs attention before it can work.";
     if (participant.status === "offline" && job.wakeOffline && allowWake) return null;
     const runtime = this.runtimes.get(id);
-    if (!runtime?.agent.alive) return "The selected vibemate is offline.";
+    if (!runtime?.session.agent.alive) return "The selected vibemate is offline.";
     if (this.focused || participant.muted || this.closing || this.recordHold) return "The room paused while the vibemate was connecting.";
-    if (runtime.workCancelled) return "The selected vibemate was stopped. Speak to it to resume work.";
-    if (runtime.turnActive || runtime.workBusy || this.nativeLaneBlocked(runtime) || runtime.pendingTurn || runtime.delayTimer || runtime.retiring || this.automationTasks.has(id)
-        || this.backgroundCompletions.get(id)?.length || participant.status !== "idle") return "Waiting for the selected vibemate to finish.";
+    if (runtime.work.workCancelled) return "The selected vibemate was stopped. Speak to it to resume work.";
+    if (runtime.work.turnActive || runtime.work.workBusy || this.nativeLaneBlocked(runtime) || runtime.queue.pendingTurn || runtime.queue.delayTimer || runtime.session.retiring || this.automations.has(id)
+        || this.completions.waiting(id) || participant.status !== "idle") return "Waiting for the selected vibemate to finish.";
     return null;
   }
 
@@ -1793,46 +1850,30 @@ export class Room extends EventEmitter {
     if (reason) return { status: "deferred", detail: reason };
     if (signal.aborted) return { status: "cancelled", detail: String(signal.reason ?? "Cancelled.") };
     const id = run.job.targetId;
-    const message: ChatMessage = { id: randomUUID(), seq: ++this.seq, from: "system", fromName: "", to: id ? [id] : [],
+    const { message, stored } = this.commit({ id: randomUUID(), from: "system", fromName: "", to: id ? [id] : [],
       toNames: id ? [this.participants.get(id)!.name] : [], ts: Date.now(), kind: "system",
       audience: "human", details: { about: "room" },
-      text: run.job.action === "reminder" ? `Reminder · ${run.job.name}\n${run.job.text}` : `Automation · ${run.job.name} → ${this.participants.get(id!)!.name}` };
-    if (this.commit(message) !== "record") return { status: "failed", detail: "The task notice could not be durably recorded; no agent was started." };
+      text: run.job.action === "reminder" ? `Reminder · ${run.job.name}\n${run.job.text}` : `Automation · ${run.job.name} → ${this.participants.get(id!)!.name}` });
+    if (stored !== "record") return { status: "failed", detail: "The task notice could not be durably recorded; no agent was started." };
     if (run.job.action === "reminder") return { status: "completed", messageId: message.id };
-    const runtime = this.runtimes.get(id!)!;
-    return new Promise(resolve => {
-      const abort = () => {
-        if (this.automationTasks.get(id!)?.run.id !== run.id || this.runtimes.get(id!) !== runtime) return;
-        this.cancelTurn(id!);
-      };
-      this.automationTasks.set(id!, { run, runtime, resolve, cleanup: () => signal.removeEventListener("abort", abort),
-        continuing: false, outcome: { status: "interrupted", detail: "No completed reply was confirmed." } });
-      signal.addEventListener("abort", abort, { once: true });
-      this.requestTurn(id!, true);
-    });
-  }
-
-  private finishAutomation(id: string, outcome?: AutomationOutcome): void {
-    const task = this.automationTasks.get(id);
-    if (!task) return;
-    this.automationTasks.delete(id); task.cleanup(); task.resolve(outcome ?? task.outcome);
+    return this.automations.begin(id!, run, this.runtimes.get(id!)!, signal);
   }
 
   acceptExternalMessage(input: { opId: string; via: MessageVia; text: string; images?: ImageInput[]; quotes?: QuoteInput[]; audio?: HeardSound[]; video?: VideoInput[] }): ExternalReceipt {
     const held = this.unsavedExternal.get(input.opId);
-    if (held) return { id: held.message.id, seq: held.message.seq, stored: held.stored, repeated: true, rerouted: false };
+    if (held) return { id: held.id, seq: held.seq, stored: held.stored, repeated: true, rerouted: false };
     const applied = this.appliedReceipt(input.opId);
     if (applied) return { id: applied.messageId, seq: applied.seq, stored: "record", repeated: true, rerouted: this.rerouteIfNeverSeen(applied.messageId) };
-    let message: ChatMessage;
+    let built: { message: ChatMessage; ticket: SeqTicket };
     try {
-      message = this.buildHumanMessage(input.text, input.images ?? [], input.quotes ?? [], input.audio ?? [], input.video ?? []);
+      built = this.buildHumanMessage(input.text, input.images ?? [], input.quotes ?? [], input.audio ?? [], input.video ?? []);
     } catch (error) {
       if (error instanceof RoomRefusal) return { stored: "rejected", reason: error.message, repeated: false, rerouted: false, transient: error.transient };
       throw error;
     }
-    message.via = input.via;
-    const stored = this.commit(message, input.opId);
-    if (stored !== "record") this.unsavedExternal.set(input.opId, { message, stored });
+    built.message.via = input.via;
+    const { message, stored } = this.commitReserved(built.message, built.ticket, input.opId);
+    if (stored !== "record") this.unsavedExternal.set(input.opId, { id: message.id, seq: message.seq, stored });
     this.route(message);
     this.emit("humanActivity");
     return { id: message.id, seq: message.seq, stored, repeated: false, rerouted: false };
@@ -1855,7 +1896,7 @@ export class Room extends EventEmitter {
     }
   }
 
-  private buildHumanMessage(text: string, images: ImageInput[], quotes: QuoteInput[], audio: HeardSound[] = [], video: VideoInput[] = []): ChatMessage {
+  private buildHumanMessage(text: string, images: ImageInput[], quotes: QuoteInput[], audio: HeardSound[] = [], video: VideoInput[] = []): { message: ChatMessage; ticket: SeqTicket } {
     this.assertRecordOpen();
     const waiting = this.unstaffed();
     if (waiting.length) throw new RoomRefusal(`${waiting.map((p) => p.name).join(", ")} ${waiting.length === 1 ? "has" : "have"} no coding agent yet: summon ${waiting.length === 1 ? "it" : "them"} from the roster to start the conversation`);
@@ -1866,11 +1907,12 @@ export class Room extends EventEmitter {
     for (const a of attachments) void this.pictures?.prepare(join(this.filesDir(), a.file), a.mimeType, { room: this.id, file: a.file });
     const sounds = audio.length ? saveAudio(ensureDir(this.filesDir()), audio).map((kept, i) => ({ ...kept, ...(audio[i].words !== undefined ? { words: audio[i].words } : {}), ...(audio[i].unheard ? { unheard: audio[i].unheard } : {}) })) : [];
     const clips = video.length ? saveVideo(ensureDir(this.filesDir()), video) : [];
-    this.humanTypingUntil = 0;
+    this.turnOrder.messageArrived();
     const human = this.participants.get("human")!;
+    const ticket = this.roomMessages.reserve();
     const message: ChatMessage = {
       id: randomUUID(),
-      seq: ++this.seq,
+      seq: ticket.seq,
       from: human.id,
       fromName: human.name,
       to: [],
@@ -1887,29 +1929,31 @@ export class Room extends EventEmitter {
     this.decorateHumanMessage(message);
     message.bodyDelivery = { version: 1, readers: {} };
     for (const p of this.participants.values()) {
-      if (p.kind === "agent" && this.runtimes.get(p.id)?.agent.alive) registerBodyReader(message, p.id, this.ensureDeliveryEpoch(p));
+      if (p.kind === "agent" && this.runtimes.get(p.id)?.session.agent.alive) registerBodyReader(message, p.id, this.ensureDeliveryEpoch(p));
     }
     human.turns += 1;
-    if (this.focused) {
-      this.focused = false;
-      this.push(this.roomEvent());
-    }
-    return message;
+    if (this.turnOrder.endHush()) this.push(this.roomEvent());
+    return { message, ticket };
   }
 
   private decorateHumanMessage(message: ChatMessage): void {
-    const mentions = this.parseMentions(message.text);
-    message.to = mentions.ids;
-    message.toNames = mentions.names;
+    const addressing = this.humanAddressing(message.text);
+    message.to = addressing.to;
+    message.toNames = addressing.toNames;
     delete message.skill;
-    const invocation = parseSkillInvocation(message.text);
-    if (invocation) {
-      const skill = this.skills?.library.get(invocation.name);
-      if (!skill) this.notice(`No skill named "${invocation.name}" in the library; sent as plain text.`, "warn");
-      else if (!skill.userInvocable) this.notice(`Skill "${skill.name}" is not user-invocable; sent as plain text.`, "warn");
-      else if (skill.problems.length) this.notice(`Skill "${skill.name}" has problems (${skill.problems.join("; ")}); sent as plain text.`, "warn");
-      else message.skill = { name: skill.name, args: invocation.args };
-    }
+    if (addressing.skill) message.skill = addressing.skill;
+  }
+
+  private humanAddressing(text: string): Pick<ChatMessage, "to" | "toNames" | "skill"> {
+    const mentions = this.parseMentions(text);
+    const invocation = parseSkillInvocation(text);
+    if (!invocation) return { to: mentions.ids, toNames: mentions.names };
+    const skill = this.skills?.library.get(invocation.name);
+    if (!skill) this.notice(`No skill named "${invocation.name}" in the library; sent as plain text.`, "warn");
+    else if (!skill.userInvocable) this.notice(`Skill "${skill.name}" is not user-invocable; sent as plain text.`, "warn");
+    else if (skill.problems.length) this.notice(`Skill "${skill.name}" has problems (${skill.problems.join("; ")}); sent as plain text.`, "warn");
+    else return { to: mentions.ids, toNames: mentions.names, skill: { name: skill.name, args: invocation.args } };
+    return { to: mentions.ids, toNames: mentions.names };
   }
 
 
@@ -1918,7 +1962,7 @@ export class Room extends EventEmitter {
     for (const p of this.participants.values()) {
       if (p.kind !== "agent" || p.status === "left" || p.status === "unstaffed") continue;
       const runtime = this.runtimes.get(p.id);
-      if (runtime) out.push({ id: p.id, name: p.name, lastSeenSeq: runtime.lastSeenSeq, suppliedThrough: p.suppliedThrough, active: runtime.turnActive, online: true });
+      if (runtime) out.push({ id: p.id, name: p.name, lastSeenSeq: runtime.reading.lastSeenSeq, suppliedThrough: p.suppliedThrough, active: runtime.work.turnActive, online: true });
       else out.push({ id: p.id, name: p.name, lastSeenSeq: this.restoredSeen.get(p.id) ?? -1, suppliedThrough: p.suppliedThrough, active: false, online: false });
     }
     return out;
@@ -1932,121 +1976,57 @@ export class Room extends EventEmitter {
 
   setPinned(messageId: string, pinned: boolean): ChatMessage {
     this.assertRecordOpen();
-    const message = this.messages.find((m) => m.id === messageId) ?? this.drafts.get(messageId);
+    const recorded = this.roomMessages.byId(messageId);
+    const draft = recorded ? undefined : this.drafts.get(messageId);
+    const message = recorded ?? draft;
     if (!message || message.kind !== "chat") throw new Error("only chat messages can be pinned");
     if (!!message.pinned === pinned) return message;
-    if (pinned) message.pinned = true;
+    if (recorded) return this.reviseRecorded(withPin(recorded, pinned));
+    if (pinned) draft!.pinned = true;
     else {
-      delete message.pinned;
-      delete message.pinLabel;
+      delete draft!.pinned;
+      delete draft!.pinLabel;
     }
-    if (!message.streaming) this.persist({ kind: "upsert", message });
-    this.push({ type: "message", message });
-    return message;
+    this.push({ type: "message", message: draft! });
+    return draft!;
   }
 
   setPinLabel(messageId: string, label: string): ChatMessage {
     this.assertRecordOpen();
-    const message = this.messages.find((m) => m.id === messageId) ?? this.drafts.get(messageId);
+    const recorded = this.roomMessages.byId(messageId);
+    const draft = recorded ? undefined : this.drafts.get(messageId);
+    const message = recorded ?? draft;
     if (!message || message.kind !== "chat" || !message.pinned) throw new Error("only a pinned message has a title of its own");
-    const title = String(label ?? "").replace(/\s+/g, " ").trim().slice(0, PIN_LABEL_MAX);
+    const title = pinTitle(label);
     if ((message.pinLabel ?? "") === title) return message;
-    if (title) message.pinLabel = title;
-    else delete message.pinLabel;
-    if (!message.streaming) this.persist({ kind: "upsert", message });
+    if (recorded) return this.reviseRecorded(withPinLabel(recorded, title));
+    if (title) draft!.pinLabel = title;
+    else delete draft!.pinLabel;
+    this.push({ type: "message", message: draft! });
+    return draft!;
+  }
+
+  private reviseRecorded(next: ChatMessage, store = true): ChatMessage {
+    const message = this.roomMessages.revise(next);
+    if (store) this.persist({ kind: "upsert", message });
     this.push({ type: "message", message });
     return message;
   }
 
   reportDiagramFailure(messageId: string, block: number, source: string, error: string): { state: DiagramRepair["state"] | "ignored" } {
-    this.assertRecordOpen();
-    const message = this.messages.find((m) => m.id === messageId);
-    if (!message || message.kind !== "chat" || message.streaming || message.from === "human") return { state: "ignored" };
-    const found = mermaidBlocks(message.text).find((b) => b.block === block);
-    if (!found || found.source !== String(source).trim()) return { state: "ignored" };
-    const repairs = message.diagramRepairs ?? [];
-    const outcome = recordFailure(repairs, block, String(error), !!found.span && this.canRepairDiagram(message), Date.now());
-    if (outcome === "unchanged") return { state: repairs.find((r) => r.block === block)?.state ?? "failed" };
-    message.diagramRepairs = repairs;
-    this.persist({ kind: "upsert", message });
-    this.push({ type: "message", message });
-    if (outcome === "repairing") {
-      const tasks = this.repairTasks.get(message.from) ?? [];
-      tasks.push({ messageId: message.id, block, delivered: false });
-      this.repairTasks.set(message.from, tasks);
-      this.requestTurn(message.from, true);
-    }
-    return { state: outcome };
+    return this.diagramRepairs.report(messageId, block, source, error);
   }
 
-  private canRepairDiagram(message: ChatMessage): boolean {
-    const participant = this.participants.get(message.from), runtime = this.runtimes.get(message.from);
+  private canRepairDiagram(authorId: string, answeredAt: number): boolean {
+    const participant = this.participants.get(authorId), runtime = this.runtimes.get(authorId);
     if (participant?.kind !== "agent" || participant.muted || this.focused || this.closing) return false;
-    if (!runtime?.agent.alive || runtime.retiring || runtime.workCancelled) return false;
+    if (!runtime?.session.agent.alive || runtime.session.retiring || runtime.work.workCancelled) return false;
     if (["unstaffed", "error", "offline", "left"].includes(participant.status)) return false;
-    return Date.now() - (message.ts + (message.durationMs ?? 0)) <= DIAGRAM_REPAIR_WINDOW_MS;
+    return Date.now() - answeredAt <= DIAGRAM_REPAIR_WINDOW_MS;
   }
 
   fixDiagramForAgent(participantId: string, seq: number, block: number, source: string): { ok: true; message: string } {
-    this.assertRecordOpenForAgents();
-    this.agentInRoom(participantId);
-    const message = this.messages.find((m) => m.seq === seq && m.kind === "chat");
-    if (!message) throw new Error(`no message #${seq} in this room`);
-    if (message.from !== participantId) throw new Error(`#${seq} is not yours: only its author can fix its diagrams`);
-    const repair = message.diagramRepairs?.find((r) => r.block === block);
-    if (!repair || repair.state !== "repairing") throw new Error(`diagram ${block} of #${seq} is not waiting for a fix${repair?.state === "failed" ? " any more" : ""}`);
-    const problem = diagramSourceProblem(source);
-    if (problem) throw new Error(problem);
-    const found = mermaidBlocks(message.text).find((b) => b.block === block);
-    if (!found) throw new Error(`#${seq} has no diagram ${block}`);
-    message.text = replaceDiagramSource(message.text, found, source);
-    recordFix(message.diagramRepairs!, block, found.source, Date.now());
-    this.persist({ kind: "upsert", message });
-    this.push({ type: "message", message });
-    this.dropRepairTask(participantId, message.id, block);
-    const runtime = this.runtimes.get(participantId);
-    if (runtime?.turnActive) runtime.fixedDiagramThisTurn = true;
-    return { ok: true, message: `Diagram ${block} of #${seq} replaced; the room draws it again in the same message. Nothing else is needed from you.` };
-  }
-
-  private dropRepairTask(agentId: string, messageId: string, block: number): void {
-    const tasks = this.repairTasks.get(agentId)?.filter((t) => t.messageId !== messageId || t.block !== block);
-    if (tasks?.length) this.repairTasks.set(agentId, tasks);
-    else this.repairTasks.delete(agentId);
-  }
-
-  private giveUpRepairs(agentId: string, which: "delivered" | "all"): void {
-    const tasks = this.repairTasks.get(agentId);
-    if (!tasks) return;
-    const over = which === "all" ? tasks : tasks.filter((t) => t.delivered);
-    for (const task of over) {
-      const message = this.messages.find((m) => m.id === task.messageId);
-      if (!message || !giveUp(message.diagramRepairs, task.block, Date.now())) continue;
-      if (!this.recordHold) this.persist({ kind: "upsert", message });
-      this.push({ type: "message", message });
-    }
-    const left = which === "all" ? [] : tasks.filter((t) => !t.delivered);
-    if (left.length) this.repairTasks.set(agentId, left);
-    else this.repairTasks.delete(agentId);
-  }
-
-  private repairTaskBlock(task: { messageId: string; block: number }): string | null {
-    const message = this.messages.find((m) => m.id === task.messageId);
-    const repair = message?.diagramRepairs?.find((r) => r.block === task.block);
-    const found = message && mermaidBlocks(message.text).find((b) => b.block === task.block);
-    if (!message || !found || repair?.state !== "repairing") return null;
-    const fence = fenceFor(found.source);
-    return [
-      "<diagram-repair>",
-      `The room could not draw diagram ${task.block} of your message #${message.seq}. Until it is fixed, ${this.humanName} sees that you are fixing it, in its place. Mermaid says:`,
-      boundedError(repair.error),
-      "",
-      "The diagram's code as it is now:",
-      `${fence}mermaid`, found.source, fence,
-      "",
-      `Send the corrected code with tool_call {"name": "fix_diagram", "arguments": {"message": ${message.seq}, "block": ${task.block}, "source": "<the code>"}}: the code alone, without the fence. The room puts it in place of this one, so ${this.humanName} sees one message with a working diagram. Do not post the diagram again; if the fix is all you have to do, reply [silent].`,
-      "</diagram-repair>",
-    ].join("\n");
+    return this.diagramRepairs.fix(participantId, seq, block, source);
   }
 
   previewEdit(messageId: string): EditPreview {
@@ -2067,25 +2047,23 @@ export class Room extends EventEmitter {
     this.assertRecordOpen();
     const trimmed = text.trim();
     if (!trimmed) throw new Error("empty message");
-    const message = this.editableMessage(messageId);
-    if (trimmed === message.text) throw new Error("the text is unchanged");
+    const held = this.editableMessage(messageId);
+    if (trimmed === held.text) throw new Error("the text is unchanged");
     this.messageCheckRevision++;
-    const { restart, offline } = affectedByEdit(this.agentReadStates(), message.seq);
-    const previous = message.text;
-    const previousVersion = message.bodyDelivery?.version ?? 1;
-    resetBodyDelivery(message);
-    for (const p of this.participants.values()) {
-      if (p.kind === "agent" && this.runtimes.get(p.id)?.agent.alive) registerBodyReader(message, p.id, this.ensureDeliveryEpoch(p));
-    }
-    message.edited = { ts: Date.now(), previous };
-    message.text = trimmed;
-    if (this.folderId && (message.numbering ?? message.origin ?? this.folderId) !== this.folderId) message.numbering = this.folderId;
-    this.decorateHumanMessage(message);
-    this.humanTypingUntil = 0;
-    if (this.focused) {
-      this.focused = false;
-      this.push(this.roomEvent());
-    }
+    const { restart, offline } = affectedByEdit(this.agentReadStates(), held.seq);
+    const readers = [...this.participants.values()].filter((p) => p.kind === "agent" && this.runtimes.get(p.id)?.session.agent.alive)
+      .map((p) => [p.id, this.ensureDeliveryEpoch(p)] as const);
+    const addressing = this.humanAddressing(trimmed);
+    const current = this.editableMessage(messageId);
+    const previous = current.text;
+    const previousVersion = current.bodyDelivery?.version ?? 1;
+    const { skill: _skill, ...unaddressed } = current;
+    const next: ChatMessage = { ...unaddressed, ...addressing, bodyDelivery: nextBodyVersion(current), edited: { ts: Date.now(), previous }, text: trimmed };
+    for (const [id, epoch] of readers) registerBodyReader(next, id, epoch);
+    if (this.folderId && (current.numbering ?? current.origin ?? this.folderId) !== this.folderId) next.numbering = this.folderId;
+    const message = this.roomMessages.revise(next);
+    this.turnOrder.messageArrived();
+    if (this.turnOrder.endHush()) this.push(this.roomEvent());
 
     if (mode === "notify") {
       this.persist({ kind: "upsert", message });
@@ -2103,18 +2081,18 @@ export class Room extends EventEmitter {
     }
 
     const { kept, removed } = partitionHistory(this.messages, message.seq);
-    this.dropNotesAfter(message.seq);
+    this.agentNotes.dropAfter(message.seq);
     for (const a of restart) {
       const runtime = this.runtimes.get(a.id);
       if (!runtime) continue;
       this.dropScheduledTurn(a.id);
       this.cancelPermissionsOf(a.id);
     }
-    this.messages.splice(0, this.messages.length, ...kept);
+    this.roomMessages.truncateAfter(message.seq);
     this.persist({ kind: "rewrite", fromSeq: message.seq, deletedAt: Date.now(), message });
     this.push({ type: "messages.truncated", fromSeq: message.seq });
     this.push({ type: "message", message });
-    if (this.speaking && restart.some((a) => a.id === this.speaking)) this.speaking = null;
+    for (const a of restart) { const runtime = this.runtimes.get(a.id); if (runtime) this.turnOrder.standDown(runtime); }
 
     const restarted: string[] = [];
     for (const a of restart) {
@@ -2130,7 +2108,7 @@ export class Room extends EventEmitter {
       const p = this.participants.get(a.id);
       if (!p) continue;
       p.sessionId = undefined;
-      p.statusDetail = "the conversation was rewritten while it was offline; reconnect replays the new history";
+      presence.rewrittenWhileOffline(p);
       this.restoredSeen.set(a.id, Math.max(0, message.seq - 1));
       this.push({ type: "participant", participant: p });
     }
@@ -2144,258 +2122,199 @@ export class Room extends EventEmitter {
   async respawnAgent(id: string, options: { memory?: boolean; replay?: number; reason?: string; wake?: boolean } = {}): Promise<Participant> {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
-    const online = this.runtimes.has(id);
+    return this.respawnExpected(participant, this.runtimes.get(id) ?? null, options);
+  }
+
+  private async respawnExpected(participant: Participant, runtime: AgentRuntime | null, options: { memory?: boolean; replay?: number; reason?: string; wake?: boolean }): Promise<Participant> {
+    await this.respawnSession(participant, runtime, options);
+    return participant;
+  }
+
+  private async respawnSession(participant: Participant, runtime: AgentRuntime | null, options: { memory?: boolean; replay?: number; reason?: string; wake?: boolean }): Promise<AgentRuntime | undefined> {
+    const id = participant.id;
+    const asked: SeenVibemate = { participant, runtime };
+    if (!this.operationHolds(asked)) return undefined;
+    const online = !!runtime;
     const memory = !!options.memory;
     const replay = memory ? Math.max(0, options.replay ?? this.settings.replayAfterRestart) : 0;
     const withNotes = memory && !!participant.notes;
     const why = options.reason ?? "its context was cleared";
     this.dropScheduledTurn(id);
+    if (!this.operationHolds(asked)) return undefined;
     this.cancelPermissionsOf(id);
-    if (this.speaking === id) this.speaking = null;
-    if (online) await this.retireRuntime(id);
+    if (!this.operationHolds(asked)) return undefined;
+    if (runtime) this.turnOrder.standDown(runtime);
+    if (runtime) await this.retireRuntime(id, runtime);
+    const without: SeenVibemate = { participant, runtime: null };
+    if (!this.operationHolds(without)) { this.log.info(`respawn of ${participant.name} stopped: the vibemate changed meanwhile`); return undefined; }
     participant.sessionId = undefined;
     this.restoredSeen.set(id, this.seq);
     this.push({ type: "participant", participant });
+    if (!this.operationHolds(without)) return undefined;
     if (!online) this.log.info(`respawn of ${participant.name} (offline): stored session dropped, starting it now`);
-    await this.reconnect(id, memory
+    const started = await this.reconnectExpected(participant, memory
       ? { mode: "replay", replay, reason: `${why}; it comes back with ${withNotes ? "its notes and " : ""}the last ${replay} messages`, wake: options.wake }
       : { mode: "replay", replay: 0, notes: false, reason: `${why}, it remembers nothing from before`, wake: options.wake });
     this.log.info(`respawn of ${participant.name}: fresh session, ${memory ? `${withNotes ? "notes + " : ""}replay ${replay}` : "no replay"}`);
-    return participant;
+    return started;
   }
 
   async restartWithPersona(id: string, patch: PersonaPatch): Promise<Participant> {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
-    const runtime = this.runtimes.get(id);
-    const online = !!runtime && runtime.agent.alive;
-    if (online && runtime.turnActive) throw new Error(`${participant.name} is in the middle of a reply; try again when it is idle`);
+    const runtime = this.runtimes.get(id) ?? null;
+    const online = !!runtime && runtime.session.agent.alive;
+    if (online && runtime.work.turnActive) throw new Error(`${participant.name} is in the middle of a reply; try again when it is idle`);
+    const asked: SeenVibemate = { participant, runtime };
+    if (!this.operationHolds(asked)) return participant;
     if (online) {
       try {
         await this.takeNotes(id);
       } catch (error) {
         this.log.warn(`${participant.name}: notes before the restart failed (${describeError(error)}); it restarts with the notes it had`);
       }
+      if (!this.operationHolds(asked)) return participant;
     }
     this.updatePersona(id, patch);
-    return this.respawnAgent(id, { memory: true, reason: "its role changed" });
-  }
-
-  private dropNotesAfter(seq: number): void {
-    for (const participant of this.participants.values()) {
-      if (!participant.notes || (participant.notesSeq ?? seq) < seq) continue;
-      participant.notesRevision = nextNotesRevision(participant.notesRevision);
-      participant.nativeNoteReceipt = undefined;
-      participant.notes = participant.notesAt = participant.notesSeq = participant.notesWrittenAt = undefined;
-      this.push({ type: "participant", participant });
-      this.log.info(`${participant.name}: notes dropped, the conversation was rewritten from #${seq}`);
-    }
+    if (!this.operationHolds(asked)) return participant;
+    return this.respawnExpected(participant, runtime, { memory: true, reason: "its role changed" });
   }
 
   updateNotes(id: string, notes: string): Participant {
-    const participant = this.participants.get(id);
-    if (!participant || participant.kind !== "agent") throw new Error("no such agent");
-    const text = notes.trim().slice(0, 4000);
-    participant.notesRevision = nextNotesRevision(participant.notesRevision);
-    participant.nativeNoteReceipt = undefined;
-    participant.notes = text || undefined;
-    participant.notesAt = text ? this.runtimes.get(id)?.lastUsed ?? participant.notesAt : undefined;
-    participant.notesSeq = text ? this.seq : undefined;
-    participant.notesWrittenAt = text ? Date.now() : undefined;
-    this.push({ type: "participant", participant });
-    return participant;
+    return this.agentNotes.update(id, notes);
   }
 
   async takeNotes(id: string): Promise<Participant> {
-    this.assertRecordOpen();
-    const participant = this.participants.get(id);
-    const runtime = this.runtimes.get(id);
-    if (!participant || participant.kind !== "agent") throw new Error("no such agent");
-    if (!runtime || !runtime.agent.alive) throw new Error(`${participant.name} is not online`);
-    if (runtime.turnActive || runtime.workBusy || this.nativeLaneBlocked(runtime)) throw new Error(`${participant.name} is in the middle of a reply or held native delivery; try again when it is idle`);
-    const header = buildHeader(this.effectiveSettings(), this.personaOf(participant), this.roster(), this.hops, ["hidden turn: notes only, nothing is posted"]);
-    this.takeWork(runtime);
-    runtime.workCancelled = false;
-    runtime.notesPending = false;
-    runtime.deferredNotesTurn = false;
-    if (runtime.delayTimer) clearTimeout(runtime.delayTimer);
-    runtime.delayTimer = null;
-    const queued = this.floorQueue.indexOf(id);
-    if (queued >= 0) this.floorQueue.splice(queued, 1);
+    return this.agentNotes.take(id);
+  }
+
+  private async runNotesTurn({ participant, runtime }: { participant: Participant; runtime: AgentRuntime }): Promise<void> {
+    const id = participant.id;
+    if (this.participants.get(id) !== participant || this.runtimes.get(id) !== runtime) throw new Error(`${participant.name} restarted before its notes were taken`);
+    const header = buildHeader(this.roomSettings.effective(), this.personaOf(participant), this.roster(), this.hops, ["hidden turn: notes only, nothing is posted"]);
+    const hold = this.takeWork(runtime);
+    runtime.work.workCancelled = false;
+    runtime.notes.notesPending = false;
+    runtime.notes.deferredNotesTurn = false;
+    this.turnOrder.defer({ id, participant, runtime });
     try {
-      runtime.log.info("notes: hidden turn");
+      runtime.session.log.info("notes: hidden turn");
+      this.notesTurns.set(id, runtime);
       participant.notesTurn = true;
       this.push({ type: "participant", participant });
-      await this.executeTurn(participant, runtime, [{ type: "text", text: `${header}\n\n${NOTES_ONLY_PROMPT}` }], null, { hidden: true });
+      await this.executeTurn(participant, hold, [{ type: "text", text: `${header}\n\n${NOTES_ONLY_PROMPT}` }], null, { hidden: true });
     } finally {
-      participant.notesTurn = undefined;
+      const mine = this.notesTurns.get(id) === runtime;
+      if (mine) { this.notesTurns.delete(id); participant.notesTurn = undefined; }
       try {
-        this.push({ type: "participant", participant });
+        if (mine && this.participants.get(id) === participant) this.push({ type: "participant", participant });
       } finally {
-        await this.finishRuntimeWork(id, runtime);
+        await this.finishRuntimeWork(id, hold);
       }
     }
-    return participant;
-  }
-
-  private keepNotes(participant: Participant, runtime: AgentRuntime, notes: string | null, via: "reply" | "hidden turn"): boolean {
-    if (!notes) return false;
-    participant.notesRevision = nextNotesRevision(participant.notesRevision);
-    participant.nativeNoteReceipt = undefined;
-    participant.notes = notes.slice(0, 4000);
-    participant.notesAt = runtime.lastUsed;
-    participant.notesSeq = this.seq;
-    participant.notesWrittenAt = Date.now();
-    runtime.notesDue = false;
-    runtime.notesMisses = 0;
-    runtime.notesPending = false;
-    this.push({ type: "participant", participant });
-    runtime.log.info(`notes: ${notes.split("\n").length} lines kept (${via}, context ${runtime.lastUsed})`);
-    return true;
-  }
-
-  private askForNotes(runtime: AgentRuntime, how: "reply" | "hidden turn" = "reply"): boolean {
-    if (!this.settings.autoNotes) return false;
-    if (how === "reply") runtime.notesDue = true;
-    else runtime.notesPending = true;
-    return true;
-  }
-
-  private withdrawAutomaticNotes(): void {
-    for (const runtime of this.runtimes.values()) {
-      runtime.notesDue = false;
-      runtime.notesPending = false;
-      runtime.notesMisses = 0;
-    }
-  }
-
-  private notesForBrief(participant: Participant, runtime: AgentRuntime): BriefNotes | undefined {
-    if (!participant.notes) return undefined;
-    const source: NotesSource | null = runtime.resumeNotes ?? (runtime.lastBriefSeq >= 0 && (participant.notesSeq ?? -1) >= runtime.lastBriefSeq ? "live" : null);
-    if (!source) return undefined;
-    const after = participant.notesSeq;
-    const newerMessages = after === undefined ? undefined
-      : this.messages.reduce((count, m) => count + Number(m.seq > after && m.kind === "chat" && !m.streaming && visibleToAgents(m)), 0);
-    return { text: participant.notes, source, writtenAt: participant.notesWrittenAt, newerMessages };
   }
 
   private contextFull(participant: Participant, runtime: AgentRuntime, detail: string): void {
-    participant.contextEvent = { kind: "full", at: Date.now(), used: runtime.lastUsed, size: participant.contextSize };
+    const asked: SeenVibemate = { participant, runtime };
+    if (!this.operationHolds(asked)) return;
+    participant.contextEvent = { kind: "full", at: Date.now(), used: runtime.session.lastUsed, size: participant.contextSize };
     const recently = participant.autoRespawnAt !== undefined && Date.now() - participant.autoRespawnAt < 10 * 60_000;
     if (recently) {
-      participant.status = "error";
-      participant.statusDetail = "its context filled up again right after a respawn; it needs you (respawn it by hand, with fewer replayed messages)";
+      presence.exhausted(participant, "its context filled up again right after a respawn; it needs you (respawn it by hand, with fewer replayed messages)");
       this.push({ type: "participant", participant });
+      if (!this.operationHolds(asked)) return;
       this.postRoomEvent(`${participant.name} ran out of context again (${detail.slice(0, 120)}); it was respawned once already and now needs you.`, "human", false, { tone: "error" });
-      runtime.log.warn(`context full again within 10 minutes: no automatic respawn`);
+      runtime.session.log.warn(`context full again within 10 minutes: no automatic respawn`);
       return;
     }
     participant.autoRespawnAt = Date.now();
     this.push({ type: "participant", participant });
+    if (!this.operationHolds(asked)) return;
     const memory = !!participant.notes;
     this.postRoomEvent(`${participant.name} ran out of context (${detail.slice(0, 120)}); it is respawned ${memory ? `with its notes and the last ${this.settings.replayAfterRestart} messages` : `with the last ${this.settings.replayAfterRestart} messages (it had no notes)`}.`, "human", false, { tone: "error" });
-    runtime.log.warn(`context full: ${detail}; respawn with ${memory ? "notes" : "no notes"}`);
+    if (!this.operationHolds(asked)) return;
+    runtime.session.log.warn(`context full: ${detail}; respawn with ${memory ? "notes" : "no notes"}`);
     setImmediate(() => {
-      void (memory ? this.respawnAgent(participant.id, { memory: true }) : this.reconnectAfterFull(participant.id)).catch((error) => this.notice(`${participant.name}: respawn after a full context failed: ${describeError(error)}`, "error"));
+      if (!this.operationHolds(asked)) return;
+      void (memory ? this.respawnExpected(participant, runtime, { memory: true }) : this.reconnectAfterFull(participant, runtime)).catch((error) => {
+        if (this.operationHolds(asked) || this.operationHolds({ participant, runtime: null })) this.notice(`${participant.name}: respawn after a full context failed: ${describeError(error)}`, "error");
+      });
     });
   }
 
-  private async reconnectAfterFull(id: string): Promise<void> {
-    const participant = this.participants.get(id);
-    if (!participant) return;
+  private async reconnectAfterFull(participant: Participant, runtime: AgentRuntime): Promise<void> {
+    const id = participant.id;
+    const asked: SeenVibemate = { participant, runtime };
+    if (!this.operationHolds(asked)) return;
     this.dropScheduledTurn(id);
+    if (!this.operationHolds(asked)) return;
     this.cancelPermissionsOf(id);
-    if (this.runtimes.has(id)) await this.retireRuntime(id);
+    if (!this.operationHolds(asked)) return;
+    await this.retireRuntime(id, runtime);
+    if (!this.operationHolds({ participant, runtime: null })) return;
     participant.sessionId = undefined;
-    await this.reconnect(id, { mode: "replay", reason: "its context was full; it comes back with the last messages" });
+    await this.reconnectExpected(participant, { mode: "replay", reason: "its context was full; it comes back with the last messages" });
   }
 
   private watchTheStop(id: string): void {
-    const turnAtStop = this.runtimes.get(id)?.turn?.message.id;
+    const participant = this.participants.get(id), runtime = this.runtimes.get(id);
+    if (!participant || !runtime) return;
+    const asked: SeenVibemate = { participant, runtime };
+    const turnAtStop = runtime.work.turn ?? null;
+    const unanswered = () => this.operationHolds(asked) && runtime.work.turnActive && (runtime.work.turn ?? null) === turnAtStop;
     const timer = setTimeout(() => {
-      const runtime = this.runtimes.get(id);
-      const participant = this.participants.get(id);
-      if (!runtime || !participant || !runtime.turnActive || runtime.turn?.message.id !== turnAtStop) return;
+      if (!unanswered()) return;
       this.postRoomEvent(`${participant.name} did not answer the stop; it is being started again with the same session.`, "human", false, { tone: "attention" });
+      if (!unanswered()) return;
       void (async () => {
+        let expected = asked;
         try {
-          await this.retireRuntime(id);
-          await this.reconnect(id, { mode: "load" });
+          await this.retireRuntime(id, runtime);
+          expected = { participant, runtime: null };
+          if (!this.operationHolds(expected)) return;
+          await this.reconnectExpected(participant, { mode: "load" });
         } catch (error) {
-          this.notice(`${participant.name} could not be started again: ${describeError(error)}`, "error");
+          if (this.operationHolds(expected)) this.notice(`${participant.name} could not be started again: ${describeError(error)}`, "error");
         }
       })();
     }, STOP_GRACE_MS);
     timer.unref?.();
   }
 
-  private async retireRuntime(id: string): Promise<void> {
-    const runtime = this.runtimes.get(id);
-    const participant = this.participants.get(id);
-    if (!runtime || !participant) return;
-    runtime.retiring = true;
-    if (runtime.quiet) this.push({ type: "participant", participant });
-    if (runtime.turnActive) runtime.agent.cancel(runtime.sessionId);
-    try {
-      await Promise.race([runtime.agent.closeSession(runtime.sessionId), delay(1500)]);
-    } catch {
-    }
-    await runtime.agent.kill();
-    this.forgetRuntime(id);
-    participant.status = "offline";
-    participant.statusDetail = undefined;
+  private async retireRuntime(id: string, expected?: AgentRuntime): Promise<void> {
+    return this.agentSessions.retire(id, expected);
   }
 
   focus(from?: string): void {
     let stopped = 0;
     for (const [id, runtime] of this.runtimes) {
       this.dropScheduledTurn(id);
-      if (runtime.turnActive) {
-        runtime.agent.cancel(runtime.sessionId);
+      if (runtime.work.turnActive) {
+        runtime.session.agent.cancel(runtime.session.sessionId);
         this.cancelPermissionsOf(id);
         stopped++;
       }
     }
-    this.focused = true;
+    this.turnOrder.hush();
     this.push(this.roomEvent());
     this.postRoomEvent(`Hush${from ? ` from ${from}` : ""}: ${stopped ? `${stopped} repl${stopped > 1 ? "ies" : "y"} stopped; ` : ""}everyone waits until ${this.humanName} writes again.`, undefined, false, { tone: "hush" });
   }
 
   rename(name: string): void {
-    const trimmed = name.trim();
-    if (!trimmed || trimmed.length > 60) throw new Error("room name must be 1-60 characters");
-    if (trimmed === this.name) return;
-    this.name = trimmed;
-    this.settings = { ...this.settings, name: trimmed };
+    if (!this.roomSettings.rename(name)) return;
+    this.name = this.roomSettings.value.name;
     this.push(this.roomEvent());
   }
 
   updateSettings(patch: Record<string, unknown>): RoomSettings {
-    const next: RoomSettings = { ...this.settings };
-    const changed: string[] = [];
-    let unknownRefs: string[] = [];
-    for (const key of Object.keys(ROOM_SETTINGS_SPEC) as (keyof RoomSettings)[]) {
-      if (patch[key] === undefined || ROOM_SETTINGS_SPEC[key].kind === "own-path") continue;
-      let value: RoomSettings[typeof key] = coerceSetting(key, patch[key]);
-      if (key === "customRules") {
-        const resolved = this.resolveRuleReferences(this.guardBriefText("The room rules text", value as string, "refuse", next.briefTextLimit));
-        unknownRefs = resolved.unknown;
-        value = resolved.stored;
-      }
-      if (JSON.stringify(value) !== JSON.stringify(next[key])) {
-        (next as unknown as Record<string, unknown>)[key] = value;
-        changed.push(key);
-      }
-    }
-    this.settings = next;
-    if (changed.includes("transcripts")) this.updateTranscriptModes();
-    if (changed.includes("autoNotes") && !next.autoNotes) this.withdrawAutomaticNotes();
+    const update = this.roomSettings.update(patch, (text, limit) => this.guardBriefText("The room rules text", text, "refuse", limit));
+    if (update.changed.includes("transcripts")) this.updateTranscriptModes();
+    if (update.changed.includes("autoNotes") && !update.settings.autoNotes) this.agentNotes.withdraw();
     this.push(this.roomEvent());
-    const briefChanges = changed.filter((c) => BRIEF_AFFECTING_SETTINGS.includes(c as keyof RoomSettings));
-    if (briefChanges.length) {
-      this.postSystem(`Room settings updated (${briefChanges.join(", ")}); agents get refreshed instructions on their next turn.`);
+    if (update.briefChanges.length) {
+      this.postSystem(`Room settings updated (${update.briefChanges.join(", ")}); agents get refreshed instructions on their next turn.`);
     }
-    const missing = unknownRefs.filter((n) => n !== "Name");
+    const missing = update.unknownNames;
     if (missing.length) {
       this.notice(`Room rules mention ${missing.map((n) => `@${n}`).join(", ")}, who ${missing.length > 1 ? "are" : "is"} not in the room; left as plain text.`, "warn");
     }
@@ -2412,6 +2331,8 @@ export class Room extends EventEmitter {
   updatePersona(id: string, patch: PersonaPatch): Participant {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
+    const asked: SeenVibemate = { participant, runtime: this.runtimes.get(id) ?? null };
+    const still = () => this.operationHolds(asked);
     if (patch.name !== undefined) {
       const name = patch.name.trim();
       if (!NAME_PATTERN.test(name)) throw new Error("name must be 1-24 letters, digits, _ or - (no spaces)");
@@ -2420,6 +2341,7 @@ export class Room extends EventEmitter {
       if (name !== participant.name) {
         const renamed: Renamed = { id, from: participant.name, to: name };
         this.postRoomEvent(`${participant.name} is now called ${name}.`, undefined, undefined, { renamed });
+        if (!still()) return participant;
         participant.formerNames = [renamed.from, ...(participant.formerNames ?? [])]
           .filter((n, i, all) => n.toLowerCase() !== name.toLowerCase() && all.findIndex((m) => m.toLowerCase() === n.toLowerCase()) === i);
         participant.name = name;
@@ -2429,7 +2351,9 @@ export class Room extends EventEmitter {
       participant.tagline = patch.tagline.trim().slice(0, 80);
     }
     if (patch.role !== undefined && patch.role.trim() !== (participant.role ?? "")) {
-      participant.role = this.guardBriefText(`${participant.name}'s vibio`, patch.role.trim());
+      const role = this.guardBriefText(`${participant.name}'s vibio`, patch.role.trim());
+      if (!still()) return participant;
+      participant.role = role;
     }
     if (patch.avatar !== undefined) {
       participant.avatar = cleanFace(patch.avatar, "vibemate") || undefined;
@@ -2457,9 +2381,9 @@ export class Room extends EventEmitter {
     const participant = this.participants.get(id);
     const runtime = this.runtimes.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such vibemate");
-    if (!runtime || !runtime.agent.alive) throw new Error(`${participant.name} is not running: respawn it instead`);
-    if (runtime.turnActive) throw new Error(`${participant.name} is answering right now`);
-    if (participant.trouble?.stage === "turn") runtime.lastSeenSeq = Math.min(runtime.lastSeenSeq, runtime.turnStartSeq);
+    if (!runtime || !runtime.session.agent.alive) throw new Error(`${participant.name} is not running: respawn it instead`);
+    if (runtime.work.turnActive) throw new Error(`${participant.name} is answering right now`);
+    if (participant.trouble?.stage === "turn") runtime.reading.lastSeenSeq = Math.min(runtime.reading.lastSeenSeq, runtime.reading.turnStartSeq);
     this.clearTrouble(participant, undefined);
     this.log.info(`retry of ${participant.name}'s last turn, asked by the human`);
     this.requestTurn(id, true);
@@ -2470,11 +2394,11 @@ export class Room extends EventEmitter {
     for (const participant of this.participants.values()) {
       if (participant.kind !== "agent" || participant.muted || participant.agentType !== recipeId || participant.trouble?.kind !== "login") continue;
       const runtime = this.runtimes.get(participant.id);
-      if (runtime?.agent.alive) {
+      if (runtime?.session.agent.alive) {
         this.notice(`${participant.name}: ${getRecipe(recipeId)?.vendor ?? recipeId} is logged in again; sending it the messages it missed.`, "info");
         try { this.retryTurn(participant.id); } catch (error) { this.log.warn(`retry after login: ${describeError(error)}`); }
       } else {
-        const restore = !!participant.sessionId && participant.supportsLoad !== false;
+        const restore = this.storedSessionHere(participant) && participant.supportsLoad !== false;
         this.notice(`${participant.name}: ${getRecipe(recipeId)?.vendor ?? recipeId} is logged in again; ${restore ? "bringing it back with its session" : "starting it afresh with its notes"}.`, "info");
         void (restore ? this.reconnect(participant.id, { mode: "load" }) : this.respawnAgent(participant.id, { memory: true, reason: "logged in again" })).catch((error) => this.notice(`${participant.name}: the start after the login failed: ${describeError(error)}`, "error"));
       }
@@ -2485,44 +2409,67 @@ export class Room extends EventEmitter {
     return [...this.participants.values()].filter(p => {
       if (p.kind !== "agent" || p.agentType !== recipeId) return false;
       const runtime = this.runtimes.get(p.id);
-      return p.status === "starting" || !!runtime && (runtime.turnActive || runtime.workBusy === true);
+      return p.status === "starting" || !!runtime && (runtime.work.turnActive || runtime.work.workBusy === true);
     }).map(p => `${p.name} (${this.name})`);
   }
 
   agentUpdateSessions(recipeId: string): { name: string; room: string; canRestore: boolean }[] {
     return [...this.participants.values()].filter(p => p.agentType === recipeId && this.runtimes.has(p.id))
-      .map(p => ({ name: p.name, room: this.name, canRestore: p.supportsLoad !== false && !!p.sessionId }));
+      .map(p => ({ name: p.name, room: this.name, canRestore: p.supportsLoad !== false && this.storedSessionHere(p) }));
   }
 
   prepareAgentUpdate(recipeId: string): { pause: () => Promise<void>; resume: () => Promise<void> } {
     const blockers = this.agentUpdateBlockers(recipeId);
     if (blockers.length) throw new Error(`Still working: ${blockers.join(", ")}`);
-    const paused = [...this.runtimes.entries()].filter(([id]) => this.participants.get(id)?.agentType === recipeId);
-    for (const [id, runtime] of paused) {
-      runtime.retiring = true; this.dropScheduledTurn(id); this.restoredSeen.set(id, runtime.lastSeenSeq);
+    const group: SeenVibemate[] = [...this.runtimes.entries()].flatMap(([id, runtime]) => {
+      const participant = this.participants.get(id);
+      return participant?.agentType === recipeId ? [{ participant, runtime }] : [];
+    });
+    const standing = new Map<SeenVibemate, "frozen" | "paused" | "lost">();
+    for (const member of group) {
+      const id = member.participant.id, runtime = member.runtime!;
+      if (!this.operationHolds(member)) { standing.set(member, "lost"); continue; }
+      runtime.session.retiring = true; this.dropScheduledTurn(id);
+      if (!this.operationHolds(member)) { standing.set(member, "lost"); continue; }
+      this.restoredSeen.set(id, runtime.reading.lastSeenSeq);
+      standing.set(member, "frozen");
     }
     const resume = async () => {
       this.optionCatalog.forget(recipeId);
-      for (const [id] of paused) {
-        const p = this.participants.get(id);
-        if (!p || p.status === "left") continue;
-        const remaining = this.runtimes.get(id);
-        if (remaining) { remaining.retiring = false; this.requestTurn(id); continue; }
+      for (const member of group) {
+        const { participant } = member, id = participant.id;
+        if (participant.status === "left") continue;
+        const state = standing.get(member);
+        if (state === "frozen") {
+          if (this.operationHolds(member)) { member.runtime!.session.retiring = false; this.requestTurn(id); }
+          continue;
+        }
+        const without: SeenVibemate = { participant, runtime: null };
+        if (state !== "paused" || !this.operationHolds(without)) continue;
         try {
-          await this.reconnect(id, { mode: "load", reason: "its installed agent was updated" });
-          this.requestTurn(id);
-        } catch (error) { this.notice(`${p.name}: could not reconnect after the update: ${describeError(error)}`, "error"); }
+          const started = await this.reconnectExpected(participant, { mode: "load", reason: "its installed agent was updated" });
+          if (started && this.operationHolds({ participant, runtime: started })) this.requestTurn(id);
+        } catch (error) {
+          if (this.operationHolds(without)) this.notice(`${participant.name}: could not reconnect after the update: ${describeError(error)}`, "error");
+        }
       }
     };
     return { resume, pause: async () => {
-      for (const [id] of paused) { await this.retireRuntime(id); const participant = this.participants.get(id); if (participant) this.push({ type: "participant", participant }); }
+      for (const member of group) {
+        if (standing.get(member) !== "frozen") continue;
+        if (!this.operationHolds(member)) { standing.set(member, "lost"); continue; }
+        await this.retireRuntime(member.participant.id, member.runtime!);
+        const without: SeenVibemate = { participant: member.participant, runtime: null };
+        if (!this.operationHolds(without)) { standing.set(member, "lost"); continue; }
+        standing.set(member, "paused");
+        this.push({ type: "participant", participant: member.participant });
+        if (!this.operationHolds(without)) standing.set(member, "lost");
+      }
     } };
   }
 
   private clearTrouble(participant: Participant, why: string | undefined): void {
-    if (participant.status === "error") participant.status = "idle";
-    participant.trouble = undefined;
-    participant.statusDetail = undefined;
+    presence.recover(participant);
     this.push({ type: "participant", participant });
     if (why) this.notice(`${participant.name} is back in the conversation (${why}).`, "info");
   }
@@ -2533,15 +2480,21 @@ export class Room extends EventEmitter {
     if (participant.status === "unstaffed") throw new Error(`${participant.name} has no coding agent to put to sleep`);
     if (participant.asleep) return participant;
     if (participant.status === "starting") throw new Error(`${participant.name} is starting; put it to sleep once it is up`);
-    this.giveUpRepairs(id, "all");
+    const runtime = this.runtimes.get(id) ?? null;
+    const asked: SeenVibemate = { participant, runtime };
+    if (!this.operationHolds(asked)) return participant;
+    this.turnLife.asleep(id);
+    if (!this.operationHolds(asked)) return participant;
     this.dropScheduledTurn(id);
+    if (!this.operationHolds(asked)) return participant;
     this.cancelPermissionsOf(id);
-    await this.retireRuntime(id);
-    participant.asleep = true;
-    participant.status = "offline";
-    participant.statusDetail = "Asleep";
-    participant.startupSkipped = undefined;
+    if (!this.operationHolds(asked)) return participant;
+    if (runtime) await this.retireRuntime(id, runtime);
+    const without: SeenVibemate = { participant, runtime: null };
+    if (!this.operationHolds(without)) return participant;
+    presence.asleep(participant);
     this.push({ type: "participant", participant });
+    if (!this.operationHolds(without)) return participant;
     const where = from ? ` (${from})` : "";
     this.postRoomEvent(`${participant.name} is asleep: its agent is stopped, and it starts again only when it is woken up${where}.`);
     return participant;
@@ -2552,16 +2505,13 @@ export class Room extends EventEmitter {
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
     if (!!participant.muted === muted) return participant;
     participant.muted = muted;
-    if (!muted && participant.startupSkipped === "muted") {
-      participant.startupSkipped = undefined;
-      participant.statusDetail = "not summoned yet; reconnect when ready";
-    }
+    if (!muted) presence.unmuted(participant);
     const runtime = this.runtimes.get(id);
-    if (muted) this.giveUpRepairs(id, "all");
+    if (muted) this.turnLife.muted(id);
     if (muted && runtime) {
       this.dropScheduledTurn(id);
-      if (runtime.turnActive) {
-        runtime.agent.cancel(runtime.sessionId);
+      if (runtime.work.turnActive) {
+        runtime.session.agent.cancel(runtime.session.sessionId);
         this.cancelPermissionsOf(id);
       }
     }
@@ -2579,70 +2529,18 @@ export class Room extends EventEmitter {
     if (recipe.unavailableReason) throw new Error(`${recipe.label}: ${recipe.unavailableReason}`);
     const stamp = recipeStamp(recipe);
     this.noteInstallation(recipeId, stamp);
-    return this.optionCatalog.get(recipeId, stamp, refresh, () => this.probeOptions(recipe));
+    return this.optionCatalog.get(recipeId, stamp, refresh, () => probeAgentOptions(recipe, { dataDir: this.dataDir, log: this.log }));
   }
 
   noteInstallation(recipeId: string, stamp: string | null): void {
     if (!stamp) return;
     for (const [id, runtime] of this.runtimes) {
       const participant = this.participants.get(id);
-      if (!participant || participant.agentType !== recipeId || !runtime.installStamp) continue;
-      const outdated = runtime.installStamp !== stamp;
+      if (!participant || participant.agentType !== recipeId || !runtime.session.installStamp) continue;
+      const outdated = runtime.session.installStamp !== stamp;
       if (!!participant.installOutdated === outdated) continue;
       participant.installOutdated = outdated || undefined;
       this.push({ type: "participant", participant });
-    }
-  }
-
-  private async probeOptions(recipe: AgentRecipe): Promise<DiscoveredOptions> {
-    const recipeId = recipe.id;
-    const cwd = ensureDir(join(this.dataDir, ".probe"));
-    const log = this.log.child(`probe:${recipeId}`);
-    const launch = recipe.build({ model: null, mode: null });
-    const release = useAgent(recipeId);
-    let agent: AcpAgent;
-    try { agent = new AcpAgent(
-      { ...launch, cwd },
-      {
-        onSessionUpdate: () => undefined,
-        onPermissionRequest: async () => ({ outcome: { outcome: "cancelled" } }),
-        onStderr: (line) => log.info(`stderr: ${line}`),
-        onExit: () => undefined,
-      },
-    ); } catch (error) { release(); throw error; }
-    const started = Date.now();
-    try {
-      const info = await Promise.race([
-        (async (): Promise<DiscoveredOptions> => {
-          const init = await agent.initialize({ name: "viberoom", version: "0.2.0" });
-          const session = await this.openSession(agent, cwd, log, [], recipe);
-          const result: DiscoveredOptions = {
-            recipeId,
-            agentInfo: { name: init.agentInfo?.name ?? null, version: init.agentInfo?.version ?? null },
-            authMethods: agent.authMethods.map((m) => m.id),
-            modes: session.modes ?? null,
-            configOptions: session.configOptions ?? [],
-            modelAtLaunch: !!recipe.modelAtLaunch,
-            modeAtLaunch: !!recipe.modeAtLaunch,
-            discoveredAt: Date.now(),
-            durationMs: 0,
-            installStamp: null,
-          };
-          try {
-            await Promise.race([agent.closeSession(session.sessionId), delay(1500)]);
-          } catch {
-          }
-          return result;
-        })(),
-        delay(30_000).then(() => {
-          throw new Error("agent did not answer initialize/session/new within 30 s");
-        }),
-      ]);
-      info.durationMs = Date.now() - started;
-      log.info(`options discovered in ${info.durationMs} ms: ${info.configOptions.map((o) => o.id).join(", ") || "none"}`);
-      return info;
-    } finally {
-      try { await agent.kill(); } finally { release(); }
     }
   }
 
@@ -2661,7 +2559,7 @@ export class Room extends EventEmitter {
     const launch: LaunchPrefs = {
       model: options.model ?? recipe.defaultModel,
       effort: options.effort ?? recipe.defaultEffort,
-      mode: options.mode ?? (this.bypassPermissionsByDefault ? recipe.bypassMode ?? recipe.defaultMode : recipe.defaultMode),
+      mode: options.mode ?? (this.roomSettings.bypassPermissionsByDefault ? recipe.bypassMode ?? recipe.defaultMode : recipe.defaultMode),
     };
     const participant: Participant = {
       id,
@@ -2699,8 +2597,7 @@ export class Room extends EventEmitter {
       id,
       name,
       kind: "agent",
-      status: "unstaffed",
-      statusDetail: "awaiting a coding agent",
+      ...presence.unstaffedPresence(),
       turns: 0,
       ...this.nextColour(input.color),
       tagline: (input.tagline ?? "").trim().slice(0, 80),
@@ -2745,16 +2642,19 @@ export class Room extends EventEmitter {
     if (!recipe) throw new Error(`unknown agent type: ${choice.agentType}`);
     if (recipe.unavailableReason) throw new Error(`${recipe.label}: ${recipe.unavailableReason}`);
     if (recipe.id === participant.agentType) return participant;
-    const runtime = this.runtimes.get(id);
-    const online = !!runtime && runtime.agent.alive;
-    if (online && runtime.turnActive) throw new Error(`${participant.name} is in the middle of a reply; try again when it is idle`);
+    const runtime = this.runtimes.get(id) ?? null;
+    const online = !!runtime && runtime.session.agent.alive;
+    if (online && runtime.work.turnActive) throw new Error(`${participant.name} is in the middle of a reply; try again when it is idle`);
+    if (!this.operationHolds({ participant, runtime })) return participant;
     if (online) {
       try {
         await this.takeNotes(id);
       } catch (error) {
         this.log.warn(`${participant.name}: notes before the change of agent failed (${describeError(error)}); it restarts with the notes it had`);
       }
-      await this.retireRuntime(id);
+      if (!this.operationHolds({ participant, runtime })) return participant;
+      await this.retireRuntime(id, runtime);
+      if (!this.operationHolds({ participant, runtime: null })) return participant;
     }
     const from = participant.agentVendor ?? participant.agentType;
     const earlier = { ...participant.earlierLaunches };
@@ -2778,32 +2678,40 @@ export class Room extends EventEmitter {
     const base: LaunchPrefs = remembered ?? {
       model: recipe.defaultModel,
       effort: recipe.defaultEffort,
-      mode: this.bypassPermissionsByDefault ? recipe.bypassMode ?? recipe.defaultMode : recipe.defaultMode,
+      mode: this.roomSettings.bypassPermissionsByDefault ? recipe.bypassMode ?? recipe.defaultMode : recipe.defaultMode,
     };
     participant.launch = { model: choice.model ?? base.model, effort: choice.effort ?? base.effort, mode: choice.mode ?? base.mode };
     const source = choice.model || choice.effort ? "as chosen" : remembered ? "as it had there before" : `the defaults for ${recipe.vendor}`;
     this.postSystem(`${participant.name} on ${recipe.vendor}: model ${participant.launch.model ?? "the agent's own"}, effort ${participant.launch.effort ?? "the agent's own"}, ${source}`, "human", false, { agentId: participant.id });
+    if (!this.operationHolds({ participant, runtime: online ? null : runtime })) return participant;
     this.log.info(`${participant.name}: coding agent ${from} -> ${recipe.vendor}`);
-    return this.respawnAgent(id, { memory: true, replay: choice.replay, reason: `it now runs on ${recipe.vendor}` });
+    return this.respawnExpected(participant, online ? null : runtime, { memory: true, replay: choice.replay, reason: `it now runs on ${recipe.vendor}` });
   }
 
   async reconnect(id: string, options: ReconnectOptions = { mode: "replay" }): Promise<Participant> {
     const participant = this.participants.get(id);
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
-    assertAgentAvailable(participant.agentType ?? "");
-    if (this.runtimes.has(id) || participant.status === "starting") return participant;
-    if (participant.asleep && !options.wake) return participant;
-    const woken = !!participant.asleep;
-    delete participant.asleep;
-    if (woken) this.postRoomEvent(`${participant.name} is woken up.`);
-    delete participant.fell;
-    participant.status = "starting";
-    participant.startupSkipped = undefined;
-    participant.statusDetail = undefined;
-    this.push({ type: "participant", participant });
-    const launch = participant.launch ?? { model: participant.model ?? null, effort: participant.effort ?? null, mode: participant.mode ?? null };
-    await this.startAgent(participant, launch, false, options);
+    await this.reconnectExpected(participant, options);
     return participant;
+  }
+
+  private async reconnectExpected(participant: Participant, options: ReconnectOptions): Promise<AgentRuntime | undefined> {
+    const id = participant.id;
+    assertAgentAvailable(participant.agentType ?? "");
+    if (this.closing || this.participants.get(id) !== participant) return undefined;
+    if (this.runtimes.has(id) || participant.status === "starting") return undefined;
+    if (participant.asleep && !options.wake) return undefined;
+    const without: SeenVibemate = { participant, runtime: null };
+    const woken = presence.woken(participant);
+    if (woken) {
+      this.postRoomEvent(`${participant.name} is woken up.`);
+      if (!this.operationHolds(without)) return undefined;
+    }
+    presence.starting(participant);
+    this.push({ type: "participant", participant });
+    if (!this.operationHolds(without)) return undefined;
+    const launch = participant.launch ?? { model: participant.model ?? null, effort: participant.effort ?? null, mode: participant.mode ?? null };
+    return this.startAgent(participant, launch, false, options);
   }
 
   async restartOnInstalled(id: string): Promise<Participant> {
@@ -2811,21 +2719,73 @@ export class Room extends EventEmitter {
     if (!participant || participant.kind !== "agent") throw new Error("no such agent");
     const runtime = this.runtimes.get(id);
     if (!runtime) return this.reconnect(id, { mode: "load" });
-    if (runtime.turnActive || runtime.retiring) throw new Error(`${participant.name} is busy; restart it when it has finished.`);
-    runtime.retiring = true; this.dropScheduledTurn(id); this.restoredSeen.set(id, runtime.lastSeenSeq);
-    await this.retireRuntime(id);
+    if (runtime.work.turnActive || runtime.session.retiring) throw new Error(`${participant.name} is busy; restart it when it has finished.`);
+    const asked: SeenVibemate = { participant, runtime };
+    if (!this.operationHolds(asked)) return participant;
+    runtime.session.retiring = true;
+    this.dropScheduledTurn(id);
+    if (!this.operationHolds(asked)) return participant;
+    this.restoredSeen.set(id, runtime.reading.lastSeenSeq);
+    await this.retireRuntime(id, runtime);
+    const without: SeenVibemate = { participant, runtime: null };
+    if (!this.operationHolds(without)) return participant;
     this.push({ type: "participant", participant });
-    await this.reconnect(id, { mode: "load", reason: "a newer version of its agent is installed" });
-    this.requestTurn(id);
+    if (!this.operationHolds(without)) return participant;
+    const started = await this.reconnectExpected(participant, { mode: "load", reason: "a newer version of its agent is installed" });
+    if (started && this.operationHolds({ participant, runtime: started })) this.requestTurn(id);
     return participant;
   }
 
   private updateTranscriptModes(): void {
-    const mode = this.settings.transcripts === "inherit" ? this.programTranscripts : this.settings.transcripts;
-    for (const runtime of this.runtimes.values()) runtime.transcript?.setMode(mode);
+    const mode = this.roomSettings.transcriptMode;
+    for (const runtime of this.runtimes.values()) runtime.session.transcript?.setMode(mode);
   }
 
-  private async startAgent(participant: Participant, launch: LaunchPrefs, fresh: boolean, reconnectOptions?: ReconnectOptions): Promise<void> {
+  private async startAgent(participant: Participant, launch: LaunchPrefs, fresh: boolean, reconnectOptions?: ReconnectOptions): Promise<AgentRuntime> {
+    const ticket = this.launchAgent(participant, launch, fresh, reconnectOptions);
+    let settle!: () => void;
+    const under: StartUnderWay = { ticket, settled: new Promise<void>((done) => { settle = done; }) };
+    this.starts.set(ticket.id, under);
+    try {
+      const runtime = await this.runStart(participant, ticket, fresh);
+      this.owedRestart.delete(participant);
+      return runtime;
+    } finally {
+      const before = this.folderPending(participant);
+      if (this.starts.get(ticket.id) === under) this.starts.delete(ticket.id);
+      try {
+        if (before !== this.folderPending(participant) && !this.closing && this.participants.get(ticket.id) === participant) {
+          this.push({ type: "participant", participant });
+        }
+      } finally { settle(); }
+    }
+  }
+
+  private async runStart(participant: Participant, ticket: StartTicket, fresh: boolean): Promise<AgentRuntime> {
+    try {
+      const opened = await this.openAgentSession(ticket);
+      ticket.check();
+      const registered = this.registerAgentSession(ticket, opened);
+      const warnings = await this.configureAgentSession(ticket, registered.runtime);
+      ticket.check();
+      this.readyAgentSession(ticket, registered, opened, warnings);
+      return registered.runtime;
+    } catch (error) {
+      if (error === ticket.abandoned || !ticket.stillWanted()) {
+        try {
+          if (ticket.registered) this.forgetRuntime(ticket.id, ticket.registered);
+        } finally {
+          try { await ticket.agent.kill(); } catch { }
+        }
+        throw error === ticket.abandoned ? error : ticket.abandoned;
+      }
+      ticket.agent.kill();
+      this.forgetRuntime(ticket.id, ticket.registered);
+      throw this.failedStart(participant, error, fresh, ticket.stderrTail, ticket.recipe);
+    }
+  }
+
+  private launchAgent(participant: Participant, launch: LaunchPrefs, fresh: boolean, reconnectOptions?: ReconnectOptions): StartTicket {
     assertAgentAvailable(participant.agentType ?? "");
     const recipe = getRecipe(participant.agentType ?? "");
     if (!recipe) throw new Error(`unknown agent type: ${participant.agentType}`);
@@ -2835,7 +2795,7 @@ export class Room extends EventEmitter {
     const cwd = ensureDir(this.dir);
     const spec = recipe.build({ model: launch.model, mode: launch.mode });
     const installStamp = recipeStamp(recipe);
-    const mode = this.settings.transcripts === "inherit" ? this.programTranscripts : this.settings.transcripts;
+    const mode = this.roomSettings.transcriptMode;
     const transcript = new Transcript(join(this.dataDir, "transcripts"), name, mode,
       this.history.path === ":memory:" ? undefined : dirname(this.history.path));
     log.info(`spawning ${spec.command} ${spec.args.join(" ")} (cwd ${cwd}); protocol: ${mode}${mode === "off" ? "" : ` (${transcript.path})`}`);
@@ -2847,7 +2807,7 @@ export class Room extends EventEmitter {
         onAuthStatus: (status) => {
           const p = this.participants.get(id);
           const current = this.runtimes.get(id);
-          if (!p || !agent?.alive || this.closing || (current && current.agent !== agent)) return;
+          if (!p || !agent?.alive || this.closing || (current && current.session.agent !== agent)) return;
           p.authStatus = status;
           this.push({ type: "participant", participant: p });
         },
@@ -2880,153 +2840,192 @@ export class Room extends EventEmitter {
         },
       );
     } catch (error) {
-      throw this.failStart(participant, error, fresh, stderrTail);
+      throw this.failedStart(participant, error, fresh, stderrTail, recipe);
     }
+    const ticket: StartTicket = {
+      id, participant, name, recipe, launch, fresh, reconnectOptions, log, cwd, transcript, installStamp, stderrTail, agent,
+      abandoned: new Error(`${name} stopped starting: the room closed or the vibemate changed meanwhile`),
+      registered: undefined,
+      stillWanted: () => !this.closing && this.participants.get(id) === participant
+        && this.runtimes.get(id) === ticket.registered,
+      check: () => { if (!ticket.stillWanted()) throw ticket.abandoned; },
+    };
+    return ticket;
+  }
 
-    try {
-      const init = await agent.initialize({ name: "viberoom", version: "0.2.0" });
-      participant.agentInfo = { name: init.agentInfo?.name, version: init.agentInfo?.version };
-      if (agent.authMethods.length) {
-        log.info(`auth methods advertised: ${agent.authMethods.map((m) => m.id).join(", ")}`);
-      }
-      participant.supportsLoad = agent.supportsLoadSession;
+  private async openAgentSession(ticket: StartTicket): Promise<OpenedSession> {
+    const { id, participant, name, recipe, agent, cwd, log, fresh, reconnectOptions } = ticket;
+    const init = await agent.initialize({ name: "viberoom", version: "0.2.0" });
+    ticket.check();
+    participant.agentInfo = { name: init.agentInfo?.name, version: init.agentInfo?.version };
+    if (agent.authMethods.length) {
+      log.info(`auth methods advertised: ${agent.authMethods.map((m) => m.id).join(", ")}`);
+    }
+    participant.supportsLoad = agent.supportsLoadSession;
 
-      const mcp = this.skillMcpServers(id);
-      const mcpToken = mcp ? mcp.token : null;
-      const mcpServers = mcp ? [mcp.server] : [];
-      const meta = sessionMeta(recipe, this.settings, mcpServers.length > 0);
+    const mcp = this.skillMcpServers(id);
+    const mcpToken = mcp ? mcp.token : null;
+    const mcpServers = mcp ? [mcp.server] : [];
+    const meta = sessionMeta(recipe, this.settings, mcpServers.length > 0);
 
-      let session: NewSessionResult | null = null;
-      let origin: NonNullable<Participant["sessionOrigin"]> = fresh ? "new" : "replayed";
-      if (!fresh && reconnectOptions?.mode === "load") {
-        if (!participant.sessionId) this.notice(`${name}: no stored session to load; starting a new one with replayed history.`, "warn");
-        else if (!agent.supportsLoadSession) this.notice(`${name}: this agent does not support session/load; starting a new session with replayed history.`, "warn");
-        else {
-          try {
-            log.info(`session/load ${participant.sessionId}`);
-            session = await agent.loadSession(participant.sessionId, cwd, mcpServers, meta);
-            origin = "loaded";
-          } catch (error) {
-            this.notice(`${name}: session/load failed (${describeError(error)}); starting a new session with replayed history.`, "warn");
-          }
+    let session: NewSessionResult | null = null;
+    let origin: NonNullable<Participant["sessionOrigin"]> = fresh ? "new" : "replayed";
+    if (!fresh && reconnectOptions?.mode === "load") {
+      if (!participant.sessionId) this.notice(`${name}: no stored session to load; starting a new one with replayed history.`, "warn");
+      else if (participant.sessionDir && participant.sessionDir !== cwd) log.info(`the stored session was opened in ${participant.sessionDir}; a new session in ${cwd} with replayed history`);
+      else if (!agent.supportsLoadSession) this.notice(`${name}: this agent does not support session/load; starting a new session with replayed history.`, "warn");
+      else {
+        try {
+          log.info(`session/load ${participant.sessionId}`);
+          session = await agent.loadSession(participant.sessionId, cwd, mcpServers, meta);
+          origin = "loaded";
+        } catch (error) {
+          ticket.check();
+          this.notice(`${name}: session/load failed (${describeError(error)}); starting a new session with replayed history.`, "warn");
         }
       }
-      if (!session) session = await this.openSession(agent, cwd, log, mcpServers, recipe, meta);
-      participant.sessionId = session.sessionId;
-      participant.sessionOrigin = origin;
-      if (origin !== "loaded" || !participant.deliveryEpoch) {
-        participant.deliveryEpoch = randomUUID();
-        participant.suppliedThrough = undefined;
-      }
-      const storedSeen = this.restoredSeen.get(id);
-      const runtime: AgentRuntime = {
-        agent,
-        sessionId: session.sessionId,
-        transcript,
-        log,
-        firstTurnDone: false,
-        lastSeenSeq: this.seq,
-        turnStartSeq: this.seq,
-        turnActive: false,
-        pendingTurn: false,
-        turn: null,
-        strayMessageId: null,
-        turnsSinceBrief: 0,
-        usedAtBrief: 0,
-        briefSentThisTurn: false,
-        lastUsed: 0,
-        briefPending: null,
-        headerNotes: [],
-        historyNoticePending: !fresh,
-        briefRequestedAtSeq: -1,
-        notesDue: false,
-        notesMisses: 0,
-        notesAskedThisTurn: false,
-        lastBriefSeq: -1,
-        resumeNotes: null,
-        replayOwnUntilSeq: fresh || origin === "loaded" ? -1 : this.seq,
-        delayTimer: null,
-        addressed: false,
-        retiring: false,
-        mcpToken,
-        sessionStartedAt: Date.now(),
-        installStamp,
-        skillChannel: mcp ? "pending" : "marker",
-        skillReadyWaiters: [],
-        pendingSkills: [],
-        skillPulledAtSeq: -1,
-        skillPulledName: "",
-      };
-      participant.skillChannel = runtime.skillChannel;
-      this.runtimes.set(id, runtime);
-      if (mcpToken && this.earlySkillReady.delete(mcpToken)) this.skillToolReady(id, mcpToken);
-      this.restoredSeen.delete(id);
-      participant.configOptions = session.configOptions ?? undefined;
-      participant.installOutdated = undefined;
-      if (session.modes) {
-        participant.mode = session.modes.currentModeId;
-        participant.modes = session.modes.availableModes;
-      }
-      this.applyConfigSummary(participant);
-
-      const warnings = await this.applyConfig(runtime, participant, {
-        model: recipe.modelAtLaunch ? null : launch.model,
-        effort: launch.effort,
-        mode: recipe.modeAtLaunch ? null : launch.mode,
-      });
-      if (recipe.modelAtLaunch && launch.model) participant.model = launch.model;
-      if (recipe.modeAtLaunch) {
-        if (!participant.modes?.length) participant.modes = recipe.modePresets.map((id) => ({ id, name: id }));
-        participant.mode = launch.mode ?? recipe.defaultMode ?? participant.mode;
-      }
-      for (const w of warnings) {
-        this.log.warn(`${name}: ${w.log}`);
-        this.postSystem(`${name}: ${w.said}.`, "human", false, { agentId: participant.id, tone: "attention" });
-      }
-
-      participant.status = "idle";
-      participant.statusDetail = undefined;
-      participant.trouble = undefined;
-      this.push({ type: "participant", participant });
-      if (fresh) {
-        const detail = this.settings.showVendorInRoster ? `${recipe.label}${participant.model ? `, model ${participant.model}` : ""}` : "agent";
-        this.postRoomEvent(`${name} joined the room (${detail}${participant.tagline ? `; "${participant.tagline}"` : ""}).`);
-        runtime.lastSeenSeq = this.seq;
-        participant.sawFromSeq = this.seq + 1;
-      } else if (origin === "loaded") {
-        runtime.lastSeenSeq = storedSeen ?? Math.max(0, this.seq - this.settings.replayAfterRestart);
-        runtime.firstTurnDone = true;
-        runtime.briefPending = "reconnected: your stored session was restored";
-        this.postRoomEvent(`${name} is back in the room (session restored).`);
-        if (participant.sawFromSeq === undefined) participant.sawFromSeq = runtime.lastSeenSeq + 1;
-      } else {
-        this.postRoomEvent(reconnectOptions?.reason ? `${name} restarted: ${reconnectOptions.reason}.` : `${name} is back in the room.`);
-        const replay = Math.max(0, reconnectOptions?.replay ?? this.settings.replayAfterRestart);
-        const chats = this.messages.filter((m) => m.kind === "chat");
-        const firstReplayed = replay > 0 && chats.length ? chats[Math.max(0, chats.length - replay)] : undefined;
-        runtime.lastSeenSeq = firstReplayed ? Math.max(0, firstReplayed.seq - 1) : this.seq;
-        participant.sawFromSeq = runtime.lastSeenSeq + 1;
-      }
-      if (participant.notes) runtime.resumeNotes = resumeNotesSource(origin === "loaded", reconnectOptions, runtime.lastSeenSeq < this.seq);
-
-      const run = this.hubRun();
-      if (run) {
-        const note = fresh ? null : hubChangeNote(participant, run);
-        if (note) runtime.headerNotes.push(note);
-        participant.runSeen = run.id;
-        participant.buildSeen = run.build;
-      }
-      this.restoredSeen.delete(id);
-      this.push({ type: "participant", participant });
-      runtime.turnStartSeq = runtime.lastSeenSeq;
-      this.rebindNativeReports(id, runtime, origin === "loaded");
-      this.drainNativeReports(id, runtime);
-      log.info(`ready: session ${session.sessionId}`);
-    } catch (error) {
-      agent.kill();
-      this.forgetRuntime(id);
-      throw this.failStart(participant, error, fresh, stderrTail);
+      ticket.check();
     }
+    if (!session) session = await openSession(agent, cwd, log, mcpServers, recipe, meta);
+    ticket.check();
+    return { session, origin, mcpToken, hasMcp: !!mcp };
+  }
+
+  private registerAgentSession(ticket: StartTicket, opened: OpenedSession): RegisteredSession {
+    const { id, participant, fresh, transcript, log, installStamp, agent } = ticket;
+    const { session, origin, mcpToken } = opened;
+    participant.sessionId = session.sessionId;
+    participant.sessionDir = ticket.cwd;
+    participant.sessionOrigin = origin;
+    if (origin !== "loaded" || !participant.deliveryEpoch) {
+      participant.deliveryEpoch = randomUUID();
+      participant.suppliedThrough = undefined;
+    }
+    const storedSeen = this.restoredSeen.get(id);
+    const runtime = createAgentRuntime({
+      agent, sessionId: session.sessionId, transcript, log, installStamp, mcpToken, sessionStartedAt: Date.now(),
+      lastSeenSeq: this.seq, historyNoticePending: !fresh, replayOwnUntilSeq: fresh || origin === "loaded" ? -1 : this.seq,
+      skillChannel: opened.hasMcp ? "pending" : "marker", cwd: ticket.cwd,
+    });
+    participant.skillChannel = runtime.skills.skillChannel;
+    this.runtimes.set(id, runtime);
+    ticket.registered = runtime;
+    if (mcpToken && this.earlySkillReady.delete(mcpToken)) {
+      this.skillToolReady(id, mcpToken);
+      ticket.check();
+    }
+    this.restoredSeen.delete(id);
+    participant.configOptions = session.configOptions ?? undefined;
+    participant.installOutdated = undefined;
+    if (session.modes) {
+      participant.mode = session.modes.currentModeId;
+      participant.modes = session.modes.availableModes;
+    }
+    summarizeConfig(participant);
+    return { runtime, storedSeen };
+  }
+
+  private async configureAgentSession(ticket: StartTicket, runtime: AgentRuntime): Promise<ConfigShortfall[]> {
+    const { participant, recipe, launch } = ticket;
+    const warnings = await this.agentConfig.applyAtStart(runtime, participant, {
+      model: recipe.modelAtLaunch ? null : launch.model,
+      effort: launch.effort,
+      mode: recipe.modeAtLaunch ? null : launch.mode,
+    });
+    ticket.check();
+    return warnings;
+  }
+
+  private readyAgentSession(ticket: StartTicket, registered: RegisteredSession, opened: OpenedSession, warnings: ConfigShortfall[]): void {
+    const { id, participant, name, recipe, launch, fresh, reconnectOptions, log } = ticket;
+    const { runtime, storedSeen } = registered;
+    const { session, origin } = opened;
+    if (recipe.modelAtLaunch && launch.model) participant.model = launch.model;
+    if (recipe.modeAtLaunch) {
+      if (!participant.modes?.length) participant.modes = recipe.modePresets.map((id) => ({ id, name: id }));
+      participant.mode = launch.mode ?? recipe.defaultMode ?? participant.mode;
+    }
+    for (const w of warnings) {
+      this.log.warn(`${name}: ${w.log}`);
+      this.postSystem(`${name}: ${w.said}.`, "human", false, { agentId: participant.id, tone: "attention" });
+      ticket.check();
+    }
+
+    presence.ready(participant);
+    this.push({ type: "participant", participant });
+    ticket.check();
+    const line = readyLine({
+      name, fresh, origin, reason: reconnectOptions?.reason, tagline: participant.tagline ?? undefined,
+      detail: this.settings.showVendorInRoster ? `${recipe.label}${participant.model ? `, model ${participant.model}` : ""}` : "agent",
+    });
+    if (fresh) {
+      this.postRoomEvent(line);
+      ticket.check();
+      runtime.reading.lastSeenSeq = this.seq;
+      participant.sawFromSeq = this.seq + 1;
+    } else if (origin === "loaded") {
+      runtime.reading.lastSeenSeq = loadedPointer(storedSeen, this.seq, this.settings.replayAfterRestart);
+      runtime.session.firstTurnDone = true;
+      runtime.brief.briefPending = "reconnected: your stored session was restored";
+      this.postRoomEvent(line);
+      ticket.check();
+      if (participant.sawFromSeq === undefined) participant.sawFromSeq = runtime.reading.lastSeenSeq + 1;
+    } else {
+      this.postRoomEvent(line);
+      ticket.check();
+      const replay = Math.max(0, reconnectOptions?.replay ?? this.settings.replayAfterRestart);
+      runtime.reading.lastSeenSeq = replayPointer(this.messages.filter((m) => m.kind === "chat"), replay, this.seq);
+      participant.sawFromSeq = runtime.reading.lastSeenSeq + 1;
+    }
+    if (participant.notes) runtime.notes.resumeNotes = resumeNotesSource(origin === "loaded", reconnectOptions, runtime.reading.lastSeenSeq < this.seq);
+
+    const run = this.hubRun();
+    if (run) {
+      const note = fresh ? null : hubChangeNote(participant, run);
+      if (note) runtime.brief.headerNotes.push(note);
+      participant.runSeen = run.id;
+      participant.buildSeen = run.build;
+    }
+    this.restoredSeen.delete(id);
+    this.push({ type: "participant", participant });
+    ticket.check();
+    runtime.reading.turnStartSeq = runtime.reading.lastSeenSeq;
+    this.rebindNativeReports(id, runtime, origin === "loaded");
+    ticket.check();
+    this.drainNativeReports(id, runtime);
+    log.info(`ready: session ${session.sessionId}`);
+  }
+
+  private failedStart(participant: Participant, error: unknown, fresh: boolean, stderr: string[], recipe: AgentRecipe | undefined): Error {
+    const id = participant.id;
+    const owns = (seen: SeenVibemate) => !this.closing && this.vibemateHeld(seen);
+    return failStart({ participant, runtime: null }, error, fresh, stderr, recipe, {
+      markFailed: (seen, detail, trouble) => {
+        if (!owns(seen)) return false;
+        presence.startFailed(participant, detail, trouble);
+        return true;
+      },
+      markStatus: (seen, first) => {
+        if (!owns(seen)) return false;
+        if (first) presence.startAbandoned(participant);
+        else presence.fellAfterStart(participant);
+        return true;
+      },
+      carried: (seen) => (owns(seen) && participant.trouble && participant.statusDetail !== undefined
+        ? { detail: participant.statusDetail, trouble: participant.trouble } : undefined),
+      publish: (seen) => {
+        if (!owns(seen)) return false;
+        this.push({ type: "participant", participant });
+        return true;
+      },
+      remove: (seen) => {
+        if (!owns(seen)) return false;
+        this.participants.delete(id);
+        this.push({ type: "participant.removed", id });
+        return true;
+      },
+      log: (text) => this.log.warn(text),
+    });
   }
 
   private mintParticipantId(base: string): string {
@@ -3067,21 +3066,15 @@ export class Room extends EventEmitter {
     const runtime = this.runtimes.get(id);
     if (runtime) {
       this.dropScheduledTurn(id);
-      if (runtime.turnActive) runtime.agent.cancel(runtime.sessionId);
+      if (runtime.work.turnActive) runtime.session.agent.cancel(runtime.session.sessionId);
       this.cancelPermissionsOf(id);
-      try {
-        await Promise.race([runtime.agent.closeSession(runtime.sessionId), delay(2000)]);
-      } catch (error) {
-        runtime.log.warn(`session/close failed: ${String(error)}`);
-      }
-      runtime.agent.kill();
-      this.forgetRuntime(id);
+      await this.agentSessions.close(id, runtime, { within: 2000, awaitKill: false, closeFailed: (error) => runtime.session.log.warn(`session/close failed: ${String(error)}`) });
       if (this.speaking === id) {
-        this.speaking = null;
+        this.turnOrder.standDown(runtime);
         this.startNext();
       }
     }
-    participant.status = "left";
+    presence.left(participant);
     this.participants.delete(id);
     this.departed.set(id, participant.name);
     this.push({ type: "participant.removed", id });
@@ -3092,27 +3085,27 @@ export class Room extends EventEmitter {
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
     if (!runtime || !participant) throw new Error("no such agent");
-    if (expectedTurnId !== undefined && runtime.turn?.message.id !== expectedTurnId) return "nothing";
+    if (expectedTurnId !== undefined && runtime.work.turn?.message.id !== expectedTurnId) return "nothing";
     if (waitingFor) {
-      if (runtime.turn?.hidden) return "nothing";
+      if (runtime.work.turn?.hidden) return "nothing";
       const message = this.messages.find(m => m.id === waitingFor.id && m.from === "human" && m.kind === "chat");
-      if (!message || message.seq <= runtime.lastSeenSeq) return "nothing";
+      if (!message || message.seq <= runtime.reading.lastSeenSeq) return "nothing";
       if (message.to.length && !message.to.includes(id)) return "nothing";
       const delivery = message?.bodyDelivery, reader = delivery?.readers[id];
       if (!delivery || !reader || delivery.version !== waitingFor.version || reader.epoch !== participant.deliveryEpoch || reader.version >= delivery.version) return "nothing";
     }
-    if (runtime.turnActive || runtime.workBusy) {
-      runtime.workCancelled = true;
-      if (runtime.turnActive) {
-        runtime.agent.cancel(runtime.sessionId);
+    if (runtime.work.turnActive || runtime.work.workBusy) {
+      runtime.work.workCancelled = true;
+      if (runtime.work.turnActive) {
+        runtime.session.agent.cancel(runtime.session.sessionId);
         this.watchTheStop(id);
-        if (runtime.quiet) this.push({ type: "participant", participant });
+        if (runtime.work.quiet) this.push({ type: "participant", participant });
       }
       this.cancelPermissionsOf(id);
       this.notice(`${participant.name}: stop requested.`, "info");
       return "turn";
     }
-    if (runtime.pendingTurn || runtime.delayTimer || this.floorQueue.includes(id)) {
+    if (runtime.queue.pendingTurn || runtime.queue.delayTimer || this.turnOrder.waiting({ id, participant, runtime })) {
       this.dropScheduledTurn(id);
       this.notice(`${participant.name}: stopped before it began; the turn is dropped.`, "info");
       this.postRoomEvent(`${participant.name} was stopped by ${this.humanName} before it began.`, undefined, false, { tone: "attention" });
@@ -3126,16 +3119,16 @@ export class Room extends EventEmitter {
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
     if (!runtime || !participant) throw new Error("no such agent");
-    if (!runtime.quiet || runtime.quiet.turnId !== runtime.turn?.message.id) throw new RoomRefusal("that turn is over");
+    if (!runtime.work.quiet || runtime.work.quiet.turnId !== runtime.work.turn?.message.id) throw new RoomRefusal("that turn is over");
     const call = unchangingCall(participant);
     if (!call) throw new RoomRefusal(`${participant.name} offers no setting to ask about, so there is nothing that can be asked without changing something`);
-    const quiet = runtime.quiet;
+    const quiet = runtime.work.quiet;
     quiet.nudge = "asking";
     this.push({ type: "participant", participant });
     const answered = await Promise.race([
       (call.kind === "config"
-        ? runtime.agent.setConfigOption(runtime.sessionId, call.id, call.value)
-        : runtime.agent.setMode(runtime.sessionId, call.id)
+        ? runtime.session.agent.setConfigOption(runtime.session.sessionId, call.id, call.value)
+        : runtime.session.agent.setMode(runtime.session.sessionId, call.id)
       ).then(() => true, (error) => {
         this.log.info(`${participant.name}: nudge refused: ${describeError(error)}`);
         return true;
@@ -3143,7 +3136,7 @@ export class Room extends EventEmitter {
       delay(NUDGE_WAIT_MS).then(() => false),
     ]);
     const outcome = answered ? "answered" : "silent";
-    if (runtime.quiet === quiet && runtime.quiet.turnId === runtime.turn?.message.id) {
+    if (runtime.work.quiet === quiet && runtime.work.quiet.turnId === runtime.work.turn?.message.id) {
       quiet.nudge = outcome;
       this.push({ type: "participant", participant });
     }
@@ -3154,146 +3147,45 @@ export class Room extends EventEmitter {
   }
 
   async setConfig(id: string, configId: string, value: string | boolean, from?: string): Promise<void> {
-    const runtime = this.runtimes.get(id);
-    const participant = this.participants.get(id);
-    if (!participant) throw new Error("no such vibemate");
-    if (participant.status === "starting") throw new Error(`${participant.name} is still starting. Change its settings once it is ready.`);
-    if (!runtime) throw new Error(`${participant.name} is offline. Reconnect it before changing its live settings.`);
-    const option = participant.configOptions?.find(o => o.id === configId)
-      ?? participant.configOptions?.find(o => o.category === configId);
-    if (option) configId = option.id;
-    if (runtime.turnActive || runtime.workBusy || runtime.nativeDraining) {
-      runtime.pendingConfig = [...(runtime.pendingConfig ?? []).filter((p) => p.configId !== configId), { configId, value, ...(from ? { from } : {}) }];
-      this.push({ type: "participant", participant });
-      this.postSystem(`${participant.name}: ${this.configName(participant, configId)} → ${configShown(value)}; when this reply is finished${from ? ` (${from})` : ""}`, "human", false, { agentId: participant.id });
-      return;
-    }
-    let owner = runtime;
-    this.takeWork(runtime);
-    try { owner = await this.applyConfigNow(id, configId, value, from); }
-    finally { await this.finishRuntimeWork(id, owner); }
+    return this.agentConfig.set(id, configId, value, from);
   }
 
-  private async applyConfigNow(id: string, configId: string, value: string | boolean, from?: string): Promise<AgentRuntime> {
-    const runtime = this.runtimes.get(id);
-    const participant = this.participants.get(id);
-    if (!runtime || !participant) throw new Error("the vibemate is no longer connected");
-    const option = participant.configOptions?.find(o => o.id === configId)
-      ?? participant.configOptions?.find(o => o.category === configId);
-    if (option) configId = option.id;
-    const stillOurs = () => {
-      if (this.runtimes.get(id) !== runtime || this.participants.get(id) !== participant) throw new Error("the vibemate restarted while its setting was changing; choose the setting again");
-    };
-    const change = async <T>(request: () => Promise<T>): Promise<T> => {
-      try { return await request(); }
-      catch (error) {
-        const record = runtime.transcript?.dump("setting change failed");
-        const setting = JSON.stringify({ id: configId, value, model: participant.model, mode: participant.mode }).slice(0, 500);
-        runtime.log.warn(`setting refused ${setting}: ${describeError(error)}${record ? `; protocol kept at ${record}` : ""}`);
-        throw error;
-      }
-    };
-    const recipe = getRecipe(participant.agentType ?? "");
-    if (recipe?.modeAtLaunch && configId === "mode") {
-      if (!recipe.modePresets.includes(String(value))) throw new Error(`${participant.name}: no mode "${value}" (${recipe.modePresets.join(", ")})`);
-      participant.launch = { model: participant.launch?.model ?? null, effort: participant.launch?.effort ?? null, mode: String(value) };
-      this.push({ type: "participant", participant });
-      const pendingTurn = runtime.pendingTurn, independentPendingTurn = runtime.independentPendingTurn, addressed = runtime.addressed;
-      await this.respawnAgent(id, { memory: true, reason: "its mode changed" });
-      const replacement = this.runtimes.get(id);
-      if (!replacement) throw new Error("the vibemate could not restart with its new mode");
-      this.takeWork(replacement);
-      replacement.pendingTurn ||= pendingTurn;
-      replacement.independentPendingTurn ||= independentPendingTurn;
-      replacement.addressed ||= addressed;
-      replacement.pendingConfig = [...(runtime.pendingConfig || []), ...(replacement.pendingConfig || [])];
-      runtime.pendingConfig = undefined;
-      this.releaseWork(runtime);
-      return replacement;
+  private async replaceForMode(id: string, hold: WorkHold): Promise<AgentRuntime> {
+    const expected = hold.runtime, participant = this.participants.get(id);
+    if (!participant || this.runtimes.get(id) !== expected || !holdsWork(hold)) throw new Error("the vibemate restarted while its setting was changing; choose the setting again");
+    const pendingTurn = expected.queue.pendingTurn, independentPendingTurn = expected.queue.independentPendingTurn, addressed = expected.queue.addressed;
+    const replacement = await this.respawnSession(participant, expected, { memory: true, reason: "its mode changed" });
+    if (!replacement) throw new Error("the vibemate could not restart with its new mode");
+    const free = !replacement.work.workBusy && !replacement.work.turnActive && !replacement.work.workSettled;
+    if (!this.operationHolds({ participant, runtime: replacement }) || !free) {
+      throw new Error("the new session began other work before the setting could follow; choose it again");
     }
-    if (!option && configId === "mode" && (participant.modes?.some((m) => m.id === value) || participant.mode === value)) {
-      const reported = await change(() => runtime.agent.setMode(runtime.sessionId, String(value)));
-      stillOurs();
-      participant.mode = reported?.currentModeId ?? String(value);
-    } else {
-      if (!option && configId === "mode" && participant.modes?.length) throw new Error(`${participant.name}: ${configShown(value)} is not an available mode. Choose one of ${participant.modes.map(m => m.name || m.id).join(", ")}.`);
-      if (!option) throw new Error(`${participant.name} no longer offers that setting. Open its settings again to see the current choices.`);
-      if ((option.type === "boolean" && typeof value !== "boolean") || (option.type === "select" && typeof value !== "string")) {
-        throw new Error(`${participant.name}: choose a valid value for ${option.name}.`);
-      }
-      if (option.category === "mode" && value !== option.currentValue && !flattenOptions(option.options).some(o => o.value === value)) {
-        throw new Error(`${participant.name}: ${configShown(value)} is not available for ${option.name}. Open its settings again to see the current choices.`);
-      }
-      const reported = await change(() => runtime.agent.setConfigOption(runtime.sessionId, configId, value));
-      stillOurs();
-      participant.configOptions = reported;
-      this.applyConfigSummary(participant);
-    }
-    participant.launch = { model: participant.model ?? null, effort: participant.effort ?? null, mode: participant.mode ?? null };
-    this.push({ type: "participant", participant });
-    const actual = participant.configOptions?.find(o => o.id === configId)?.currentValue ?? (configId === "mode" ? participant.mode : undefined) ?? value;
-    const said = actual === value ? configShown(actual) : `${configShown(actual)} (requested ${configShown(value)})`;
-    this.postSystem(`${participant.name}: ${this.configName(participant, configId)} → ${said}; from its next turn${from ? ` (${from})` : ""}`, "human", false, { agentId: participant.id });
-    return runtime;
+    const handed = this.takeWork(replacement);
+    replacement.queue.pendingTurn ||= pendingTurn;
+    replacement.queue.independentPendingTurn ||= independentPendingTurn;
+    replacement.queue.addressed ||= addressed;
+    replacement.queue.pendingConfig = [...(expected.queue.pendingConfig || []), ...(replacement.queue.pendingConfig || [])];
+    expected.queue.pendingConfig = undefined;
+    const old: WorkHold = { ...hold };
+    Object.assign(hold, handed);
+    this.releaseWork(old);
+    return replacement;
   }
 
   setLaunch(id: string, patch: { model?: string | null; effort?: string | null; mode?: string | null }, from?: string): Participant {
-    const participant = this.participants.get(id);
-    if (!participant || participant.kind !== "agent") throw new Error("no such vibemate");
-    if (this.runtimes.get(id)) throw new Error(`${participant.name} is running: this is one of its settings now, not a choice for its next start`);
-    const launch: LaunchPrefs = { model: participant.launch?.model ?? null, effort: participant.launch?.effort ?? null, mode: participant.launch?.mode ?? null };
-    for (const field of ["model", "effort", "mode"] as const) {
-      const value = patch[field];
-      if (value === undefined) continue;
-      launch[field] = value === null || value === "" ? null : String(value).slice(0, 80);
-      participant[field] = launch[field] ?? undefined;
-      this.postSystem(`${participant.name}: ${field} → ${launch[field] ?? "the agent's own"}; when it comes back${from ? ` (${from})` : ""}`, "human", false, { agentId: participant.id });
-    }
-    participant.launch = launch;
-    this.push({ type: "participant", participant });
-    return participant;
-  }
-
-  private configName(participant: Participant, configId: string): string {
-    return configId === "mode" ? "mode" : participant.configOptions?.find((o) => o.id === configId)?.name || configId;
-  }
-
-  private async applyPendingConfig(id: string, expected = this.runtimes.get(id)): Promise<AgentRuntime | undefined> {
-    let runtime = expected;
-    const participant = this.participants.get(id);
-    if (!runtime || !participant) return runtime;
-    let changed = false;
-    while (this.runtimes.get(id) === runtime && !runtime.retiring && runtime.pendingConfig?.length) {
-      changed = true;
-      const entry = runtime.pendingConfig.shift()!;
-      try {
-        runtime = await this.applyConfigNow(id, entry.configId, entry.value, entry.from);
-      } catch (error) {
-        this.postSystem(`${participant.name}: ${this.configName(participant, entry.configId)} → ${configShown(entry.value)} was refused (${describeError(error)})`, "human", false, { agentId: participant.id, tone: "error" });
-      }
-    }
-    if (changed && this.runtimes.get(id) === runtime) { runtime.pendingConfig = undefined; this.push({ type: "participant", participant }); }
-    return runtime;
+    return this.agentConfig.setLaunch(id, patch, from);
   }
 
   permissionPending(key: string): boolean {
-    return this.permissions.has(key);
+    return this.permissions.pending(key);
   }
 
   private askingHuman(id: string): boolean {
-    for (const entry of this.permissions.values()) if (entry.participantId === id) return true;
-    return false;
+    return this.permissions.waitsOn(id);
   }
 
   resolvePermission(key: string, optionId: string | null): void {
-    const entry = this.permissions.get(key);
-    if (!entry) throw new Error("no such pending permission");
-    this.permissions.delete(key);
-    entry.resolve(optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } });
-    this.push({ type: "permission.resolved", key, optionId });
-    const turn = this.runtimes.get(entry.participantId)?.turn;
-    if (turn) turn.lastSignAt = Date.now();
-    this.log.info(`${this.participants.get(entry.participantId)?.name ?? entry.participantId}'s question for permission was answered: ${optionId ?? "dismissed"}`);
+    this.permissions.resolve(key, optionId);
   }
 
   postNotice(text: string): void {
@@ -3302,20 +3194,9 @@ export class Room extends EventEmitter {
 
   closeDoor(): void {
     this.closing = true;
-    if (this.silenceWatch) clearInterval(this.silenceWatch);
-    this.silenceWatch = null;
-    if (this.typingTimer) {
-      clearTimeout(this.typingTimer);
-      this.typingTimer = null;
-    }
-    for (const runtime of this.runtimes.values()) {
-      if (runtime.delayTimer) clearTimeout(runtime.delayTimer);
-      runtime.delayTimer = null;
-      runtime.pendingTurn = false;
-      runtime.independentPendingTurn = false;
-      runtime.deferredNotesTurn = false;
-    }
-    for (const [id, task] of this.automationTasks) if (!task.runtime.workBusy && !task.runtime.turnActive) this.finishAutomation(id, { status: "interrupted", detail: "The room stopped before the task began." });
+    this.silence.stop();
+    this.turnOrder.closeDoor();
+    this.turnLife.doorClosed();
   }
 
   reopenDoor(): void {
@@ -3333,70 +3214,66 @@ export class Room extends EventEmitter {
   async shutdown(): Promise<void> {
     this.closeDoor();
     const runtimes = [...this.runtimes.entries()];
-    const working = runtimes.map(([, runtime]) => runtime).filter((runtime) => runtime.turnActive || runtime.workBusy);
+    const working = runtimes.map(([, runtime]) => runtime).filter((runtime) => runtime.work.turnActive || runtime.work.workBusy);
     for (const runtime of working) {
-      runtime.roomStopped = true;
+      runtime.work.roomStopped = true;
       try {
-        if (runtime.turnActive) runtime.agent.cancel(runtime.sessionId);
+        if (runtime.work.turnActive) runtime.session.agent.cancel(runtime.session.sessionId);
       } catch {
       }
     }
-    const ended = (jobs: AgentRuntime[], ms: number) => jobs.length ? Promise.race([Promise.all(jobs.map((runtime) => runtime.workSettled?.promise)), delay(ms)]) : Promise.resolve();
+    const ended = (jobs: AgentRuntime[], ms: number) => jobs.length ? Promise.race([Promise.all(jobs.map((runtime) => runtime.work.workSettled?.promise)), delay(ms)]) : Promise.resolve();
     await ended(working, SHUTDOWN_TURN_STOP_MS);
-    for (const [id, runtime] of runtimes) {
-      try {
-        await Promise.race([runtime.agent.closeSession(runtime.sessionId), delay(1000)]);
-      } catch {
-      }
-      runtime.agent.kill();
-      this.forgetRuntime(id);
-    }
-    await ended(working.filter((runtime) => runtime.workBusy), SHUTDOWN_SETTLE_MS);
+    for (const [id, runtime] of runtimes) await this.agentSessions.close(id, runtime, { within: 1000, awaitKill: false });
+    await ended(working.filter((runtime) => runtime.work.workBusy), SHUTDOWN_SETTLE_MS);
+    this.permissions.dispose();
+    this.proposalCards.dispose();
+    this.design.dispose();
+    this.diagramRepairs.dispose();
+    this.turnOrder.dispose();
+    this.nativeReports.dispose();
+    this.draftStream.dispose();
+    this.turnPublication.dispose();
+    this.silence.dispose();
+    this.agentConfig.dispose();
+    this.agentNotes.dispose();
+    this.automations.dispose();
+    this.completions.dispose();
   }
 
 
   private route(message: ChatMessage): void {
     const from = this.participants.get(message.from);
-    const live = (id: string): boolean => this.runtimes.has(id) && !this.participants.get(id)?.muted;
-    const agentTargets = message.to.filter(live);
-    let targets: string[] = [];
-    if (from?.kind === "human") {
-      this.hops = 0;
-      targets = message.to.length ? agentTargets : [...this.runtimes.keys()].filter(live);
-      if (message.skill) {
-        const skill = this.skills?.library.get(message.skill.name);
-        if (!message.to.length) targets = targets.filter((id) => this.hasSkill(this.participants.get(id), message.skill!.name));
-        if (!targets.length && !message.to.length) {
-          const alone = [...this.runtimes.keys()].filter(live);
-          if (alone.length === 1) targets = alone;
-        }
-        if (!targets.length) this.notice(`Nobody in this room has the skill "${message.skill.name}"; attach it to an agent first, or address one with @.`, "warn");
-        if (skill) {
-          for (const id of targets) {
-            const runtime = this.runtimes.get(id);
-            if (runtime) runtime.pendingSkills.push({ name: skill.name, text: renderSkillBody(skill.body, message.skill.args), invokedBy: from.name, extraFiles: skill.extraFiles });
-          }
-        }
-        targets = [...targets];
-      }
-      if (!message.to.length && !message.skill && this.settings.turnTaking === "one-at-a-time" && targets.length > 1) targets = shuffle(targets);
-    } else if (this.focused) {
-      targets = [];
-    } else {
-      const addressed = message.to.length > 0;
-      const wanted = agentTargets.length ? agentTargets : addressed ? [] : this.settings.agentsWakeEachOther ? [...this.runtimes.keys()].filter((id) => id !== message.from && live(id)) : [];
-      if (wanted.length) {
-        if (this.hops >= this.hopLimit) {
-          const who = agentTargets.length ? message.toNames.join(", ") : "the other vibemates";
-          this.postRoomEvent(`Hop limit ${this.hopLimit} reached: ${who} will not be prompted until ${this.humanName} writes again.`, undefined, false, { tone: "attention" });
-        } else {
-          this.hops += 1;
-          targets = this.settings.turnTaking === "one-at-a-time" && !agentTargets.length && wanted.length > 1 ? shuffle(wanted) : wanted;
+    const human = from?.kind === "human";
+    if (human) this.turnOrder.resetHops();
+    const invoked = human ? message.skill : undefined;
+    const skill = invoked ? this.skills?.library.get(invoked.name) : undefined;
+    const live = this.wakeableVibemates();
+    const skillHolders = !invoked ? undefined : message.to.length ? [] : live.filter((id) => this.hasSkill(this.participants.get(id), invoked.name));
+    const decision = decideWake({ author: { id: message.from, human }, addressed: message.to, live, skillHolders,
+      agentsWakeEachOther: this.settings.agentsWakeEachOther, focused: this.focused, hops: this.hops, hopLimit: this.hopLimit });
+    let targets = [...woken(decision)];
+    if (invoked) {
+      if (decision.skillMissing) this.notice(`Nobody in this room has the skill "${invoked.name}"; attach it to an agent first, or address one with @.`, "warn");
+      if (skill) {
+        for (const id of targets) {
+          const runtime = this.runtimes.get(id);
+          if (runtime) runtime.skills.pendingSkills.push({ name: skill.name, text: renderSkillBody(skill.body, invoked.args), invokedBy: from!.name, extraFiles: skill.extraFiles });
         }
       }
     }
+    if (decision.hop === "limit") {
+      const who = decision.broadcast ? "the other vibemates" : message.toNames.join(", ");
+      this.postRoomEvent(`Hop limit ${this.hopLimit} reached: ${who} will not be prompted until ${this.humanName} writes again.`, undefined, false, { tone: "attention" });
+    }
+    if (decision.hop === "take") this.turnOrder.countHop();
+    if (decision.broadcast && !message.skill && this.settings.turnTaking === "one-at-a-time" && targets.length > 1) targets = shuffle(targets);
     this.push(this.roomEvent());
     for (const id of targets) this.requestTurn(id, message.to.includes(id) || !!message.skill);
+  }
+
+  private wakeableVibemates(): string[] {
+    return [...this.runtimes.keys()].filter((id) => !this.participants.get(id)?.muted);
   }
 
 
@@ -3422,7 +3299,7 @@ export class Room extends EventEmitter {
     const items = this.attachedSkills(participant)
       .filter((s) => s.agentInvocable)
       .map((s) => ({ name: s.name, description: s.description }));
-    const channel = runtime.skillChannel === "tool" ? "tool" : "marker";
+    const channel = runtime.skills.skillChannel === "tool" ? "tool" : "marker";
     if (!items.length && channel !== "tool") return undefined;
     return { items, channel, canCreate: channel === "tool" };
   }
@@ -3431,7 +3308,7 @@ export class Room extends EventEmitter {
   private skillsForDesign(participantId: string): RoomDesignContext["skills"] {
     if (!this.skills) return undefined;
     const runtime = this.runtimes.get(participantId);
-    const channel = runtime?.skillChannel === "tool" ? "tool" : "marker";
+    const channel = runtime?.skills.skillChannel === "tool" ? "tool" : "marker";
     return {
       library: this.skills.library.list().filter((s) => !s.problems.length && !s.draft && s.agentInvocable).map((s) => ({ name: s.name, description: s.description })),
       channel,
@@ -3453,63 +3330,21 @@ export class Room extends EventEmitter {
   memoryTurn(participantId: string): string {
     this.assertHistoryAccessForAgent(participantId);
     const runtime = this.runtimes.get(participantId);
-    if (!runtime?.agent.alive || !runtime.turnActive || !runtime.turn || runtime.turn.hidden || runtime.retiring || runtime.workCancelled) throw new Error("Memory maintenance is available only during an active visible room turn.");
-    return runtime.turn.message.id;
+    if (!runtime?.session.agent.alive || !runtime.work.turnActive || !runtime.work.turn || runtime.work.turn.hidden || runtime.session.retiring || runtime.work.workCancelled) throw new Error("Memory maintenance is available only during an active visible room turn.");
+    return runtime.work.turn.message.id;
   }
 
   describeRoomForAgent(participantId: string, selector?: string): Record<string, unknown> {
-    const participant = this.agentInRoom(participantId);
-    const other = this.otherRoom(selector);
-    if (other) return other.describeForVisitor(this.skills!.rooms!.sharesWith(this.id, other.id));
-    const shape = this.templateOf();
-    const skills = this.skills ? this.skills.library.list().filter((s) => !s.problems.length && !s.draft).map((s) => ({ name: s.name, description: s.description })) : [];
-    const templates = this.skills ? this.skills.templates.list().map((t) => ({ id: t.id, name: t.name, builtin: !!t.builtin })) : [];
-    return {
-      room: { name: this.settings.name, topic: this.settings.topic, emoji: this.settings.emoji, dir: this.dir },
-      human: this.settings.humanName,
-      you: participant.name,
-      settings: describeSettings({ ...this.settings, customRules: this.renderRuleReferences(this.settings.customRules) }),
-      rules: ruleLines(this.renderRuleReferences(this.settings.customRules)),
-      vibemates: shape.vibemates.map((v) => {
-        const role = v.role ?? "";
-        const own = v.name === participant.name;
-        return {
-          name: v.name,
-          tagline: v.tagline ?? "",
-          ...(own ? { role } : { rolePrivate: true, roleLength: role.length }),
-          avatar: v.avatar ?? "",
-          skills: v.skills ?? [],
-          agentType: v.agentType,
-        };
-      }),
-      skills,
-      templates,
-      otherRooms: this.skills?.rooms ? this.skills.rooms.list().filter((room) => room.id !== this.id) : [],
-      yourBrief: buildInstructionPreview(this.effectiveSettings(), this.personaOf(participant), this.roster(), this.skillsForPrompt(participant, this.runtimes.get(participant.id)!)),
-      howTo: "Settings are proposed by key with the values above; rules are one per line in customRules; a vibemate is { name, tagline, role, avatar, skills }. Another vibemate's role is private: you learn only that it has one and how long it is, and you may still propose a new one, which the human reads in full on the card. Check a design with lint_room_design, then create_template (a file for the human to pick) or propose_room_changes (a card the human applies).",
-    };
+    return this.design.describeRoomForAgent(participantId, selector);
   }
 
-  private otherRoom(selector: string | undefined): Room | null {
-    const wanted = String(selector ?? "").trim();
-    if (!wanted) return null;
-    if (!this.skills?.rooms) throw new Error("the other rooms are not available here");
-    const room = this.skills.rooms.find(wanted);
-    return room === this ? null : room;
-  }
 
   describeForVisitor(sharesHistory: boolean): Record<string, unknown> {
-    const rows = describeSettings({ ...this.settings, customRules: this.renderRuleReferences(this.settings.customRules) });
-    return {
-      room: { id: this.id, name: this.settings.name, emoji: this.settings.emoji },
-      human: this.settings.humanName,
-      settings: sharesHistory ? rows : rows.map(({ value, ...row }) => (row.kind === "text" ? { ...row, valueHidden: `${String(value ?? "").length} characters; this room does not share its history with yours` } : { ...row, value })),
-      howTo: "Propose settings here with propose_room_changes and room set to this room's id: the card stands in your room, and Apply changes this one. Its vibemates are proposed from inside it.",
-    };
+    return this.design.describeForVisitor(sharesHistory);
   }
 
   proposalShape(): { context: RoomDesignContext; vibemates: TemplateVibemate[] } {
-    return { context: this.designContext("room"), vibemates: this.templateOf().vibemates };
+    return this.design.proposalShape();
   }
 
   applySettingsFromCard(patch: Record<string, unknown>, line: string): void {
@@ -3518,9 +3353,7 @@ export class Room extends EventEmitter {
   }
 
   lintDesignForAgent(participantId: string, kind: "template" | "room", design: RoomDesign): { ok: boolean; errors: string[]; warnings: string[]; preview?: string } {
-    this.agentInRoom(participantId);
-    const result = lintRoomDesign(design, { ...this.designContext(kind), skills: this.skillsForDesign(participantId) });
-    return { ok: !result.errors.length, errors: result.errors.map((e) => e.message), warnings: result.warnings.map((w) => w.message), preview: result.preview };
+    return this.design.lintDesignForAgent(participantId, kind, design);
   }
 
   readMessageForAgent(participantId: string, seq: number, around: number): Record<string, unknown> {
@@ -3646,16 +3479,26 @@ export class Room extends EventEmitter {
     return participant.deliveryEpoch;
   }
 
-  private publishBodyDelivery(rows: ChatMessage[]): void {
-    const unique = [...new Map(rows.map(row => [row.id, row])).values()].filter(row => row.bodyDelivery);
-    if (!unique.length) return;
-    this.persistMany(unique.map(message => ({ kind: "upsert", message })));
-    this.push({ type: "message.delivery", updates: unique.map(row => ({ id: row.id, delivery: row.bodyDelivery! })) });
+  private publishBodyDelivery(changes: ReadonlyMap<string, BodyDelivery>): void {
+    const revised: ChatMessage[] = [];
+    for (const [id, delivery] of changes) {
+      const row = this.roomMessages.byId(id);
+      if (row) revised.push(this.roomMessages.revise({ ...row, bodyDelivery: delivery }));
+    }
+    if (!revised.length) return;
+    this.persistMany(revised.map(message => ({ kind: "upsert", message })));
+    this.push({ type: "message.delivery", updates: revised.map(row => ({ id: row.id, delivery: row.bodyDelivery! })) });
   }
 
-  private registerPendingBodies(participant: Participant, rows: ChatMessage[]): void {
+  private registerPendingBodies(participant: Participant, rows: readonly ChatMessage[]): void {
     const epoch = this.ensureDeliveryEpoch(participant);
-    this.publishBodyDelivery(rows.filter(row => registerBodyReader(row, participant.id, epoch)));
+    const changes = new Map<string, BodyDelivery>();
+    for (const prepared of rows) {
+      const row = this.roomMessages.byId(prepared.id);
+      const next = row && withBodyReader(row, participant.id, epoch);
+      if (next) changes.set(row.id, next);
+    }
+    this.publishBodyDelivery(changes);
   }
 
   private recordBodySupply(participantId: string, refs: BodyRef[], expectedEpoch?: string): void {
@@ -3665,9 +3508,14 @@ export class Room extends EventEmitter {
     if (expectedEpoch !== undefined && epoch !== expectedEpoch) return;
     const referenced = new Set(refs.map(ref => ref.id));
     this.noteBodyExposure(participantId, this.messages.filter(row => referenced.has(row.id)).map(row => row.seq));
-    const initialized = this.messages.filter(row => referenced.has(row.id) && registerBodyReader(row, participantId, epoch));
-    const changed = supplyBodies(this.messages, refs, participantId, epoch) as ChatMessage[];
-    this.publishBodyDelivery([...initialized, ...changed]);
+    const changes = new Map<string, BodyDelivery>();
+    for (const row of this.messages) {
+      const next = referenced.has(row.id) ? withBodyReader(row, participantId, epoch) : null;
+      if (next) changes.set(row.id, next);
+    }
+    const rows = changes.size ? this.messages.map(row => (changes.has(row.id) ? { ...row, bodyDelivery: changes.get(row.id) } : row)) : this.messages;
+    for (const [id, delivery] of suppliedBodies(rows, refs, participantId, epoch)) changes.set(id, delivery);
+    this.publishBodyDelivery(changes);
   }
 
   private noteBodyExposure(participantId: string, seqs: number[]): void {
@@ -3683,7 +3531,9 @@ export class Room extends EventEmitter {
   searchHistoryForAgent(participantId: string, args: AgentSearchArgs, search: () => AgentSearchResult): AgentSearchResult {
     this.assertHistoryAccessForAgent(participantId);
     const runtime = this.runtimes.get(participantId)!;
-    const turn = runtime.turnActive && runtime.agent?.alive && !runtime.retiring && !runtime.workCancelled && runtime.turn && !runtime.turn.hidden ? runtime.turn : undefined;
+    const turn = runtime.work.turnActive && runtime.session.agent?.alive && !runtime.session.retiring && !runtime.work.workCancelled && runtime.work.turn && !runtime.work.turn.hidden ? runtime.work.turn : undefined;
+    const searcher = this.participants.get(participantId)!;
+    const owner = turn ? { participant: searcher, runtime, turn } : undefined;
     try {
       const result = search();
       const local = result.results.filter(hit => hit.room === this.id);
@@ -3691,15 +3541,17 @@ export class Room extends EventEmitter {
       const complete = local.flatMap(hit => hit.context ?? []).filter(row => !row.truncated);
       this.recordBodySupply(participantId, bodyRefs(this.messages.filter(message =>
         !message.images?.length && !message.quotes?.length && complete.some(row => row.seq === message.seq && row.text === message.text))));
-      if (turn) this.recordHistorySearch(turn, args, result);
+      if (owner) this.recordHistorySearch(owner, args, result);
       return result;
     } catch (error) {
-      if (turn) this.recordHistorySearch(turn, args, undefined, describeError(error));
+      if (owner) this.recordHistorySearch(owner, args, undefined, describeError(error));
       throw error;
     }
   }
 
-  private recordHistorySearch(turn: NonNullable<AgentRuntime["turn"]>, args: AgentSearchArgs, result?: AgentSearchResult, error?: string): void {
+  private recordHistorySearch(owner: DraftOwner & { readonly turn: DraftTurn }, args: AgentSearchArgs, result?: AgentSearchResult, error?: string): void {
+    if (!this.draftStream.holds(owner)) return;
+    const turn = owner.turn;
     const calls = (turn.message.toolCalls ??= []);
     const candidates = calls.filter(call => {
       if (call.historySearch || ["completed", "failed"].includes(call.status ?? "") || roomOperation(call)?.name !== "search_history") return false;
@@ -3719,8 +3571,8 @@ export class Room extends EventEmitter {
     view.rawInput = args;
     view.historySearch = historySearchReceipt(result);
     view.output = result ? toolOutputText({ toolCallId: view.toolCallId, rawOutput: view.historySearch }) : error;
-    this.showDraft(turn);
-    this.push({ type: "toolcall", id: turn.message.id, toolCall: view });
+    if (this.showDraft(owner) === "refused") return;
+    this.draftStream.tell(owner, { type: "toolcall", id: turn.message.id, toolCall: view });
   }
 
   private checkRoomExtras(participantId: string, callerTurn: string, args: MessageCheckArgs): Pick<MessageCheckResult, "vibemates" | "vibematesOmitted" | "liveDraft" | "hopLimitReached" | "hopLimitNotice"> {
@@ -3738,8 +3590,8 @@ export class Room extends EventEmitter {
     if (!args.draft) return extras;
     const writer = this.findByName(args.draft.name);
     if (!writer || writer.kind !== "agent" || writer.id === participantId || writer.status === "left") throw new Error("Choose another vibemate in this room for draft.name.");
-    const runtime = this.runtimes.get(writer.id), turn = runtime?.turn;
-    if (!runtime?.agent.alive || !runtime.turnActive || runtime.retiring || runtime.workCancelled || !turn || turn.hidden || !turn.published || !visibleToAgents(turn.message)) {
+    const runtime = this.runtimes.get(writer.id), turn = runtime?.work.turn;
+    if (!runtime?.session.agent.alive || !runtime.work.turnActive || runtime.session.retiring || runtime.work.workCancelled || !turn || turn.hidden || !turn.published || !visibleToAgents(turn.message)) {
       extras.liveDraft = { name: writer.name, provisional: true, available: false, text: "", hint: "No visible draft is being written now. Finished replies are ordinary room messages.", ...(args.draft.cursor ? { reset: true } : {}) };
       return extras;
     }
@@ -3756,10 +3608,11 @@ export class Room extends EventEmitter {
   checkMessagesForAgent(participantId: string, params: Record<string, unknown>): MessageCheckResult {
     this.assertHistoryAccessForAgent(participantId);
     const runtime = this.runtimes.get(participantId)!;
-    const turn = runtime.turn;
-    if (!runtime.agent.alive || !runtime.turnActive || !turn || turn.hidden || runtime.retiring || runtime.workCancelled || !Number.isSafeInteger(turn.messagesFromSeq)) {
+    const turn = runtime.work.turn;
+    if (!runtime.session.agent.alive || !runtime.work.turnActive || !turn || turn.hidden || runtime.session.retiring || runtime.work.workCancelled || !Number.isSafeInteger(turn.messagesFromSeq)) {
       throw new Error("check_room is available only during an active visible room turn");
     }
+    const owner = { participant: this.participants.get(participantId)!, runtime, turn };
     const args = parseMessageCheckArgs(params);
     try {
       const context = { turn: turn.message.id, revision: this.messageCheckRevision, baseline: turn.messagesFromSeq, latest: this.seq };
@@ -3781,15 +3634,17 @@ export class Room extends EventEmitter {
         const complete = new Set(result.messages.filter(m => !m.truncated && !m.detailsOmitted).map(m => m.seq));
         this.recordBodySupply(participantId, bodyRefs(this.messages.filter(m => complete.has(m.seq))));
       }
-      this.recordMessageCheck(turn, args, result);
+      this.recordMessageCheck(owner, args, result);
       return result;
     } catch (error) {
-      this.recordMessageCheck(turn, args, undefined, describeError(error));
+      this.recordMessageCheck(owner, args, undefined, describeError(error));
       throw error;
     }
   }
 
-  private recordMessageCheck(turn: NonNullable<AgentRuntime["turn"]>, args: MessageCheckArgs, result?: MessageCheckResult, error?: string): void {
+  private recordMessageCheck(owner: DraftOwner & { readonly turn: DraftTurn }, args: MessageCheckArgs, result?: MessageCheckResult, error?: string): void {
+    if (!this.draftStream.holds(owner)) return;
+    const turn = owner.turn;
     const calls = (turn.message.toolCalls ??= []);
     const candidates = calls.filter(call => {
       if (call.messageCheck || ["completed", "failed"].includes(call.status ?? "") || !(roomOperation(call)?.name === "check_room" || isDirectMessageCheck(call.name ?? call.title))) return false;
@@ -3813,149 +3668,32 @@ export class Room extends EventEmitter {
       ...(result.mode === "status" ? { headers: result.headers, snapshotThrough: result.snapshotThrough } : {
         messages: result.messages.map(m => ({ ...messageCheckHeader(m), truncated: !!m.truncated, detailsOmitted: !!m.detailsOmitted })),
       }) } }) : error;
-    this.showDraft(turn);
-    this.push({ type: "toolcall", id: turn.message.id, toolCall: view });
+    if (this.showDraft(owner) === "refused") return;
+    this.draftStream.tell(owner, { type: "toolcall", id: turn.message.id, toolCall: view });
   }
 
-  private designContext(kind: "template" | "room"): RoomDesignContext {
-    return {
-      kind,
-      humanName: this.settings.humanName,
-      roomName: this.settings.name,
-      base: kind === "room" ? { ...this.settings, customRules: this.renderRuleReferences(this.settings.customRules) } : undefined,
-      briefTextLimit: this.settings.briefTextLimit,
-      knownSkills: this.skills ? this.skills.library.list().map((s) => s.name) : undefined,
-    };
-  }
 
   createTemplateForAgent(participantId: string, design: RoomDesign, replace: boolean): { ok: true; message: string; id: string; path: string; warnings: string[] } {
-    const participant = this.agentInRoom(participantId);
-    if (!this.skills) throw new Error("templates are not available in this room");
-    const result = lintRoomDesign(design, this.designContext("template"));
-    if (result.errors.length) throw new Error(`not saved: ${result.errors.map((e) => e.message).join("; ")}`);
-    const settings = result.settings!;
-    const rest: Partial<RoomSettings> = {};
-    for (const key of Object.keys(design.settings ?? {}) as (keyof RoomSettings)[]) if (AGENT_SETTINGS.includes(key)) (rest as Record<string, unknown>)[key] = settings[key];
-    const draft = {
-      name: String(design.name).trim(),
-      description: String(design.description ?? "").trim(),
-      emoji: settings.emoji || undefined,
-      settings: rest,
-      vibemates: (design.vibemates ?? []).map((v) => {
-        const out: TemplateVibemate = { name: v.name.trim() };
-        if (v.tagline?.trim()) out.tagline = v.tagline.trim();
-        if (v.role?.trim()) out.role = v.role.trim();
-        if (v.avatar?.trim()) out.avatar = v.avatar.trim();
-        if (v.skills?.length) out.skills = v.skills.map((s) => s.trim()).filter(Boolean);
-        if (typeof v.replyDelay === "number") out.replyDelay = v.replyDelay;
-        return out;
-      }),
-    };
-    const library = this.skills.templates;
-    const wanted = templateId(draft.name);
-    const existing = library.list().find((t) => t.id === wanted);
-    let saved;
-    if (existing && replace) {
-      if (existing.builtin) throw new Error(`"${existing.name}" is a template viberoom ships and cannot be replaced; pick another name`);
-      saved = library.overwrite(wanted, draft);
-    } else saved = library.save(draft);
-    this.skills.templatesChanged();
-    const warnings = result.warnings.map((w) => w.message);
-    this.postSystem(`${participant.name} ${existing && replace ? "updated" : "created"} the room template "${saved.name}" (${saved.vibemates.map((v) => v.name).join(", ") || "no vibemates"}); it is in the picker under New room.`);
-    this.log.info(`templates: ${participant.name} ${existing && replace ? "updated" : "created"} "${saved.name}" (${saved.id})`);
-    return {
-      ok: true,
-      message: `Template "${saved.name}" saved as ${saved.id}${existing && !replace ? ` (the name was taken, so the id got a number; pass replace: true to update your own template instead)` : ""}. The human creates a room from it under New room; nothing in this room changed.${warnings.length ? ` Warnings: ${warnings.join("; ")}` : ""}`,
-      id: saved.id,
-      path: join(library.dir, saved.id, "template.json"),
-      warnings,
-    };
+    return this.design.createTemplateForAgent(participantId, design, replace);
   }
 
 
   proposeRoomChanges(participantId: string, why: string, changes: RoomChangeSet, roomSelector?: string): { ok: true; message: string; key: string; warnings: string[] } {
-    const participant = this.agentInRoom(participantId);
-    const target = this.otherRoom(roomSelector);
-    if (target) return this.proposeSettingsFor(target, participant, why, changes);
-    const shape = this.templateOf();
-    const current = shape.vibemates;
-    const vibes = applyVibemateChanges(current, changes.vibemates);
-    if (vibes.errors.length) throw new Error(`not proposed: ${vibes.errors.join("; ")}`);
-    const touched = vibes.ops.flatMap((op) => [op.name, ...(op.fields ?? []).filter((f) => f.field === "name").map((f) => f.to)]);
-    const result = lintRoomDesign({ settings: changes.settings, vibemates: vibes.next }, { ...this.designContext("room"), changedVibemates: touched });
-    if (result.errors.length) throw new Error(`not proposed: ${result.errors.map((e) => e.message).join("; ")}`);
-    const base = this.designContext("room").base!;
-    const settingChanges = diffSettings(base, result.settings!);
-    if (!settingChanges.length && !vibes.ops.length) throw new Error("not proposed: the change set leaves the room as it is");
-    const touchesOwn = vibes.ops.some((op) => op.name.toLowerCase() === participant.name.toLowerCase()) || settingChanges.some((c) => c.key === "customRules");
-    const ids: Record<string, string> = {};
-    for (const op of vibes.ops) {
-      const target = op.op === "add" ? undefined : this.findByName(op.name);
-      if (target) ids[op.name] = target.id;
-    }
-    return this.holdProposal(participant, why, undefined, settingChanges, vibes.ops, result.warnings.map((w) => w.message), touchesOwn,
-      { settings: settingChanges, vibemates: vibes.next, ops: vibes.ops, ids });
+    return this.design.proposeRoomChanges(participantId, why, changes, roomSelector);
   }
 
-  private proposeSettingsFor(target: Room, participant: Participant, why: string, changes: RoomChangeSet): { ok: true; message: string; key: string; warnings: string[] } {
-    const asked = changes.vibemates;
-    if (asked && (asked.add?.length || asked.update?.length || asked.remove?.length)) {
-      throw new Error(`not proposed: a proposal for another room changes its settings only; the vibemates of ${target.settings.name} are proposed from inside it`);
-    }
-    if (target.readOnly) throw new Error(`not proposed: ${target.settings.name} waits for ${this.settings.humanName} to release its record, and changes nothing until then`);
-    const { context, vibemates } = target.proposalShape();
-    const result = lintRoomDesign({ settings: changes.settings, vibemates }, { ...context, changedVibemates: [] });
-    if (result.errors.length) throw new Error(`not proposed: ${result.errors.map((e) => e.message).join("; ")}`);
-    const settingChanges = diffSettings(context.base!, result.settings!);
-    if (!settingChanges.length) throw new Error(`not proposed: the change set leaves ${target.settings.name} as it is`);
-    return this.holdProposal(participant, why, { id: target.id, name: target.settings.name }, settingChanges, [], result.warnings.map((w) => w.message), false,
-      { settings: settingChanges, vibemates: [], ops: [], ids: {}, roomId: target.id });
-  }
 
-  private holdProposal(participant: Participant, why: string, room: RoomProposal["room"], settingChanges: SettingChange[], ops: VibemateChange[], warnings: string[], touchesOwn: boolean, plan: ProposalPlan): { ok: true; message: string; key: string; warnings: string[] } {
-    const participantId = participant.id;
-    const what = [...settingChanges.map((c) => c.key), ...ops.map((o) => `${o.op} ${o.name}`)].join(", ");
-    const where = room ? `the room ${room.name}` : "the room";
-    const line = this.postRoomEvent(`${participant.name} proposes changes to ${where} (${what}); apply or reject them on the card.`, "human", false, { tone: "attention" });
-    const proposal: RoomProposal = {
-      key: randomUUID(),
-      participantId,
-      participantName: participant.name,
-      ts: Date.now(),
-      afterSeq: line.seq,
-      why: String(why ?? "").trim().slice(0, 600),
-      ...(room ? { room } : {}),
-      settings: settingChanges,
-      vibemates: ops,
-      warnings,
-      touchesOwn,
-      status: "pending",
-    };
-    this.proposalPlans.set(proposal.key, plan);
-    this.proposals.set(proposal.key, proposal);
-    this.keepCard("proposal", proposal.key);
-    this.push({ type: "proposal", proposal });
-    this.log.info(`proposal ${proposal.key} from ${participant.name}${room ? ` for ${room.name} (${room.id})` : ""}: ${what}`);
-    return {
-      ok: true,
-      message: `Proposal sent to ${this.settings.humanName} as a card in the room${room ? ` you are in, for the room ${room.name}` : ""} (${what}). Nothing changes until they apply it; you will see a room line with the outcome.${proposal.warnings.length ? ` Warnings shown on the card: ${proposal.warnings.join("; ")}` : ""}`,
-      key: proposal.key,
-      warnings: proposal.warnings,
-    };
-  }
 
 
   proposeNewRoom(participantId: string, request: Record<string, unknown>): { ok: true; message: string; key: string } {
     const participant = this.agentInRoom(participantId);
     const plan = planNewRoom(request, {
       proposerWasCreated: participant.createdByVibemate === true,
-      openCard: [...this.newRooms.values()].some((waiting) => waiting.status === "pending"),
+      openCard: this.proposalCards.hasWaitingRoom(),
       proposerName: participant.name,
     });
-    const proposal: NewRoomProposal = { key: randomUUID(), participantId, participantName: participant.name, ts: Date.now(), afterSeq: this.seq, plan, status: "pending" };
-    this.newRooms.set(proposal.key, proposal);
-    this.keepCard("new-room", proposal.key);
-    this.push({ type: "new-room", proposal });
+    const proposal = this.proposalCards.proposeRoom(participant, plan);
+    if (!proposal) throw new Error("not proposed: the room has shut down");
     const cast = plan.vibemates.map((one) => one.name).join(", ");
     const price = plan.price.byModel.map((one) => `${one.sessions} on ${one.model}`).join(", ");
     this.log.info(`new room proposed by ${participant.name}: ${plan.name} (${cast}; ${plan.price.sessions} sessions — ${price})`);
@@ -3967,146 +3705,40 @@ export class Room extends EventEmitter {
   }
 
   newRoomProposals(): NewRoomProposal[] {
-    return [...this.newRooms.values()];
+    return this.proposalCards.newRoomProposals();
   }
 
   pendingNewRoom(key: string): NewRoomProposal | undefined {
-    const proposal = this.newRooms.get(key);
-    return proposal && proposal.status === "pending" ? proposal : undefined;
+    return this.proposalCards.pendingNewRoom(key);
   }
 
   settleNewRoom(key: string, status: "created" | "refused", madeAs?: string): NewRoomProposal {
-    const proposal = this.newRooms.get(key);
-    if (!proposal) throw new Error("no such proposed room");
-    if (proposal.status !== "pending") return proposal;
-    proposal.status = status;
-    if (madeAs) proposal.roomId = madeAs;
-    this.keepCard("new-room", key);
-    this.push({ type: "new-room.resolved", key, status, ...(madeAs ? { roomId: madeAs } : {}) });
-    this.postRoomEvent(status === "created"
-      ? `${this.settings.humanName} created the room ${proposal.plan.name} that ${proposal.participantName} proposed.`
-      : `${this.settings.humanName} did not create the room ${proposal.plan.name} that ${proposal.participantName} proposed.`);
-    return proposal;
+    return this.proposalCards.settleNewRoom(key, status, madeAs);
   }
 
 
-  async describeLooksForAgent(participantId: string): Promise<Record<string, unknown>> {
-    const participant = this.agentInRoom(participantId);
-    if (!this.skills?.looks || !this.skills.appearance) throw new Error("looks are not available in this room");
-    const described = await this.skills.looks.describe();
-    return { you: participant.name, human: this.settings.humanName, appearance: this.skills.appearance.current(), ...described };
+  describeLooksForAgent(participantId: string): Promise<Record<string, unknown>> {
+    return this.design.describeLooksForAgent(participantId);
   }
 
-  async lintLookForAgent(participantId: string, raw: unknown): Promise<{ ok: boolean; id?: string; errors: { key: string; message: string }[]; warnings: { key: string; message: string }[]; report: string[] }> {
-    this.agentInRoom(participantId);
-    if (!this.skills?.looks) throw new Error("looks are not available in this room");
-    try {
-      const checked = await this.skills.looks.check(raw);
-      return { ok: checked.lint.ok, id: checked.spec.id, errors: checked.lint.errors.map((e) => ({ key: e.key, message: e.message })), warnings: checked.lint.warnings.map((w) => ({ key: w.key, message: w.message })), report: checked.lint.report };
-    } catch (error) {
-      return { ok: false, errors: [{ key: "spec", message: error instanceof Error ? error.message : String(error) }], warnings: [], report: [] };
-    }
+  lintLookForAgent(participantId: string, raw: unknown): Promise<{ ok: boolean; id?: string; errors: { key: string; message: string }[]; warnings: { key: string; message: string }[]; report: string[] }> {
+    return this.design.lintLookForAgent(participantId, raw);
   }
 
-  async createLookForAgent(participantId: string, raw: unknown, replace: boolean): Promise<{ ok: true; message: string; id: string; warnings: string[] }> {
-    const participant = this.agentInRoom(participantId);
-    if (!this.skills?.looks) throw new Error("looks are not available in this room");
-    let saved: LookCheck;
-    try {
-      saved = await this.skills.looks.save(raw, { author: participant.name, replace });
-    } catch (error) {
-      throw new Error(`not saved: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    const warnings = saved.lint.warnings.map((w) => w.message);
-    this.postSystem(`${participant.name} saved the look "${saved.spec.label}" (Settings → Appearance).`);
-    this.log.info(`${participant.name} saved look ${saved.spec.id}`);
-    return {
-      ok: true,
-      message: `Saved the look "${saved.spec.label}" (id ${saved.spec.id}) among ${this.settings.humanName}'s own looks: it is in Settings → Appearance now, after the looks viberoom ships. Nothing is worn until ${this.settings.humanName} picks it; propose_look_changes with look "${saved.spec.id}" offers it as a card.${warnings.length ? ` Warnings: ${warnings.join("; ")}` : ""}`,
-      id: saved.spec.id,
-      warnings,
-    };
+  createLookForAgent(participantId: string, raw: unknown, replace: boolean): Promise<{ ok: true; message: string; id: string; warnings: string[] }> {
+    return this.design.createLookForAgent(participantId, raw, replace);
   }
 
-  async proposeLookChanges(participantId: string, why: string, changes: LookChangeSet): Promise<{ ok: true; message: string; key: string; warnings: string[] }> {
-    const participant = this.agentInRoom(participantId);
-    if (!this.skills?.appearance || !this.skills.looks) throw new Error("looks are not available in this room");
-    const current = this.skills.appearance.current();
-    const patch: Record<string, unknown> = {};
-    const rows: SettingChange[] = [];
-    if (changes.look !== undefined) {
-      const lookId = String(changes.look).trim();
-      const known = await this.skills.appearance.ownAdjustments(lookId);
-      if (!known) throw new Error(`not proposed: no look "${lookId}" (the looks viberoom ships, or one of ${this.settings.humanName}'s own by its id)`);
-      patch.look = lookId;
-      if (lookId !== current.look) rows.push({ key: "look", from: current.look, to: lookId });
-    }
-    if (changes.adjust !== undefined) {
-      if (!changes.adjust || typeof changes.adjust !== "object" || Array.isArray(changes.adjust)) throw new Error("not proposed: adjust is an object of adjustable keys and values");
-      const lookId = String(changes.look ?? current.look);
-      const own = await this.skills.appearance.ownAdjustments(lookId);
-      if (!own) throw new Error(`not proposed: no look "${lookId}" to fine-tune`);
-      const merged = { ...(current.custom?.[lookId] ?? {}), ...(changes.adjust as Record<string, unknown>) };
-      patch.custom = { [lookId]: merged };
-      const previewed = this.skills.appearance.preview({ custom: { [lookId]: merged } });
-      for (const key of Object.keys(changes.adjust)) {
-        const from = current.custom?.[lookId]?.[key as keyof typeof current.custom[string]] ?? own.values[key] ?? "";
-        const to = previewed.custom[lookId]?.[key as keyof typeof previewed.custom[string]] ?? "";
-        if (String(from).toLowerCase() !== String(to).toLowerCase()) rows.push({ key: `${key} (${own.label})`, from, to });
-      }
-    }
-    for (const key of ["chatFontSize", "scale", "font", "mono"] as const) {
-      if (changes[key] === undefined) continue;
-      patch[key] = changes[key];
-      const previewed = this.skills.appearance.preview({ [key]: changes[key] });
-      if (String(previewed[key]) !== String(current[key])) rows.push({ key: key === "chatFontSize" ? "text size" : key === "scale" ? "scale, %" : key === "font" ? "font" : "code font", from: current[key], to: previewed[key] });
-    }
-    this.skills.appearance.preview(patch);
-    if (!rows.length) throw new Error("not proposed: the change leaves the window as it is");
-    const what = rows.map((c) => c.key).join(", ");
-    const line = this.postRoomEvent(`${participant.name} proposes a change to how the window looks (${what}); apply or reject it on the card.`, "human", false, { tone: "attention" });
-    const proposal: RoomProposal = {
-      key: randomUUID(),
-      participantId,
-      participantName: participant.name,
-      ts: Date.now(),
-      afterSeq: line.seq,
-      why: String(why ?? "").trim().slice(0, 600),
-      settings: [],
-      vibemates: [],
-      appearance: rows,
-      warnings: [],
-      touchesOwn: false,
-      status: "pending",
-    };
-    this.proposalPlans.set(proposal.key, { settings: [], vibemates: [], ops: [], ids: {}, appearance: patch });
-    this.proposals.set(proposal.key, proposal);
-    this.keepCard("proposal", proposal.key);
-    this.push({ type: "proposal", proposal });
-    this.log.info(`look proposal ${proposal.key} from ${participant.name}: ${what}`);
-    return {
-      ok: true,
-      message: `Proposal sent to ${this.settings.humanName} as a card in the room (${what}). It changes the whole window, not this room alone; nothing changes until they apply it, and you will see a room line with the outcome.`,
-      key: proposal.key,
-      warnings: [],
-    };
+  proposeLookChanges(participantId: string, why: string, changes: LookChangeSet): Promise<{ ok: true; message: string; key: string; warnings: string[] }> {
+    return this.design.proposeLookChanges(participantId, why, changes);
   }
 
   async resolveProposal(key: string, accept: boolean): Promise<RoomProposal> {
-    const proposal = this.proposals.get(key);
-    const plan = this.proposalPlans.get(key);
-    if (!proposal || !plan) throw new Error("no such pending proposal");
+    const { proposal, plan } = this.proposalCards.pending(key);
     if (proposal.status !== "pending") return proposal;
     const what = [...proposal.settings.map((c) => c.key), ...proposal.vibemates.map((o) => `${o.op} ${o.name}`), ...(proposal.appearance ?? []).map((c) => c.key)].join(", ")
       + (proposal.room ? ` for the room ${proposal.room.name}` : "");
-    if (!accept) {
-      proposal.status = "rejected";
-      this.proposalPlans.delete(key);
-      this.keepCard("proposal", key);
-      this.push({ type: "proposal.resolved", key, status: "rejected" });
-      this.postRoomEvent(`${this.settings.humanName} rejected ${proposal.participantName}'s proposal (${what}).`);
-      return proposal;
-    }
+    if (!accept) return this.proposalCards.reject(key, what);
     const skipped: string[] = [];
     for (const op of plan.ops) {
       const known = plan.ids[op.name];
@@ -4166,13 +3798,7 @@ export class Room extends EventEmitter {
         skipped.push(`appearance (${error instanceof Error ? error.message : String(error)})`);
       }
     }
-    proposal.status = "applied";
-    proposal.skipped = skipped;
-    this.proposalPlans.delete(key);
-    this.keepCard("proposal", key);
-    this.push({ type: "proposal.resolved", key, status: "applied", skipped });
-    this.postRoomEvent(`${this.settings.humanName} applied ${proposal.participantName}'s proposal (${what}).${skipped.length ? ` Not applied: ${skipped.join("; ")}.` : ""}`);
-    return proposal;
+    return this.proposalCards.applied(key, what, skipped);
   }
 
   createSkillForAgent(participantId: string, input: AgentSkillInput): { ok: true; message: string; warnings: string[] } {
@@ -4278,35 +3904,35 @@ export class Room extends EventEmitter {
   skillToolReady(participantId: string, token: string): void {
     const runtime = this.runtimes.get(participantId);
     const participant = this.participants.get(participantId);
-    if (!runtime || runtime.mcpToken !== token) {
+    if (!runtime || runtime.session.mcpToken !== token) {
       this.earlySkillReady.add(token);
       return;
     }
     if (!participant) return;
-    const late = runtime.skillChannel === "marker";
-    runtime.skillChannel = "tool";
+    const late = runtime.skills.skillChannel === "marker";
+    runtime.skills.skillChannel = "tool";
     participant.skillChannel = "tool";
-    for (const wake of runtime.skillReadyWaiters.splice(0)) wake();
-    runtime.log.info(`skills: the ${SKILL_TOOL_NAME} tool is available${late ? " (late; brief will be refreshed)" : ""}`);
+    for (const wake of runtime.skills.skillReadyWaiters.splice(0)) wake();
+    runtime.session.log.info(`skills: the ${SKILL_TOOL_NAME} tool is available${late ? " (late; brief will be refreshed)" : ""}`);
     this.push({ type: "participant", participant });
   }
 
   private async awaitSkillChannel(participant: Participant, runtime: AgentRuntime): Promise<void> {
-    if (runtime.skillChannel !== "pending") return;
-    const remaining = runtime.sessionStartedAt + SKILL_TOOL_READY_MS - Date.now();
+    if (runtime.skills.skillChannel !== "pending") return;
+    const remaining = runtime.session.sessionStartedAt + SKILL_TOOL_READY_MS - Date.now();
     if (remaining > 0) {
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, remaining);
-        runtime.skillReadyWaiters.push(() => {
+        runtime.skills.skillReadyWaiters.push(() => {
           clearTimeout(timer);
           resolve();
         });
       });
     }
-    if (runtime.skillChannel === "pending") {
-      runtime.skillChannel = "marker";
+    if (runtime.skills.skillChannel === "pending") {
+      runtime.skills.skillChannel = "marker";
       participant.skillChannel = "marker";
-      runtime.log.info("skills: no MCP tools listed in time; using the [skill:name] marker");
+      runtime.session.log.info("skills: no MCP tools listed in time; using the [skill:name] marker");
       this.push({ type: "participant", participant });
     }
   }
@@ -4320,7 +3946,6 @@ export class Room extends EventEmitter {
     const text = composeSkillBlock({ name: skill.skill.name, text: renderSkillBody(skill.skill.body, ""), extraFiles: skill.skill.extraFiles });
     this.commit({
       id: randomUUID(),
-      seq: ++this.seq,
       from: participant.id,
       fromName: participant.name,
       to: [],
@@ -4330,7 +3955,7 @@ export class Room extends EventEmitter {
       kind: "hidden",
       details: { skill: skill.skill.name, via: "tool", outcome: "delivered as a tool result" },
     });
-    runtime.log.info(`skills: "${skill.skill.name}" loaded through the tool`);
+    runtime.session.log.info(`skills: "${skill.skill.name}" loaded through the tool`);
     return { name: skill.skill.name, text };
   }
 
@@ -4349,250 +3974,130 @@ export class Room extends EventEmitter {
   skillChanged(name: string): void {
     for (const [id, runtime] of this.runtimes) {
       const participant = this.participants.get(id);
-      if (participant && this.hasSkill(participant, name)) runtime.skillCatalogPending = true;
+      if (participant && this.hasSkill(participant, name)) runtime.brief.skillCatalogPending = true;
     }
   }
 
-  private isSkillToolCall(runtime: AgentRuntime, params: RequestPermissionParams): boolean {
-    if (!runtime.mcpToken) return false;
-    const call = params.toolCall;
-    const known = runtime.turn?.message.toolCalls?.find((t) => t.toolCallId === call.toolCallId);
-    return canAutoApproveRoomTool(call, known, "tool_search", input => validArguments("tool_search", input)) || canAutoApproveMessageCheck(call, known) || canAutoApproveRoomTool(call, known, "memory",
-      input => Object.keys(input).every(key => ["action", "scope", "ticket", "notes", "reason", "acknowledge"].includes(key)) && (input.action === "read" || input.action === "revise")) || canAutoApproveRoomTool(call, known, SKILL_TOOL_NAME,
-      input => Object.keys(input).every(key => key === "name") && typeof input.name === "string" && !!input.name.trim())
-      || canAutoApproveRoomTool(call, known, "post_message", input => validArguments("post_message", input))
-      || ["register_background_task", "list_background_tasks", "get_background_task", "cancel_background_task"].some(name =>
-        canAutoApproveRoomTool(call, known, name, input => validArguments(name, input)))
-      || canAutoApproveRoomTool(call, known, "fix_diagram", () => true);
+  private turnBoundWork(): TurnLife {
+    const life = new TurnLife();
+    life.subscribe(this.completions.turnSubscriber());
+    life.subscribe(this.automations.turnSubscriber());
+    life.subscribe(this.diagramRepairs.turnSubscriber());
+    return life;
   }
 
-  private forgetRuntime(id: string): void {
-    this.finishAutomation(id, { status: "interrupted", detail: "The assigned session ended before the result was confirmed." });
-    this.giveUpRepairs(id, "all");
+  private forgetRuntime(id: string, expected?: AgentRuntime): void {
+    if (expected && this.runtimes.get(id) !== expected) return;
+    this.turnLife.sessionEnded(id);
     const runtime = this.runtimes.get(id);
-    if (runtime?.mcpToken) this.skills?.revokeToken(runtime.mcpToken);
-    if (runtime?.delayTimer) clearTimeout(runtime.delayTimer);
+    if (expected && runtime !== expected) return;
+    if (runtime?.session.mcpToken) this.skills?.revokeToken(runtime.session.mcpToken);
+    if (runtime) this.turnOrder.sessionEnded(id, runtime);
     this.runtimes.delete(id);
   }
 
   private requestTurn(id: string, addressed = false, missedNotice = false, backgroundCorrection = false, cause: "ordinary" | "native" | "resume" = "ordinary"): void {
-    if (this.recordHold) return;
-    const runtime = this.runtimes.get(id);
-    const participant = this.participants.get(id);
-    if (!runtime || !participant) return;
-    if (!backgroundCorrection && cause === "ordinary") runtime.independentPendingTurn = true;
-    if (!backgroundCorrection && runtime.backgroundCorrections?.length) runtime.backgroundBacklogPending = true;
-    runtime.pendingTurn = true;
-    runtime.missedNotice = missedNotice;
-    if (runtime.retiring) return;
-    if (participant.muted || this.focused) return;
-    if (participant.status === "error") {
-      const trouble = participant.trouble;
-      const canResume = addressed && runtime.agent.alive && trouble?.stage === "turn" && trouble.kind !== "crash";
-      if (!canResume) return;
-      this.clearTrouble(participant, "you wrote to it directly");
-    }
-    if (addressed && !runtime.addressed) {
-      runtime.addressed = true;
-      if (this.floorQueue.includes(id)) {
-        this.floorQueue.splice(this.floorQueue.indexOf(id), 1);
-        this.enqueueForFloor(id);
-      }
-    }
-    if (runtime.turnActive || runtime.workBusy || this.nativeLaneBlocked(runtime) || runtime.delayTimer || this.floorQueue.includes(id)) return;
-    const others = [...this.runtimes.keys()].filter((otherId) => otherId !== id && this.participants.get(otherId)?.status !== "left").length;
-    const roomDelay = others >= 1 ? (this.settings.replyDelay ?? 0) : 0;
-    const maxMs = Math.max(0, participant.replyDelay ?? roomDelay) * 1000;
-    const waitMs = maxMs > 0 ? Math.round(Math.random() * maxMs) : 0;
-    if (participant.status === "idle") {
-      participant.status = "queued";
-      this.push({ type: "participant", participant });
-    }
-    runtime.delayTimer = setTimeout(() => {
-      runtime.delayTimer = null;
-      this.tryStartTurn(id);
-    }, waitMs);
-    if (waitMs) runtime.log.info(`reply delay ${waitMs} ms`);
+    this.turnOrder.request(id, { addressed, missedNotice, backgroundCorrection, cause });
   }
 
   private tryStartTurn(id: string): void {
-    const runtime = this.runtimes.get(id);
-    if (!runtime || !runtime.pendingTurn || runtime.turnActive || runtime.workBusy || this.nativeLaneBlocked(runtime)) return;
-    if (this.humanIsTyping()) {
-      this.enqueueForFloor(id);
-      this.armTypingTimer();
-      return;
-    }
-    if (this.settings.turnTaking === "one-at-a-time" && this.speaking && this.speaking !== id) {
-      this.enqueueForFloor(id);
-      return;
-    }
-    void this.runTurn(id);
-  }
-
-  private enqueueForFloor(id: string): void {
-    if (this.floorQueue.includes(id)) return;
-    const runtime = this.runtimes.get(id);
-    if (runtime?.addressed) {
-      const firstPlain = this.floorQueue.findIndex((other) => !this.runtimes.get(other)?.addressed);
-      if (firstPlain >= 0) {
-        this.floorQueue.splice(firstPlain, 0, id);
-        return;
-      }
-    }
-    this.floorQueue.push(id);
-  }
-
-  private static readonly TYPING_HOLD_CAP_MS = 12_000;
-  private typingHoldSince = 0;
-
-  private humanIsTyping(): boolean {
-    return this.settings.waitWhileHumanTypes && Date.now() < this.humanTypingUntil && Date.now() - this.typingHoldSince < Room.TYPING_HOLD_CAP_MS;
+    const participant = this.participants.get(id), runtime = this.runtimes.get(id);
+    if (participant && runtime) this.turnOrder.tryStart({ id, participant, runtime });
   }
 
   humanTyping(): void {
-    if (Date.now() >= this.humanTypingUntil) this.typingHoldSince = Date.now();
-    this.humanTypingUntil = Date.now() + 4000;
-    this.armTypingTimer();
-  }
-
-  private armTypingTimer(): void {
-    if (this.typingTimer) return;
-    const wait = Math.max(50, this.humanTypingUntil - Date.now() + 20);
-    this.typingTimer = setTimeout(() => {
-      this.typingTimer = null;
-      if (this.humanIsTyping()) {
-        this.armTypingTimer();
-        return;
-      }
-      this.startNext();
-    }, wait);
+    this.turnOrder.humanTyping();
   }
 
   private startNext(): void {
-    if (this.humanIsTyping()) {
-      this.armTypingTimer();
-      return;
-    }
-    const oneAtATime = this.settings.turnTaking === "one-at-a-time";
-    if (oneAtATime && this.speaking) return;
-    while (this.floorQueue.length) {
-      const id = this.floorQueue.shift()!;
-      const runtime = this.runtimes.get(id);
-      const participant = this.participants.get(id);
-      if (!runtime || !participant || !runtime.pendingTurn || runtime.turnActive || runtime.workBusy || this.nativeLaneBlocked(runtime) || participant.muted || this.focused || participant.status === "error") continue;
-      void this.runTurn(id);
-      if (oneAtATime) return;
-    }
+    this.turnOrder.next();
   }
 
   private dropScheduledTurn(id: string): void {
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
-    if (!runtime?.workBusy && !runtime?.turnActive) this.finishAutomation(id, { status: "cancelled", detail: "Stopped before the task began." });
-    if (runtime) {
-      runtime.pendingTurn = false;
-      runtime.independentPendingTurn = false;
-      runtime.deferredNotesTurn = false;
-      runtime.addressed = false;
-      if (runtime.delayTimer) {
-        clearTimeout(runtime.delayTimer);
-        runtime.delayTimer = null;
-      }
-    }
-    const i = this.floorQueue.indexOf(id);
-    if (i >= 0) this.floorQueue.splice(i, 1);
-    if (participant && participant.status === "queued") {
-      participant.status = "idle";
-      this.push({ type: "participant", participant });
-    }
+    this.turnLife.turnDropped(id, runtime);
+    if (this.participants.get(id) !== participant || this.runtimes.get(id) !== runtime) return;
+    this.turnOrder.drop(id, runtime);
+    if (participant && presence.unqueue(participant)) this.push({ type: "participant", participant });
   }
 
   private async runTurn(id: string): Promise<void> {
     const participant = this.participants.get(id);
     const runtime = this.runtimes.get(id);
-    if (!participant || !runtime || runtime.turnActive || runtime.workBusy || this.nativeLaneBlocked(runtime)) return;
-    this.takeWork(runtime);
-    runtime.workCancelled = false;
-    this.speaking = id;
-    runtime.addressed = false;
-    const automation = this.automationTasks.get(id);
-    if (automation) automation.continuing = false;
-    const activeCompletion = this.activeBackgroundCompletions.get(id);
-    if (activeCompletion) activeCompletion.continuing = false;
+    if (!participant || !runtime || runtime.work.turnActive || runtime.work.workBusy || this.nativeLaneBlocked(runtime)) return;
+    const hold = this.takeWork(runtime);
+    runtime.work.workCancelled = false;
+    runtime.queue.addressed = false;
+    const turn: Turn = { id, runtime };
     try {
-      await this.runTurnInner(id, participant, runtime);
-    } finally {
-      const completion = this.activeBackgroundCompletions.get(id);
-      if (completion && (!completion.continuing || runtime.workCancelled || this.closing || runtime.retiring)) {
-        this.activeBackgroundCompletions.delete(id);
-        this.removeFinishedBackgroundCompletion(id, completion);
-        completion.finish(completion.confirmed && !runtime.workCancelled && !this.closing && !runtime.retiring, completion.messageId);
-      }
-      if (automation && this.automationTasks.get(id) === automation && (!automation.continuing || runtime.workCancelled || this.closing)) this.finishAutomation(id);
-      this.giveUpRepairs(id, "delivered");
-      if (this.speaking === id) this.speaking = null;
+      this.turnOrder.begin(turn);
       try {
-        if (participant.status === "queued") {
-          participant.status = "idle";
-          this.push({ type: "participant", participant });
-        }
+        this.turnLife.turnStarted(turn);
+        await this.runTurnInner(id, participant, hold);
       } finally {
-        await this.finishRuntimeWork(id, runtime);
+        try { this.turnLife.turnEnded(turn); }
+        finally { this.turnOrder.end(turn); }
+      }
+    } finally {
+      try {
+        if (presence.unqueue(participant)) this.push({ type: "participant", participant });
+      } finally {
+        await this.finishRuntimeWork(id, hold);
       }
     }
   }
 
-  private takeWork(runtime: AgentRuntime): void {
-    runtime.workBusy = true;
-    if (!runtime.workSettled) {
+  private takeWork(runtime: AgentRuntime): WorkHold {
+    runtime.work.workBusy = true;
+    if (!runtime.work.workSettled) {
       let resolve!: () => void;
       const promise = new Promise<void>((done) => { resolve = done; });
-      runtime.workSettled = { promise, resolve };
+      runtime.work.workSettled = { promise, resolve };
     }
+    return { runtime, gate: runtime.work.workSettled };
   }
 
-  private releaseWork(runtime: AgentRuntime): void {
-    runtime.workBusy = false;
-    const settled = runtime.workSettled;
-    runtime.workSettled = undefined;
-    settled?.resolve();
+  private releaseWork(hold: WorkHold): void {
+    if (holdsWork(hold)) {
+      hold.runtime.work.workBusy = false;
+      hold.runtime.work.workSettled = undefined;
+    }
+    hold.gate.resolve();
   }
 
-  private async finishRuntimeWork(id: string, runtime: AgentRuntime): Promise<void> {
-    let owner = runtime;
-    try { owner = await this.applyPendingConfig(id, runtime) ?? runtime; }
-    finally { this.resumeRuntimeWork(id, owner); this.startNext(); }
+  private async finishRuntimeWork(id: string, hold: WorkHold): Promise<void> {
+    try { await this.agentConfig.applyPending(id, hold); }
+    finally { this.resumeRuntimeWork(id, hold); this.startNext(); }
   }
 
-  private resumeRuntimeWork(id: string, runtime: AgentRuntime): void {
-    this.releaseWork(runtime);
-    if (this.closing || runtime.retiring || this.runtimes.get(id) !== runtime || !runtime.agent.alive) return;
+  private resumeRuntimeWork(id: string, hold: WorkHold): void {
+    const runtime = hold.runtime;
+    this.releaseWork(hold);
+    if (this.closing || runtime.session.retiring || this.runtimes.get(id) !== runtime || !runtime.session.agent.alive) return;
     this.drainNativeReports(id, runtime);
-    if (runtime.workBusy || this.nativeLaneBlocked(runtime)) return;
-    if (this.resumeDeferredNotes(id, runtime)) return;
+    if (runtime.work.workBusy || this.nativeLaneBlocked(runtime)) return;
+    if (this.agentNotes.resumeDeferred(id, runtime)) return;
     const participant = this.participants.get(id);
     if (!participant || participant.muted || this.focused || participant.status === "error" || this.recordHold) {
-      runtime.promptedThisWork = false;
+      runtime.work.promptedThisWork = false;
       return;
     }
-    if (runtime.backgroundCorrections?.length && !this.automationTasks.has(id)) {
+    if (runtime.native.backgroundCorrections?.length && !this.automations.has(id)) {
       this.requestTurn(id, false, false, true);
-    } else if (this.backgroundCompletions.get(id)?.length) {
+    } else if (this.completions.waiting(id)) {
       this.requestTurn(id);
-    } else if (runtime.notesPending && this.settings.autoNotes && !runtime.workCancelled) {
-      runtime.notesPending = false;
-      void this.takeNotes(id).catch(error => runtime.log.warn(`notes: hidden turn failed: ${describeError(error)}`));
-    } else if (runtime.pendingTurn) {
+    } else if (this.agentNotes.startPending(id, runtime)) {
+    } else if (runtime.queue.pendingTurn) {
       this.requestTurn(id, false, false, false, "resume");
     } else if (this.missedWhileWorking(id, runtime)) {
       this.requestTurn(id, false, true);
     }
-    runtime.promptedThisWork = false;
+    runtime.work.promptedThisWork = false;
   }
 
   private missedWhileWorking(id: string, runtime: AgentRuntime): boolean {
-    if (!this.settings.missedMessagesNotice || !runtime.promptedThisWork || runtime.missedNotice || runtime.workCancelled) return false;
+    if (!this.settings.missedMessagesNotice || !runtime.work.promptedThisWork || runtime.queue.missedNotice || runtime.work.workCancelled) return false;
     const participant = this.participants.get(id);
     if (!participant || participant.muted || participant.status === "error" || this.focused || this.recordHold) return false;
     if (!this.missedChat(id, runtime).length) return false;
@@ -4603,11 +4108,11 @@ export class Room extends EventEmitter {
   }
 
   private missedChat(id: string, runtime: AgentRuntime): ChatMessage[] {
-    return this.messages.filter(m => m.kind === "chat" && m.from !== id && m.audience !== "human" && !m.streaming && m.seq > runtime.lastSeenSeq);
+    return this.messages.filter(m => m.kind === "chat" && m.from !== id && m.audience !== "human" && !m.streaming && m.seq > runtime.reading.lastSeenSeq);
   }
 
   private noticeOnly(id: string, runtime: AgentRuntime): boolean {
-    return !!runtime.missedNotice && !this.automationTasks.has(id) && !this.repairTasks.has(id);
+    return !!runtime.queue.missedNotice && !this.automations.has(id) && !this.diagramRepairs.has(id);
   }
 
   private addressedIn(id: string, messages: readonly ChatMessage[]): number[] {
@@ -4620,9 +4125,9 @@ export class Room extends EventEmitter {
     for (const [otherId, other] of this.runtimes) {
       if (otherId === id) continue;
       const p = this.participants.get(otherId);
-      if (!p || p.kind !== "agent" || p.muted || !other.agent.alive || other.retiring || p.status === "left" || p.status === "error") continue;
-      if (other.turnActive || other.workBusy) midTurn.push(p.name);
-      else if (this.settings.turnTaking !== "one-at-a-time" && (other.pendingTurn || other.delayTimer || this.floorQueue.includes(otherId) || p.status === "queued")) starting.push(p.name);
+      if (!p || p.kind !== "agent" || p.muted || !other.session.agent.alive || other.session.retiring || p.status === "left" || p.status === "error") continue;
+      if (other.work.turnActive || other.work.workBusy) midTurn.push(p.name);
+      else if (this.settings.turnTaking !== "one-at-a-time" && (other.queue.pendingTurn || other.queue.delayTimer || this.turnOrder.waiting({ id: otherId, participant: p, runtime: other }) || p.status === "queued")) starting.push(p.name);
     }
     if (!starting.length && !midTurn.length) return null;
     const clauses: string[] = [];
@@ -4634,28 +4139,24 @@ export class Room extends EventEmitter {
   private ordinaryWakeDisposition(wake: OrdinaryWakeClaim, participant: Participant, runtime: AgentRuntime): "allowed" | "suppressed" | "held" {
     if (wake.independent) return "allowed";
     try { return wake.native.some(ref => this.nativePromptEligible(ref, participant, runtime)) ? "allowed" : "suppressed"; }
-    catch { this.nativeFault(participant.id, "native_route_authority_unknown"); return "held"; }
+    catch { this.nativeFault({ id: participant.id, participant, runtime }, "native_route_authority_unknown"); return "held"; }
   }
 
   private consumeNativeWake(runtime: AgentRuntime, captured: readonly NativeObligationRef[]): void {
     const same = (a: NativeObligationRef, b: NativeObligationRef) => a.obligationId === b.obligationId && a.subject.id === b.subject.id
       && a.subject.roomUuid === b.subject.roomUuid && a.subject.reportHash === b.subject.reportHash;
-    runtime.nativePromptObligations = (runtime.nativePromptObligations ?? []).filter(ref => !captured.some(old => same(old, ref)));
+    runtime.native.nativePromptObligations = (runtime.native.nativePromptObligations ?? []).filter(ref => !captured.some(old => same(old, ref)));
+  }
+
+  private dispatchHeld(owner: DispatchOwner): boolean {
+    const { participant, runtime, turn } = owner;
+    return this.dispatchOwnerCurrent(participant, runtime, !!turn.hidden) && runtime.work.turn === turn && holdsWork(owner);
   }
 
   private dispatchOwnerCurrent(participant: Participant, runtime: AgentRuntime, hidden: boolean): boolean {
     return !this.closing && !this.readOnly && this.participants.get(participant.id) === participant && this.runtimes.get(participant.id) === runtime
-      && runtime.agent.alive && !runtime.retiring && !runtime.workCancelled
+      && runtime.session.agent.alive && !runtime.session.retiring && !runtime.work.workCancelled
       && (hidden || !participant.muted && !this.focused);
-  }
-
-  private resumeDeferredNotes(id: string, runtime: AgentRuntime): boolean {
-    if (!runtime.deferredNotesTurn || this.closing || this.readOnly || runtime.workCancelled || runtime.retiring
-      || this.runtimes.get(id) !== runtime || !runtime.agent.alive || runtime.workBusy || runtime.turnActive || this.nativeLaneBlocked(runtime)) return false;
-    runtime.deferredNotesTurn = false;
-    runtime.notesPending = false;
-    void this.takeNotes(id).catch(error => runtime.log.warn(`notes: deferred hidden turn failed: ${describeError(error)}`));
-    return true;
   }
 
   private ordinaryPreparationCurrent(plan: OrdinaryPromptPreparation): boolean {
@@ -4664,224 +4165,296 @@ export class Room extends EventEmitter {
   }
 
   private preparationFields(runtime: AgentRuntime): PreparationFields {
-    return { missedNotice: runtime.missedNotice, promptedThisWork: runtime.promptedThisWork, turnStartSeq: runtime.turnStartSeq,
-      lastSeenSeq: runtime.lastSeenSeq, notesDue: runtime.notesDue, notesAskedThisTurn: runtime.notesAskedThisTurn,
-      instructionRevisions: runtime.instructionRevisions, skillCatalogPending: runtime.skillCatalogPending, memoryStamp: runtime.memoryStamp,
-      memoryGraphStamp: runtime.memoryGraphStamp, briefPending: runtime.briefPending, turnsSinceBrief: runtime.turnsSinceBrief,
-      briefSentThisTurn: runtime.briefSentThisTurn, lastBriefSeq: runtime.lastBriefSeq, resumeNotes: runtime.resumeNotes,
-      firstTurnDone: runtime.firstTurnDone, replayOwnUntilSeq: runtime.replayOwnUntilSeq };
+    return preparationFields(runtime);
   }
+
+  private readonly turnDispatch: TurnDispatchPorts = {
+    startTurn: (owner) => {
+      if (!this.dispatchHeld(owner)) return false;
+      const { participant } = owner;
+      presence.startTurn(participant);
+      this.push({ type: "participant", participant });
+      return true;
+    },
+    holdDraft: (draft) => { this.drafts.set(draft.id, draft); },
+    releaseDraft: (draft) => { this.drafts.delete(draft.id); },
+    turnDiscarded: (participant, runtime) => {
+      if (this.runtimes.get(participant.id) === runtime && this.participants.get(participant.id) === participant && presence.quietTurnEnded(participant)) {
+        this.push({ type: "participant", participant });
+      }
+    },
+    ownerCurrent: (owner) => this.dispatchHeld(owner),
+    nativeLaneBlocked: (runtime) => this.nativeLaneBlocked(runtime),
+    wakeDisposition: (wake, participant, runtime) => this.ordinaryWakeDisposition(wake, participant, runtime),
+    consumeNativeWake: (runtime, refs) => this.consumeNativeWake(runtime, refs),
+    preparationCurrent: (plan) => this.ordinaryPreparationCurrent(plan),
+    nativeEligible: (ref, participant, runtime) => this.nativePromptEligible(ref, participant, runtime),
+    startNative: (ref, participant, runtime) => this.startNativePrompt(ref, participant, runtime),
+    nativeTransition: (ref, phase) => this.nativeTransition(ref, phase),
+    nativeFault: (participant, runtime, reason) => this.nativeFault({ id: participant.id, participant, runtime }, reason),
+    recordPrompt: (draft, participant, blocks, hidden, correction, extras) => {
+      if (this.roomSettings.recordPrompts) this.recordPrompt(draft.id, participant, blocks, hidden, correction, extras.memorySearch);
+    },
+    send: (owner, blocks, extras) => {
+      const { participant, runtime, turn } = owner, hidden = !!extras.hidden;
+      if (!this.dispatchHeld(owner)) return { unsent: "gone" };
+      if (this.nativeLaneBlocked(runtime)) return { unsent: "deferred" };
+      if (extras.ordinaryPreparation) {
+        this.commitOrdinaryPreparation(participant, runtime, extras.ordinaryPreparation);
+        turn.messagesFromSeq = runtime.reading.lastSeenSeq;
+      }
+      if (!hidden) this.completions.confirmed(participant.id, false);
+      runtime.work.usageSeenThisTurn = false;
+      runtime.work.fixedDiagramThisTurn = false;
+      this.silence.watch();
+      return { sent: runtime.session.agent.prompt(runtime.session.sessionId, blocks) };
+    },
+    metadata: (owner, extras, epoch) => {
+      const { participant, runtime } = owner, failures: unknown[] = [];
+      if (extras.ordinaryPreparation && this.runtimes.get(participant.id) === runtime) {
+        try { this.registerPendingBodies(participant, extras.ordinaryPreparation.bodies); }
+        catch (error) { failures.push(error); }
+      }
+      if (!extras.hidden && this.runtimes.get(participant.id) === runtime) {
+        try { this.recordBodySupply(participant.id, extras.supplied ?? [], epoch); }
+        catch (error) { failures.push(error); }
+      }
+      return failures;
+    },
+    log: (runtime, text) => runtime.session.log.warn(text),
+  };
+
+  private publicationHeld(owner: PublicationOwner): boolean {
+    const { participant, runtime } = owner, id = participant.id;
+    if (this.participants.get(id) !== participant) return false;
+    if (owner.phase === "background") return this.runtimes.get(id) === runtime && !runtime.work.turn && !runtime.work.turnActive && !runtime.work.workBusy;
+    const holder = this.runtimes.get(id);
+    return (!holder || holder === runtime) && holdsWork(owner);
+  }
+
+  private publicationOpen(owner: PublicationOwner): boolean {
+    return !this.closing && this.publicationHeld(owner);
+  }
+
+  private readonly turnPublication: TurnPublication = new TurnPublication({
+    held: (owner) => this.publicationHeld(owner),
+    withdraw: (draft, retry) => {
+      this.push({ type: "message.removed", id: draft.id });
+      if (retry) this.closeRetry(retry, "the session was replaced; nothing was posted");
+    },
+    humanName: () => this.humanName,
+    refereeAction: () => this.settings.refereeAction,
+    referee: (participant, text) => this.referee(participant, text),
+    mentions: (text) => this.parseMentions(text),
+    correctionHeader: (participant) => buildHeader(this.roomSettings.effective(), this.personaOf(participant), this.roster(), this.hops, [
+      "your last reply was not posted; see the correction below",
+    ]),
+    postedAfter: (messageId, ts) => this.messages.some((x) => x.kind === "chat" && x.id !== messageId && x.ts > ts),
+    resolveSkill: (participant, name) => this.resolveAgentSkill(participant, name),
+    commit: (owner, draft) => this.publicationHeld(owner) ? this.commit(draft) : null,
+    push: (owner, event) => {
+      if (!this.publicationHeld(owner)) return false;
+      this.push(event);
+      return true;
+    },
+    postRoomEvent: (owner, text, audience, wakes, details) => this.publicationHeld(owner) ? this.postRoomEvent(text, audience, wakes, details) : null,
+    postSystem: (owner, text, audience, wakes, details) => this.publicationHeld(owner) ? this.postSystem(text, audience, wakes, details) : null,
+    notice: (owner, text, level) => {
+      if (!this.publicationHeld(owner)) return false;
+      this.notice(text, level);
+      return true;
+    },
+    closeRetry: (owner, retry, outcome) => {
+      if (!this.publicationHeld(owner)) return false;
+      this.closeRetry(retry, outcome);
+      return true;
+    },
+    compaction: (owner, used, size) => {
+      if (!this.publicationHeld(owner)) return false;
+      this.checkForCompaction(owner.participant, owner.runtime, used, size);
+      return true;
+    },
+    keepNotes: (owner, notes, via) => !this.publicationHeld(owner) ? "refused" : this.agentNotes.keep(owner.participant, owner.runtime, notes, via) ? "kept" : "none",
+    askNotes: (owner, how) => this.publicationOpen(owner) && this.agentNotes.ask(owner.runtime, how),
+    contextFull: (owner, detail) => {
+      if (!this.publicationOpen(owner)) return false;
+      this.contextFull(owner.participant, owner.runtime, detail);
+      return true;
+    },
+    requestTurn: (owner) => {
+      if (!this.publicationOpen(owner)) return false;
+      this.requestTurn(owner.participant.id);
+      return true;
+    },
+    route: (owner, message) => {
+      if (!this.publicationOpen(owner)) return false;
+      this.route(message);
+      return true;
+    },
+    queueBackgroundCorrection: (owner, retry) => {
+      if (!this.publicationOpen(owner)) return false;
+      this.queueBackgroundCorrection(owner.participant.id, owner.runtime, retry);
+      return true;
+    },
+    unconfirmed: (owner, messageId, retry, reportHash) => {
+      this.unconfirmedBackground.set(messageId, { participant: owner.participant, runtime: owner.runtime, retry, reportHash, due: false });
+    },
+    automationAssigned: (id) => this.automations.has(id),
+    automationEnded: (owner, outcome) => {
+      if (!this.publicationHeld(owner)) return false;
+      this.automations.ended(owner.participant.id, outcome);
+      return true;
+    },
+    automationFailed: (owner, detail) => {
+      if (!this.publicationHeld(owner)) return false;
+      this.automations.failed(owner.participant.id, detail);
+      return true;
+    },
+    automationDelivered: (owner, stored, messageId) => {
+      if (!this.publicationHeld(owner)) return false;
+      this.automations.delivered(owner.participant.id, stored, messageId);
+      return true;
+    },
+    automationContinuing: (owner, value) => {
+      if (!this.publicationHeld(owner)) return false;
+      this.automations.continuing(owner.participant.id, value);
+      return true;
+    },
+    completionCarried: (id) => this.completions.carriedBy(id),
+    completionConfirmed: (owner, value) => {
+      if (!this.publicationHeld(owner)) return false;
+      this.completions.confirmed(owner.participant.id, value);
+      return true;
+    },
+    completionContinuing: (owner, value) => {
+      if (!this.publicationHeld(owner)) return false;
+      this.completions.continuing(owner.participant.id, value);
+      return true;
+    },
+  });
+
+  private readonly turnPreparation: TurnPreparationPorts = {
+    messages: () => this.messages,
+    seq: () => this.seq,
+    messageCheckRevision: () => this.messageCheckRevision,
+    settings: () => this.settings,
+    effectiveSettings: () => this.roomSettings.effective(),
+    persona: (participant) => this.personaOf(participant),
+    roster: () => this.roster(),
+    skillsForPrompt: (owner) => this.skillsForPrompt(owner.participant, owner.runtime),
+    memory: (scope) => this.history.memory.read(scope === "user" ? "user" : `room:${this.uuid}`),
+    memoryGraph: (addressed, seqs) => this.memoryGraph(this.id, addressed, seqs),
+    memoryWhy: (addressed) => this.memoryWhy(this.id, addressed),
+    addressedIn: (id, messages) => this.addressedIn(id, messages),
+    noticeOnly: (owner) => this.noticeOnly(owner.participant.id, owner.runtime),
+    missedChat: (owner) => this.missedChat(owner.participant.id, owner.runtime),
+    automationHas: (id) => this.automations.has(id),
+    repairsHas: (id) => this.diagramRepairs.has(id),
+    parallelNote: (id) => this.parallelWorkNote(id),
+    hops: () => this.hops,
+    readOnly: () => this.readOnly,
+    connections: () => this.connections(this.uuid),
+    notesForBrief: (owner) => this.agentNotes.forBrief(owner.participant, owner.runtime),
+    earlierChats: (beforeSeq) => this.messages.reduce((count, m) => count + Number(m.seq < beforeSeq && m.kind === "chat" && !m.streaming && visibleToAgents(m)), 0),
+    render: { text: (m) => this.backlogText(m), audio: (m) => this.backlogAudio(m), video: (m) => this.backlogVideo(m), attachmentPath: (a) => this.attachmentPath(a) },
+    promptBlocks: (prompt, runtime) => this.promptBlocks(prompt, runtime),
+    automationBlock: (id) => this.automations.block(id),
+    completionBlock: (completion) => this.completions.block(completion),
+    pendingRepairs: (id) => this.diagramRepairs.pendingFor(id),
+    repairBlock: (task) => this.diagramRepairs.block(task),
+    log: (owner, text) => {
+      if (this.closing || this.participants.get(owner.participant.id) !== owner.participant || this.runtimes.get(owner.participant.id) !== owner.runtime) return false;
+      owner.runtime.session.log.info(text);
+      return true;
+    },
+  };
 
   private commitOrdinaryPreparation(participant: Participant, runtime: AgentRuntime, plan: OrdinaryPromptPreparation): void {
-    const effects: PreparationFields = runtime;
-    const apply = <K extends PreparationField>(field: K): void => {
-      if (effects[field] === plan.expected[field]) effects[field] = plan.next[field];
-    };
-    apply("missedNotice"); apply("promptedThisWork"); apply("turnStartSeq"); apply("lastSeenSeq");
-    apply("notesDue"); apply("notesAskedThisTurn"); apply("instructionRevisions"); apply("skillCatalogPending");
-    apply("memoryStamp"); apply("memoryGraphStamp"); apply("briefPending"); apply("turnsSinceBrief");
-    apply("briefSentThisTurn"); apply("lastBriefSeq"); apply("resumeNotes"); apply("firstTurnDone"); apply("replayOwnUntilSeq");
-    if (runtime.headerNotes === plan.headerArray && plan.headers.every((line, i) => runtime.headerNotes[i] === line)) runtime.headerNotes.splice(0, plan.headers.length);
-    if (runtime.pendingSkills === plan.skillArray && plan.skills.every((skill, i) => runtime.pendingSkills[i] === skill)) runtime.pendingSkills.splice(0, plan.skills.length);
+    const { expected: was, next } = plan;
+    const { queue, work, reading, notes, brief, session } = runtime;
+    compareAndSet(queue, "missedNotice", was.missedNotice, next.missedNotice);
+    compareAndSet(work, "promptedThisWork", was.promptedThisWork, next.promptedThisWork);
+    compareAndSet(reading, "turnStartSeq", was.turnStartSeq, next.turnStartSeq);
+    compareAndSet(reading, "lastSeenSeq", was.lastSeenSeq, next.lastSeenSeq);
+    compareAndSet(notes, "notesDue", was.notesDue, next.notesDue);
+    compareAndSet(notes, "notesAskedThisTurn", was.notesAskedThisTurn, next.notesAskedThisTurn);
+    compareAndSet(brief, "instructionRevisions", was.instructionRevisions, next.instructionRevisions);
+    compareAndSet(brief, "skillCatalogPending", was.skillCatalogPending, next.skillCatalogPending);
+    compareAndSet(brief, "memoryStamp", was.memoryStamp, next.memoryStamp);
+    compareAndSet(brief, "memoryGraphStamp", was.memoryGraphStamp, next.memoryGraphStamp);
+    compareAndSet(brief, "briefPending", was.briefPending, next.briefPending);
+    compareAndSet(brief, "turnsSinceBrief", was.turnsSinceBrief, next.turnsSinceBrief);
+    compareAndSet(brief, "briefSentThisTurn", was.briefSentThisTurn, next.briefSentThisTurn);
+    compareAndSet(brief, "lastBriefSeq", was.lastBriefSeq, next.lastBriefSeq);
+    compareAndSet(notes, "resumeNotes", was.resumeNotes, next.resumeNotes);
+    compareAndSet(session, "firstTurnDone", was.firstTurnDone, next.firstTurnDone);
+    compareAndSet(reading, "replayOwnUntilSeq", was.replayOwnUntilSeq, next.replayOwnUntilSeq);
+    if (runtime.brief.headerNotes === plan.headerArray && plan.headers.every((line, i) => runtime.brief.headerNotes[i] === line)) runtime.brief.headerNotes.splice(0, plan.headers.length);
+    if (runtime.skills.pendingSkills === plan.skillArray && plan.skills.every((skill, i) => runtime.skills.pendingSkills[i] === skill)) runtime.skills.pendingSkills.splice(0, plan.skills.length);
     if (plan.brief) participant.briefsSent = (participant.briefsSent ?? 0) + 1;
-    for (const task of plan.repairs) if (this.repairTasks.get(participant.id)?.includes(task)) task.delivered = true;
-    if (plan.completion) { plan.completion.continuing = false; plan.completion.confirmed = false; }
+    for (const task of plan.repairs) this.diagramRepairs.delivered(participant.id, task);
+    if (plan.completion) this.completions.prepared(participant.id, plan.completion);
   }
 
-  private async runTurnInner(id: string, participant: Participant, runtime: AgentRuntime): Promise<void> {
-    runtime.pendingTurn = false;
-    if (!runtime.agent.alive || participant.muted || this.focused || runtime.workCancelled) return;
-    const correction = !this.automationTasks.has(id) && !this.activeBackgroundCompletions.has(id) ? runtime.backgroundCorrections?.shift() : undefined;
+  private async runTurnInner(id: string, participant: Participant, hold: WorkHold): Promise<void> {
+    const runtime = hold.runtime;
+    runtime.queue.pendingTurn = false;
+    if (!runtime.session.agent.alive || participant.muted || this.focused || runtime.work.workCancelled) return;
+    const correction = !this.automations.has(id) && !this.completions.carriedBy(id) ? runtime.native.backgroundCorrections?.shift() : undefined;
     if (correction) {
-      const backlogPending = runtime.backgroundBacklogPending;
-      runtime.backgroundBacklogPending = false;
-      await this.executeTurn(participant, runtime, [{ type: "text", text: correction.prompt }], correction);
-      if (runtime.backgroundCorrections?.includes(correction)) runtime.backgroundBacklogPending ||= backlogPending;
-      if (backlogPending || runtime.backgroundCorrections?.length) runtime.pendingTurn = true;
+      const backlogPending = runtime.native.backgroundBacklogPending;
+      runtime.native.backgroundBacklogPending = false;
+      await this.executeTurn(participant, hold, [{ type: "text", text: correction.prompt }], correction);
+      if (runtime.native.backgroundCorrections?.includes(correction)) runtime.native.backgroundBacklogPending ||= backlogPending;
+      if (backlogPending || runtime.native.backgroundCorrections?.length) runtime.queue.pendingTurn = true;
       return;
     }
-    const wake: OrdinaryWakeClaim = { independent: !!runtime.independentPendingTurn || this.automationTasks.has(id)
-      || this.repairTasks.has(id) || !!this.backgroundCompletions.get(id)?.length, native: [...(runtime.nativePromptObligations ?? [])] };
-    runtime.independentPendingTurn = false;
+    const wake: OrdinaryWakeClaim = { independent: !!runtime.queue.independentPendingTurn || this.automations.has(id)
+      || this.diagramRepairs.has(id) || this.completions.waiting(id), native: [...(runtime.native.nativePromptObligations ?? [])] };
+    runtime.queue.independentPendingTurn = false;
     const admission = this.ordinaryWakeDisposition(wake, participant, runtime);
     if (admission !== "allowed") {
       if (admission === "suppressed") this.consumeNativeWake(runtime, wake.native);
-      else runtime.pendingTurn = true;
+      else runtime.queue.pendingTurn = true;
       return;
     }
     await this.awaitSkillChannel(participant, runtime);
     if (this.settings.remembers && !this.noticeOnly(id, runtime)) {
-      await this.memoryGraphReady(this.id, this.addressedIn(id, this.messages.filter(m => m.seq > runtime.lastSeenSeq)));
+      await this.memoryGraphReady(this.id, this.addressedIn(id, this.messages.filter(m => m.seq > runtime.reading.lastSeenSeq)));
     }
-    if (!runtime.agent.alive || runtime.retiring || this.runtimes.get(id) !== runtime || participant.muted || this.focused || runtime.workCancelled) return;
+    if (!runtime.session.agent.alive || runtime.session.retiring || this.runtimes.get(id) !== runtime || participant.muted || this.focused || runtime.work.workCancelled) return;
 
-    const completion = !this.automationTasks.has(id) ? this.backgroundCompletions.get(id)?.[0] : undefined;
-    if (completion && !completion.claimed) {
-      try {
-        if (!this.history.hasMessageId(this.id, completion.messageId)) {
-          const pending = this.messages.find(message => message.id === completion.messageId);
-          let stored: StoreOutcome;
-          if (pending) stored = this.persist({ kind: "upsert", message: pending });
-          else {
-            const notice: ChatMessage = { id: completion.messageId, seq: ++this.seq, from: "system", fromName: "",
-              to: [id], toNames: [participant.name], text: `Background task finished · ${completion.description}`,
-              ts: Date.now(), kind: "system", audience: "human", details: { agentId: id } };
-            stored = this.commit(notice);
-          }
-          if (stored !== "record") { this.removeFinishedBackgroundCompletion(id, completion); return; }
-        }
-        if (!completion.claim(completion.messageId)) {
-          this.removeFinishedBackgroundCompletion(id, completion);
-          runtime.pendingTurn = true;
-          runtime.independentPendingTurn ||= wake.independent;
-          return;
-        }
-      } catch (error) {
-        this.removeFinishedBackgroundCompletion(id, completion);
-        runtime.log.warn(`background completion is waiting for storage: ${describeError(error)}`);
-        return;
+    const queued = !this.automations.has(id) ? this.completions.next(id) : undefined;
+    const claim = queued && this.completions.claim(id, queued);
+    if (claim && claim.kind !== "carried") {
+      if (claim.kind === "refused") {
+        runtime.queue.pendingTurn = true;
+        runtime.queue.independentPendingTurn ||= wake.independent;
       }
-      completion.claimed = true;
-      this.activeBackgroundCompletions.set(id, completion);
+      if (claim.kind === "failed") runtime.session.log.warn(`background completion is waiting for storage: ${describeError(claim.error)}`);
+      return;
     }
+    const completion = claim ? claim.completion : undefined;
 
     const beforePreparation = this.ordinaryWakeDisposition(wake, participant, runtime);
     if (beforePreparation !== "allowed") {
       if (beforePreparation === "suppressed") this.consumeNativeWake(runtime, wake.native);
-      else runtime.pendingTurn = true;
+      else runtime.queue.pendingTurn = true;
       return;
     }
 
-    const unreadAll = this.messages.filter(
-      (m) => m.kind !== "hidden" && m.audience !== "human" && m.seq > runtime.lastSeenSeq && (m.kind === "system" || m.from !== id || m.seq <= runtime.replayOwnUntilSeq),
-    );
-    if (!unreadAll.some((m) => m.kind === "chat" || m.wakes) && !this.automationTasks.has(id) && !this.repairTasks.has(id) && !completion) return;
-    const missed = this.noticeOnly(id, runtime) ? this.missedChat(id, runtime).length : 0;
-    const expected = this.preparationFields(runtime), preparedThrough = this.seq;
-    const sourceRevision = this.messageCheckRevision, sourceRows = unreadAll.map(row => ({ row, stamp: JSON.stringify(row) }));
-    const headerArray = runtime.headerNotes, headers = [...headerArray];
-    const skillArray = runtime.pendingSkills, attached = [...skillArray];
-    const nativeHeaders = [...(runtime.nativeHeaderObligations ?? [])];
-    const cap = this.settings.backlogCap;
-    const omitted = missed ? 0 : Math.max(0, unreadAll.length - cap);
-    const unread = missed ? [] : omitted ? unreadAll.slice(omitted) : unreadAll;
-    const supplied = bodyRefs(unread);
-
-    const persona = this.personaOf(participant);
-    const roster = this.roster();
-    const settings = this.effectiveSettings();
-    const tokensSinceBrief = runtime.lastUsed - runtime.usedAtBrief;
-    const userMemory = this.history.memory.read("user"), roomMemory = this.history.memory.read(`room:${this.uuid}`);
-    const memoryStamp = `${userMemory.revision}:${roomMemory.revision}`;
-    let briefReason: string | null = null;
-    if (!runtime.firstTurnDone || !runtime.instructionRevisions) briefReason = "first turn";
-    else if (runtime.briefPending) briefReason = runtime.briefPending;
-    else if (runtime.turnsSinceBrief >= this.settings.fullBriefEveryTurns) briefReason = `every ${this.settings.fullBriefEveryTurns} turns`;
-    else if (tokensSinceBrief >= this.settings.fullBriefEveryTokens) briefReason = `${tokensSinceBrief} tokens since last brief`;
-
-    const skillsForPrompt = this.skillsForPrompt(participant, runtime);
-    const contents = buildInstructionContents(settings, persona, roster, skillsForPrompt);
-    const delivery = planInstructionDelivery(contents, runtime.instructionRevisions, briefReason !== null, runtime.skillCatalogPending);
-    const sendMemory = delivery.full || runtime.memoryStamp !== memoryStamp;
-    const memoryGraph = this.settings.remembers ? this.memoryGraph(this.id, this.addressedIn(id, unread), unread.map(m => m.seq)) : null;
-    const sendMemoryGraph = !!memoryGraph && (delivery.full || runtime.memoryGraphStamp !== memoryGraph.revision);
-
-    const notes = [...headers];
-    if (missed) notes.push(`${missed} message${missed === 1 ? "" : "s"} arrived while you were working; none was addressed to you. Read ${missed === 1 ? "it" : "them"} with check_room if the conversation may concern you, then answer or reply [silent]. Either way ${missed === 1 ? "it arrives" : "they arrive"} again with your next turn.`);
-    const parallelNote = this.parallelWorkNote(id);
-    if (parallelNote) notes.push(parallelNote);
-    const notesDue = runtime.notesDue || !!(this.settings.autoNotes && briefReason && overThreshold(runtime.lastUsed, participant.contextSize ?? 0));
-    if (notesDue) notes.push(NOTES_REQUEST);
-    if (briefReason && runtime.firstTurnDone) {
-      if (briefReason.startsWith("requested")) notes.push("full brief re-sent as requested");
-      else notes.push(`full brief re-attached (${briefReason})`);
+    const prepared = await prepareOrdinaryTurn({ participant, runtime }, { wake, ...(completion ? { completion } : {}) }, this.turnPreparation);
+    if (prepared.kind === "nothing") return;
+    if (!this.dispatchOwnerCurrent(participant, runtime, false) || !holdsWork(hold)) return;
+    if (this.nativeLaneBlocked(runtime)) {
+      runtime.queue.independentPendingTurn ||= wake.independent;
+      runtime.queue.pendingTurn = true;
+      return;
     }
-    if (!delivery.full) {
-      const updated = [delivery.brief && "room-brief", delivery.roomRules && "room-rules", delivery.vibio && "vibio"].filter(Boolean);
-      if (updated.length) notes.push(`instructions updated (${updated.join(", ")}); each supplied block replaces its previous version`);
-      if (sendMemory) notes.push("shared memory changed");
-      if (sendMemoryGraph) notes.push("memory-graph refreshed; it replaces the previous memory-graph block");
-    }
-    notes.push(`instruction versions: room-rules=${delivery.revisions.roomRules}, vibio=${delivery.revisions.vibio}`);
-    if (runtime.skillCatalogPending) notes.push("your skill library changed; reload an affected skill before using its instructions again");
-    for (const s of attached) {
-      notes.push(s.invokedBy ? `${s.invokedBy} invoked your skill "${s.name}"; its instructions are attached below, follow them` : `skill "${s.name}" attached below as you asked; the same messages follow`);
-    }
-    const offerHistoryNotice = !missed && runtime.historyNoticePending && skillsForPrompt?.channel === "tool" && !this.readOnly;
-    if (offerHistoryNotice) {
-      const firstShownSeq = Math.min(...unread.map(m => m.seq));
-      const earlier = this.messages.reduce((count, m) => count + Number(
-        m.seq < firstShownSeq && m.kind === "chat" && !m.streaming && visibleToAgents(m),
-      ), 0);
-      if (earlier) notes.push(`${earlier} earlier chat message${earlier === 1 ? " is" : "s are"} outside this prompt; use search_history to find ${earlier === 1 ? "it" : "them"}.`);
-    }
-    const seesImages = runtime.agent.acceptsImages;
-    const backlogImages = (m: ChatMessage): BacklogImage[] | undefined => {
-      if (!m.images || !m.images.length) return undefined;
-      const attached = seesImages && (m.to.length === 0 || m.to.includes(id));
-      return m.images.map((a, i) => ({ n: a.n ?? i + 1, ref: `#${m.seq}.${a.n ?? i + 1}`, name: a.name, path: this.attachmentPath(a), mimeType: a.mimeType, attached, forNames: m.to.length ? m.toNames : [] }));
-    };
-    const backlogQuotes = (m: ChatMessage): BacklogQuote[] | undefined =>
-      m.quotes && m.quotes.length ? m.quotes.map((q) => ({ n: q.n, seq: q.seq, fromName: q.fromName, ts: q.ts, text: q.text })) : undefined;
-    const prompt = composePrompt({
-      brief: delivery.brief ? buildBrief(settings, persona, roster, this.notesForBrief(participant, runtime), skillsForPrompt) : undefined,
-      roomRules: delivery.roomRules ? instructionBlock("room-rules", contents.roomRules) : undefined,
-      vibio: delivery.vibio ? instructionBlock("vibio", contents.vibio) : undefined,
-      header: buildHeader(settings, persona, roster, this.hops, notes, skillsForPrompt, this.connections(this.uuid)),
-      memory: sendMemory ? memoryBlock(userMemory, roomMemory) : undefined,
-      memoryGraph: sendMemoryGraph ? memoryGraph!.block : undefined,
-      skills: attached.map((s) => composeSkillBlock({ name: s.name, text: s.text, invokedBy: s.invokedBy, extraFiles: s.extraFiles })),
-      backlog: unread.map<BacklogLine>((m) =>
-        m.kind === "system"
-          ? { kind: "event", text: this.backlogText(m) }
-          : {
-              kind: "message",
-              fromName: m.from === id ? `${m.fromName} (you, earlier)` : m.fromName,
-              toNames: m.toNames,
-              text: this.backlogText(m),
-              images: backlogImages(m),
-              quotes: backlogQuotes(m),
-              audio: this.backlogAudio(m),
-              video: this.backlogVideo(m),
-            },
-      ),
-      omitted,
-      personaName: participant.name,
-      replyLanguage: replyLanguageClause(settings),
-    });
-    const next: PreparationFields = { ...expected, missedNotice: false, promptedThisWork: !missed,
-      turnStartSeq: missed ? expected.turnStartSeq : expected.lastSeenSeq, lastSeenSeq: missed ? expected.lastSeenSeq : preparedThrough,
-      notesDue, notesAskedThisTurn: notesDue, instructionRevisions: delivery.revisions, skillCatalogPending: false,
-      memoryStamp: sendMemory ? memoryStamp : expected.memoryStamp, memoryGraphStamp: sendMemoryGraph ? memoryGraph!.revision : expected.memoryGraphStamp,
-      briefPending: delivery.full ? null : expected.briefPending, turnsSinceBrief: delivery.full ? 0 : expected.turnsSinceBrief,
-      briefSentThisTurn: delivery.full ? true : expected.briefSentThisTurn, lastBriefSeq: delivery.brief ? preparedThrough : expected.lastBriefSeq,
-      resumeNotes: delivery.brief ? null : expected.resumeNotes, firstTurnDone: true, replayOwnUntilSeq: -1 };
-    const memoryWords = !this.settings.remembers ? "off"
-      : memoryGraph ? `${sendMemoryGraph ? "sent" : "unchanged, not sent again"} for #${memoryGraph.search?.seq ?? "?"}`
-      : this.memoryWhy(this.id, this.addressedIn(id, unread));
-    runtime.log.info(`turn: ${unread.length} unread (${omitted} omitted), full refresh=${briefReason ?? "no"}, blocks=${[delivery.brief && "brief", delivery.roomRules && "rules", delivery.vibio && "vibio"].filter(Boolean).join(",") || "none"}, memory=${memoryWords}, notes=${notes.length}`);
-
-    const blocks = await this.promptBlocks(prompt, runtime);
-    const automation = this.automationTasks.get(id);
-    if (completion) {
-      blocks.push({ type: "text", text: `<background-task-completion>\n${JSON.stringify({ taskId: completion.taskId,
-        description: completion.description, status: completion.status, result: completion.result }).replaceAll("<", "\\u003c")}\n</background-task-completion>` });
-    }
-    const repairs: OrdinaryPromptPreparation["repairs"] = [];
-    for (const task of this.repairTasks.get(id) ?? []) {
-      if (task.delivered) continue;
-      const text = this.repairTaskBlock(task);
-      repairs.push(task);
-      if (text) blocks.push({ type: "text", text });
-    }
-    if (automation) blocks.unshift({ type: "text", text: `<automation-task>\nSaved by ${this.humanName}: ${automation.run.job.name}\n${automation.run.job.text}\n\nThis task is assigned to you using this room's context and existing permissions. Your final reply will be shown in the room without waking other participants. Finish with the result, or [silent] if there is nothing to report.\n</automation-task>` });
-    const memorySearch = memoryGraph?.search ? { ...memoryGraph.search, sent: sendMemoryGraph } : undefined;
-    const ordinaryPreparation: OrdinaryPromptPreparation = { wake, expected, next, headerArray, headers, skillArray, skills: attached,
-      nativeHeaders, bodies: missed ? [] : unreadAll, sourceRevision, sourceRows, brief: !!delivery.brief, repairs, ...(completion ? { completion } : {}) };
-    const retry = await this.executeTurn(participant, runtime, blocks, null, { historyNoticeOffered: offerHistoryNotice, nativeHeaderOffered: true,
-      ordinaryPreparation, supplied, ...(memorySearch ? { memorySearch } : {}) });
+    const retry = await this.executeTurn(participant, hold, prepared.blocks, null, { historyNoticeOffered: prepared.historyNoticeOffered, nativeHeaderOffered: true,
+      ordinaryPreparation: prepared.preparation, supplied: prepared.supplied, ...(prepared.memorySearch ? { memorySearch: prepared.memorySearch } : {}) });
     if (retry) {
-      await this.executeTurn(participant, runtime, [{ type: "text", text: retry.prompt }], retry);
+      await this.executeTurn(participant, hold, [{ type: "text", text: retry.prompt }], retry);
     }
   }
 
@@ -4934,515 +4507,59 @@ export class Room extends EventEmitter {
       }
       try {
         if (!budget.take((await stat(view.path)).size)) {
-          runtime.log.info(`image ${part.image.ref} is not attached: the turn's pictures before it fill the message`);
+          runtime.session.log.info(`image ${part.image.ref} is not attached: the turn's pictures before it fill the message`);
           blocks.push({ type: "text", text: ` (${part.image.ref} is not attached: with it this message would pass the ${AGENT_MESSAGE_MAX_BYTES / 1024 / 1024} MiB one message to you may carry; it is in the room)` });
           continue;
         }
         blocks.push({ type: "image", data: (await readFile(view.path)).toString("base64"), mimeType: view.mimeType });
       } catch (error) {
-        runtime.log.warn(`image ${part.image.ref} could not be read: ${describeError(error)}`);
+        runtime.session.log.warn(`image ${part.image.ref} could not be read: ${describeError(error)}`);
         blocks.push({ type: "text", text: ` (${part.image.ref} could not be read: ${part.image.path})` });
       }
     }
     return blocks;
   }
 
-  private async executeTurn(participant: Participant, runtime: AgentRuntime, blocks: ContentBlock[], retry: RetryRequest | null, extras: TurnExtras = {}): Promise<RetryRequest | null> {
-    const { hidden = false, historyNoticeOffered = false, supplied = [], memorySearch } = extras;
-    if (runtime.turnActive || runtime.turn || this.nativeLaneBlocked(runtime)) throw new Error(`${participant.name} is already answering or has held native delivery`);
+  private async executeTurn(participant: Participant, hold: WorkHold, blocks: ContentBlock[], retry: RetryRequest | null, extras: TurnExtras = {}): Promise<RetryRequest | null> {
+    const { hidden = false, historyNoticeOffered = false } = extras;
     const id = participant.id;
-    runtime.turnActive = true;
-    participant.status = "thinking";
-    participant.statusDetail = undefined;
-
-    const draft: ChatMessage = {
-      id: randomUUID(),
-      seq: 0,
-      from: id,
-      fromName: participant.name,
-      to: [],
-      toNames: [],
-      text: "",
-      ts: Date.now(),
-      kind: "chat",
-      streaming: true,
-      toolCalls: [],
-    };
-    this.drafts.set(draft.id, draft);
-    const turn: NonNullable<AgentRuntime["turn"]> = { message: draft, messageId: null, sawMessageId: false, startedAt: Date.now(), published: false, hidden, messagesFromSeq: runtime.lastSeenSeq };
-    runtime.turn = turn;
-    this.push({ type: "participant", participant });
-
-    let result: PromptResult | null = null;
-    let failure: string | null = null;
-    let failureCode = "";
-    const nativeCorrection = retry?.nativeObligation;
-    const nativePrompts = extras.ordinaryPreparation?.wake.native ?? (extras.nativeHeaderOffered ? [...(runtime.nativePromptObligations ?? [])] : []);
-    const startedNative: NativeObligationRef[] = [];
-    const discardUndispatchedTurn = (): null => {
-      this.drafts.delete(draft.id);
-      if (runtime.turn !== turn) return null;
-      runtime.turn = null;
-      runtime.turnActive = false;
-      if (this.runtimes.get(id) === runtime && this.participants.get(id) === participant && participant.status === "thinking") {
-        participant.status = "idle";
-        this.push({ type: "participant", participant });
-      }
-      return null;
-    };
-    try {
-      const epoch = participant.deliveryEpoch;
-      if (!this.dispatchOwnerCurrent(participant, runtime, hidden)) return discardUndispatchedTurn();
-      if (this.nativeLaneBlocked(runtime)) {
-        if (extras.ordinaryPreparation) {
-          runtime.independentPendingTurn ||= extras.ordinaryPreparation.wake.independent;
-          runtime.pendingTurn = true;
-        } else if (retry) {
-          const corrections = runtime.backgroundCorrections ??= [];
-          runtime.backgroundBacklogPending ||= runtime.pendingTurn;
-          if (!corrections.includes(retry)) corrections.unshift(retry);
-          runtime.pendingTurn = true;
-        } else if (hidden) runtime.deferredNotesTurn = true;
-        return discardUndispatchedTurn();
-      }
-      if (extras.ordinaryPreparation) {
-        const disposition = this.ordinaryWakeDisposition(extras.ordinaryPreparation.wake, participant, runtime);
-        if (disposition !== "allowed") {
-          if (disposition === "suppressed") this.consumeNativeWake(runtime, nativePrompts);
-          else runtime.pendingTurn = true;
-          return discardUndispatchedTurn();
-        }
-        if (!this.ordinaryPreparationCurrent(extras.ordinaryPreparation)) {
-          runtime.independentPendingTurn ||= extras.ordinaryPreparation.wake.independent;
-          runtime.pendingTurn = true;
-          return discardUndispatchedTurn();
-        }
-      }
-      if (nativeCorrection && !this.nativePromptEligible(nativeCorrection, participant, runtime)) return discardUndispatchedTurn();
-      if (this.recordPrompts) this.recordPrompt(draft.id, participant, blocks, hidden, retry !== null, memorySearch);
-      if (extras.ordinaryPreparation) {
-        this.commitOrdinaryPreparation(participant, runtime, extras.ordinaryPreparation);
-        turn.messagesFromSeq = runtime.lastSeenSeq;
-      }
-      if (extras.nativeHeaderOffered) {
-        const captured = extras.ordinaryPreparation?.nativeHeaders ?? [...(runtime.nativeHeaderObligations ?? [])];
-        for (const ref of captured) this.nativeTransition(ref, "applied_local");
-        runtime.nativeHeaderObligations = (runtime.nativeHeaderObligations ?? []).filter(ref => !captured.some(old => old.obligationId === ref.obligationId));
-      }
-      for (const ref of nativePrompts) if (this.startNativePrompt(ref, participant, runtime)) startedNative.push(ref);
-      if (extras.nativeHeaderOffered) this.consumeNativeWake(runtime, nativePrompts);
-      if (nativeCorrection) {
-        if (!this.startNativePrompt(nativeCorrection, participant, runtime)) return discardUndispatchedTurn();
-        startedNative.push(nativeCorrection);
-      }
-      if (!hidden) {
-        const completion = this.activeBackgroundCompletions.get(id);
-        if (completion) completion.confirmed = false;
-      }
-      runtime.usageSeenThisTurn = false;
-      runtime.fixedDiagramThisTurn = false;
-      this.watchForSilence();
-      const pending = runtime.agent.prompt(runtime.sessionId, blocks);
-      const metadataFailures: unknown[] = [];
-      if (extras.ordinaryPreparation && this.runtimes.get(id) === runtime) {
-        try { this.registerPendingBodies(participant, extras.ordinaryPreparation.bodies); }
-        catch (error) { metadataFailures.push(error); }
-      }
-      if (!hidden && this.runtimes.get(id) === runtime) {
-        try { this.recordBodySupply(id, supplied, epoch); }
-        catch (error) { metadataFailures.push(error); }
-      }
-      try { result = await pending; }
-      finally {
-        for (const error of metadataFailures) {
-          try { runtime.log.warn(`prompt body metadata failed after dispatch: ${describeError(error)}`); }
-          catch { }
-        }
-      }
-    } catch (error) {
-      failureCode = errorName(error);
-      failure = describeError(error);
-    }
-    for (const ref of startedNative) {
-      try { this.nativeTransition(ref, result ? "completed" : "attempt_unknown"); }
-      catch { this.nativeFault(id, "native_attempt_unknown"); }
-    }
-
-    if (runtime.turn !== turn) {
-      this.drafts.delete(draft.id);
-      return null;
-    }
-    const startedAt = turn.startedAt;
-    const published = turn.published;
-    const publishedAt = turn.publishedAt ?? null;
-    runtime.turn = null;
-    runtime.turnActive = false;
-    this.drafts.delete(draft.id);
-    participant.turns += 1;
-    if (!retry) runtime.turnsSinceBrief += 1;
-
-    if (runtime.retiring) {
-      this.push({ type: "message.removed", id: draft.id });
-      if (retry) this.closeRetry(retry, "the session was replaced; nothing was posted");
-      return null;
-    }
-    if ((failure || !result) && runtime.roomStopped) {
-      runtime.log.info(`the turn ended with the room's shutdown: ${failure ?? "no result"}`);
-      result = { stopReason: "cancelled" };
-      failure = null;
-    }
-    if (failure || !result) {
-      const automation = !hidden ? this.automationTasks.get(id) : undefined;
-      if (automation) automation.outcome = { status: "failed", detail: failure ?? "No result was returned." };
-      runtime.briefPending = runtime.briefPending ?? "previous turn failed";
-      runtime.briefSentThisTurn = false;
-      participant.statusDetail = `last turn failed: ${(failure ?? "no result").replace(/\s+/g, " ").slice(0, 120)}`;
-      participant.failedTurns = (participant.failedTurns ?? 0) + 1;
-      const keepFailed = published && !hidden && !retry && !!(draft.toolCalls?.length || draft.text || draft.thought);
-      if (keepFailed) {
-        this.commit({ ...draft, seq: ++this.seq, to: [], toNames: [], streaming: false, audience: "human",
-          failed: (failure ?? "no result").replace(/\s+/g, " ").slice(0, 240), usage: draft.usage ?? null, durationMs: Date.now() - startedAt });
-      } else this.push({ type: "message.removed", id: draft.id });
-      runtime.log.error(`turn failed: ${failure}`);
-      const kept = runtime.transcript.dump(`turn failed: ${(failure ?? "no result").slice(0, 120)}`);
-      if (kept) runtime.log.info(`the protocol around the failure was kept: ${kept}`);
-      if (retry) this.closeRetry(retry, "the correction turn failed; nothing was posted");
-      if (isContextFullError(failure)) {
-        participant.status = runtime.agent.alive ? "idle" : "error";
-        this.push({ type: "participant", participant });
-        this.contextFull(participant, runtime, failure ?? "");
-        return null;
-      }
-      const recipe = getRecipe(participant.agentType ?? "");
-      const trouble = classifyTurnFailure({
-        error: failure ?? "no result",
-        code: failureCode,
-        vendor: recipe?.vendor ?? participant.agentVendor ?? "The coding agent",
-        alive: runtime.agent.alive,
-        loginCommand: recipe?.loginCommand || undefined,
-        loginFromHere: !!recipe && recipe.loginFlow.kind !== "none",
-      });
-      const again = participant.trouble?.stage === "turn" && participant.trouble.kind === trouble.kind;
-      trouble.streak = again ? (participant.trouble?.streak ?? 1) + 1 : 1;
-      if (trouble.streak >= 2 && trouble.kind === "unknown" && trouble.actions?.includes("respawn")) {
-        trouble.actions = ["respawn", ...trouble.actions.filter((a) => a !== "respawn")];
-        trouble.advice = "It failed the same way twice in a row: respawn it (a fresh session with its notes and the last messages; the history stays), or press Retry if it was a passing thing.";
-      } else if (trouble.streak >= 2 && (trouble.kind === "limit" || trouble.kind === "network")) {
-        trouble.advice = `${trouble.advice} It has failed this way ${trouble.streak} times in a row: give it a few minutes first.`;
-      }
-      participant.trouble = trouble;
-      const paused = !runtime.agent.alive || trouble.kind === "login" || trouble.streak >= 2;
-      participant.status = paused ? "error" : "idle";
-      this.push({ type: "participant", participant });
-      if (paused) {
-        runtime.log.warn(`paused after ${trouble.streak} ${trouble.kind} failure(s): waiting for the human`);
-        this.postRoomEvent(`${participant.name} needs you: ${trouble.what} ${trouble.advice}`, "human", false, { tone: "attention" });
-      } else {
-        this.postRoomEvent(`${participant.name} could not answer: ${(failure ?? "no result").slice(0, 240)}`, undefined, false, { tone: "error" });
-      }
-      return null;
-    }
-    const failedBefore = participant.failedTurns ?? 0;
-    const automation = !hidden ? this.automationTasks.get(id) : undefined;
-    if (automation) automation.outcome = { status: result.stopReason === "cancelled" ? "cancelled" : result.stopReason === "end_turn" ? "completed" : "failed", delivery: "silent", detail: result.stopReason === "end_turn" ? "The assigned vibemate finished its reply." : `The reply ended with ${result.stopReason}.` };
-    const completion = !hidden ? this.activeBackgroundCompletions.get(id) : undefined;
-    if (completion) completion.confirmed = result.stopReason === "end_turn" && (participant.failedTurns ?? 0) === failedBefore;
-    const next = this.finalizeTurn(participant, runtime, draft, result, Date.now() - startedAt, retry, published, publishedAt, hidden);
-    if (completion && (participant.failedTurns ?? 0) !== failedBefore) completion.confirmed = false;
-    if (historyNoticeOffered && result.stopReason !== "cancelled" && !runtime.workCancelled && (participant.failedTurns ?? 0) === failedBefore) {
-      runtime.historyNoticePending = false;
-    }
-    return next;
+    const { runtime, gate } = hold;
+    const dispatched = await dispatchTurn(participant, { runtime, gate }, blocks, retry, extras, errorName, describeError, this.turnDispatch);
+    if (dispatched.kind !== "settled") return null;
+    return this.turnPublication.settle({ phase: "settled", participant, runtime, gate }, dispatched, retry, { hidden, historyNoticeOffered });
   }
 
-  private finalizeTurn(
-    participant: Participant,
-    runtime: AgentRuntime,
-    draft: ChatMessage,
-    result: PromptResult,
-    durationMs: number,
-    retry: RetryRequest | null,
-    published: boolean,
-    publishedAt: number | null = null,
-    hidden = false,
-  ): RetryRequest | null {
-    participant.status = "idle";
-    if (!runtime.usageSeenThisTurn) {
-      const used = tokensCarried(result);
-      if (used !== null) {
-        participant.contextUsed = used;
-        this.checkForCompaction(participant, runtime, used, participant.contextSize ?? 0);
-        runtime.lastUsed = used;
-        runtime.log.info(`context from the result: ${used} input tokens${participant.contextSize ? ` of ${participant.contextSize}` : " (window size unknown)"}`);
-      }
-    }
-    if (runtime.briefSentThisTurn) {
-      runtime.usedAtBrief = runtime.lastUsed;
-      runtime.briefSentThisTurn = false;
-    }
-    if (participant.trouble?.stage === "turn") {
-      participant.trouble = undefined;
-      participant.statusDetail = undefined;
-    }
-    this.push({ type: "participant", participant });
-
-    const cancelled = result.stopReason === "cancelled";
-    const endedBy: ChatMessage["cancelledBy"] = !cancelled ? undefined : runtime.workCancelled ? "human" : runtime.roomStopped ? "room" : "agent";
-    const stoppedByHuman = endedBy === "human";
-    const stopRow = () => endedBy === "human" ? `${participant.name} was stopped by ${this.humanName}${stoppedWork(draft)}.`
-      : endedBy === "room" ? `${participant.name}'s turn ended when viberoom stopped${stoppedWork(draft)}.`
-      : `${participant.name}'s agent ended the turn${stoppedWork(draft)}.`;
-    if (cancelled) runtime.briefPending = runtime.briefPending ?? "previous turn was cancelled";
-
-    const extracted = extractNotes(draft.text);
-    const hadNotes = this.keepNotes(participant, runtime, extracted.notes, hidden ? "hidden turn" : "reply");
-    draft.text = extracted.visible;
-    const text = draft.text.trim();
-    if (hidden) {
-      this.commit({
-        id: randomUUID(),
-        seq: ++this.seq,
-        from: participant.id,
-        fromName: participant.name,
-        to: [],
-        toNames: [],
-        text: hadNotes ? `took notes (${(participant.notes ?? "").split("\n").length} lines)` : "was asked for notes and gave none",
-        ts: Date.now(),
-        kind: "hidden",
-        details: { original: draft.text, outcome: hadNotes ? "notes kept" : "no <notes> block in the reply" },
-      });
-      return null;
-    }
-    if (runtime.notesAskedThisTurn && !hadNotes && !retry && !cancelled) {
-      runtime.notesMisses += 1;
-      if (runtime.notesMisses >= 2) {
-        runtime.notesMisses = 0;
-        if (!cancelled) this.askForNotes(runtime, "hidden turn");
-      }
-    }
-
-    if (!retry && text.toLowerCase() === REQUEST_BRIEF_MARKER) {
-      this.push({ type: "message.removed", id: draft.id });
-      if (runtime.briefRequestedAtSeq === runtime.lastSeenSeq) {
-        this.notice(`${participant.name} asked for the brief twice on the same messages; treated as silent.`, "warn");
-        return null;
-      }
-      runtime.briefRequestedAtSeq = runtime.lastSeenSeq;
-      runtime.lastSeenSeq = runtime.turnStartSeq;
-      runtime.briefPending = "requested by the agent";
-      const automation = this.automationTasks.get(participant.id);
-      if (automation) automation.continuing = true;
-      const completion = this.activeBackgroundCompletions.get(participant.id);
-      if (completion) completion.continuing = true;
-      this.notice(`${participant.name} asked for the room brief (hidden turn); re-sending with the same messages.`, "info");
-      this.requestTurn(participant.id);
-      return null;
-    }
-
-    const pull = !retry ? skillPull(text) : null;
-    if (pull) {
-      this.push({ type: "message.removed", id: draft.id });
-      const next = this.handleSkillPull(participant, runtime, text, pull);
-      const automation = this.automationTasks.get(participant.id);
-      if (automation) automation.continuing = runtime.pendingTurn;
-      const completion = this.activeBackgroundCompletions.get(participant.id);
-      if (completion) completion.continuing = runtime.pendingTurn;
-      return next;
-    }
-
-    if (!text || text.toLowerCase() === SILENT_MARKER) {
-      const keepBubble = cancelled && !retry && !!draft.toolCalls?.length;
-      if (published && !keepBubble) this.push({ type: "message.removed", id: draft.id });
-      if (keepBubble) {
-        this.commit({ ...draft, seq: ++this.seq, to: [], toNames: [], text: "", streaming: false,
-          stopReason: result.stopReason, cancelledBy: endedBy,
-          ...(stoppedByHuman ? { stoppedBy: this.humanName } : {}),
-          audience: "human", usage: result.usage ?? null, durationMs });
-      }
-      if (retry) {
-        this.closeRetry(retry, cancelled ? "the correction turn was stopped; nothing was posted" : "the agent withdrew the reply");
-        if (cancelled) this.postRoomEvent(stopRow(), undefined, false, { tone: "attention" });
-      } else if (cancelled) {
-        this.postRoomEvent(stopRow(), undefined, false, { tone: "attention" });
-      } else if (!runtime.fixedDiagramThisTurn) {
-        this.postSystem(`${participant.name} read the room and has nothing to add.`);
-      }
-      return null;
-    }
-
-    const bareContextFull = isBareContextFullError(text);
-    if (!(draft.toolCalls?.length) && (ADAPTER_ERROR_PATTERN.test(text) || bareContextFull)) {
-      const automation = this.automationTasks.get(participant.id);
-      if (automation) automation.outcome = { status: "failed", detail: text.slice(0, 1000) };
-      runtime.briefPending = runtime.briefPending ?? "previous turn returned an adapter error";
-      this.push({ type: "message.removed", id: draft.id });
-      participant.failedTurns = (participant.failedTurns ?? 0) + 1;
-      participant.statusDetail = `agent error: ${text.replace(/\s+/g, " ").slice(0, 120)}${text.length > 120 ? "…" : ""}`;
-      this.push({ type: "participant", participant });
-      this.postRoomEvent(`${participant.name}'s agent reported an error instead of a reply: ${text.slice(0, 200)}${text.length > 200 ? "…" : ""}`, undefined, false, { tone: "error" });
-      runtime.log.warn(`adapter error text treated as failed turn: ${text.slice(0, 200)}`);
-      if (retry) this.closeRetry(retry, "the agent reported an error instead of a corrected reply");
-      if (bareContextFull) this.contextFull(participant, runtime, text);
-      return null;
-    }
-
-    return this.publishAgentReply(participant, runtime, draft, result, durationMs, publishedAt, retry, endedBy);
+  private finalizeTurn(owner: SettledOwner, draft: ChatMessage, result: PromptResult, durationMs: number, retry: RetryRequest | null,
+    published: boolean, publishedAt: number | null = null, hidden = false): RetryRequest | null {
+    return this.turnPublication.finalize(owner, draft, result, durationMs, retry, published, publishedAt, hidden);
   }
 
-  private publishAgentReply(
-    participant: Participant, runtime: AgentRuntime, draft: ChatMessage, result: PromptResult,
-    durationMs: number | undefined, publishedAt: number | null, retry: RetryRequest | null,
-    endedBy?: ChatMessage["cancelledBy"], background = false,
-  ): RetryRequest | null {
-    const text = draft.text.trim();
-    const cancelled = result.stopReason === "cancelled";
-    const stoppedByHuman = endedBy === "human";
-    const mentions = this.parseMentions(text);
-    const corrections = this.referee(participant, text, mentions);
-    if (corrections.length) {
-      participant.violations = (participant.violations ?? 0) + corrections.length;
-      runtime.log.info(`referee${retry ? " (after retry)" : ""}: ${corrections.join(" | ")}`);
-      if (!retry && this.settings.refereeAction === "retry-hidden" && !cancelled && !draft.failed) {
-        this.push({ type: "message.removed", id: draft.id });
-        participant.retries = (participant.retries ?? 0) + 1;
-        this.push({ type: "participant", participant });
-        const record: ChatMessage = {
-          id: background ? draft.id : randomUUID(),
-          seq: ++this.seq,
-          from: participant.id,
-          fromName: participant.name,
-          to: [],
-          toNames: [],
-          text: `Reply held back; correction requested: ${corrections.map((c) => c.replace(/^reminder:\s*/i, "")).join("; ")}`,
-          ts: Date.now(),
-          kind: "hidden",
-          details: { ...draft.details, original: text, corrections },
-        };
-        const stored = this.commit(record);
-        const header = buildHeader(this.effectiveSettings(), this.personaOf(participant), this.roster(), this.hops, [
-          "your last reply was not posted; see the correction below",
-        ]);
-        const request: RetryRequest = {
-          prompt: composeCorrectionPrompt({ header, originalText: text, corrections, personaName: participant.name }),
-          original: text,
-          corrections,
-          record,
-        };
-        if (background) {
-          if (stored === "record") this.queueBackgroundCorrection(participant.id, runtime, request);
-          else this.unconfirmedBackground.set(record.id, request);
-        }
-        return request;
-      }
-      runtime.headerNotes.push(...corrections);
-      this.push({ type: "participant", participant });
-    }
-
-    const answerFrom = (draft.answerFrom ?? 0) - (draft.text.length - draft.text.trimStart().length);
-    const message: ChatMessage = {
-      ...draft,
-      seq: ++this.seq,
-      to: mentions.ids,
-      toNames: mentions.names,
-      text,
-      answerFrom: answerFrom > 0 && answerFrom < text.length ? answerFrom : undefined,
-      streaming: false,
-      stopReason: background && draft.failed ? undefined : result.stopReason,
-      ...(endedBy ? { cancelledBy: endedBy } : {}),
-      ...(stoppedByHuman ? { stoppedBy: this.humanName } : {}),
-      usage: result.usage ?? null,
-      durationMs,
-    };
-    const stored = this.commit(message);
-    if (background && stored !== "record") this.unconfirmedBackground.set(message.id, null);
-    if (!background && stored !== "record") {
-      const completion = this.activeBackgroundCompletions.get(participant.id);
-      if (completion) completion.confirmed = false;
-    }
-    const automation = background ? undefined : this.automationTasks.get(participant.id);
-    if (automation) automation.outcome = stored === "record" ? { ...automation.outcome, delivery: "posted", messageId: message.id } : { ...automation.outcome, delivery: "unconfirmed", detail: "The reply finished but could not be durably recorded. Its delivery is unconfirmed." };
-    if (!background && participant.contextEvent?.kind === "compacted") {
-      participant.contextEvent = undefined;
-      this.push({ type: "participant", participant });
-    }
-    if (publishedAt !== null && durationMs !== undefined && this.messages.some((x) => x.kind === "chat" && x.id !== message.id && x.ts > publishedAt)) {
-      const at = new Date(draft.ts);
-      const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
-      this.postSystem(`${participant.name} finished the reply started at ${hhmm} · ${formatDuration(durationMs)}`, "human", false, { refId: message.id, agentId: participant.id });
-    }
-    if (retry) {
-      this.closeRetry(retry, corrections.length ? `corrected reply posted, but it still breaks: ${corrections.map((c) => c.replace(/^reminder:\s*/i, "")).join("; ")}` : "corrected reply posted");
-    }
-    if (cancelled) {
-      if (background) return null;
-      const cut = endedBy === "human" ? `${participant.name} was stopped mid-reply by ${this.humanName}`
-        : endedBy === "room" ? `${participant.name}'s turn ended mid-reply when viberoom stopped`
-        : `${participant.name}'s agent ended the turn mid-reply`;
-      this.postSystem(`${cut}; what it had written stays in the room.`, "agents", false, { tone: "attention" });
-      return null;
-    }
-    if (result.stopReason !== "end_turn") {
-      this.postRoomEvent(`${participant.name} stopped with ${result.stopReason}.`, undefined, false, { tone: "attention" });
-    }
-    if (!automation && (!background || (stored === "record" && !message.audience && !message.failed))) this.route(message);
-    return null;
-  }
-
-  private handleSkillPull(participant: Participant, runtime: AgentRuntime, original: string, name: string): null {
-    const record: ChatMessage = {
-      id: randomUUID(),
-      seq: ++this.seq,
-      from: participant.id,
-      fromName: participant.name,
-      to: [],
-      toNames: [],
-      text: `asked for skill "${name}"`,
-      ts: Date.now(),
-      kind: "hidden",
-      details: { original, skill: name, via: "marker" },
-    };
-    const resolved = this.resolveAgentSkill(participant, name);
-    if (!resolved.ok) {
-      record.details = { ...record.details, outcome: `not delivered: ${resolved.reason}` };
-      this.commit(record);
-      runtime.headerNotes.push(`you asked for skill "${name}" but ${resolved.reason}`);
-      runtime.log.info(`skills: pull of "${name}" refused: ${resolved.reason}`);
-      return null;
-    }
-    if (runtime.skillPulledAtSeq === runtime.lastSeenSeq && runtime.skillPulledName === resolved.skill.name) {
-      record.details = { ...record.details, outcome: "not delivered: asked twice on the same messages; treated as silent" };
-      this.commit(record);
-      this.notice(`${participant.name} asked for skill "${name}" twice on the same messages; treated as silent.`, "warn");
-      return null;
-    }
-    runtime.skillPulledAtSeq = runtime.lastSeenSeq;
-    runtime.skillPulledName = resolved.skill.name;
-    runtime.pendingSkills.push({ name: resolved.skill.name, text: renderSkillBody(resolved.skill.body, ""), extraFiles: resolved.skill.extraFiles });
-    runtime.lastSeenSeq = runtime.turnStartSeq;
-    record.details = { ...record.details, outcome: "delivered in a hidden turn" };
-    this.commit(record);
-    runtime.log.info(`skills: "${resolved.skill.name}" pulled with the marker; re-running the turn`);
-    this.requestTurn(participant.id);
-    return null;
+  private publishAgentReply(owner: PublicationOwner, draft: ChatMessage, result: PromptResult, durationMs: number | undefined,
+    publishedAt: number | null, retry: RetryRequest | null, endedBy?: ChatMessage["cancelledBy"]): RetryRequest | null {
+    return this.turnPublication.publish(owner, draft, result, durationMs, publishedAt, retry, endedBy);
   }
 
   private closeRetry(retry: RetryRequest, outcome: string): void {
-    retry.record.details = { ...(retry.record.details ?? { original: retry.original, corrections: retry.corrections }), outcome };
-    this.push({ type: "message", message: retry.record });
+    const row = this.roomMessages.byId(retry.recordId);
+    if (!row) return;
+    this.reviseRecorded({ ...row, details: { ...(row.details ?? { original: retry.original, corrections: retry.corrections }), outcome } });
   }
 
-  private referee(participant: Participant, text: string, mentions: { ids: string[]; names: string[] }): string[] {
+  private referee(participant: Participant, text: string): string[] {
     const corrections: string[] = [];
     const unknown: string[] = [];
+    let selfNamed = false;
     for (const match of spokenText(text).matchAll(MENTION_PATTERN)) {
       if (match[1].toLowerCase() === "all") continue;
-      if (!this.findByName(match[1]) && !unknown.includes(match[1])) unknown.push(match[1]);
+      const named = this.findByName(match[1]);
+      if (!named && !unknown.includes(match[1])) unknown.push(match[1]);
+      if (named?.id === participant.id) selfNamed = true;
     }
     if (unknown.length) {
       const known = [...this.participants.values()].map((p) => p.name).join(", ");
       corrections.push(`reminder: ${unknown.map((u) => `@${u}`).join(", ")} ${unknown.length > 1 ? "are" : "is"} not in the room; participants are ${known}`);
     }
-    if (mentions.ids.includes(participant.id)) {
+    if (selfNamed) {
       corrections.push("reminder: do not address yourself with @");
     }
     if (this.settings.maxSentences) {
@@ -5456,18 +4573,14 @@ export class Room extends EventEmitter {
 
 
   private liveAgentSession(id: string, agent: AcpAgent, sessionId: string): boolean {
-    const runtime = this.runtimes.get(id);
-    const participant = this.participants.get(id);
-    return !!participant && participant.kind === "agent" && participant.status !== "left"
-      && !!runtime && runtime.agent === agent && runtime.sessionId === sessionId
-      && agent.alive && !runtime.retiring && !this.closing && !this.readOnly && !this.recordHold;
+    return this.agentSessions.live(id, agent, sessionId);
   }
 
   postMessageForAgent(id: string, token: string, raw: unknown): PostMessageReceipt {
     const runtime = this.runtimes.get(id);
-    if (!runtime || runtime.mcpToken !== token || !token || !this.liveAgentSession(id, runtime.agent, runtime.sessionId))
+    if (!runtime || runtime.session.mcpToken !== token || !token || !this.liveAgentSession(id, runtime.session.agent, runtime.session.sessionId))
       throw new AgentMessageError(403, "session_unavailable", "This agent session cannot publish a message now.");
-    if (runtime.workBusy || runtime.turnActive || runtime.turn)
+    if (runtime.work.workBusy || runtime.work.turnActive || runtime.work.turn)
       throw new AgentMessageError(409, "reply_in_progress", "A separate message cannot be posted while your current reply is active. Include this text in the current reply, or publish after that turn has finished.");
     if (this.nativeLaneBlocked(runtime))
       throw new AgentMessageError(409, "native_delivery_pending", "A previously completed native report is held for storage or delivery recovery. A separate message cannot be published until that pending delivery is resolved.");
@@ -5475,8 +4588,8 @@ export class Room extends EventEmitter {
     const visible = extractNotes(input.text).visible.trim();
     if (!visible || visible.toLowerCase() === SILENT_MARKER || visible.toLowerCase() === REQUEST_BRIEF_MARKER || skillPull(visible))
       throw new AgentMessageError(400, "invalid_arguments", "post_message publishes a complete visible message; control markers and notes alone are not messages.");
-    const report: BackgroundMessage = { sessionId: runtime.sessionId, ...input, stopReason: "end_turn" };
-    const messageId = agentMessageId(this.uuid, id, runtime.sessionId, input.messageId, "mcp");
+    const report: BackgroundMessage = { sessionId: runtime.session.sessionId, ...input, stopReason: "end_turn" };
+    const messageId = agentMessageId(this.uuid, id, runtime.session.sessionId, input.messageId, "mcp");
     const hash = agentMessageHash(report);
     const confirm = <T>(read: () => T): T => {
       try { return read(); }
@@ -5492,7 +4605,7 @@ export class Room extends EventEmitter {
     const previous = confirm(() => this.history.agentMessageReceipt(this.id, messageId));
     if (previous) {
       const result = receipt(previous, true);
-      this.finishBackgroundDelivery(id, runtime, messageId, previous.deleted);
+      this.confirmBackground(messageId, previous);
       return result;
     }
     const pending = this.messages.find(message => message.id === messageId);
@@ -5503,12 +4616,12 @@ export class Room extends EventEmitter {
       const recovered = confirm(() => this.history.agentMessageReceipt(this.id, messageId));
       if (recovered) {
         const result = receipt(recovered, true);
-        this.finishBackgroundDelivery(id, runtime, messageId, recovered.deleted);
+        this.confirmBackground(messageId, recovered);
         return result;
       }
       throw new AgentMessageError(503, "unconfirmed_result", "The message could not be confirmed in the room's durable record; inspect it before retrying.");
     }
-    confirm(() => this.onBackgroundMessage(id, runtime.agent, report, "mcp"));
+    confirm(() => this.onBackgroundMessage(id, runtime.session.agent, report, "mcp"));
     const stored = confirm(() => this.history.agentMessageReceipt(this.id, messageId));
     if (!stored) throw new AgentMessageError(503, "unconfirmed_result", "The message could not be confirmed in the room's durable record; inspect it before retrying.");
     return receipt(stored, false);
@@ -5520,17 +4633,17 @@ export class Room extends EventEmitter {
     const runtime = this.runtimes.get(id)!;
     const participant = this.participants.get(id)!;
     const messageId = agentMessageId(this.uuid, id, report.sessionId, report.messageId, transport);
-    const seen = runtime.backgroundMessages ??= new Set();
+    const seen = runtime.native.backgroundMessages ??= new Set();
     if (seen.has(messageId) || this.messages.some(message => message.id === messageId) || this.history.hasMessageId(this.id, messageId)) return;
     seen.add(messageId);
     if (seen.size > 256) seen.delete(seen.values().next().value!);
 
     const extracted = extractNotes(report.text);
-    if (report.stopReason === "end_turn") this.keepNotes(participant, runtime, extracted.notes, "reply");
+    if (report.stopReason === "end_turn") this.agentNotes.keep(participant, runtime, extracted.notes, "reply");
     const text = extracted.visible.trim();
     if (!text || text.toLowerCase() === SILENT_MARKER) return;
     if (text.toLowerCase() === REQUEST_BRIEF_MARKER || skillPull(text)) {
-      runtime.headerNotes.push("your autonomous report requested room instructions; use the instructions supplied with your next turn");
+      runtime.brief.headerNotes.push("your autonomous report requested room instructions; use the instructions supplied with your next turn");
       return;
     }
     const interrupted = report.stopReason !== "end_turn";
@@ -5541,187 +4654,44 @@ export class Room extends EventEmitter {
       ...(interrupted ? { audience: "human" as const } : {}),
       ...(report.stopReason === "error" ? { failed: "The autonomous agent cycle failed before completing." } : {}),
     };
-    this.publishAgentReply(participant, runtime, draft,
+    this.publishAgentReply({ phase: "background", participant, runtime }, draft,
       { stopReason: report.stopReason === "cancelled" ? "cancelled" : "end_turn" }, undefined, null, null,
-      report.stopReason === "cancelled" ? "agent" : undefined, true);
+      report.stopReason === "cancelled" ? "agent" : undefined);
   }
 
   private nativeLaneBlocked(runtime: AgentRuntime): boolean {
-    return !!runtime.nativeDraining || !!runtime.nativeHold || this.nativeRecoveryHold
-      || [...this.retainedNativeArrivals.values()].some(arrival => arrival.agent === runtime.agent);
+    return this.nativeReports.laneBlocked(runtime);
   }
 
   hasPendingNativeDelivery(): boolean {
-    if (this.unsavedNative.size || this.retainedNativeArrivals.size || this.nativeRecoveryHold) return true;
-    try {
-      if (this.divertPending && this.history.nativeJournalSafety(this.id)) return true;
-      return this.history.listNativeDelivery(this.id).length !== 0;
-    }
-    catch { this.nativeRecoveryHold = true; return true; }
+    return this.nativeReports.hasPending();
   }
 
   retryNativeReports(): boolean {
-    if (this.closing || this.readOnly || this.recordHold) return this.hasPendingNativeDelivery();
-    if (this.divertPending) this.drainDivert();
-    if (this.nativeRecoveryHold && !this.divertPending) {
-      try {
-        this.history.nativeJournalSafety(this.id); this.history.nativeHighWater(this.uuid); this.history.listNativeDelivery(this.id);
-        this.nativeRecoveryHold = false;
-      } catch { return true; }
-    }
-    if (this.nativeRecoveryHold) return true;
-    for (const [id, envelope] of this.unsavedNative) {
-      try {
-        const previous = this.history.nativeReceipt(this.id, this.uuid, id);
-        if (!previous) this.history.enqueueNative(this.id, envelope);
-        else if ((previous.type === "native" ? previous.record.envelope.reportHash : previous.receipt.hash) !== envelope.reportHash) {
-          this.nativeFault(envelope.owner.participantId, "native_conflict"); continue;
-        }
-        this.unsavedNative.delete(id);
-      } catch { }
-    }
-    for (const [messageId, arrival] of this.retainedNativeArrivals) {
-      if (!arrival.owner) break;
-      this.acceptNativeReport(arrival.owner.participantId, arrival.agent, arrival.report);
-      if (this.retainedNativeArrivals.has(messageId)) break;
-    }
-    for (const [id, runtime] of this.runtimes) this.drainNativeReports(id, runtime);
-    return this.hasPendingNativeDelivery();
+    return this.nativeReports.retry();
   }
 
-  private nativeFault(id: string, reason: string): void {
-    const runtime = this.runtimes.get(id);
-    if (runtime) runtime.nativeHold = true;
-    this.onNativePending?.(this.id);
-    const owner = `${runtime?.sessionId ?? "missing"}:${this.participants.get(id)?.deliveryEpoch ?? "missing"}:${reason}`;
-    if (this.nativeFaultReasons.get(id) === owner) return;
-    this.nativeFaultReasons.set(id, owner);
-    this.log.warn(`native report for ${id}: ${reason}; publication is held`);
-    this.notice(`An autonomous report for ${this.participants.get(id)?.name ?? id} is held (${reason}). No new reply was published.`, "error");
+  private nativeFault(owner: FaultOwner, reason: string): void {
+    this.nativeReports.fault(owner, reason);
   }
 
   private rebindNativeReports(id: string, runtime: AgentRuntime, loaded: boolean): void {
-    if (!loaded) return;
-    try {
-      for (const record of this.history.listNativeDelivery(this.id, id)) {
-        const e = record.envelope;
-        if (!this.nativeOwnerReason(e, runtime)) this.nativeHandles.set(e.id, runtime.agent);
-      }
-    } catch { this.nativeFault(id, "storage_read_unknown"); }
-  }
-
-  private nativeOwnerReason(envelope: NativeEnvelope, runtime: AgentRuntime): NativeHoldReason | null {
-    const owner = envelope.owner, participant = this.participants.get(owner.participantId);
-    if (owner.roomId !== this.id || owner.roomUuid !== this.uuid || owner.folderId !== this.folderId) return "retired_owner";
-    if (!participant || participant.kind !== "agent" || participant.status === "left" || this.runtimes.get(participant.id) !== runtime || runtime.retiring) return "retired_owner";
-    if (!runtime.agent.alive) return "runtime_missing";
-    if (runtime.sessionId !== owner.sessionId) return "stale_session";
-    if (participant.deliveryEpoch !== owner.deliveryEpoch) return "stale_epoch";
-    if (this.history.nativeGeneration(this.id) !== owner.generation) return "stale_generation";
-    if (this.closing || this.readOnly) return "room_closed";
-    if (this.recordHold) return "record_hold";
-    return null;
+    this.nativeReports.rebind(id, runtime, loaded);
   }
 
   private acceptNativeReport(id: string, agent: AcpAgent, raw: BackgroundMessage): void {
-    const report = readBackgroundMessage(raw);
-    if (!report || !this.liveAgentSession(id, agent, report.sessionId)) return;
-    const runtime = this.runtimes.get(id)!, participant = this.participants.get(id)!;
-    const messageId = agentMessageId(this.uuid, id, report.sessionId, report.messageId, "acp"), hash = agentMessageHash(report);
-    let arrival = this.retainedNativeArrivals.get(messageId);
-    if (arrival && (arrival.agent !== agent || agentMessageHash(arrival.report) !== hash)) {
-      this.nativeFault(id, "native_conflict"); return;
-    }
-    if (!arrival) {
-      const bytes = Buffer.byteLength(report.text, "utf8");
-      const retainedBytes = [...this.retainedNativeArrivals.values()].reduce((sum, held) => sum + Buffer.byteLength(held.report.text, "utf8"), 0);
-      if (this.retainedNativeArrivals.size >= Room.NATIVE_ARRIVAL_LIMIT || retainedBytes + bytes > Room.NATIVE_ARRIVAL_BYTES) {
-        this.nativeFault(id, "not_saved_capacity"); return;
-      }
-      arrival = { report: { ...report }, agent, acceptedName: participant.name, at: Date.now(), owner: null };
-      this.retainedNativeArrivals.set(messageId, arrival);
-      try {
-        if (participant.deliveryEpoch) arrival.owner = { roomId: this.id, roomUuid: this.uuid, participantId: id,
-          sessionId: runtime.sessionId, deliveryEpoch: participant.deliveryEpoch, folderId: this.folderId,
-          generation: this.history.nativeGeneration(this.id) };
-      } catch { }
-    }
-    try {
-      const previous = this.history.nativeReceipt(this.id, this.uuid, messageId);
-      if (previous) {
-        const priorHash = previous.type === "native" ? previous.record.envelope.reportHash : previous.receipt.hash;
-        if (priorHash !== null && priorHash !== hash) { this.nativeFault(id, "native_conflict"); return; }
-        this.retainedNativeArrivals.delete(messageId);
-        if (previous.type === "native" && this.nativeHandles.get(messageId) === agent) this.drainNativeReports(id, runtime);
-        return;
-      }
-      if (!arrival.owner || this.nativeOwnerReason({ owner: arrival.owner } as NativeEnvelope, runtime)) {
-        this.nativeFault(id, "not_saved_original_owner_unknown"); return;
-      }
-      if (this.retainedNativeArrivals.keys().next().value !== messageId) {
-        this.nativeFault(id, "not_saved_order_unknown"); return;
-      }
-      const journal = this.journalOps();
-      if (journal.blocked || this.nativeRecoveryHold) { this.nativeFault(id, "journal_corrupt_not_saved"); return; }
-      if (this.unsavedNative.size) { this.nativeFault(id, "order_unknown_not_saved"); return; }
-      const enqueues = journal.ops.filter((op): op is Extract<DivertOp, { kind: "native_enqueue_v1" }> => op.kind === "native_enqueue_v1");
-      for (const op of enqueues) {
-        if (op.envelope.owner.roomUuid !== this.uuid || op.envelope.owner.roomId !== this.id || op.envelope.owner.folderId !== this.folderId) {
-          this.nativeRecoveryHold = true; this.nativeFault(id, "journal_conflict"); return;
-        }
-        if (op.envelope.id === messageId) {
-          if (op.envelope.reportHash !== hash) this.nativeFault(id, "native_conflict");
-          else { this.retainedNativeArrivals.delete(messageId); this.nativeHandles.set(messageId, agent); this.onNativePending?.(this.id); this.drainNativeReports(id, runtime); }
-          return;
-        }
-      }
-      const epoch = participant.deliveryEpoch;
-      if (!epoch) { this.nativeFault(id, "stale_epoch"); return; }
-      const highWater = Math.max(this.history.nativeHighWater(this.uuid), ...enqueues.map(op => op.envelope.acceptOrder));
-      const envelope = makeNativeEnvelope(arrival.owner, arrival.report, arrival.acceptedName, arrival.at, nativeInteger(highWater + 1, 1));
-      let retained = false;
-      try {
-        if (this.divertPending) this.drainDivert();
-        if (this.divertPending || this.nativeRecoveryHold) throw new Error("earlier_journal_pending");
-        this.history.enqueueNative(this.id, envelope); retained = true;
-      } catch (error) {
-        if (this.nativeRecoveryHold) { this.nativeFault(id, "journal_unknown"); return; }
-        let recovered = false;
-        try {
-          const exact = this.history.nativeReceipt(this.id, this.uuid, messageId);
-          recovered = exact?.type === "native" && JSON.stringify(exact.record.envelope) === JSON.stringify(envelope);
-          if (exact && !recovered) { this.nativeFault(id, "native_conflict"); return; }
-        } catch { this.nativeFault(id, "commit_unknown"); }
-        retained = recovered || this.divert(nativeDivertOp({ kind: "native_enqueue_v1", envelope }), error);
-        if (!retained) {
-          if (this.unsavedNative.size < 64) {
-            this.unsavedNative.set(messageId, envelope);
-            this.retainedNativeArrivals.delete(messageId);
-          }
-          this.nativeHandles.set(messageId, agent);
-          this.nativeFault(id, "not_saved"); return;
-        }
-      }
-      if (retained) {
-        this.retainedNativeArrivals.delete(messageId);
-        this.nativeHandles.set(messageId, agent);
-        this.onNativePending?.(this.id);
-        this.drainNativeReports(id, runtime);
-      }
-    } catch {
-      this.nativeFault(id, "storage_read_unknown_not_saved");
-    }
+    this.nativeReports.accept(id, agent, raw);
   }
 
   private prepareNativeDecision(envelope: NativeEnvelope, participant: Participant, runtime: AgentRuntime): NativeDecision {
     const extracted = extractNotes(envelope.text), text = extracted.visible.trim(), at = Date.now();
     const notes = envelope.stopReason === "end_turn" && extracted.notes
       ? planNativeNoteEffect(captureNativeNoteSubject(participant), envelope.id,
-        { notes: extracted.notes, notesAt: runtime.lastUsed, notesSeq: this.seq, notesWrittenAt: at }) : null;
+        { notes: extracted.notes, notesAt: runtime.session.lastUsed, notesSeq: this.seq, notesWrittenAt: at }) : null;
     const silent = !text || text.toLowerCase() === SILENT_MARKER;
     const marker = text.toLowerCase() === REQUEST_BRIEF_MARKER || !!skillPull(text);
     const mentions = silent || marker ? { ids: [], names: [] } : this.parseMentions(text);
-    const corrections = silent || marker ? [] : this.referee(participant, text, mentions);
+    const corrections = silent || marker ? [] : this.referee(participant, text);
     const kind: NativeDecision["kind"] = silent ? notes && !text ? "notes_only" : "silent" : marker ? "instruction_marker"
       : envelope.stopReason === "cancelled" ? "visible_cancelled_human" : envelope.stopReason === "error" ? "visible_error_human"
       : corrections.length && this.settings.refereeAction === "retry-hidden" ? "referee_hidden" : "visible_complete";
@@ -5731,14 +4701,13 @@ export class Room extends EventEmitter {
     if (marker || corrections.length && kind !== "referee_hidden") obligations.push({ ...base("header"), kind: "header",
       lines: marker ? ["your autonomous report requested room instructions; use the instructions supplied with your next turn"] : corrections });
     if (kind === "referee_hidden") obligations.push({ ...base("correction"), kind: "correction", original: text, corrections });
-    if (kind === "visible_complete" && !this.focused && this.hops < this.hopLimit) {
-      const live = (id: string) => this.runtimes.has(id) && !this.participants.get(id)?.muted;
-      const targets = mentions.ids.length ? mentions.ids.filter(live)
-        : this.settings.agentsWakeEachOther ? [...this.runtimes.keys()].filter(id => id !== participant.id && live(id)) : [];
-      for (const target of targets) {
+    if (kind === "visible_complete") {
+      const decision = decideWake({ author: { id: participant.id, human: false }, addressed: mentions.ids, live: this.wakeableVibemates(),
+        agentsWakeEachOther: this.settings.agentsWakeEachOther, focused: this.focused, hops: this.hops, hopLimit: this.hopLimit });
+      for (const target of woken(decision)) {
         const owner = this.runtimes.get(target)!, epoch = this.participants.get(target)?.deliveryEpoch;
         if (epoch) obligations.push({ ...base("route", target), kind: "route", messageId: envelope.id,
-          participantId: target, sessionId: owner.sessionId, deliveryEpoch: epoch });
+          participantId: target, sessionId: owner.session.sessionId, deliveryEpoch: epoch });
       }
     }
     return { version: 1, kind, reportHash: envelope.reportHash, owner: envelope.owner, at, text,
@@ -5748,7 +4717,8 @@ export class Room extends EventEmitter {
   private nativeMessage(envelope: NativeEnvelope, decision: NativeDecision, participant: Participant): ChatMessage | null {
     if (["silent", "notes_only", "instruction_marker"].includes(decision.kind)) return null;
     const hidden = decision.kind === "referee_hidden", interrupted = envelope.stopReason !== "end_turn";
-    return { id: envelope.id, seq: nativeInteger(Math.max(this.seq, this.history.maxSeq(this.id)) + 1, 1), displayOrder: nativeInteger(Math.max(this.displayOrder, this.history.nativeDisplayHighWater(this.id)) + 1, 1),
+    const next = this.roomMessages.nextNative(this.history.maxSeq(this.id), this.history.nativeDisplayHighWater(this.id));
+    return { id: envelope.id, seq: nativeInteger(next.seq, 1), displayOrder: nativeInteger(next.displayOrder, 1),
       from: participant.id, fromName: participant.name, to: hidden ? [] : decision.to, toNames: hidden ? [] : decision.toNames,
       text: hidden ? `Reply held back; correction requested: ${decision.corrections.map(c => c.replace(/^reminder:\s*/i, "")).join("; ")}` : decision.text,
       ts: decision.at, kind: hidden ? "hidden" : "chat", streaming: false, usage: null,
@@ -5759,310 +4729,141 @@ export class Room extends EventEmitter {
   }
 
   private drainNativeReports(id: string, runtime: AgentRuntime): void {
-    if (runtime.nativeDraining || runtime.workBusy || runtime.turnActive || runtime.turn || this.closing || this.readOnly || this.recordHold) return;
-    if (this.runtimes.get(id) !== runtime || !runtime.agent.alive || runtime.retiring) return;
-    runtime.nativeDraining = true;
-    runtime.nativeHold = false;
-    try {
-      if (this.divertPending) this.drainDivert();
-      if (this.nativeRecoveryHold || this.divertPending || [...this.unsavedNative.values()].some(e => e.owner.participantId === id)) { runtime.nativeHold = true; return; }
-      const visited = new Set<string>();
-      while (!runtime.nativeHold) {
-        const batch = this.history.listNativeDelivery(this.id, id).filter(record => !visited.has(record.envelope.id));
-        if (!batch.length) break;
-        for (let record of batch) {
-          visited.add(record.envelope.id);
-          const envelope = record.envelope, reason = this.nativeOwnerReason(envelope, runtime);
-          if (reason || this.nativeHandles.get(envelope.id) !== runtime.agent) {
-            if (record.state === "pending" || record.state === "held") {
-              const hold = reason ?? "runtime_missing";
-              if (record.state !== "held" || record.holdReason !== hold) this.history.holdNative(this.id, nativeSubject(envelope), record.stateRevision, hold, Date.now());
-            } else {
-              for (const obligation of record.obligations) {
-                const ref = { subject: nativeSubject(envelope), obligationId: obligation.id };
-                if (obligation.phase === "pending") this.nativeTransition(ref, "held_owner");
-                else if (obligation.phase === "attempt_started") this.nativeTransition(ref, "attempt_unknown");
-              }
-            }
-            if (!reason) { runtime.nativeHold = true; break; }
-            continue;
-          }
-          if (record.state === "held") {
-            if (["note_subject_changed", "stale_session", "stale_epoch", "stale_generation", "retired_owner"].includes(record.holdReason!)) { runtime.nativeHold = true; break; }
-            record = this.history.releaseNative(this.id, nativeSubject(envelope), record.stateRevision);
-          }
-          if (record.obligations.some(o => o.phase === "held_owner")) {
-            for (const obligation of record.obligations) if (obligation.phase === "held_owner") this.nativeTransition({ subject: nativeSubject(envelope), obligationId: obligation.id }, "pending");
-            const refreshed = this.history.nativeReceipt(this.id, this.uuid, envelope.id);
-            if (!refreshed || refreshed.type !== "native") throw new Error("native_recovery_receipt_unknown");
-            record = refreshed.record;
-          }
-          if (record.state === "pending") {
-            const participant = this.participants.get(id)!, decision = this.prepareNativeDecision(envelope, participant, runtime), message = this.nativeMessage(envelope, decision, participant);
-            let finalized: NativeRecord | undefined;
-            const writeRecord = () => { finalized = this.history.finalizeNative(this.id, nativeSubject(envelope), record.stateRevision, decision, message); };
-            if (decision.notes) {
-              if (!this.commitNativeNoteDecision) { this.nativeFault(id, "note_metadata_unavailable"); break; }
-              const disposition = this.commitNativeNoteDecision(this, id, decision.notes, writeRecord);
-              if (disposition === "changed" || disposition === "superseded") {
-                this.history.holdNative(this.id, nativeSubject(envelope), record.stateRevision, "note_subject_changed", Date.now());
-                runtime.nativeHold = true; break;
-              }
-            } else writeRecord();
-            if (!finalized) throw new Error("native_finalize_not_confirmed");
-            record = finalized;
-          }
-          this.projectNativeDecision(record, runtime);
-        }
-      }
-    } catch {
-      this.nativeFault(id, "commit_unknown");
-    } finally { runtime.nativeDraining = false; }
-    if (!runtime.nativeHold) this.nativeFaultReasons.delete(id);
-    if (!this.nativeLaneBlocked(runtime) && !runtime.workBusy && !runtime.turnActive && !runtime.turn) {
-      if (!this.resumeDeferredNotes(id, runtime)) {
-        if (runtime.backgroundCorrections?.length && !this.participants.get(id)?.muted && !this.focused) this.requestTurn(id, false, false, true);
-        else if (runtime.pendingTurn) this.requestTurn(id, false, false, false, "resume");
-      }
-    }
-    if (this.hasPendingNativeDelivery()) this.onNativePending?.(this.id);
+    this.nativeReports.drain(id, runtime);
   }
 
-  private projectNativeDecision(record: NativeRecord, runtime: AgentRuntime): void {
-    const decision = record.decision, envelope = record.envelope, participant = this.participants.get(envelope.owner.participantId);
-    if (!decision || !participant || record.state === "tombstoned") return;
-    const projection = `${envelope.id}:projection`;
-    if (!this.nativeLocalEffects.has(projection)) {
-      if (record.receipt) {
-        const message = this.history.get(this.id, record.receipt.seq);
-        if (!message || message.id !== envelope.id || message.details?.reportHash !== envelope.reportHash) throw new Error("native_publication_unknown");
-        this.seq = Math.max(this.seq, message.seq); this.displayOrder = Math.max(this.displayOrder, message.displayOrder ?? message.seq);
-        if (!this.messages.some(m => m.id === message.id)) this.messages.push(message);
-        this.push({ type: "message", message }); this.numberQuotesOf(message);
-      }
-      if (decision.corrections.length) participant.violations = (participant.violations ?? 0) + decision.corrections.length;
-      if (decision.kind === "referee_hidden") participant.retries = (participant.retries ?? 0) + 1;
-      this.nativeLocalEffects.add(projection);
-      if (decision.corrections.length) this.push({ type: "participant", participant });
+  private publishNativeRecord(record: NativeRecord): "published" | "tombstoned" | "unknown" {
+    const envelope = record.envelope, owner = envelope.owner;
+    if (record.state === "tombstoned") return "tombstoned";
+    if (!record.receipt || owner.roomId !== this.id || owner.roomUuid !== this.uuid || owner.folderId !== this.folderId
+      || owner.generation !== this.history.nativeGeneration(this.id)) return "unknown";
+    const message = this.history.get(this.id, record.receipt.seq);
+    if (!message || message.id !== envelope.id || message.details?.reportHash !== envelope.reportHash) return "unknown";
+    this.roomMessages.acceptRecorded(message);
+    this.push({ type: "message", message }); this.numberQuotesOf(message);
+    return "published";
+  }
+
+  private routeNativeObligation(obligation: NativeRouteObligation, ref: NativeObligationRef, addressed: boolean, hop: NativeHop): "routed" | "superseded" {
+    const holder = () => {
+      const target = this.runtimes.get(obligation.participantId), p = this.participants.get(obligation.participantId);
+      return target && p && !this.closing && !this.readOnly && !this.recordHold && target.session.agent.alive && !target.session.retiring
+        && target.session.sessionId === obligation.sessionId && p.deliveryEpoch === obligation.deliveryEpoch && !p.muted && !this.focused ? { target, p } : null;
+    };
+    const first = holder();
+    if (!first || this.hops >= this.hopLimit && !hop.spent) return "superseded";
+    if (!hop.spent) {
+      this.turnOrder.countHop();
+      hop.spend();
+      this.push(this.roomEvent());
+      const now = holder();
+      if (!now || now.target !== first.target || now.p !== first.p) return "superseded";
     }
-    for (const obligation of record.obligations) {
-      const ref = { subject: nativeSubject(envelope), obligationId: obligation.id };
-      if (obligation.phase === "attempt_started") {
-        if (!this.nativeLocalEffects.has(obligation.id)) this.nativeTransition(ref, "attempt_unknown");
-        continue;
-      }
-      if (obligation.phase !== "pending" || this.nativeLocalEffects.has(obligation.id)) continue;
-      if (obligation.kind === "note") {
-        const disposition = nativeNoteDisposition(captureNativeNoteSubject(participant), obligation.effect);
-        if (disposition === "apply") {
-          Object.assign(participant, { notes: obligation.effect.next.notes ?? undefined, notesAt: obligation.effect.next.notesAt ?? undefined,
-            notesSeq: obligation.effect.next.notesSeq ?? undefined, notesWrittenAt: obligation.effect.next.notesWrittenAt ?? undefined,
-            notesRevision: obligation.effect.next.notesRevision, nativeNoteReceipt: obligation.effect.next.nativeNoteReceipt ?? undefined });
-          runtime.notesDue = false; runtime.notesMisses = 0; runtime.notesPending = false;
-          this.push({ type: "participant", participant });
-        }
-        this.nativeTransition(ref, disposition === "changed" || disposition === "superseded" ? "superseded" : "applied_local");
-      } else if (obligation.kind === "header") {
-        runtime.headerNotes.push(...obligation.lines);
-        (runtime.nativeHeaderObligations ??= []).push(ref);
-      } else if (obligation.kind === "correction") {
-        const message = this.messages.find(m => m.id === envelope.id);
-        if (!message) throw new Error("native_hidden_receipt_missing");
-        const header = buildHeader(this.effectiveSettings(), this.personaOf(participant), this.roster(), this.hops, ["your last reply was not posted; see the correction below"]);
-        this.queueBackgroundCorrection(participant.id, runtime, { prompt: composeCorrectionPrompt({ header, originalText: obligation.original,
-          corrections: obligation.corrections, personaName: participant.name }), original: obligation.original,
-          corrections: obligation.corrections, record: message, nativeObligation: ref });
-      } else {
-        const target = this.runtimes.get(obligation.participantId), p = this.participants.get(obligation.participantId);
-        const hop = `${envelope.id}:hop`;
-        if (!target || !p || !target.agent.alive || target.retiring || target.sessionId !== obligation.sessionId || p.deliveryEpoch !== obligation.deliveryEpoch || p.muted || this.focused || this.hops >= this.hopLimit && !this.nativeLocalEffects.has(hop)) {
-          this.nativeTransition(ref, "superseded");
-        } else {
-          if (!this.nativeLocalEffects.has(hop)) { this.hops++; this.nativeLocalEffects.add(hop); this.push(this.roomEvent()); }
-          (target.nativePromptObligations ??= []).push(ref);
-          this.requestTurn(p.id, decision.to.includes(p.id), false, false, "native");
-        }
-      }
-      this.nativeLocalEffects.add(obligation.id);
-    }
+    (first.target.native.nativePromptObligations ??= []).push(ref);
+    this.requestTurn(first.p.id, addressed, false, false, "native");
+    return "routed";
   }
 
   private nativeTransition(ref: NativeObligationRef, phase: NativeObligation["phase"]): void {
-    const receipt = this.history.nativeReceipt(this.id, ref.subject.roomUuid, ref.subject.id);
-    if (!receipt || receipt.type !== "native" || receipt.record.envelope.reportHash !== ref.subject.reportHash) throw new Error("native_obligation_unknown");
-    this.history.updateNativeObligation(this.id, ref.subject, receipt.record.stateRevision, ref.obligationId, phase);
+    this.nativeReports.transition(ref, phase);
   }
 
   private nativePromptEligible(ref: NativeObligationRef, participant: Participant, runtime: AgentRuntime): boolean {
-    const receipt = this.history.nativeReceipt(this.id, ref.subject.roomUuid, ref.subject.id);
-    if (!receipt || receipt.type !== "native" || receipt.record.envelope.reportHash !== ref.subject.reportHash) throw new Error("native_prompt_subject_unknown");
-    const record = receipt.record;
-    if (record.state === "tombstoned") return false;
-    const source = this.runtimes.get(record.envelope.owner.participantId);
-    if (!source || this.nativeOwnerReason(record.envelope, source) || this.nativeHandles.get(record.envelope.id) !== source.agent) throw new Error("native_prompt_owner_changed");
-    const obligation = record.obligations.find(o => o.id === ref.obligationId);
-    if (!obligation) throw new Error("native_prompt_obligation_unknown");
-    if (["suppressed_deleted", "superseded", "completed", "attempt_unknown"].includes(obligation.phase)) return false;
-    if (obligation.phase !== "pending") throw new Error("native_prompt_already_attempted");
-    if (obligation.kind === "route") {
-      if (obligation.participantId !== participant.id || obligation.sessionId !== runtime.sessionId || obligation.deliveryEpoch !== participant.deliveryEpoch) throw new Error("native_route_owner_changed");
-    } else if (obligation.kind !== "correction" || record.envelope.owner.participantId !== participant.id) throw new Error("native_prompt_kind_changed");
-    return true;
+    return this.nativeReports.promptEligible(ref, participant, runtime);
   }
 
   private startNativePrompt(ref: NativeObligationRef, participant: Participant, runtime: AgentRuntime): boolean {
-    if (!this.nativePromptEligible(ref, participant, runtime)) return false;
-    this.nativeTransition(ref, "attempt_started");
-    return true;
+    return this.nativeReports.startPrompt(ref, participant, runtime);
   }
 
-  private finishBackgroundDelivery(id: string, runtime: AgentRuntime, messageId: string, deleted: boolean): void {
-    if (!this.unconfirmedBackground.has(messageId)) return;
-    const retry = this.unconfirmedBackground.get(messageId);
-    this.unconfirmedBackground.delete(messageId);
-    if (deleted) return;
-    if (retry) this.queueBackgroundCorrection(id, runtime, retry);
-    else {
-      const message = this.messages.find(message => message.id === messageId);
-      if (message?.kind === "chat" && !message.audience && !message.failed) this.route(message);
-    }
+  private confirmBackground(messageId: string, receipt: { deleted: boolean; hash: string | null }): void {
+    this.nativeReports.confirmPost(messageId, receipt);
+  }
+
+  private journalApplied(): void {
+    this.nativeReports.journalApplied();
   }
 
   private queueBackgroundCorrection(id: string, runtime: AgentRuntime, retry: RetryRequest): void {
-    runtime.backgroundBacklogPending ||= runtime.pendingTurn;
-    (runtime.backgroundCorrections ??= []).push(retry);
+    runtime.native.backgroundBacklogPending ||= runtime.queue.pendingTurn;
+    (runtime.native.backgroundCorrections ??= []).push(retry);
     this.requestTurn(id, false, false, true);
   }
 
-  private showDraft(turn: NonNullable<AgentRuntime["turn"]>): void {
-    if (turn.published || turn.hidden) return;
-    turn.published = true;
-    turn.publishedAt = Date.now();
-    turn.message.displayOrder = ++this.displayOrder;
-    this.push({ type: "message", message: turn.message });
+  private showDraft(owner: DraftOwner): "shown" | "skipped" | "refused" {
+    return this.draftStream.show(owner);
   }
 
   private checkForCompaction(participant: Participant, runtime: AgentRuntime, used: number, size: number): void {
-    if (!looksCompacted(runtime.lastUsed, used) || runtime.briefPending) return;
-    runtime.briefPending = `context shrank from ${runtime.lastUsed} to ${used} tokens (compaction?)`;
-    runtime.log.info(`usage dropped ${runtime.lastUsed} -> ${used}; full instructions scheduled`);
+    if (!looksCompacted(runtime.session.lastUsed, used) || runtime.brief.briefPending) return;
+    runtime.brief.briefPending = `context shrank from ${runtime.session.lastUsed} to ${used} tokens (compaction?)`;
+    runtime.session.log.info(`usage dropped ${runtime.session.lastUsed} -> ${used}; full instructions scheduled`);
     participant.contextEvent = { kind: "compacted", at: Date.now(), used, size };
-    runtime.notesDue = false;
-    if (overThreshold(used, size)) this.askForNotes(runtime);
-    this.postSystem(`${participant.name} compacted its context (${Math.round(runtime.lastUsed / 1000)}k → ${Math.round(used / 1000)}k tokens); the room instructions are re-sent with its next turn${participant.notes ? ", with its notes" : ""}.`, "human", false, { tone: "attention" });
+    runtime.notes.notesDue = false;
+    if (overThreshold(used, size)) this.agentNotes.ask(runtime);
+    this.postSystem(`${participant.name} compacted its context (${Math.round(runtime.session.lastUsed / 1000)}k → ${Math.round(used / 1000)}k tokens); the room instructions are re-sent with its next turn${participant.notes ? ", with its notes" : ""}.`, "human", false, { tone: "attention" });
   }
 
   private onSessionUpdate(id: string, update: SessionUpdate): void {
     const runtime = this.runtimes.get(id);
     const participant = this.participants.get(id);
     if (!runtime || !participant) return;
-    const turn = runtime.turn;
+    const turn = runtime.work.turn;
+    const owner: DraftOwner = { participant, runtime, turn: turn ?? null };
     if (turn) {
-      if (runtime.quiet && runtime.quiet.turnId === turn.message.id) {
+      if (runtime.work.quiet && runtime.work.quiet.turnId === turn.message.id) {
         const waited = Math.round((Date.now() - (turn.lastSignAt ?? turn.startedAt)) / 60_000);
-        runtime.quiet = undefined;
-        if (this.toldOfSilence.has(turn.message.id)) this.postSystem(`${participant.name} answered after ${waited} minute${waited === 1 ? "" : "s"}.`, "human", false, { agentId: id });
+        runtime.work.quiet = undefined;
+        if (this.silence.toldOf(turn.message.id)) this.postSystem(`${participant.name} answered after ${waited} minute${waited === 1 ? "" : "s"}.`, "human", false, { agentId: id });
         this.push({ type: "participant", participant });
       }
       turn.lastSignAt = Date.now();
       if (WORK_SIGNS.has(update.sessionUpdate)) turn.lastWorkAt = Date.now();
     }
 
+    const held = () => this.participants.get(id) === participant && this.runtimes.get(id) === runtime;
     switch (update.sessionUpdate) {
-      case "agent_message_chunk": {
-        const u = update as { content: ContentBlock; messageId?: string | null };
-        const messageId = u.messageId ?? null;
-        if (!turn) {
-          if (messageId) runtime.strayMessageId = messageId;
-          return;
-        }
-        if (messageId && messageId === runtime.strayMessageId) return;
-        let text = contentText(u.content);
-        if (messageId && !turn.sawMessageId && turn.message.text) {
-          const notices = (turn.message.notices ??= []);
-          notices.push(turn.message.text.trim());
-          turn.message.text = "";
-          turn.message.answerFrom = undefined;
-          turn.shownLength = 0;
-          if (turn.published) this.push({ type: "message", message: turn.message });
-        } else if (messageId !== turn.messageId && turn.message.text) {
-          text = "\n\n" + text;
-          turn.message.answerFrom = turn.message.text.length + 2;
-        }
-        if (messageId) turn.sawMessageId = true;
-        turn.messageId = messageId;
-        const settled = settledVisible(turn.message.text + text);
-        const shown = settled.slice(turn.shownLength ?? 0);
-        turn.shownLength = settled.length;
-        turn.message.text += text;
-        if (!turn.published) {
-          if (!looksSilent(turn.message.text) && shown) this.showDraft(turn);
-          return;
-        }
-        if (shown) this.push({ type: "chunk", id: turn.message.id, text: shown });
-        return;
-      }
-      case "agent_thought_chunk": {
-        if (!turn) return;
-        const text = contentText((update as { content: ContentBlock }).content);
-        turn.message.thought = (turn.message.thought ?? "") + text;
-        if (turn.published) this.push({ type: "thought", id: turn.message.id, text });
-        return;
-      }
+      case "agent_message_chunk":
+      case "agent_thought_chunk":
       case "tool_call":
-      case "tool_call_update": {
-        if (!turn) return;
-        this.showDraft(turn);
-        const u = update as ToolCallUpdate;
-        const calls = (turn.message.toolCalls ??= []);
-        let view = calls.find((c) => c.toolCallId === u.toolCallId);
-        if (!view) {
-          view = { toolCallId: u.toolCallId, title: u.title ?? u.name ?? "tool call" };
-          calls.push(view);
-        }
-        if (!applyToolCallUpdate(view, u) && update.sessionUpdate === "tool_call_update") return;
-        this.push({ type: "toolcall", id: turn.message.id, toolCall: view });
+      case "tool_call_update":
+      case "plan":
+        this.draftStream.update(owner, update as unknown as { sessionUpdate: string } & Record<string, unknown>);
         return;
-      }
-      case "plan": {
-        if (!turn) return;
-        this.showDraft(turn);
-        const entries = (update as { entries: PlanEntry[] }).entries;
-        turn.message.plan = entries;
-        this.push({ type: "plan", id: turn.message.id, entries });
-        return;
-      }
       case "usage_update": {
+        if (!held()) return;
         const u = update as { used: number; size: number; cost?: { amount: number; currency: string } | null };
-        if (emptyUsageReport(runtime.lastUsed, u.used)) {
-          runtime.log.info(`usage report of 0 after ${runtime.lastUsed} tokens ignored (failed request?)`);
+        if (emptyUsageReport(runtime.session.lastUsed, u.used)) {
+          runtime.session.log.info(`usage report of 0 after ${runtime.session.lastUsed} tokens ignored (failed request?)`);
           return;
         }
-        runtime.usageSeenThisTurn = true;
+        runtime.work.usageSeenThisTurn = true;
         participant.contextUsed = u.used;
         participant.contextSize = u.size;
         if (u.cost) participant.cost = { amount: u.cost.amount, currency: u.cost.currency };
         this.checkForCompaction(participant, runtime, u.used, u.size);
-        if (crossedThreshold(runtime.lastUsed, u.used, u.size)) {
-          const asked = this.askForNotes(runtime);
+        if (crossedThreshold(runtime.session.lastUsed, u.used, u.size)) {
+          const asked = this.agentNotes.ask(runtime);
           participant.contextEvent = { kind: "threshold", at: Date.now(), used: u.used, size: u.size };
           const percent = Math.round((100 * u.used) / u.size);
           this.postSystem(asked
             ? `${participant.name} is at ${percent}% of its context; it will leave notes with its next reply. You can respawn it with memory from its panel.`
             : `${participant.name} is at ${percent}% of its context. You can take its notes or respawn it with memory from its panel.`, "human", false, { tone: "attention" });
-          runtime.log.info(`context at ${u.used}/${u.size}: ${asked ? "notes due" : "automatic notes are off"}`);
+          runtime.session.log.info(`context at ${u.used}/${u.size}: ${asked ? "notes due" : "automatic notes are off"}`);
         }
-        runtime.lastUsed = u.used;
+        runtime.session.lastUsed = u.used;
         this.push({ type: "participant", participant });
         return;
       }
       case "config_option_update": {
+        if (!held()) return;
         participant.configOptions = (update as { configOptions: SessionConfigOption[] }).configOptions;
-        this.applyConfigSummary(participant);
+        summarizeConfig(participant);
         this.push({ type: "participant", participant });
         return;
       }
       case "current_mode_update": {
+        if (!held()) return;
         participant.mode = (update as { currentModeId: string }).currentModeId;
         this.push({ type: "participant", participant });
         return;
@@ -6072,214 +4873,44 @@ export class Room extends EventEmitter {
       case "user_message_chunk":
         return;
       default:
-        runtime.log.info(`unhandled session update: ${update.sessionUpdate}`);
+        runtime.session.log.info(`unhandled session update: ${update.sessionUpdate}`);
     }
   }
 
   private onPermissionRequest(id: string, params: RequestPermissionParams): Promise<RequestPermissionResponse> {
     const participant = this.participants.get(id);
     const runtime = this.runtimes.get(id);
+    const owner: DraftOwner | null = participant && runtime ? { participant, runtime, turn: runtime.work.turn ?? null } : null;
     if (participant?.agentType === "cursor") {
       const normalized = cursorPermissionInput(params.toolCall);
       if (normalized !== params.toolCall) {
         params = { ...params, toolCall: normalized };
-        const view = runtime?.turn?.message.toolCalls?.find(call => call.toolCallId === normalized.toolCallId);
-        if (view && applyToolCallUpdate(view, normalized)) this.push({ type: "toolcall", id: runtime!.turn!.message.id, toolCall: view });
+        if (owner) this.draftStream.toolView(owner, normalized);
       }
     }
-    if (runtime && this.isSkillToolCall(runtime, params)) {
+    const known = runtime?.work.turn?.message.toolCalls?.find(t => t.toolCallId === params.toolCall.toolCallId);
+    if (runtime && roomToolNeedsNoQuestion(params.toolCall, known, !!runtime.session.mcpToken)) {
       const option = params.options.find((o) => o.kind === "allow_once");
       if (option) {
-        runtime.log.info(`room tool permission auto-approved (${option.optionId})`);
+        runtime.session.log.info(`room tool permission auto-approved (${option.optionId})`);
         return Promise.resolve({ outcome: { outcome: "selected", optionId: option.optionId } });
       }
     }
-    return new Promise((resolve) => {
-      const entry: PermissionEntry = {
-        key: randomUUID(),
-        participantId: id,
-        toolCall: { ...params.toolCall, title: roomToolTitle(params.toolCall, runtime?.turn?.message.toolCalls?.find(t => t.toolCallId === params.toolCall.toolCallId)) ?? params.toolCall.title },
-        options: isWrappedRoomCall(params.toolCall, runtime?.turn?.message.toolCalls?.find(t => t.toolCallId === params.toolCall.toolCallId))
-          ? params.options.filter(option => option.kind !== "allow_always") : params.options,
-        ts: Date.now(),
-        afterSeq: this.seq,
-        resolve,
-      };
-      this.permissions.set(entry.key, entry);
-      const { resolve: _r, ...view } = entry;
-      if (runtime?.turn) this.showDraft(runtime.turn);
-      this.push({ type: "permission", permission: view });
-      this.notice(`${participant?.name ?? id} asks for permission: ${params.toolCall.title ?? params.toolCall.toolCallId}`, "info");
-    });
+    return this.permissions.ask(id,
+      { ...params.toolCall, title: roomToolTitle(params.toolCall, known) ?? params.toolCall.title },
+      isWrappedRoomCall(params.toolCall, known) ? params.options.filter(option => option.kind !== "allow_always") : params.options,
+      params.toolCall.title ?? params.toolCall.toolCallId,
+      () => { if (owner?.turn) this.showDraft(owner); },
+    );
   }
 
   private onAgentExit(id: string, code: number | null, signal: NodeJS.Signals | null, agent: AcpAgent): void {
-    const participant = this.participants.get(id);
-    const runtime = this.runtimes.get(id);
-    if (!participant) return;
-    if (!runtime || runtime.agent !== agent) return;
-    delete participant.authStatus;
-    this.cancelPermissionsOf(id);
-    if (this.closing || runtime.retiring) {
-      this.forgetRuntime(id);
-      return;
-    }
-    if (runtime) {
-      runtime.log.warn(`agent process exited (code ${code}, signal ${signal})`);
-      const kept = runtime.transcript.dump(`the agent process exited (code ${code}, signal ${signal})`);
-      if (kept) runtime.log.info(`the protocol around the exit was kept: ${kept}`);
-      this.forgetRuntime(id);
-    }
-    if (participant.status !== "left") {
-      if (runtime) this.restoredSeen.set(id, runtime.lastSeenSeq);
-      participant.status = "offline";
-      participant.fell = true;
-      participant.statusDetail = `process exited (code ${code}${signal ? `, signal ${signal}` : ""}); reconnect to continue`;
-      this.push({ type: "participant", participant });
-      this.notice(`${participant.name}: agent process exited.`, "error");
-    }
+    this.agentSessions.exited(id, code, signal, agent);
   }
 
-
-  private async openSession(agent: AcpAgent, cwd: string, log: Logger, mcpServers: McpServer[] = [], recipe?: AgentRecipe, meta?: Record<string, unknown>): Promise<NewSessionResult> {
-    try {
-      return await agent.newSession(cwd, mcpServers, meta);
-    } catch (error) {
-      if (!isAuthRequired(error) || !agent.authMethods.length) throw error;
-      log.info(`session/new needs authentication: ${describeError(error)}`);
-      if (recipe?.loginState === "missing") throw new Error(`authentication required: ${recipe.vendor} is not logged in on this machine${recipe.loginCommand ? ` (its own CLI: ${recipe.loginCommand})` : ""}`);
-    }
-    const failures: string[] = [];
-    for (const method of agent.authMethods) {
-      const human = (method as { type?: string }).type === "terminal" ? "needs a terminal" : needsTheHuman(method, recipe) ? "opens a browser (a sign-in that needs you)" : null;
-      if (human) {
-        failures.push(`${method.id}: ${human}`);
-        continue;
-      }
-      log.info(`authenticate with "${method.id}"${method.name ? ` (${method.name})` : ""}`);
-      try {
-        const done = await Promise.race([agent.authenticate(method.id).then(() => true), delay(AUTH_WAIT_MS).then(() => false)]);
-        if (!done) {
-          failures.push(`${method.id}: no answer in ${AUTH_WAIT_MS / 1000} s (a sign-in that needs you)`);
-          continue;
-        }
-        return await agent.newSession(cwd, mcpServers, meta);
-      } catch (error) {
-        failures.push(`${method.id}: ${describeError(error)}`);
-      }
-    }
-    throw new Error(`authentication failed: ${recipe?.vendor ?? "the agent"} is not logged in on this machine. ${failures.join("; ")}`);
-  }
-
-  private async applyConfig(
-    runtime: AgentRuntime,
-    participant: Participant,
-    wanted: { model: string | null; effort: string | null; mode: string | null },
-  ): Promise<ConfigShortfall[]> {
-    const warnings: ConfigShortfall[] = [];
-    const plan: [string, string, string | null][] = [
-      ["model", "model", wanted.model],
-      ["thought_level", "effort", wanted.effort],
-      ["mode", "mode", wanted.mode],
-    ];
-    for (const [category, label, value] of plan) {
-      if (!value) continue;
-      const option = participant.configOptions?.find((o) => o.category === category);
-      if (!option || option.type !== "select") {
-        if (category === "mode" && participant.modes?.some((m) => m.id === value)) {
-          try {
-            const reported = await runtime.agent.setMode(runtime.sessionId, value);
-            participant.mode = reported?.currentModeId ?? value;
-          } catch (error) {
-            warnings.push({ category, log: `mode: set_mode failed: ${describeError(error)}`, said: `the agent refused mode ${value}; it uses ${participant.mode ?? "its own"}` });
-          }
-          continue;
-        }
-        warnings.push({ category, log: `${category}: the agent exposes no such config option; left at its default`, said: `${label} ${value} cannot be chosen for this agent; it uses the agent's own` });
-        continue;
-      }
-      const values = flattenOptions(option.options);
-      if (!values.some((v) => v.value === value)) {
-        warnings.push({ category, log: `${category}: "${value}" is not offered (${values.map((v) => v.value).join(", ")}); left at ${String(option.currentValue)}`, said: `${label} ${value} is not available on this computer; it uses ${String(option.currentValue)}` });
-        continue;
-      }
-      if (option.currentValue === value) continue;
-      try {
-        participant.configOptions = await runtime.agent.setConfigOption(runtime.sessionId, option.id, value);
-        const taken = participant.configOptions?.find((o) => o.id === option.id)?.currentValue;
-        if (taken !== undefined && taken !== value) {
-          warnings.push({ category, log: `${category}: asked for "${value}", the agent took "${String(taken)}"`, said: `the agent took ${label} ${String(taken)} instead of ${value}` });
-        }
-      } catch (error) {
-        warnings.push({ category, log: `${category}: set_config_option failed: ${describeError(error)}`, said: `the agent refused ${label} ${value}; it uses ${String(option.currentValue)}` });
-      }
-    }
-    const recipe = participant.agentType ? getRecipe(participant.agentType) : undefined;
-    if (recipe?.bypassConfig && wanted.mode && wanted.mode === recipe.bypassMode) {
-      for (const [optionId, value] of Object.entries(recipe.bypassConfig)) {
-        const option = participant.configOptions?.find((o) => o.id === optionId);
-        if (!option || option.type !== "select" || option.currentValue === value) continue;
-        if (!flattenOptions(option.options).some((v) => v.value === value)) continue;
-        try {
-          participant.configOptions = await runtime.agent.setConfigOption(runtime.sessionId, option.id, value);
-        } catch (error) {
-          warnings.push({ category: optionId, log: `${optionId}: set_config_option failed: ${describeError(error)}`, said: `the agent refused ${option.name || optionId} ${value}, which acting without asking needs; it may ask before it acts` });
-        }
-      }
-    }
-    this.applyConfigSummary(participant);
-    if (wanted.mode && participant.mode && participant.mode !== wanted.mode && !warnings.some(w => w.category === "mode")) {
-      warnings.push({ category: "mode", log: `mode: requested ${wanted.mode}; the agent reports ${participant.mode}`, said: `mode ${wanted.mode} was asked for; the agent uses ${participant.mode}` });
-    }
-    return warnings;
-  }
-
-  private applyConfigSummary(participant: Participant): void {
-    const pick = (category: string): string | undefined => {
-      const option = participant.configOptions?.find((o) => o.category === category);
-      return option ? String(option.currentValue) : undefined;
-    };
-    participant.model = pick("model") ?? participant.model;
-    participant.effort = pick("thought_level") ?? participant.effort;
-    participant.mode = pick("mode") ?? participant.mode;
-  }
-
-  private failStart(participant: Participant, error: unknown, fresh: boolean, stderr: string[] = []): Error {
-    participant.statusDetail = describeError(error);
-    const recipe = getRecipe(participant.agentType ?? "");
-    participant.trouble = classifyStartFailure({
-      error: participant.statusDetail,
-      stderr,
-      vendor: recipe?.vendor ?? participant.agentVendor ?? "The coding agent",
-      loginCommand: recipe?.loginCommand || undefined,
-      installHint: recipe?.installHint || undefined,
-      loginState: recipe?.loginState,
-      loginFromHere: !!recipe && recipe.loginFlow.kind !== "none",
-    });
-    this.log.warn(`${participant.name}: failed to start: ${participant.statusDetail}`);
-    if (fresh) {
-      participant.status = "error";
-      this.push({ type: "participant", participant });
-      this.participants.delete(participant.id);
-      this.push({ type: "participant.removed", id: participant.id });
-    } else {
-      participant.status = "offline";
-      participant.fell = true;
-      this.push({ type: "participant", participant });
-    }
-    return new Error(`${participant.trouble.what} ${participant.trouble.advice} (${participant.statusDetail})`);
-  }
 
   private cancelPermissionsOf(id: string): void {
-    let ended = 0;
-    for (const [key, entry] of this.permissions) {
-      if (entry.participantId !== id) continue;
-      this.permissions.delete(key);
-      entry.resolve({ outcome: { outcome: "cancelled" } });
-      this.push({ type: "permission.resolved", key, optionId: null });
-      ended++;
-    }
-    if (ended) this.log.info(`${this.participants.get(id)?.name ?? id}'s question${ended === 1 ? "" : "s"} for permission ended with the turn, unanswered`);
+    this.permissions.cancelOf(id);
   }
 
   private personaOf(participant: Participant): Persona {
@@ -6325,9 +4956,8 @@ export class Room extends EventEmitter {
   }
 
   private postSystem(text: string, audience?: "agents" | "human", wakes?: boolean, details?: ChatMessage["details"], bodyEdit?: BodyEdit): ChatMessage {
-    const message: ChatMessage = {
+    const message: MessageDraft = {
       id: randomUUID(),
-      seq: ++this.seq,
       from: "system",
       fromName: "",
       to: [],
@@ -6340,36 +4970,79 @@ export class Room extends EventEmitter {
     if (wakes) message.wakes = true;
     if (details) message.details = details;
     if (bodyEdit) message.bodyEdit = bodyEdit;
-    this.commit(message);
-    return message;
+    return this.commit(message).message;
   }
 
-  async setDir(dir: string): Promise<{ dir: string; restarted: string[] }> {
+  async setDir(dir: string, restart: "now" | "later" = "now"): Promise<{ dir: string; restarted: string[] }> {
     const next = resolve(String(dir ?? "").trim());
     if (!dir.trim()) throw new Error("working directory is required");
     if (!existsSync(next) || !statSync(next).isDirectory()) throw new Error(`working directory does not exist: ${next}`);
-    if (next === this.dir) return { dir: next, restarted: [] };
-    const previous = this.dir;
-    this.dir = next;
-    const restarted: string[] = [];
-    for (const id of [...this.runtimes.keys()]) {
-      const p = this.participants.get(id);
-      if (!p) continue;
-      await this.retireRuntime(id);
-      try {
-        await this.reconnect(id, { mode: "replay", reason: "the room moved to another folder" });
-        restarted.push(p.name);
-      } catch (error) {
-        this.notice(`${p.name} could not be restarted in the new folder: ${describeError(error)}`, "error");
+    return this.queueMove(() => this.moveDir(next, restart));
+  }
+
+  async restartInFolder(): Promise<{ dir: string; restarted: string[] }> {
+    return this.queueMove(() => this.moveDir(this.dir, "now"));
+  }
+
+  private queueMove(move: () => Promise<{ dir: string; restarted: string[] }>): Promise<{ dir: string; restarted: string[] }> {
+    const queued = this.dirMoves.then(move);
+    this.dirMoves = queued.then(() => undefined, () => undefined);
+    return queued;
+  }
+  private dirMoves: Promise<void> = Promise.resolve();
+  private readonly starts = new Map<string, StartUnderWay>();
+  private readonly owedRestart = new Set<Participant>();
+
+  private async moveDir(next: string, restart: "now" | "later"): Promise<{ dir: string; restarted: string[] }> {
+    if (this.closing) return { dir: this.dir, restarted: [] };
+    const previous = this.dir, moved = next !== previous;
+    if (moved) {
+      for (const p of this.participants.values()) if (p.kind === "agent" && p.sessionId && !p.sessionDir) p.sessionDir = previous;
+      this.dir = next;
+      this.push(this.roomEvent());
+      for (const p of [...this.participants.values()].filter((v) => v.kind === "agent")) {
+        if (this.closing) return { dir: this.dir, restarted: [] };
+        if (this.participants.get(p.id) === p) this.push({ type: "participant", participant: p });
       }
     }
-    for (const p of this.participants.values()) {
-      if (p.kind === "agent" && !this.runtimes.has(p.id)) p.sessionId = undefined;
+    const restarted = restart === "now" ? await this.restartOutsideFolder() : [];
+    if (this.closing) return { dir: this.dir, restarted };
+    if (moved) {
+      this.postRoomEvent(`The room moved to ${next}${restarted.length ? `; ${restarted.join(", ")} restarted there` : restart === "later" ? "; the vibemates move there at their next restart" : ""}.`);
+      this.log.info(`working directory: ${previous} -> ${next} (${restart})`);
+    } else if (restarted.length) {
+      this.postRoomEvent(`${restarted.join(", ")} restarted in ${next}.`);
     }
-    this.push(this.roomEvent());
-    this.postRoomEvent(`The room moved to ${next}${restarted.length ? `; ${restarted.join(", ")} restarted there` : ""}.`);
-    this.log.info(`working directory: ${previous} -> ${next}`);
-    return { dir: next, restarted };
+    return { dir: this.dir, restarted };
+  }
+
+  private async restartOutsideFolder(): Promise<string[]> {
+    await Promise.all([...this.starts.values()].filter((start) => start.ticket.cwd !== this.dir).map((start) => start.settled));
+    const group: SeenVibemate[] = [...this.runtimes.entries()].flatMap(([id, runtime]) => {
+      const participant = this.participants.get(id);
+      return participant && runtime.session.cwd !== this.dir ? [{ participant, runtime }] : [];
+    });
+    for (const participant of this.owedRestart) {
+      if (this.participants.get(participant.id) === participant && !this.runtimes.has(participant.id)) group.push({ participant, runtime: null });
+      else this.owedRestart.delete(participant);
+    }
+    const restarted: string[] = [];
+    for (const member of group) {
+      const { participant } = member;
+      if (!this.operationHolds(member)) continue;
+      if (member.runtime) await this.retireRuntime(participant.id, member.runtime);
+      const without: SeenVibemate = { participant, runtime: null };
+      if (!this.operationHolds(without)) continue;
+      this.owedRestart.add(participant);
+      try {
+        const started = await this.reconnectExpected(participant, { mode: "replay", reason: "the room moved to another folder" });
+        if (started && this.operationHolds({ participant, runtime: started })) restarted.push(participant.name);
+      } catch (error) {
+        if (this.operationHolds(without)) this.notice(`${participant.name} could not be restarted in the new folder: ${describeError(error)}`, "error");
+      }
+      if (!this.closing && this.participants.get(participant.id) === participant) this.push({ type: "participant", participant });
+    }
+    return restarted;
   }
 
   startingWithHub = false;
@@ -6380,7 +5053,7 @@ export class Room extends EventEmitter {
       hopLimit: this.hopLimit,
       hops: this.hops,
       settings: this.settings,
-      customRulesText: this.renderRuleReferences(this.settings.customRules),
+      customRulesText: this.roomSettings.rulesText(),
       focused: this.focused,
       startingWithHub: this.startingWithHub,
       name: this.name,
@@ -6409,23 +5082,36 @@ export class Room extends EventEmitter {
 
   private participantView(participant: Participant): Participant & { lastSeenSeq?: number } {
     const runtime = this.runtimes.get(participant.id);
-    return { ...participant, lastSeenSeq: runtime?.lastSeenSeq ?? this.restoredSeen.get(participant.id),
-      pendingSettings: runtime?.pendingConfig?.length ? runtime.pendingConfig.map(entry => ({ id: entry.configId, name: this.configName(participant, entry.configId), value: entry.value })) : undefined,
-      activeTurnId: runtime?.turn && !runtime.turn.hidden ? runtime.turn.message.id : undefined,
-      lastSignAt: runtime?.turn && !runtime.turn.hidden ? (runtime.turn.lastWorkAt ?? runtime.turn.startedAt) : undefined,
-      quiet: this.quietTurn(participant.id) };
+    return { ...participant, lastSeenSeq: runtime?.reading.lastSeenSeq ?? this.restoredSeen.get(participant.id),
+      pendingSettings: runtime?.queue.pendingConfig?.length ? runtime.queue.pendingConfig.map(entry => ({ id: entry.configId, name: configName(participant, entry.configId), value: entry.value })) : undefined,
+      activeTurnId: runtime?.work.turn && !runtime.work.turn.hidden ? runtime.work.turn.message.id : undefined,
+      activeTurnInputThrough: runtime?.work.turn && !runtime.work.turn.hidden ? runtime.work.turn.inputThrough : undefined,
+      lastSignAt: runtime?.work.turn && !runtime.work.turn.hidden ? (runtime.work.turn.lastWorkAt ?? runtime.work.turn.startedAt) : undefined,
+      quiet: this.quietTurn(participant.id), folderPending: this.folderPending(participant) || undefined };
+  }
+
+  private folderPending(participant: Participant): boolean {
+    const runtime = this.runtimes.get(participant.id);
+    if (runtime) return runtime.session.cwd !== this.dir;
+    const start = this.starts.get(participant.id);
+    if (start && start.ticket.participant === participant) return start.ticket.cwd !== this.dir;
+    return this.owedRestart.has(participant);
+  }
+
+  private storedSessionHere(participant: Participant): boolean {
+    return !!participant.sessionId && (!participant.sessionDir || participant.sessionDir === this.dir);
   }
 
   private quietTurn(id: string): QuietTurn | undefined {
     const runtime = this.runtimes.get(id);
-    const turn = runtime?.turn;
-    if (!runtime?.quiet || !turn || turn.hidden || runtime.quiet.turnId !== turn.message.id) return undefined;
-    const stopping = runtime.retiring ? "forcing" : runtime.workCancelled ? "asked" : undefined;
+    const turn = runtime?.work.turn;
+    if (!runtime?.work.quiet || !turn || turn.hidden || runtime.work.quiet.turnId !== turn.message.id) return undefined;
+    const stopping = runtime.session.retiring ? "forcing" : runtime.work.workCancelled ? "asked" : undefined;
     return {
       since: turn.lastSignAt ?? turn.startedAt,
       turnId: turn.message.id,
-      processAlive: runtime.agent.alive,
-      ...(runtime.quiet.nudge ? { nudge: runtime.quiet.nudge } : {}),
+      processAlive: runtime.session.agent.alive,
+      ...(runtime.work.quiet.nudge ? { nudge: runtime.work.quiet.nudge } : {}),
       ...(stopping ? { stopping } : {}),
     };
   }
@@ -6471,29 +5157,8 @@ export function routeAdapterStderr(line: string, to: { note(text: string): void;
   to.keep(line);
 }
 
-function isAuthRequired(error: unknown): boolean {
-  if (error instanceof RemoteError) return error.rpc.code === -32000 || /auth/i.test(error.rpc.message);
-  return error instanceof Error && /auth/i.test(error.message);
-}
-
-function errorData(error: unknown): unknown {
-  if (!(error instanceof Error)) return undefined;
-  return (error as Error & { data?: unknown; rpc?: { data?: unknown } }).rpc?.data ?? (error as Error & { data?: unknown }).data;
-}
-
 function errorName(error: unknown): string {
   return errorCode(errorData(error));
-}
-
-function configShown(value: string | boolean): string {
-  return typeof value === "boolean" ? (value ? "on" : "off") : String(value);
-}
-
-function describeError(error: unknown): string {
-  if (!(error instanceof Error)) return String(error);
-  const data = errorData(error);
-  const detail = errorDetail(data);
-  return detail && !error.message.includes(detail) ? `${error.message}: ${detail}` : error.message;
 }
 
 function unchangingCall(participant: Participant): { kind: "config"; id: string; value: string | boolean } | { kind: "mode"; id: string } | null {
@@ -6504,67 +5169,6 @@ function unchangingCall(participant: Participant): { kind: "config"; id: string;
   return null;
 }
 
-function looksSilent(text: string): boolean {
-  const t = text.trim().toLowerCase();
-  return t.length <= SILENT_MARKER.length && SILENT_MARKER.startsWith(t);
-}
-
-export function applyToolCallUpdate(view: ToolCallView, u: ToolCallUpdate): boolean {
-  const before = JSON.stringify(view);
-  if (view.historySearch) {
-    if (u.status === "failed" && view.status !== "failed") { view.status = "failed"; view.title += " · Response failed"; }
-    return JSON.stringify(view) !== before;
-  }
-  if (view.messageCheck) {
-    if (u.status === "failed") { view.status = "failed"; view.title = "Message check failed"; view.output = toolOutputText(u) || view.output; }
-    return JSON.stringify(view) !== before;
-  }
-  if (u.title) view.title = u.title;
-  if (u.name) view.name = u.name;
-  if (u.kind !== undefined) view.kind = u.kind;
-  if (u.status !== undefined) view.status = u.status;
-  if (u.rawInput !== undefined) view.rawInput = u.rawInput;
-  const touched = [...(u.locations ?? []).map((l) => l.path), ...(u.content ?? []).filter((c) => c.type === "diff").map((c) => (c as { path: string }).path)].filter((path) => typeof path === "string" && path);
-  if (touched.length) view.locations = [...new Set([...(view.locations ?? []), ...touched])];
-  const chip = roomToolChip(view);
-  if (chip) {
-    view.name ??= chip.name;
-    view.title = chip.title;
-    if (chip.kind) view.kind = chip.kind;
-  }
-  const output = toolOutputText(u);
-  if (output) view.output = output;
-  return JSON.stringify(view) !== before;
-}
-
-function toolOutputText(u: ToolCallUpdate): string {
-  const cap = (s: string): string => (s.length > 4000 ? `${s.slice(0, 4000)}\n… (${s.length - 4000} more characters)` : s);
-  if (u.content && u.content.length) {
-    const parts = u.content.map((c) => {
-      if (c.type === "content") return contentText(c.content);
-      if (c.type === "diff") return `--- ${c.path}\n${c.oldText ? `- ${c.oldText}\n` : ""}+ ${c.newText}`;
-      return `[terminal ${c.terminalId}]`;
-    });
-    return cap(parts.join("\n"));
-  }
-  if (u.rawOutput !== undefined && u.rawOutput !== null) return cap(typeof u.rawOutput === "string" ? u.rawOutput : JSON.stringify(u.rawOutput, null, 1));
-  return "";
-}
-
-function contentText(block: ContentBlock): string {
-  if (block.type === "text") return block.text;
-  return `[${block.type}]`;
-}
-
-function flattenOptions(options: SessionConfigOption["options"]): SessionConfigSelectOption[] {
-  if (!options) return [];
-  const out: SessionConfigSelectOption[] = [];
-  for (const entry of options) {
-    if ("options" in entry) out.push(...(entry as SessionConfigSelectGroup).options);
-    else out.push(entry as SessionConfigSelectOption);
-  }
-  return out;
-}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

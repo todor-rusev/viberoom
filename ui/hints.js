@@ -5,22 +5,33 @@
   const GAP = 8;
   const EDGE = 8;
   const START = 12;
+  let hintSequence = 0;
 
-  function install({ doc = root.document, layout, delayMs, inMenu = (owner) => !!owner.closest(".rail") }) {
+  function install({ root: scope, doc = scope?.ownerDocument || (scope?.nodeType === 9 ? scope : root.document), layout, delayMs, inMenu = (owner) => !!owner.closest(".rail") }) {
+    scope = scope || doc;
+    const View = doc.defaultView;
+    const contains = (node) => !!node && scope.contains(node);
+    const listeners = [];
+    let disposed = false, observer = null;
+    const on = (target, type, listener, options) => {
+      target.addEventListener(type, listener, options);
+      listeners.push(() => target.removeEventListener(type, listener, options));
+    };
     const hint = doc.createElement("div");
-    hint.id = "vr-hint";
+    do { hintSequence++; hint.id = hintSequence === 1 ? "vr-hint" : `vr-hint-${hintSequence}`; } while (doc.getElementById(hint.id));
     hint.dataset.ui = "hint";
     hint.setAttribute("role", "tooltip");
     const popover = typeof hint.showPopover === "function";
-    if (popover) hint.setAttribute("popover", "manual");
-    else hint.hidden = true;
-    doc.body.appendChild(hint);
+    hint.setAttribute("popover", "manual");
+    if (!popover) hint.hidden = true;
+    (scope === doc ? doc.body : scope).appendChild(hint);
     let open = false;
     const raise = () => { if (open) return; open = true; if (popover) hint.showPopover(); else hint.hidden = false; };
     const lower = () => { if (!open) return; open = false; if (popover) hint.hidePopover(); else hint.hidden = true; };
     const state = { owner: null, pending: null, timer: 0, hiddenAt: 0, describes: false };
 
     function take(owner) {
+      if (disposed || !contains(owner)) return;
       const title = owner.getAttribute("title");
       if (title === null || owner === hint) return;
       owner.removeAttribute("title");
@@ -35,21 +46,25 @@
     }
     function ownerOf(target) {
       const owner = target && target.closest ? target.closest("[title], [data-hint]") : null;
-      if (!owner || owner === hint || hint.contains(owner)) return null;
+      if (!contains(owner) || owner === hint || hint.contains(owner)) return null;
       take(owner);
       return owner.dataset.hint ? owner : null;
     }
-    const takeAll = (root_) => { if (root_.nodeType === 1) { if (root_.hasAttribute("title")) take(root_); for (const el of root_.querySelectorAll("[title]")) take(el); } };
-    const View = doc.defaultView;
+    const takeAll = (root_) => {
+      if (root_.nodeType === 1 && root_.hasAttribute("title")) take(root_);
+      for (const el of root_.querySelectorAll?.("[title]") || []) take(el);
+    };
     if (View && typeof View.MutationObserver === "function") {
-      new View.MutationObserver((changes) => {
+      observer = new View.MutationObserver((changes) => {
+        if (disposed) return;
         for (const change of changes) {
           if (change.type === "attributes") { if (change.target.hasAttribute("title")) take(change.target); }
           else for (const node of change.addedNodes) takeAll(node);
         }
-      }).observe(doc.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["title"] });
+      });
+      observer.observe(scope === doc ? doc.documentElement : scope, { subtree: true, childList: true, attributes: true, attributeFilter: ["title"] });
     }
-    takeAll(doc.body);
+    takeAll(scope === doc ? doc.body : scope);
     function visibleWords(owner) {
       const view = doc.defaultView;
       const drawn = (el) => {
@@ -69,7 +84,7 @@
       return words.join(" ").replace(/\s+/g, " ").trim();
     }
     function show(owner) {
-      if (!owner.isConnected || !owner.dataset.hint) return hide();
+      if (disposed || !contains(owner) || !owner.isConnected || !owner.dataset.hint) return hide();
       const words = owner.dataset.hint;
       if (visibleWords(owner) === words.replace(/\s+/g, " ").trim()) return hide();
       state.owner = owner;
@@ -85,9 +100,9 @@
     }
     function place() {
       const owner = state.owner;
-      if (!owner || !owner.isConnected) return hide();
+      if (!contains(owner) || !owner.isConnected) return hide();
       const r = layout.rect(owner);
-      const width = layout.length(root.innerWidth), height = layout.length(root.innerHeight);
+      const width = layout.length(View.innerWidth), height = layout.length(View.innerHeight);
       const w = hint.offsetWidth, h = hint.offsetHeight;
       let left, top;
       if (hint.dataset.side === "right") {
@@ -103,7 +118,7 @@
       hint.style.top = `${Math.round(Math.max(EDGE, Math.min(top, height - h - EDGE)))}px`;
     }
     function hide() {
-      clearTimeout(state.timer);
+      View.clearTimeout(state.timer);
       state.timer = 0;
       state.pending = null;
       if (state.owner) {
@@ -118,36 +133,46 @@
       lower();
     }
     function soon(owner) {
+      if (disposed) return;
       const warm = Date.now() - state.hiddenAt < WARM_MS || !!state.owner;
       hide();
       if (warm) return show(owner);
       state.pending = owner;
-      state.timer = setTimeout(() => { state.pending = null; state.timer = 0; show(owner); }, delayMs());
+      state.timer = View.setTimeout(() => { state.pending = null; state.timer = 0; show(owner); }, delayMs());
     }
 
-    doc.addEventListener("pointerover", (e) => {
+    on(scope, "pointerover", (e) => {
       if (e.pointerType === "touch" || e.buttons) return;
       const owner = ownerOf(e.target);
       if (!owner || owner === state.owner || owner === state.pending) return;
       soon(owner);
     }, true);
-    doc.addEventListener("pointerout", (e) => {
+    on(scope, "pointerout", (e) => {
       const current = state.owner || state.pending;
-      if (current && !(e.relatedTarget && current.contains(e.relatedTarget))) hide();
+      if (current && !(e.relatedTarget?.nodeType && current.contains(e.relatedTarget))) hide();
     }, true);
-    doc.addEventListener("focusin", (e) => {
+    on(scope, "focusin", (e) => {
       const owner = ownerOf(e.target);
       let keyboard = false;
       try { keyboard = e.target.matches(":focus-visible"); } catch { }
       if (owner && keyboard) soon(owner);
     });
-    doc.addEventListener("focusout", () => hide());
-    for (const type of ["pointerdown", "wheel", "keydown"]) doc.addEventListener(type, () => { if (state.owner || state.timer) hide(); }, true);
-    doc.addEventListener("scroll", () => { if (state.owner) hide(); }, true);
-    root.addEventListener("blur", hide);
-    root.addEventListener("resize", hide);
-    return { hide, element: hint };
+    on(scope, "focusout", () => hide());
+    for (const type of ["pointerdown", "wheel", "keydown"]) on(scope, type, () => { if (state.owner || state.timer) hide(); }, true);
+    on(doc, "scroll", () => { if (state.owner || state.timer) hide(); }, true);
+    on(View, "blur", hide);
+    on(View, "resize", hide);
+    function dispose() {
+      if (disposed) return;
+      disposed = true;
+      observer?.disconnect();
+      for (const off of listeners.splice(0)) off();
+      hide();
+      hint.remove();
+    }
+    return { hide, element: hint, dispose };
   }
 
+  Object.defineProperty(install, "disposable", { value: true });
   root.VIBEROOM_HINTS = Object.freeze({ install });
 })(globalThis);

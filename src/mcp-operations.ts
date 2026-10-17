@@ -2,7 +2,7 @@
 import { parseReadMessageArgs } from "./message-read.js";
 import { parseMessageCheckArgs } from "./message-check.js";
 import { parseAgentSearchArgs } from "./agent-history.js";
-import { TOOL_NAME } from "./tool-spec.js";
+import { TOOL_NAME, type OperationSpec } from "./tool-spec.js";
 export interface McpResult { content: { type: "text"; text: string }[]; isError?: boolean; structuredContent?: Record<string, unknown> }
 export type HubRequest = (path: string, init?: RequestInit, options?: { timeoutMs?: number }) => Promise<{ ok: boolean; status: number; body: Record<string, unknown> }>;
 export class OperationArgumentError extends Error {}
@@ -37,6 +37,31 @@ export async function callConnection(name: string, args: Record<string, unknown>
   if (res.status === 0 || res.body.code === "unconfirmed_result") throw new OperationUnconfirmedError();
   if (!res.ok) return { content: [{ type: "text", text: typeof res.body.error === "string" ? res.body.error : "the connection could not run the tool" }], isError: true };
   return jsonResult(res.body, res.body.isError === true);
+}
+
+export async function productOperations(TOKEN: string, hub: HubRequest): Promise<OperationSpec[] | null> {
+  let res: Awaited<ReturnType<HubRequest>>;
+  try { res = await hub(`/api/mcp/operations?token=${encodeURIComponent(TOKEN)}`, undefined, { timeoutMs: CONNECTION_ROWS_MS }); }
+  catch { return null; }
+  if (!res.ok || !Array.isArray(res.body.operations)) return null;
+  return (res.body.operations as unknown[]).filter((op): op is OperationSpec => !!op && typeof (op as { name?: unknown }).name === "string"
+    && typeof (op as { summary?: unknown }).summary === "string" && typeof (op as { description?: unknown }).description === "string"
+    && !!(op as { inputSchema?: unknown }).inputSchema && typeof (op as { inputSchema?: unknown }).inputSchema === "object")
+    .map((op) => ({ ...op, exposure: "deferred" as const }));
+}
+
+export async function callProductOperation(name: string, args: unknown, TOKEN: string, hub: HubRequest): Promise<McpResult> {
+  const res = await hub("/api/mcp/operations/call", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN, name, arguments: args }),
+  });
+  if (res.status === 0 || res.body.code === "unconfirmed_result") throw new OperationUnconfirmedError();
+  if (res.ok) return jsonResult(res.body.result ?? null);
+  if (res.body.code === "invalid_arguments") return jsonResult({
+    code: "invalid_arguments", operation: name, problems: res.body.problems, inputSchema: res.body.inputSchema,
+    hint: "Nothing was executed. Correct the arguments using this schema and retry the same operation.",
+  }, true);
+  if ((res.body.code === "refused" || res.status === 403) && typeof res.body.error === "string") return { content: [{ type: "text", text: res.body.error }], isError: true };
+  return jsonResult({ code: "internal_error", hint: "The operation could not be confirmed. Check its outcome before retrying a write." }, true);
 }
 
 export async function executeOperation(name: string, args: Record<string, unknown>, TOKEN: string, hub: HubRequest): Promise<McpResult> {

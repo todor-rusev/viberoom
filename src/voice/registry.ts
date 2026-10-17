@@ -25,11 +25,11 @@ export const VOICE_PROVIDERS: VoiceProviderEntry[] = [
   {
     id: "openai",
     label: "OpenAI",
-    blurb: "OpenAI's own service: the most exact, paid by the minute of audio.",
+    blurb: "OpenAI's own speech models, for hearing and for reading aloud; paid by use.",
     fields: [
       { key: "apiKey", kind: "secret", label: "OpenAI API key", hint: "From platform.openai.com, API keys. Kept encrypted in this computer's vault, never shown again.", placeholder: "paste the API key" },
-      { key: "model", kind: "text", use: "hearing", label: "Model", default: "gpt-4o-transcribe", hint: "gpt-4o-transcribe by default; gpt-4o-mini-transcribe costs half; whisper-1 is the older one.", placeholder: "gpt-4o-transcribe" },
-      { key: "speechModel", kind: "text", use: "reading", label: "Reading model", default: "gpt-4o-mini-tts", hint: "gpt-4o-mini-tts by default; tts-1 is the older one.", placeholder: "gpt-4o-mini-tts" },
+      { key: "model", kind: "text", use: "hearing", label: "Model", default: "gpt-4o-transcribe", hint: "Empty: gpt-4o-transcribe. Any speech model OpenAI lists works, for example gpt-4o-mini-transcribe or whisper-1.", placeholder: "gpt-4o-transcribe" },
+      { key: "speechModel", kind: "text", use: "reading", label: "Reading model", default: "gpt-4o-mini-tts", hint: "Empty: gpt-4o-mini-tts. Any reading model OpenAI lists works, for example tts-1.", placeholder: "gpt-4o-mini-tts" },
       { key: "speechVoice", kind: "text", use: "reading", label: "Reading voice", default: "coral", hint: "One of OpenAI's voices: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer or verse.", placeholder: "coral" },
     ],
     baseUrl: () => "https://api.openai.com/v1",
@@ -37,10 +37,10 @@ export const VOICE_PROVIDERS: VoiceProviderEntry[] = [
   {
     id: "groq",
     label: "Groq",
-    blurb: "Whisper on Groq's servers: fast, with a free plan.",
+    blurb: "Whisper models on Groq's servers; its own plans and limits.",
     fields: [
       { key: "apiKey", kind: "secret", label: "Groq API key", hint: "From console.groq.com, API Keys. Kept encrypted in this computer's vault, never shown again.", placeholder: "paste the API key" },
-      { key: "model", kind: "text", use: "hearing", label: "Model", default: "whisper-large-v3-turbo", hint: "whisper-large-v3-turbo by default; whisper-large-v3 is a little more exact and slower.", placeholder: "whisper-large-v3-turbo" },
+      { key: "model", kind: "text", use: "hearing", label: "Model", default: "whisper-large-v3-turbo", hint: "Empty: whisper-large-v3-turbo. Any speech model Groq lists works, for example whisper-large-v3.", placeholder: "whisper-large-v3-turbo" },
       { key: "speechModel", kind: "text", use: "reading", label: "Reading model", hint: "Groq's own name for a model of its /audio/speech, when it has one for your language.", placeholder: "the model's name" },
       { key: "speechVoice", kind: "text", use: "reading", label: "Reading voice", hint: "Groq's own name for a voice of that model.", placeholder: "the voice's name" },
     ],
@@ -49,7 +49,7 @@ export const VOICE_PROVIDERS: VoiceProviderEntry[] = [
   {
     id: "compatible",
     label: "Your own server",
-    blurb: "Any server with OpenAI's audio API: a Whisper server on this computer keeps your voice here.",
+    blurb: "Any server or service with OpenAI's audio API; a Whisper server on this computer keeps your voice here.",
     fields: [
       { key: "baseUrl", kind: "text", label: "Endpoint", hint: "The address before /audio/transcriptions: http://localhost:8000/v1 for a server on this computer, or another service's.", placeholder: "http://localhost:8000/v1" },
       { key: "apiKey", kind: "secret", label: "API key", optional: true, hint: "Kept encrypted in this computer's vault, never shown again. Empty for a server on this computer.", placeholder: "the server's key; empty for a local one" },

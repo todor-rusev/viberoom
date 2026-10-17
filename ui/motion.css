@@ -65,6 +65,15 @@
 @keyframes g-shrink { 50% { transform: scale(0.8); } 100% { transform: scale(0.92); } }
 .rig-plus.play > .p-v { animation: rig-quarter-lead var(--t-gesture) var(--ease-soft); }
 .rig-plus.play > .p-h { animation: rig-quarter-follow var(--t-gesture) var(--ease-soft); }
+.rig-more.play > .p-a { animation: rig-hop calc(var(--t-gesture) * 0.7) var(--ease-soft); }
+.rig-more.play > .p-b { animation: rig-hop calc(var(--t-gesture) * 0.7) var(--ease-soft) calc(var(--t-gesture) * 0.15); }
+.rig-more.play > .p-c { animation: rig-hop calc(var(--t-gesture) * 0.7) var(--ease-soft) calc(var(--t-gesture) * 0.3); }
+.rig-projects.play > .p-front { animation: rig-settle calc(var(--t-gesture) * 0.8) var(--ease-soft); }
+.rig-projects.play > .p-mid { animation: rig-lift calc(var(--t-gesture) * 0.8) var(--ease-soft) calc(var(--t-gesture) * 0.1); }
+.rig-projects.play > .p-back { animation: rig-lift calc(var(--t-gesture) * 0.8) var(--ease-soft) calc(var(--t-gesture) * 0.2); }
+@keyframes rig-lift { 40% { transform: translateY(-12.5%); } 80%, to { transform: none; } }
+@keyframes rig-settle { 40% { transform: translateY(4.17%); } 80%, to { transform: none; } }
+@keyframes rig-hop { 35% { transform: translateY(-16.67%); } 70%, to { transform: none; } }
 @keyframes rig-quarter-lead { 70%, to { transform: rotate(90deg); } }
 @keyframes rig-quarter-follow { 30% { transform: rotate(0deg); } to { transform: rotate(90deg); } }
 .rig-ship > :is(.p-hull, .p-mast, .p-sail, .p-jib, .p-flag, .p-gangway) { transform-origin: 51.04% 70%; }

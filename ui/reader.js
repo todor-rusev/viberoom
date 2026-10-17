@@ -90,10 +90,11 @@
   }
 
   function create({ synth = root.speechSynthesis, Utterance = root.SpeechSynthesisUtterance, fetchSpeech, makeAudio = () => new root.Audio(), onChange = () => {}, urls = root.URL }) {
-    let current = null;
+    let current = null, disposed = false, operation = 0;
     const waiting = [];
 
     function tell(key, state, error) {
+      if (disposed) return;
       try {
         onChange(key, state, error);
       } catch {
@@ -102,14 +103,18 @@
     function finish(job, error) {
       if (current !== job) return;
       current = null;
+      const finishing = operation;
       tell(job.key, "idle", error);
+      if (disposed || operation !== finishing) return;
       const next = waiting.shift();
       if (next) begin(next);
     }
     function begin(job) {
+      if (disposed) return;
       current = job;
       job.state = "loading";
       tell(job.key, "loading");
+      if (disposed || current !== job) return;
       if (job.how.mode === "system") sayHere(job);
       else void playProvided(job);
     }
@@ -128,6 +133,7 @@
       job.halt = () => synth.cancel();
       synth.cancel();
       parts.forEach((part, i) => {
+        if (current !== job) return;
         const utterance = new Utterance(part);
         if (voice) {
           utterance.voice = voice;
@@ -149,12 +155,21 @@
       if (!parts.length) return finish(job);
       const audio = makeAudio();
       const controller = new AbortController();
-      const made = [];
-      let wake = null;
+      const made = new Set();
+      let wake = null, endedListener = null, errorListener = null;
+      const releaseMedia = () => {
+        if (audio.onended === endedListener) audio.onended = null;
+        if (audio.onerror === errorListener) audio.onerror = null;
+        for (const url of made) urls.revokeObjectURL(url);
+        made.clear();
+      };
       job.halt = () => {
         controller.abort();
         audio.pause();
         if (wake) wake();
+        releaseMedia();
+        audio.removeAttribute?.("src");
+        audio.load?.();
       };
       try {
         let next = fetchSpeech(parts[0], controller.signal);
@@ -164,12 +179,12 @@
           next = i + 1 < parts.length ? fetchSpeech(parts[i + 1], controller.signal) : null;
           if (next) next.catch(() => {});
           const url = urls.createObjectURL(blob);
-          made.push(url);
+          made.add(url);
           audio.src = url;
           const ended = new Promise((resolve, reject) => {
             wake = resolve;
-            audio.onended = () => resolve();
-            audio.onerror = () => reject(new Error("The sound of the reading could not be played."));
+            audio.onended = endedListener = () => resolve();
+            audio.onerror = errorListener = () => reject(new Error("The sound of the reading could not be played."));
           });
           ended.catch(() => {});
           await audio.play();
@@ -182,11 +197,11 @@
       } catch (error) {
         if (current === job) finish(job, error && typeof error.message === "string" ? error : new Error(String(error)));
       } finally {
-        for (const url of made) urls.revokeObjectURL(url);
+        releaseMedia();
       }
     }
 
-    function stop() {
+    function halt() {
       const job = current;
       waiting.length = 0;
       current = null;
@@ -194,22 +209,30 @@
       if (job.halt) job.halt();
       tell(job.key, "idle");
     }
+    function stop() { operation++; halt(); }
     function read(key, text, how) {
+      if (disposed) return;
+      const reading = ++operation;
       const again = !!current && current.key === key;
-      stop();
+      halt();
+      if (disposed || operation !== reading) return;
       if (!again) begin({ key, text, how });
     }
     function queue(key, text, how) {
+      if (disposed) return;
       if ((current && current.key === key) || waiting.some((job) => job.key === key)) return;
-      if (current) waiting.push({ key, text, how });
-      else begin({ key, text, how });
+      operation++;
+      waiting.push({ key, text, how });
+      if (!current) begin(waiting.shift());
     }
     function state(key) {
       if (current && current.key === key) return current.state;
       return waiting.some((job) => job.key === key) ? "waiting" : "idle";
     }
-    return { read, queue, stop, state, get busy() { return !!current; } };
+    function dispose() { if (disposed) return; disposed = true; stop(); }
+    return { read, queue, stop, dispose, state, get busy() { return !!current; } };
   }
 
+  Object.defineProperty(create, "disposable", { value: true });
   root.VIBEROOM_READER = Object.freeze({ speakable, pieces, localVoices, pickVoice, create, LOCAL_PIECE, PROVIDER_PIECE, FIRST_PIECE });
 })(globalThis);

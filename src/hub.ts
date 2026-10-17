@@ -5,20 +5,24 @@ import { startProductionPrivateTrial, stopProductionPrivateTrial } from "./memor
 import { EventEmitter } from "node:events";
 import { AutomationStore } from "./automation-store.js";
 import { Automations } from "./automations.js";
-import { BackgroundTaskStore, BackgroundTaskError } from "./background-task-store.js";
-import { AgentMessageError } from "./agent-message.js";
+import { BackgroundTasks } from "./hub/background-tasks.js";
+import { RestartCoordinator, type RestartView } from "./hub/restart.js";
+import { HistoryAccess, type HistorySearchResponse } from "./hub/history-access.js";
+
+export type { RestartView } from "./hub/restart.js";
+export type { HistorySearchResponse } from "./hub/history-access.js";
+import type { ConsentFeature, SecretRequest } from "./hub/secret-cards.js";
+import { SecretDesk } from "./hub/secret-desk.js";
+export { CONSENT_FEATURES, CONSENT_FEATURE_WORDS, KEYED_PURPOSE, READ_HERE_WORDS, SECRET_CARD_MS, secretLabel, type ConsentFeature, type SecretRequest } from "./hub/secret-cards.js";
 import type { NativeNoteEffect } from "./native-reports.js";
 import { captureNativeNoteSubject, nativeNoteDisposition, type NativeNoteDisposition } from "./native-note-state.js";
-import { validArguments } from "./tool-validation.js";
 import { parseAutomation, parseSchedule, previewSchedule } from "./automation-schedule.js";
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { onRenameRefused, writeFileAtomic } from "./atomic.js";
 import { onSlowIo, slowIoWords } from "./slow-io.js";
 import { watchThread } from "./thread-watch.js";
 import { commitFiles, recoverFileTransactions, type FileChange, type FileOps } from "./file-transaction.js";
-import { carriedParticipants } from "./carry-plan.js";
-import { ARRIVING, HELD_FILE_RETRIES, removeArrivingFolder } from "./carry-write.js";
 import { folderIdentity, isIdentity, newIdentity } from "./identity.js";
 import { qrSvg } from "./qr.js";
 import { pickBotKey } from "./bot-key.js";
@@ -27,48 +31,51 @@ import { RequestTraceRing } from "./mcp-diagnostics.js";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { Logger, type TranscriptMode } from "./log.js";
+import { Logger } from "./log.js";
 import { transcriptWriter } from "./transcript-writer.js";
-import { HISTORY_DB_FILE, HistoryStore, storeOpenFailure, type SearchHit, type SearchQuery } from "./history-store.js";
-import { NameDirectory, namesInQuery } from "./name-directory.js";
+import { HISTORY_DB_FILE, HistoryStore, storeOpenFailure } from "./history-store.js";
+import type { NameDirectory } from "./name-directory.js";
+import { ROOM_ID_PATTERN, RoomRegistry, type ArrivingReservation, type RoomsFile } from "./hub/room-registry.js";
+import { RoomImport, type ImportCommit, type ImportContext, type Pause } from "./hub/room-import.js";
+import { RoomLifecycle } from "./hub/room-lifecycle.js";
+import { DEFAULT_APPEARANCE, ProgramSettingsFile, nextAppearance, type ProgramSettings } from "./hub/program-settings.js";
+export {
+  ADJUSTABLE, DEFAULT_APPEARANCE, DIAGRAM_PRESETS, MONO_FONTS, TEXT_FONTS, WHEEL_STEP_DEFAULT, WHEEL_STEP_MAX, WHEEL_STEP_MIN, nextAppearance,
+  type Adjustable, type AppearanceSettings, type DiagramPreset, type DiagramSettings, type ProgramSettings, type VendorPreset,
+} from "./hub/program-settings.js";
 
-const TRANSCRIPT_MODES: readonly TranscriptMode[] = ["off", "errors", "full"];
-export const WHEEL_STEP_DEFAULT = 20, WHEEL_STEP_MIN = 5, WHEEL_STEP_MAX = 60;
-import { DEFAULT_EDITOR_SETTINGS, type EditorSettings } from "./open.js";
 import { ownNpmPrefix } from "./own-runtime.js";
-import { getRecipe, installVendorsInto, listRecipes, publicRecipes, type AgentTypeId } from "./recipes.js";
+import { getRecipe, installVendorsInto, listRecipes, publicRecipes } from "./recipes.js";
 import { AgentManager, type AgentUpdatesView } from "./agent-manager.js";
 import type { LoginFlows, LoginFlow } from "./login-flow.js";
 import { DEFAULT_ROOM_SETTINGS, pastRoomSettings, upgradeRoomSettings, type RoomSettings } from "./persona.js";
-import { CREATED_MODE, type NewRoomPlan } from "./new-room.js";
+import type { NewRoomPlan } from "./new-room.js";
 import { OptionCatalog } from "./option-catalog.js";
 import { recipeStamp } from "./install-stamp.js";
 import { Room, ROOM_SHUTDOWN_WAIT_MS, type ChatMessage, type DiscoveredOptions, type RoomEvent, type SkillsBridge, type StoredParticipant, type RoomRecovery } from "./room.js";
 import { SkillLibrary, type SkillDraft, type SkillMeta } from "./skills.js";
-import { TemplateLibrary, roomSettingsFromTemplate, type RoomTemplate } from "./templates.js";
+import { TemplateLibrary, type RoomTemplate } from "./templates.js";
 import { LookLibrary, checkLookSpec, loadTokens, type LookCheck, type LookSpec } from "./looks.js";
 import { ChannelRouter, type ChannelsView } from "./channels/router.js";
 import { ChannelsStore, fileRootRefusal, type FileRoot } from "./channels/state.js";
 import { Vault } from "./vault.js";
+import { ConsentChangedError } from "./consent-changed.js";
 import { Connections, ConnectionError, type ConnectionView } from "./connections/service.js";
 import { commandLine, type LocalLaunch } from "./connections/local-launch.js";
 import { checkHeaderNames } from "./connections/mcp-remote.js";
 import { ConnectionDesk } from "./connections/desk.js";
 import { guardedFetch } from "./connections/outbound.js";
 import { SignInError } from "./connections/oauth.js";
-import { cleanFace, freshFace } from "./faces.js";
 import type { KeyedSystemId } from "./connections/catalog.js";
 import { launchOpen, openCommand } from "./open.js";
-import { BLOCK_CHARS_MAX, BLOCK_CHARS_MIN, MemoryConfigStore, consentWords, legacyRecallAcrossRooms, memoryReadiness, type MemoryConfigView } from "./memory/config.js";
+import { BLOCK_CHARS_MAX, BLOCK_CHARS_MIN, MemoryConfigStore, consentWords, memoryReadiness, type MemoryConfigView } from "./memory/config.js";
 import { VoiceConfigStore, readingConsentWords, readingReadiness, voiceConsentWords, voiceReadiness } from "./voice/config.js";
 import { voiceProvider } from "./voice/registry.js";
 import { VoiceService } from "./voice/service.js";
 import { MEMORY_PROVIDERS, coerceProviderSettings, providerEntry } from "./memory/registry.js";
-import { MemoryPipeline, type MemoryStatus } from "./memory/service.js";
+import { MemoryPipeline, acceptForRecipient, type MemoryStatus } from "./memory/service.js";
 import { MemoryRecoveryActions } from "./memory/recovery-actions.js";
 import { configuredAnswerContext, configuredTrialContext, configuredTrialAccountContext, type ConfiguredTrialSelection, type ConfiguredTrialAccountSelection } from "./memory/configured-trial.js";
-import { sourceVersion } from "./memory/provenance.js";
-import { visibleToAgents } from "./quotes.js";
 import { QUESTION_FORMS, isQuestionForm } from "./memory/questions.js";
 import { TelegramAdapter, TelegramApiError } from "./channels/telegram.js";
 import type { AutostartStatus } from "./autostart.js";
@@ -82,67 +89,11 @@ const HUB_VERSION: string = (() => {
   }
 })();
 
-export interface VendorPreset {
-  model: string | null;
-  effort: string | null;
-  mode: string | null;
-}
-
-export interface ProgramSettings {
-  humanName: string;
-  humanDescription: string;
-  humanAvatar: string;
-  bypassPermissionsByDefault: boolean;
-  profileCompleted: boolean;
-  agentSkillsNeedApproval: boolean;
-  roomDefaults: Partial<Omit<RoomSettings, "name" | "humanName">>;
-  vendorPresets: Record<string, VendorPreset>;
-  diagrams: DiagramSettings;
-  editor: EditorSettings;
-  appearance: AppearanceSettings;
-  showMoreOnClick: boolean;
-  wheelStepPercent: number;
-  wheelInertia: boolean;
-  notifyReplies: "every" | "to-me" | "off";
-  appBadge: boolean;
-  keepAwake: KeepAwake;
-  devShowPrompts: boolean;
-  devShowMemoryIngestion: boolean;
-  checkForUpdates: boolean;
-  checkAgentUpdates: boolean;
-  transcripts: TranscriptMode;
-  foldAfter: number;
-  reconnectMode: "replay" | "load";
-}
-
-export interface AppearanceSettings {
-  chatFontSize: number;
-  scale: number;
-  font: string;
-  mono: string;
-  look: string;
-  custom: Record<string, Partial<Record<Adjustable, string>>>;
-}
-export type Adjustable = "canvas" | "panel" | "bubble" | "mine" | "ring" | "ink" | "muted" | "accent" | "face" | "logo" | "logoInk" | "corners";
-export const ADJUSTABLE: Record<Adjustable, "colour" | "scale"> = {
-  canvas: "colour", panel: "colour", bubble: "colour", mine: "colour", ring: "colour", ink: "colour", muted: "colour", accent: "colour",
-  face: "colour", logo: "colour", logoInk: "colour", corners: "scale",
-};
-export const TEXT_FONTS = ["nunito", "inter", "noto-sans", "open-sans", "source-sans-3", "ibm-plex-sans", "manrope", "rubik", "montserrat", "golos-text", "exo-2", "comfortaa", "ubuntu-sans", "arial", "system"];
-export const MONO_FONTS = ["jetbrains-mono", "fira-code", "source-code-pro", "ibm-plex-mono", "pt-mono", "victor-mono", "anonymous-pro", "cascadia-code", "system"];
-export const DEFAULT_APPEARANCE: AppearanceSettings = { chatFontSize: 14.5, scale: 100, font: "nunito", mono: "jetbrains-mono", look: "classic", custom: {} };
-
-export interface DiagramSettings {
-  preset: DiagramPreset;
-  primary: string | null;
-}
-
-export type DiagramPreset = "pop" | "lavender" | "mint" | "sunset" | "slate";
-export const DIAGRAM_PRESETS: DiagramPreset[] = ["pop", "lavender", "mint", "sunset", "slate"];
 
 export interface StoredRoom {
   id: string;
   uuid?: string;
+  scope?: unknown;
   name: string;
   dir: string;
   createdAt: number;
@@ -150,59 +101,13 @@ export interface StoredRoom {
   participants: StoredParticipant[];
 }
 
-interface RoomsFile {
-  version: 1;
-  rooms: StoredRoom[];
-}
 
 import type { UpdateInfo } from "./update.js";
 import { hasSourceTree } from "./update.js";
-import { KEEP_AWAKE, KEEP_AWAKE_DEFAULT, keepAwakeOf, WakeKeeper, type KeepAwake, type KeepAwakeStatus, type NoPower, type Power } from "./keep-awake.js";
+import { keepAwakeOf, WakeKeeper, type KeepAwakeStatus, type NoPower, type Power } from "./keep-awake.js";
 import { wakeFullyIfDark } from "./mac-wake.js";
 import { AgentImages, type AgentImageState } from "./agent-images.js";
-
-export const SECRET_CARD_MS = 10 * 60_000;
-
-export interface SecretRequest {
-  id: string;
-  purpose: "telegram-token" | "telegram-pair" | "memory-zep-key" | "memory-sieve-key" | "voice-key" | "consent" | "connection" | "trial-budget";
-  trialBudget?: TrialBudgetView;
-  consent?: { feature: ConsentFeature; words: string; recipient: string; reader?: "system" | "provider"; changed?: boolean };
-  connection?: {
-    id: string; name: string; blurb: string; mark?: ConnectionView["mark"]; signingIn?: boolean;
-    url?: string;
-    command?: string;
-    launch?: LocalLaunch;
-    keys?: string[];
-    keysIn?: "env" | "headers";
-    keysSaved?: string[];
-    add?: boolean;
-  };
-  prefill?: { baseUrl?: string; model?: string; provider?: string; language?: string };
-  askedBy: { kind: "window" } | { kind: "vibemate"; roomId: string; participantId: string; name: string };
-  askedAt: number;
-  expiresAt: number;
-  state: "open" | "done" | "closed" | "expired";
-  outcome?: string;
-  refusal?: string;
-  link?: { url: string; expiresAt: number; svg: string };
-}
-
-export const KEYED_PURPOSE: Record<KeyedSystemId, SecretRequest["purpose"]> = { telegram: "telegram-token", zep: "memory-zep-key", sieve: "memory-sieve-key", voice: "voice-key" };
-
-export const CONSENT_FEATURES = ["memory", "voice", "reading"] as const;
-export type ConsentFeature = (typeof CONSENT_FEATURES)[number];
-export const CONSENT_FEATURE_WORDS: Record<ConsentFeature, string> = { memory: "the long-term memory", voice: "the voice (recordings made into words)", reading: "reading the replies aloud" };
-export const READ_HERE_WORDS = "The replies are read aloud by this computer's own voices, in the window: nothing leaves this computer.";
-
-export function secretLabel(request: Pick<SecretRequest, "purpose" | "connection" | "consent">): string {
-  const { purpose } = request;
-  if (purpose === "connection" && request.connection?.add) return `${request.connection.name} (${request.connection.url ?? request.connection.command}) to be added as a connection`;
-  if (purpose === "connection") return `a sign-in to ${request.connection?.name ?? "a system"}`;
-  if (purpose === "consent") return `their consent to ${CONSENT_FEATURE_WORDS[request.consent?.feature ?? "voice"]}`;
-  if (purpose === "voice-key") return "the voice provider's key";
-  return purpose === "memory-zep-key" ? "the Zep API key" : purpose === "memory-sieve-key" ? "the sieve key" : "the Telegram bot key";
-}
+import { ProductOperations, type OperationOutcome, type ProductOperation } from "./product-operations.js";
 
 export type HubEvent =
   | { type: "automations"; pending: Record<string, number>; jobs: number }
@@ -227,73 +132,14 @@ export type HubEvent =
   | { type: "picture"; room: string; file: string; state: AgentImageState | null }
   | { type: "connections"; connections: ConnectionView[]; storageProblem?: string | null };
 
-export interface RestartView {
-  askedBy: string;
-  from: "window" | "telegram" | "discord" | "vibemate";
-  waitingFor: string[];
-  since: number;
-  quietSince?: number;
-  sessions?: "load" | "replay";
-}
-
 interface McpTokenEntry {
   roomId: string;
   participantId: string;
 }
 
-const ROOM_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
-const INSTRUCTION_FILES = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules"];
 
-export function nextAppearance(current: AppearanceSettings, a: Record<string, unknown>): AppearanceSettings {
-  const chatFontSize = Number(a.chatFontSize ?? current.chatFontSize ?? DEFAULT_APPEARANCE.chatFontSize);
-  if (!Number.isFinite(chatFontSize) || chatFontSize < 12 || chatFontSize > 32) throw new Error("appearance.chatFontSize must be between 12 and 32");
-  const scale = Number(a.scale ?? current.scale ?? DEFAULT_APPEARANCE.scale);
-  if (!Number.isFinite(scale) || scale < 70 || scale > 150) throw new Error("appearance.scale must be between 70 and 150 (per cent)");
-  const font = String(a.font ?? current.font ?? DEFAULT_APPEARANCE.font);
-  if (!TEXT_FONTS.includes(font)) throw new Error(`appearance.font must be one of ${TEXT_FONTS.join(", ")}`);
-  const mono = String(a.mono ?? current.mono ?? DEFAULT_APPEARANCE.mono);
-  if (!MONO_FONTS.includes(mono)) throw new Error(`appearance.mono must be one of ${MONO_FONTS.join(", ")}`);
-  const look = String(a.look ?? current.look ?? DEFAULT_APPEARANCE.look);
-  if (!/^[a-z][a-z0-9-]{0,30}$/.test(look)) throw new Error("appearance.look must be a short lower-case id");
-  const custom: Record<string, Partial<Record<Adjustable, string>>> = { ...(current.custom ?? {}) };
-  if (a.custom !== undefined && typeof a.custom === "object" && a.custom) {
-    for (const [lookId, values] of Object.entries(a.custom as Record<string, unknown>)) {
-      if (!/^[a-z][a-z0-9-]{0,30}$/.test(lookId)) throw new Error("appearance.custom: a look id is a short lower-case id");
-      if (values === null) {
-        delete custom[lookId];
-        continue;
-      }
-      if (typeof values !== "object") throw new Error("appearance.custom: each look takes an object of adjustments");
-      const clean: Partial<Record<Adjustable, string>> = {};
-      for (const [key, value] of Object.entries(values as Record<string, unknown>)) {
-        const kind = (ADJUSTABLE as Record<string, string | undefined>)[key];
-        if (!kind) throw new Error(`appearance.custom: "${key}" is not adjustable (${Object.keys(ADJUSTABLE).join(", ")})`);
-        if (kind === "colour") {
-          if (typeof value !== "string" || !/^#[0-9a-fA-F]{6}$/.test(value)) throw new Error(`appearance.custom.${key} must be a colour like #1a2b3c`);
-          clean[key as Adjustable] = value.toLowerCase();
-        } else {
-          const n = typeof value === "string" || typeof value === "number" ? Number(value) : NaN;
-          if (!Number.isFinite(n) || n < 0 || n > 2) throw new Error(`appearance.custom.${key} must be a number between 0 and 2`);
-          clean[key as Adjustable] = String(Math.round(n * 100) / 100);
-        }
-      }
-      if (Object.keys(clean).length) custom[lookId] = clean;
-      else delete custom[lookId];
-    }
-  }
-  return { chatFontSize: Math.round(chatFontSize * 2) / 2, scale: Math.round(scale), font, mono, look, custom };
-}
 
 const CHANNEL_RETRY_MS = [5_000, 15_000, 60_000, 300_000];
-const RESTART_POLL_MS = 2_000;
-const RESTART_GIVE_UP_MS = 30_000;
-const RESTART_QUIET_MS = 5 * 60_000;
-
-function nameList(names: string[]): string {
-  if (names.length <= 1) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
-
 export const SHUTDOWN_STAGES = ["probe-hold", "ways-in", "transcripts", "rooms-file", "backup", "automations", "background-tasks", "memory", "history"] as const;
 export type ShutdownStageName = (typeof SHUTDOWN_STAGES)[number] | `room:${string}`;
 
@@ -312,31 +158,84 @@ export class Hub extends EventEmitter {
   private automationsUnavailable = "";
   private automationsStarted = false;
   private readonly automationBoot = randomUUID();
-  private backgroundTasks: BackgroundTaskStore | null = null;
-  private backgroundTaskTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly backgroundTasks: BackgroundTasks;
   private nativeReportTimer: ReturnType<typeof setInterval> | null = null;
   private readonly pendingNativeRooms = new Set<string>();
-  private readonly backgroundTaskResults = new Map<string, { confirmed: boolean; messageId: string }>();
-  private backgroundTaskFault = "";
   private roomFolderMemo: { key: string; names: ReadonlySet<string> } | null = null;
   private roomFolderReads = 0;
   readonly dataDir: string;
   readonly requestDiagnostics = new RequestTraceRing();
-  readonly rooms = new Map<string, Room>();
+  private readonly registry: RoomRegistry = new RoomRegistry({
+    dataDir: () => this.dataDir,
+    log: { info: (text) => this.log.info(text), warn: (text) => this.log.warn(text) },
+    renamedSkills: () => this.renamedSkills,
+    announce: (event) => this.emit("event", event satisfies HubEvent),
+  });
+  private readonly lifecycle: RoomLifecycle = new RoomLifecycle({
+    registry: this.registry,
+    dataDir: () => this.dataDir,
+    log: { info: (text) => this.log.info(text), warn: (text) => this.log.warn(text) },
+    make: (made) => this.instantiate(made.id, made.name, made.dir, made.settings, made.createdAt, made.uuid, made.scope, { life: made.life, reservation: made.reservation }),
+    templates: { get: (id) => this.templates.get(id), save: (template) => this.templates.save(template) },
+    hasSkill: (name) => !!this.skills.get(name),
+    installed: () => new Set(listRecipes().filter((r) => !r.unavailableReason).map((r) => r.id)),
+    humanName: () => this.settings.humanName,
+    announce: (event) => this.emit("event", event as HubEvent),
+    saveRooms: () => this.saveRooms(),
+    keeperReview: () => this.keeper?.review(),
+    memory: { detachRoom: (id) => this.memory.detachRoom(id), forgetRoom: (id, expected) => this.memory.forgetRoom(id, expected) },
+    forgetter: () => {
+      const config = this.memoryStore.get();
+      const entry = providerEntry(config.provider);
+      if (!entry?.roomForget) return null;
+      return { id: entry.id, label: entry.label, keySet: !entry.fields.some((field) => field.kind === "secret" && !config.providers[entry.id]?.[field.key]) };
+    },
+    identityDrops: (room) => [
+      () => this.automations?.store.removeRoom(room.uuid),
+      () => this.backgroundTasks.removeRoom(room.uuid),
+      () => this.historyAccess.dropRoom(room),
+      () => this.history?.memory.drop(`room:${room.uuid}`),
+    ],
+    dropByAddress: (id) => this.history?.dropRoom(id),
+  });
+  private readonly roomImport: RoomImport = new RoomImport({
+    registry: this.registry,
+    dataDir: () => this.dataDir,
+    log: { info: (text) => this.log.info(text), warn: (text) => this.log.warn(text) },
+    history: () => this.history,
+    fileOps: () => this.fileOps,
+    make: (stored, life) => this.instantiate(stored.id, stored.name, stored.dir, stored.settings, stored.createdAt, stored.uuid, stored.scope, { life }),
+    discard: (room) => {
+      if (!this.registry.drop(room)) return;
+      this.memory.detachRoom(room.id);
+      void room.shutdown().catch((error) => this.log.warn(`room ${room.id}: its sessions did not all close (${error instanceof Error ? error.message : String(error)})`));
+    },
+    announce: (event) => this.emit("event", event as HubEvent),
+    reconnectMode: (room) => this.reconnectModeFor(room),
+    reconnect: (room, id, mode) => this.importReconnect(room, id, mode),
+    memoryImported: (id) => this.memory.imported(id),
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+  get rooms(): ReadonlyMap<string, Room> { return this.registry.rooms; }
   readonly skills: SkillLibrary;
   readonly templates: TemplateLibrary;
   readonly looks: LookLibrary;
   readonly history: HistoryStore;
   readonly pictures: AgentImages;
-  private readonly staleHistoryRooms = new Set<string>();
-  settings: ProgramSettings;
+  private readonly historyAccess: HistoryAccess = new HistoryAccess({
+    rooms: () => this.rooms,
+    history: () => this.history,
+    knobs: () => ({ retryMs: this.historyRetryMs, backupKeep: this.historyBackupKeep, backupEveryMs: this.historyBackupEveryMs }),
+    backupsDir: () => join(this.dataDir, "backups"),
+    log: (text) => this.log.warn(text),
+  });
+  private readonly programSettings: ProgramSettingsFile;
   private readonly log: Logger;
   private readonly optionCatalog = new OptionCatalog();
   private readonly mcpTokens = new Map<string, McpTokenEntry>();
   private hubUrl: string | null = null;
   private run: { id: string; build: string } | null = null;
   private readonly renamedSkills = new Map<string, string>();
-  private renamedAttachments = false;
   private readonly skillsBridge: SkillsBridge;
 
   readonly folderId: string;
@@ -391,11 +290,12 @@ export class Hub extends EventEmitter {
       templates: this.templates,
       templatesChanged: () => this.emit("event", { type: "templates" } satisfies HubEvent),
       rooms: {
-        list: () => [...this.rooms.values()].map((room) => ({ id: room.id, name: room.settings.name })),
-        find: (selector) => {
-          const byId = this.rooms.get(selector);
+        list: (callerId) => this.roomsReachedFrom(callerId).map((room) => ({ id: room.id, name: room.settings.name })),
+        find: (callerId, selector) => {
+          const reached = this.roomsReachedFrom(callerId);
+          const byId = reached.find((room) => room.id === selector);
           if (byId) return byId;
-          const named = [...this.rooms.values()].filter((room) => room.settings.name === selector);
+          const named = reached.filter((room) => room.settings.name === selector);
           if (named.length > 1) throw new Error(`room ${JSON.stringify(selector)} is ambiguous; use its id from describe_room's otherRooms`);
           if (!named.length) throw new Error(`no room ${JSON.stringify(selector)}; describe_room's otherRooms lists them`);
           return named[0];
@@ -443,7 +343,7 @@ export class Hub extends EventEmitter {
         this.mcpTokens.delete(token);
       },
     };
-    this.settings = this.loadSettings(initialHumanName);
+    this.programSettings = new ProgramSettingsFile({ dataDir: this.dataDir, log: { warn: (text) => this.log.warn(text) } }, initialHumanName);
     if (!FROM_SOURCES || !this.settings.devShowMemoryIngestion) this.history.memoryDebug.clear();
     if (options.backgroundAgentChecks !== false) this.agents.start();
     this.loadRooms();
@@ -457,11 +357,12 @@ export class Hub extends EventEmitter {
         execute: (run, signal) => assignedRoom(run.roomKey)?.executeAutomation(run, signal) ?? Promise.resolve({ status: "interrupted", detail: "The room was removed." }),
       }, () => this.automationsChanged(), message => this.log.warn(message));
     } catch (error) { this.automationsUnavailable = `Automations are unavailable: ${error instanceof Error ? error.message : String(error)}`; this.log.warn(this.automationsUnavailable); }
-    try {
-      this.backgroundTasks = new BackgroundTaskStore(join(this.dataDir, "background-tasks.sqlite"));
-      this.backgroundTaskTimer = setInterval(() => this.flushBackgroundTasks(), 1000);
-      this.backgroundTaskTimer.unref();
-    } catch (error) { this.backgroundTaskFailure(error); }
+    this.backgroundTasks = new BackgroundTasks(join(this.dataDir, "background-tasks.sqlite"), {
+      caller: (token) => this.resolveMcpToken(token),
+      roomByUuid: (uuid) => [...this.rooms.values()].find((room) => room.uuid === uuid),
+      rooms: () => this.rooms.values(),
+      log: (text) => this.log.warn(text),
+    });
     for (const room of this.rooms.values()) {
       try { if (room.hasPendingNativeDelivery()) this.pendingNativeRooms.add(room.id); }
       catch { this.pendingNativeRooms.add(room.id); }
@@ -469,7 +370,7 @@ export class Hub extends EventEmitter {
     this.nativeReportTimer = setInterval(() => this.retryNativeDeliveries(), 1000);
     this.nativeReportTimer.unref();
     this.tellRoomsWhatEndedTheLastRun();
-    if (this.renamedAttachments) this.saveRooms();
+    if (this.registry.renamedAttachments) this.saveRooms();
     let vault: Vault | null | undefined;
     const vaultHandle = (): Vault | null => {
       if (vault !== undefined) return vault;
@@ -501,7 +402,7 @@ export class Hub extends EventEmitter {
         dataDir: () => this.dataDir,
         onRoomEvent: (handler) => this.on("event", (event: HubEvent) => { if (event.type === "room.event") handler(event.roomId, event.event); }),
         channelsChanged: () => this.emit("event", { type: "channels", channels: this.channels.view() } satisfies HubEvent),
-        paired: (_platform, name) => this.settlePairingCards(name),
+        paired: (_platform, name) => this.desk.settlePairingCards(name),
         hear: (room, sounds) => this.voice.hearAll(sounds, room.speechNames()),
         restart: {
           writingNow: () => this.writingNow(),
@@ -532,6 +433,7 @@ export class Hub extends EventEmitter {
       recoveryCompletionAuthorized: (preview, id) => this.history.memoryOutbox.recoveryHuman.completionAuthorized(preview, id),
       rooms: () => [...this.rooms.values()].map(memoryRoomView),
       room: (id) => { const room = this.rooms.get(id); return room ? memoryRoomView(room) : null; },
+      accept: (roomId, expected, work) => acceptForRecipient({ provider: this.memoryStore.get().provider, uuid: this.rooms.get(roomId)?.uuid, living: expected.life === undefined ? !this.registry.ended : this.registry.living(expected.life) }, expected, work),
       searchPool: (roomId) => this.roomsForAgentSearch(roomId).flatMap(({ id }) => { const room = this.rooms.get(id); return room ? [memoryRoomView(room)] : []; }),
       config: () => this.memoryStore.get(),
       provider: async (config) => {
@@ -581,9 +483,9 @@ export class Hub extends EventEmitter {
   privateTrialNamespaceUnregistered(roomIds: readonly string[], roomUuids: readonly string[], options: { fresh?: boolean } = {}): boolean {
     if (roomIds.length !== 20 || roomUuids.length !== 20 || new Set(roomIds).size !== 20 || new Set(roomUuids).size !== 20) return false;
     for (const id of roomIds) if (!/^trial:[0-9a-f-]{36}:[0-9a-f-]{36}$/.test(id) || ROOM_ID_PATTERN.test(id) ||
-      this.rooms.has(id) || this.arriving.has(id)) return false;
+      this.rooms.has(id) || this.registry.isArriving(id)) return false;
     for (const room of this.rooms.values()) if (roomUuids.includes(room.uuid)) return false;
-    if (this.arriving.size !== 0) return false;
+    if (this.registry.arriving.size !== 0) return false;
     const names = this.roomFolderNames(join(this.dataDir, "rooms"), options.fresh === true);
     return !roomIds.some(id => names.has(id));
   }
@@ -601,7 +503,7 @@ export class Hub extends EventEmitter {
 
   privateTrialRoomFolderReads(): number { return this.roomFolderReads; }
 
-  async setMemory(patch: { provider?: unknown; settings?: unknown; consent?: unknown; filterMode?: unknown; filterBaseUrl?: unknown; filterApiKey?: unknown; filterModel?: unknown; filterForm?: unknown; blockChars?: unknown }): Promise<{ view: MemoryConfigView; status: MemoryStatus; verified?: { ok: boolean; reason?: string } }> {
+  async setMemory(patch: { provider?: unknown; settings?: unknown; consent?: unknown; consentWords?: unknown; filterMode?: unknown; filterBaseUrl?: unknown; filterApiKey?: unknown; filterModel?: unknown; filterForm?: unknown; blockChars?: unknown }): Promise<{ view: MemoryConfigView; status: MemoryStatus; verified?: { ok: boolean; reason?: string } }> {
     if (patch.provider !== undefined && patch.provider !== "off" && !providerEntry(String(patch.provider))) throw new Error(`memory provider must be off or one of: ${MEMORY_PROVIDERS.map(e => e.id).join(", ")}`);
     if (patch.settings !== undefined && (typeof patch.settings !== "object" || patch.settings === null || Array.isArray(patch.settings))) throw new Error("settings must be an object of the provider's fields");
     if (patch.consent !== undefined && typeof patch.consent !== "boolean") throw new Error("consent must be true or false");
@@ -617,7 +519,14 @@ export class Hub extends EventEmitter {
     const settings = patch.settings !== undefined && target
       ? coerceProviderSettings(target, this.memoryStore.get().providers[target.id] ?? {}, patch.settings as Record<string, unknown>)
       : null;
+    const shown = patch.consentWords;
+    if (shown !== undefined && (typeof shown !== "string" || patch.consent !== true || Object.keys(patch).some((key) => key !== "consent" && key !== "consentWords")))
+      throw new Error("consentWords go with the consent alone, as text");
     this.memoryStore.update((s) => {
+      if (typeof shown === "string") {
+        const current = providerEntry(s.provider);
+        if (!current || current.id !== target?.id || consentWords(current, s.filter) !== shown) throw new ConsentChangedError();
+      }
       if (patch.provider !== undefined) s.provider = targetId;
       if (settings && target) s.providers[target.id] = settings;
       if (patch.filterMode !== undefined) s.filter.mode = patch.filterMode as "off" | "heuristic" | "llm";
@@ -689,11 +598,7 @@ export class Hub extends EventEmitter {
 
   cancelPairLink(): void {
     this.channels.cancelPairLink("telegram");
-    for (const request of this.openSecrets()) {
-      if (request.purpose !== "telegram-pair") continue;
-      request.outcome = "closed: the link was withdrawn";
-      this.settleSecret(request, "closed");
-    }
+    this.desk.pairLinkWithdrawn();
   }
 
   unpair(senderId: string, stopTurns = false): boolean {
@@ -770,124 +675,32 @@ export class Hub extends EventEmitter {
 
 
   restartWith: ((sessions?: "load" | "replay") => void) | null = null;
-  private restart: (RestartView & { timer: NodeJS.Timeout | null; marks: string; quietSince: number; toldOfWait: boolean }) | null = null;
+  private readonly restarts: RestartCoordinator = new RestartCoordinator({
+    handOver: () => this.restartWith,
+    rooms: () => this.rooms.values(),
+    holds: (room) => this.rooms.get(room.id) === room,
+    stillWaiting: (text) => this.channels.restartStillWaiting(text),
+    announce: (restart) => this.emit("event", { type: "restart", restart } satisfies HubEvent),
+    log: (text) => this.log.warn(text),
+  });
 
   get canRestart(): boolean {
     return !!this.restartWith;
   }
 
-  writingNow(): string[] {
-    const names: string[] = [];
-    for (const room of this.rooms.values()) {
-      for (const p of room.participants.values()) if (p.kind === "agent" && (p.status === "thinking" || p.status === "queued")) names.push(p.name);
-    }
-    return names;
-  }
+  writingNow(): string[] { return this.restarts.writingNow(); }
 
-  restartPending(): RestartView | null {
-    if (!this.restart) return null;
-    const { timer: _timer, marks: _marks, quietSince, toldOfWait: _told, ...view } = this.restart;
-    return { ...view, ...(view.waitingFor.length ? { quietSince } : {}) };
-  }
-
-  private writingMarks(): string {
-    const marks: string[] = [];
-    for (const room of this.rooms.values()) {
-      for (const p of room.participants.values()) {
-        if (p.kind !== "agent" || (p.status !== "thinking" && p.status !== "queued")) continue;
-        marks.push(`${room.id}:${p.id}:${p.status}:${room.turnProgressMark(p.id)}`);
-      }
-    }
-    return marks.join("|");
-  }
+  restartPending(): RestartView | null { return this.restarts.pending(); }
 
   requestRestart(input: { askedBy: string; from: RestartView["from"]; room?: string; sessions?: "load" | "replay"; when: "now" | "idle" }): RestartView {
-    if (!this.restartWith) throw new Error("this viberoom cannot restart itself");
-    if (this.restart) return this.restartPending()!;
-    const waiting = input.when === "idle" ? this.writingNow() : [];
-    this.restart = { askedBy: input.askedBy, from: input.from, ...(input.sessions ? { sessions: input.sessions } : {}), since: Date.now(), waitingFor: waiting, timer: null, marks: this.writingMarks(), quietSince: Date.now(), toldOfWait: false };
-    const where = input.from === "window" ? "" : input.from === "vibemate" ? (input.room ? ` from the room ${input.room}` : "")
-      : ` from ${input.from === "telegram" ? "Telegram" : "Discord"}`;
-    this.recordEverywhere(waiting.length
-      ? `${input.askedBy} asked${where} for viberoom to restart when ${nameList(waiting)} ${waiting.length > 1 ? "finish" : "finishes"}.`
-      : `${input.askedBy} asked${where} for viberoom to restart now; a reply being written this moment is cut short.`);
-    this.announceRestart();
-    const accepted = this.restartPending()!;
-    if (waiting.length) this.restart.timer = setInterval(() => this.checkRestart(), RESTART_POLL_MS).unref();
-    else this.goRestart();
-    return accepted;
+    return this.restarts.request(input);
   }
 
-  restartNow(by: string): void {
-    if (!this.restart || !this.restart.waitingFor.length) return;
-    this.recordEverywhere(`${by} chose not to wait: a reply being written this moment is cut short.`);
-    this.goRestart();
-  }
+  restartNow(by: string): void { this.restarts.now(by); }
 
-  cancelRestart(by: string): void {
-    if (!this.restart) return;
-    this.clearRestart();
-    this.recordEverywhere(`${by} called off the restart of viberoom.`);
-    this.announceRestart();
-  }
+  cancelRestart(by: string): void { this.restarts.cancel(by); }
 
-  private restartFailed(): void {
-    if (!this.restart) return;
-    this.clearRestart();
-    this.recordEverywhere("The restart did not happen: this viberoom is still the one running. Its log says why.");
-    this.announceRestart();
-  }
-
-  private clearRestart(): void {
-    if (this.restart?.timer) clearInterval(this.restart.timer);
-    this.restart = null;
-  }
-
-  private checkRestart(): void {
-    const req = this.restart;
-    if (!req) return;
-    const writing = this.writingNow();
-    if (!writing.length) return this.goRestart();
-    const marks = this.writingMarks();
-    const changed = writing.join("|") !== req.waitingFor.join("|");
-    if (marks !== req.marks) {
-      req.marks = marks;
-      req.quietSince = Date.now();
-    }
-    req.waitingFor = writing;
-    if (changed) this.announceRestart();
-    if (!req.toldOfWait && Date.now() - req.quietSince >= RESTART_QUIET_MS) {
-      req.toldOfWait = true;
-      const minutes = Math.round((Date.now() - req.quietSince) / 60_000);
-      const words = `Nothing new from ${nameList(writing)} for ${minutes} minutes; viberoom is still waiting to restart.`;
-      this.recordEverywhere(words);
-      if (req.from !== "window") void this.channels.restartStillWaiting(`<b>Still waiting.</b> ${words}`).catch(() => undefined);
-      this.announceRestart();
-    }
-  }
-
-  private goRestart(): void {
-    const req = this.restart;
-    if (!req || !this.restartWith) return;
-    if (req.timer) clearInterval(req.timer);
-    req.waitingFor = [];
-    req.timer = setTimeout(() => this.restartFailed(), RESTART_GIVE_UP_MS).unref();
-    this.recordEverywhere("viberoom is restarting; it comes back in a few seconds.");
-    this.announceRestart();
-    this.restartWith(req.sessions);
-  }
-
-  private announceRestart(): void {
-    this.emit("event", { type: "restart", restart: this.restartPending() } satisfies HubEvent);
-  }
-
-  noteBackAfterRestart(build: string): void {
-    this.recordEverywhere(`viberoom is back (build ${build}).`);
-  }
-
-  private recordEverywhere(text: string): void {
-    for (const room of this.rooms.values()) room.hubRecord(text);
-  }
+  noteBackAfterRestart(build: string): void { this.restarts.noteBack(build); }
 
   readonly channels: ChannelRouter;
   readonly connections: Connections;
@@ -926,384 +739,47 @@ export class Hub extends EventEmitter {
   private channelsRetryAttempt = 0;
 
 
-  private readonly secrets = new Map<string, SecretRequest>();
-  private readonly trialBudgetSessions = new WeakMap<SecretRequest, TrialBudgetCard>();
-
-  askTrialBudget(subject: TrialBudgetSubject): SecretRequest {
-    const session = new TrialBudgetCard(subject);
-    const open = [...this.secrets.values()].find(r => r.state === "open" && r.purpose === "trial-budget" &&
-      r.trialBudget?.cardSha256 === session.view.cardSha256);
-    if (open) return structuredClone(open);
-    const request: SecretRequest = { id: randomUUID(), purpose: "trial-budget", askedBy: { kind: "window" },
-      askedAt: session.view.offeredAt, expiresAt: session.view.offerExpiresAt, state: "open", trialBudget: session.view };
-    this.secrets.set(request.id, request); this.trialBudgetSessions.set(request, session);
-    this.emit("event", { type: "secret", request: structuredClone(request) } satisfies HubEvent);
-    const timer = setTimeout(() => this.expireSecrets(), request.expiresAt - Date.now() + 50); timer.unref();
-    return structuredClone(request);
-  }
-
-  decideTrialBudget(id: string, body: unknown): SecretRequest {
-    const request = this.secrets.get(id), session = request && this.trialBudgetSessions.get(request);
-    if (!request || request.purpose !== "trial-budget" || request.state !== "open" || !session)
-      throw new Error("trial_budget_card_unavailable");
-    try {
-      const outcome = session.decide(body);
-      request.outcome = outcome.state === "claimed" ? `Whole comparison claimed once: ${outcome.claimId}` : "not now";
-      this.settleSecret(request, outcome.state === "claimed" ? "done" : "closed");
-      return structuredClone(request);
-    } catch {
-      request.refusal = "The exact whole-budget decision was refused; no new grant is available.";
-      if (session.outcome().phase === "closed") { request.outcome = session.outcome().reason ?? "refused"; this.settleSecret(request, "closed"); }
-      this.emit("event", { type: "secret", request: structuredClone(request) } satisfies HubEvent);
-      throw new Error("trial_budget_decision_refused");
-    }
-  }
-
-  private revokeTrialBudgetCards(reason: string): void {
-    for (const request of this.secrets.values()) {
-      if (request.purpose !== "trial-budget") continue;
-      this.trialBudgetSessions.get(request)?.close(reason);
-      if (request.state === "open") { request.outcome = reason; this.settleSecret(request, "closed"); }
-    }
-  }
-
-  revokeTrialBudget(id: string): SecretRequest {
-    const request = this.secrets.get(id), session = request && this.trialBudgetSessions.get(request);
-    if (!request || request.purpose !== "trial-budget" || !session) throw new Error("trial_budget_card_unavailable");
-    session.close("human_revoked"); request.outcome = "Whole comparison authority withdrawn";
-    if (request.state === "open") this.settleSecret(request, "closed");
-    else this.emit("event", { type: "secret", request: structuredClone(request) } satisfies HubEvent);
-    return structuredClone(request);
-  }
-
-
-
-  openSecrets(): SecretRequest[] {
-    return [...this.secrets.values()].filter((r) => r.state === "open").map(r => r.purpose === "trial-budget" ? structuredClone(r) : r);
-  }
-
-  askSecret(purpose: SecretRequest["purpose"], askedBy: SecretRequest["askedBy"], prefill?: SecretRequest["prefill"], connection?: SecretRequest["connection"], consent?: SecretRequest["consent"]): SecretRequest {
-    const key = (c?: SecretRequest["connection"]) => c?.add ? `+${c.url ?? c.command}` : c?.id;
-    const open = this.openSecrets().find((r) => r.purpose === purpose && (purpose !== "connection" || key(r.connection) === key(connection)) && (purpose !== "consent" || r.consent?.feature === consent?.feature));
-    if (open) return open;
-    const now = Date.now();
-    const request: SecretRequest = { id: randomBytes(9).toString("base64url"), purpose, askedBy, askedAt: now, expiresAt: now + SECRET_CARD_MS, state: "open" };
-    if (connection) request.connection = { ...connection };
-    if (consent) request.consent = { ...consent };
-    const given = Object.entries(prefill ?? {}).filter(([, value]) => typeof value === "string" && value !== "");
-    if (given.length) request.prefill = Object.fromEntries(given);
-    if (purpose === "telegram-pair") {
-      const { url, link } = this.channels.pairLink("telegram");
-      request.link = { url, expiresAt: link.expiresAt, svg: qrSvg(url) };
-      request.expiresAt = link.expiresAt;
-    }
-    this.secrets.set(request.id, request);
-    this.log.info(`secret card ${request.id} (${purpose}) asked by ${askedBy.kind === "window" ? "the window" : `${askedBy.name} in room ${askedBy.roomId}`}`);
-    this.emit("event", { type: "secret", request } satisfies HubEvent);
-    if (askedBy.kind === "vibemate") {
-      const room = this.rooms.get(askedBy.roomId);
-      const human = room?.settings.humanName;
-      if (room) room.channelRecord(purpose === "telegram-pair"
-        ? `${askedBy.name} asked to pair a phone: a card with the link and its QR code is on ${human}'s screen.`
-        : `${askedBy.name} asked for ${secretLabel(request)}: a card is on ${human}'s screen.`);
-    }
-    const timer = setTimeout(() => this.expireSecrets(), request.expiresAt - now + 50);
-    timer.unref();
-    return request;
-  }
-
-  async answerSecret(id: string, value: string): Promise<SecretRequest> {
-    const request = this.secrets.get(id);
-    if (!request || request.state !== "open") throw new Error("that card is no longer open");
-    if (request.purpose === "trial-budget") throw new Error("trial_budget_exact_decision_required");
-    if (request.purpose === "telegram-pair" || request.purpose === "connection" || request.purpose === "consent") throw new Error("that card takes no value");
-    if (!value && !(request.purpose === "voice-key" && request.prefill?.provider === "compatible")) throw new Error("the card is empty: paste the key, or close it without one");
-    try {
-      if (request.purpose === "voice-key") {
-        const provider = request.prefill?.provider ?? "openai";
-        const entry = voiceProvider(provider);
-        if (!entry) throw new Error(`"${provider}" is not a voice provider`);
-        const settings = { ...(value ? { apiKey: value } : {}), ...(request.prefill?.baseUrl ? { baseUrl: request.prefill.baseUrl } : {}), ...(request.prefill?.model ? { model: request.prefill.model } : {}) };
-        const proven = await this.voice.proveKey(provider, settings);
-        this.voice.set({ provider, settings, ...(request.prefill?.language ? { language: request.prefill.language } : {}) });
-        request.outcome = proven ? `${entry.label} is chosen, its key in the vault, and it answers` : `${entry.label} is chosen${value ? ", its key in the vault" : ""}`;
-      } else if (request.purpose === "telegram-token") {
-        const view = await this.setTelegram({ token: value, enabled: true });
-        const tg = view.telegram;
-        if (!tg || (tg.state !== "connected" && tg.state !== "listening")) throw new Error(tg?.detail || "the bot did not start");
-        request.outcome = `connected as @${tg.account}`;
-      } else if (request.purpose === "memory-zep-key") {
-        const result = await this.setMemory({ provider: "zep", settings: { apiKey: value } });
-        if (result.verified && !result.verified.ok) throw new Error(result.verified.reason || "Zep did not accept the key");
-        request.outcome = "the Zep key is in the vault and the provider answers";
-      } else {
-        await this.setMemory({
-          filterMode: "llm", filterApiKey: value,
-          ...(request.prefill?.baseUrl ? { filterBaseUrl: request.prefill.baseUrl } : {}),
-          ...(request.prefill?.model ? { filterModel: request.prefill.model } : {}),
-        });
-        request.outcome = "the sieve key is in the vault";
-      }
-    } catch (error) {
-      request.refusal = error instanceof Error ? error.message : String(error);
-      this.emit("event", { type: "secret", request } satisfies HubEvent);
-      throw error;
-    }
-    request.refusal = undefined;
-    this.settleSecret(request, "done");
-    return request;
-  }
-
-  closeSecret(id: string, options: { copied?: boolean } = {}): SecretRequest {
-    const request = this.secrets.get(id);
-    if (!request) throw new Error("no such card");
-    if (request.state !== "open") return request;
-    if (request.purpose === "trial-budget") {
-      this.trialBudgetSessions.get(request)?.close(); request.outcome = "not now";
-      this.settleSecret(request, "closed"); return structuredClone(request);
-    }
-    if (request.purpose === "telegram-pair") {
-      request.outcome = options.copied ? "closed: the link was copied and stays good until it runs out" : "closed without pairing";
-      this.settleSecret(request, "closed");
-      if (!options.copied) this.channels.cancelPairLink("telegram");
-      return request;
-    }
-    if (request.purpose === "connection" || request.purpose === "consent") {
-      if (request.connection) this.connections.cancelSignIn(request.connection.id);
-      request.outcome = "not now";
-      this.settleSecret(request, "closed");
-      return request;
-    }
-    request.outcome = "closed without a key";
-    this.settleSecret(request, "closed");
-    return request;
-  }
-
-  askConsent(feature: ConsentFeature, askedBy: SecretRequest["askedBy"], reader?: "system" | "provider"): SecretRequest | null {
-    const who = feature === "reading" ? reader ?? "provider" : undefined;
-    if (this.featureOn(feature, who)) return null;
-    return this.askSecret("consent", askedBy, undefined, undefined, { feature, words: this.consentWordsNow(feature, who), recipient: this.consentRecipient(feature, who), ...(who ? { reader: who } : {}) });
-  }
-
-  private consentRecipient(feature: ConsentFeature, reader?: "system" | "provider"): string {
-    if (feature === "memory") return providerEntry(this.memoryStore.get().provider)?.label ?? "the provider";
-    if (feature === "reading" && reader === "system") return "this computer's own voices";
-    const entry = voiceProvider(this.voice.store.get().provider);
-    return !entry ? "the provider" : entry.id === "compatible" ? "your own server" : entry.label;
-  }
-
-  private featureOn(feature: ConsentFeature, reader?: "system" | "provider"): boolean {
-    if (feature === "memory") return memoryReadiness(this.memoryStore.get()).ready;
-    const state = this.voice.store.get();
-    if (feature === "voice") return voiceReadiness(state).ready;
-    return state.reading.reader === reader && readingReadiness(state).ready;
-  }
-
-  private consentWordsNow(feature: ConsentFeature, reader?: "system" | "provider"): string {
-    if (feature === "memory") {
-      const state = this.memoryStore.get();
-      const entry = providerEntry(state.provider);
-      if (!entry) throw new Error("no memory provider is chosen yet: its key card, or Settings → Long-term memory, comes first");
-      return consentWords(entry, state.filter);
-    }
-    if (feature === "reading" && reader === "system") return READ_HERE_WORDS;
-    const state = this.voice.store.get();
-    const entry = voiceProvider(state.provider);
-    if (!entry) throw new Error("no voice provider is chosen yet: its key card, or Settings → Voice, comes first");
-    const settings = state.providers[entry.id] ?? {};
-    return feature === "voice" ? voiceConsentWords(entry, settings) : readingConsentWords(entry, settings);
-  }
-
-  private async applyConsent(feature: ConsentFeature, reader?: "system" | "provider"): Promise<string> {
-    if (feature === "memory") await this.setMemory({ consent: true });
-    else if (feature === "voice") this.voice.set({ consent: true });
-    else this.voice.set({ reading: reader === "system" ? { reader: "system" } : { reader: "provider", consent: true } });
-    return this.featureState(feature);
-  }
-
-  async agreeTo(feature: ConsentFeature, words: string, reader?: "system" | "provider"): Promise<string> {
-    const who = feature === "reading" ? reader ?? "provider" : undefined;
-    if (words !== this.consentWordsNow(feature, who)) throw new Error("What leaves this computer changed since the page showed it: read the words again.");
-    return this.applyConsent(feature, who);
-  }
-
-  async withdrawConsent(feature: ConsentFeature): Promise<void> {
-    if (feature === "memory") await this.setMemory({ consent: false });
-    else if (feature === "voice") this.voice.set({ consent: false });
-    else this.voice.set({ reading: { consent: false } });
-  }
-
-  private featureState(feature: ConsentFeature): string {
-    const readiness = feature === "memory" ? memoryReadiness(this.memoryStore.get()) : feature === "voice" ? voiceReadiness(this.voice.store.get()) : readingReadiness(this.voice.store.get());
-    const name = CONSENT_FEATURE_WORDS[feature];
-    return readiness.ready ? `${name} is on` : `${name} is not on yet: ${readiness.reason}`;
-  }
-
-  async giveConsent(id: string): Promise<SecretRequest> {
-    const request = this.secrets.get(id);
-    if (!request || request.state !== "open" || request.purpose !== "consent" || !request.consent) throw new Error("that card is no longer open");
-    const { feature, reader } = request.consent;
-    try {
-      const words = this.consentWordsNow(feature, reader);
-      if (words !== request.consent.words) {
-        request.consent.words = words;
-        request.consent.recipient = this.consentRecipient(feature, reader);
-        request.consent.changed = true;
-        throw new Error("What leaves this computer changed since the card opened: read the words again.");
-      }
-      request.outcome = await this.applyConsent(feature, reader);
-    } catch (error) {
-      request.refusal = error instanceof Error ? error.message : String(error);
-      this.emit("event", { type: "secret", request } satisfies HubEvent);
-      throw error;
-    }
-    request.refusal = undefined;
-    this.settleSecret(request, "done");
-    return request;
-  }
-
-  connectionsView(): ConnectionView[] {
-    const ids = new Map([...this.rooms.values()].map((room) => [room.uuid, room.id]));
-    return this.connections.view().map((view) => view.offInRooms ? { ...view, offInRooms: view.offInRooms.flatMap((uuid) => ids.has(uuid) ? [ids.get(uuid)!] : []) } : view);
-  }
-
-  askConnection(id: string, askedBy: SecretRequest["askedBy"]): SecretRequest {
-    const view = this.connections.view().find((v) => v.id === id);
-    if (!view) throw new ConnectionError(`"${id}" is not a system viberoom connects to`, "unknown-tool");
-    return this.askSecret("connection", askedBy, undefined, {
-      id, name: view.name, blurb: view.blurb, mark: view.mark, ...(view.url ? { url: view.url } : {}),
-      ...(view.command ? { command: view.command } : {}),
-      ...(view.keys?.length ? { keys: view.keys, keysIn: view.keysIn, keysSaved: this.connections.savedKeys(id) } : {}),
+  private readonly desk: SecretDesk = (() => {
+    const hub = this;
+    return new SecretDesk({
+      rooms: () => hub.rooms,
+      announce: (request) => hub.emit("event", { type: "secret", request } satisfies HubEvent),
+      log: { info: (text) => hub.log.info(text), warn: (text) => hub.log.warn(text) },
+      get voice() { return hub.voice; },
+      get memoryStore() { return hub.memoryStore; },
+      get connections() { return hub.connections; },
+      setTelegram: (patch) => hub.setTelegram(patch),
+      setMemory: (patch) => hub.setMemory(patch),
+      pairLink: () => hub.channels.pairLink("telegram"),
+      cancelPairLink: (link) => hub.channels.cancelPairLink("telegram", link),
+      connectSystem: (id, cardId) => hub.connectSystem(id, cardId),
     });
-  }
+  })();
 
+  askTrialBudget(subject: TrialBudgetSubject): SecretRequest { return this.desk.askTrialBudget(subject); }
+  decideTrialBudget(id: string, body: unknown): SecretRequest { return this.desk.decideTrialBudget(id, body); }
+  revokeTrialBudget(id: string): SecretRequest { return this.desk.revokeTrialBudget(id); }
+  openSecrets(): SecretRequest[] { return this.desk.openSecrets(); }
+  askSecret(purpose: SecretRequest["purpose"], askedBy: SecretRequest["askedBy"], prefill?: SecretRequest["prefill"], connection?: SecretRequest["connection"], consent?: SecretRequest["consent"]): SecretRequest {
+    return this.desk.askSecret(purpose, askedBy, prefill, connection, consent);
+  }
+  answerSecret(id: string, value: string): Promise<SecretRequest> { return this.desk.answerSecret(id, value); }
+  closeSecret(id: string, options: { copied?: boolean } = {}): SecretRequest { return this.desk.closeSecret(id, options); }
+  askConsent(feature: ConsentFeature, askedBy: SecretRequest["askedBy"], reader?: "system" | "provider"): SecretRequest | null { return this.desk.askConsent(feature, askedBy, reader); }
+  agreeTo(feature: ConsentFeature, words: string, reader?: "system" | "provider"): Promise<string> { return this.desk.agreeTo(feature, words, reader); }
+  withdrawConsent(feature: ConsentFeature): Promise<void> { return this.desk.withdrawConsent(feature); }
+  giveConsent(id: string): Promise<SecretRequest> { return this.desk.giveConsent(id); }
+  connectionsView(): ConnectionView[] { return this.desk.connectionsView(); }
+  askConnection(id: string, askedBy: SecretRequest["askedBy"]): SecretRequest { return this.desk.askConnection(id, askedBy); }
   askAddConnection(name: string, url: string, askedBy: SecretRequest["askedBy"], headers: readonly string[] = []): { request: SecretRequest; known: boolean } {
-    const known = this.connections.findByUrl(url);
-    if (known) return { request: this.askConnection(known, askedBy), known: true };
-    const label = name.trim().replace(/\s+/g, " ");
-    if (!label || label.length > 60) throw new ConnectionError("give the server a name of 1 to 60 characters", "failed");
-    const href = new URL(url.trim()).href;
-    const keys = checkHeaderNames([...headers]);
-    return {
-      request: this.askSecret("connection", askedBy, undefined, { id: "", name: label, blurb: new URL(href).host, url: href, ...(keys.length ? { keys, keysIn: "headers" as const } : {}), add: true }),
-      known: false,
-    };
+    return this.desk.askAddConnection(name, url, askedBy, headers);
   }
-
   askAddLocalConnection(name: string, launch: LocalLaunch, env: readonly string[], askedBy: SecretRequest["askedBy"]): { request: SecretRequest; known: boolean } {
-    const known = this.connections.findByLaunch(launch);
-    if (known) return { request: this.askConnection(known, askedBy), known: true };
-    const label = name.trim().replace(/\s+/g, " ");
-    if (!label || label.length > 60) throw new ConnectionError("give the server a name of 1 to 60 characters", "failed");
-    const command = commandLine(launch);
-    return { request: this.askSecret("connection", askedBy, undefined, { id: "", name: label, blurb: "a program on this computer", command, launch: { ...launch, args: [...launch.args] }, ...(env.length ? { keys: [...env], keysIn: "env" as const } : {}), add: true }), known: false };
+    return this.desk.askAddLocalConnection(name, launch, env, askedBy);
   }
-
-  async connectCard(cardId: string, keys: Record<string, unknown> = {}): Promise<ConnectionView> {
-    const card = this.openSecrets().find((r) => r.id === cardId);
-    if (!card?.connection) throw new Error("that card is no longer open");
-    try {
-      if (card.connection.add) {
-        card.connection.id = card.connection.launch
-          ? this.connections.addOwnLocal(card.connection.name, card.connection.launch, card.connection.keys ?? [])
-          : this.connections.addOwn(card.connection.name, card.connection.url!, card.connection.keys ?? []);
-        card.connection.add = false;
-      }
-      if (card.connection.keys?.length) await this.connections.setKeys(card.connection.id, keys);
-    } catch (error) {
-      card.refusal = error instanceof Error ? error.message : String(error);
-      this.emit("event", { type: "secret", request: card } satisfies HubEvent);
-      throw error;
-    }
-    return this.connectSystem(card.connection.id, card.id);
-  }
-
-  async connectSystem(id: string, cardId?: string): Promise<ConnectionView> {
-    const request = cardId ? this.secrets.get(cardId) : undefined;
-    if (cardId && (!request || request.state !== "open" || request.purpose !== "connection" || request.connection?.id !== id)) throw new Error("that card is no longer open");
-    if (request?.connection) {
-      request.connection.signingIn = true;
-      request.refusal = undefined;
-      this.emit("event", { type: "secret", request } satisfies HubEvent);
-    }
-    try {
-      const view = await this.connections.connect(id);
-      const tools = view.tools ?? [];
-      const reads = tools.filter((t) => t.rule === "read").length;
-      this.log.info(`connection ${id}: connected, ${tools.length} tools`);
-      for (const card of this.openSecrets()) {
-        if (card.purpose !== "connection" || card.connection?.id !== id) continue;
-        card.outcome = `connected, ${tools.length} tools (${reads} read, ${tools.length - reads} write and ask first)`;
-        this.settleSecret(card, "done");
-      }
-      return view;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.warn(`connection ${id}: the sign-in did not finish: ${message}`);
-      if (request?.connection && request.state === "open") {
-        request.connection.signingIn = false;
-        request.refusal = error instanceof SignInError && error.kind === "cancelled" ? `Not connected: ${message}.` : `The sign-in failed: ${message}.`;
-        this.emit("event", { type: "secret", request } satisfies HubEvent);
-      }
-      throw error;
-    }
-  }
-
-  private settlePairingCards(name: string): void {
-    for (const request of this.openSecrets()) {
-      if (request.purpose !== "telegram-pair") continue;
-      request.outcome = `paired: ${name}`;
-      this.settleSecret(request, "done");
-    }
-  }
-
-  expireSecrets(now = Date.now()): void {
-    for (const request of this.secrets.values()) {
-      if (request.state !== "open") continue;
-      if (request.expiresAt > now) continue;
-      if (request.purpose === "trial-budget") this.trialBudgetSessions.get(request)?.close("offer_expired");
-      if (request.purpose === "connection" && request.connection) this.connections.cancelSignIn(request.connection.id);
-      request.outcome = request.purpose === "telegram-pair" ? "expired: not used within ten minutes" : "not answered within ten minutes";
-      this.settleSecret(request, "expired");
-    }
-  }
-
-  private settleSecret(request: SecretRequest, state: "done" | "closed" | "expired"): void {
-    request.state = state;
-    this.log.info(`secret card ${request.id}: ${state} (${request.outcome})`);
-    this.emit("event", { type: "secret", request } satisfies HubEvent);
-    if (request.askedBy.kind !== "vibemate") return;
-    const room = this.rooms.get(request.askedBy.roomId);
-    if (!room) return;
-    const human = room.settings.humanName;
-    if (request.purpose === "telegram-pair") {
-      room.cardOutcome(
-        state === "done" ? `${human} paired the phone from the card: ${request.outcome}.`
-          : state === "closed" ? `${human}'s pairing card closed: ${request.outcome}.`
-          : "The pairing card was not used within ten minutes and closed by itself.",
-        request.askedBy.participantId,
-      );
-      return;
-    }
-    if (request.purpose === "consent") {
-      const feature = CONSENT_FEATURE_WORDS[request.consent?.feature ?? "voice"];
-      room.cardOutcome(
-        state === "done" ? `${human} gave their consent on the card: ${request.outcome}.`
-          : state === "closed" ? `${human} closed the card for ${feature}: not now.`
-          : `The card for ${feature} was not answered within ten minutes and closed by itself.`,
-        request.askedBy.participantId,
-      );
-      return;
-    }
-    room.cardOutcome(
-      state === "done" ? (request.purpose === "connection" ? `${human} connected ${request.connection?.name} from the card: ${request.outcome}.`
-        : request.purpose === "voice-key" ? `${human} saved the voice provider's card: ${request.outcome}.`
-        : `${human} entered ${secretLabel(request)} on the card: ${request.outcome}.`)
-        : state === "closed" ? (request.purpose === "connection" ? `${human} closed the ${request.connection?.name} card: ${request.outcome}.` : `${human} closed the key card without a key.`)
-        : "The key card was not answered within ten minutes and closed by itself.",
-      request.askedBy.participantId,
-    );
-  }
+  connectCard(cardId: string, keys: Record<string, unknown> = {}): Promise<ConnectionView> { return this.desk.connectCard(cardId, keys); }
+  connectSystem(id: string, cardId?: string): Promise<ConnectionView> { return this.desk.connectSystem(id, cardId); }
+  expireSecrets(now = Date.now()): void { this.desk.expireSecrets(now); }
 
   setRun(run: { id: string; build: string }): void {
     this.run = run;
@@ -1319,20 +795,38 @@ export class Hub extends EventEmitter {
   }
 
   private automationEvent(room: Room, event: "first-human-message" | "room-start"): void {
+    const still = () => this.registry.speaks(room);
+    if (!still()) return;
     try {
-      if (this.automations?.store.event(room.uuid, event, this.automationBoot, Date.now())) this.automationsChanged();
-    } catch (error) { this.log.warn(`Automation event could not be recorded: ${String(error)}`); }
+      const changed = this.automations?.store.event(room.uuid, event, this.automationBoot, Date.now());
+      if (changed && still()) this.automationsChanged(still);
+    } catch (error) {
+      if (still()) this.log.warn(`Automation event could not be recorded: ${String(error)}`);
+    }
   }
 
-  private automationPending(): Record<string, number> {
-    try { return Object.fromEntries([...this.rooms.values()].map(room => [room.id, room.readOnly ? 0 : this.automations?.store.proposals(room.uuid).filter(p => p.status === "pending").length ?? 0])); }
-    catch { return {}; }
+  private automationPending(still: () => boolean = () => true): Record<string, number> | undefined {
+    try {
+      const pending: Record<string, number> = {};
+      for (const room of [...this.rooms.values()]) {
+        pending[room.id] = room.readOnly ? 0 : this.automations?.store.proposals(room.uuid).filter(p => p.status === "pending").length ?? 0;
+        if (!still()) return undefined;
+      }
+      return pending;
+    }
+    catch { return still() ? {} : undefined; }
   }
   private automationJobs(): number {
     try { return this.automations?.store.jobCount() ?? 0; }
     catch { return 0; }
   }
-  private automationsChanged(): void { this.emit("event", { type: "automations", pending: this.automationPending(), jobs: this.automationJobs() } satisfies HubEvent); }
+  private automationsChanged(still: () => boolean = () => true): void {
+    const pending = this.automationPending(still);
+    if (!pending) return;
+    const jobs = this.automationJobs();
+    if (!still()) return;
+    this.emit("event", { type: "automations", pending, jobs } satisfies HubEvent);
+  }
 
   private automationStore(): AutomationStore {
     if (!this.automations) throw new Error(this.automationsUnavailable || "Automations are unavailable.");
@@ -1405,108 +899,11 @@ export class Hub extends EventEmitter {
     return room ? { room, participantId: entry.participantId } : null;
   }
 
-  private backgroundTaskFailure(error: unknown): void {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message !== this.backgroundTaskFault) this.log.warn(`Background tasks: ${message}`);
-    this.backgroundTaskFault = message;
-  }
-
-  private withBackgroundTasks<T>(action: (store: BackgroundTaskStore) => T): T {
-    if (this.leaving.signal.aborted || !this.backgroundTasks)
-      throw new AgentMessageError(503, "unconfirmed_result", "Background tasks are unavailable now.");
-    try { return action(this.backgroundTasks); }
-    catch (error) {
-      if (error instanceof AgentMessageError) throw error;
-      if (error instanceof BackgroundTaskError) throw new AgentMessageError(error.status, error.code, error.message);
-      this.backgroundTaskFailure(error);
-      throw new AgentMessageError(503, "unconfirmed_result", "The background task result could not be confirmed; repeat only the same task ID and payload.");
-    }
-  }
-
-  private backgroundTaskCaller(token: string): { room: Room; participantId: string } {
-    const target = this.resolveMcpToken(token);
-    if (!target || !target.room.acceptsBackgroundRegistration(target.participantId, token))
-      throw new AgentMessageError(403, "session_unavailable", "This agent session cannot register background tasks now.");
-    return target;
-  }
-
-  registerBackgroundTask(token: string, raw: unknown) {
-    const target = this.backgroundTaskCaller(token);
-    if (!validArguments("register_background_task", raw)) throw new AgentMessageError(400, "invalid_arguments", "Provide only taskId and description.");
-    const input = raw as { taskId: string; description: string };
-    return this.withBackgroundTasks(store => store.register(target.room.uuid, target.participantId, input.taskId, input.description));
-  }
-
-  listBackgroundTasks(token: string) {
-    const target = this.backgroundTaskCaller(token);
-    return this.withBackgroundTasks(store => ({ tasks: store.list(target.room.uuid, target.participantId) }));
-  }
-
-  getBackgroundTask(token: string, taskId: string) {
-    const target = this.backgroundTaskCaller(token);
-    if (!validArguments("get_background_task", { taskId })) throw new AgentMessageError(400, "invalid_arguments", "Provide a nonblank taskId.");
-    return this.withBackgroundTasks(store => {
-      const task = store.get(target.room.uuid, target.participantId, taskId);
-      if (!task) throw new AgentMessageError(404, "task_unavailable", "That task is not registered under your name in this room.");
-      return task;
-    });
-  }
-
-  cancelBackgroundTask(token: string, raw: unknown) {
-    const target = this.backgroundTaskCaller(token);
-    if (!validArguments("cancel_background_task", raw)) throw new AgentMessageError(400, "invalid_arguments", "Provide only taskId.");
-    const input = raw as { taskId: string };
-    const result = this.withBackgroundTasks(store => store.cancel(target.room.uuid, target.participantId, input.taskId));
-    target.room.removeBackgroundCompletion(target.participantId, result.key);
-    return result;
-  }
-
-  completeBackgroundTask(raw: unknown) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new AgentMessageError(400, "invalid_arguments", "Provide the completion key, token, terminal status and complete result.");
-    const input = raw as Record<string, unknown>;
-    if (Object.keys(input).some(key => !["key", "token", "status", "result"].includes(key))
-        || typeof input.key !== "string" || typeof input.token !== "string" || typeof input.result !== "string"
-        || typeof input.status !== "string" || !["succeeded", "failed", "cancelled"].includes(input.status))
-      throw new AgentMessageError(400, "invalid_arguments", "Provide the completion key, token, terminal status and complete result.");
-    const result = this.withBackgroundTasks(store => {
-      const task = store.lookup(input.key as string);
-      const room = task && [...this.rooms.values()].find(candidate => candidate.uuid === task.roomUuid);
-      const participant = task && room?.participants.get(task.participantId);
-      if (!task || !room || !participant || participant.kind !== "agent" || participant.status === "left")
-        throw new AgentMessageError(403, "session_unavailable", "The background task's author is no longer in this room.");
-      return store.complete(input.key as string, input.token as string, input.status as "succeeded" | "failed" | "cancelled", input.result as string);
-    });
-    queueMicrotask(() => this.flushBackgroundTasks());
-    return { key: result.key, status: result.status, delivery: result.delivery };
-  }
-
-  private flushBackgroundTasks(): void {
-    if (this.leaving.signal.aborted || !this.backgroundTasks) return;
-    try {
-      for (const [key, result] of this.backgroundTaskResults) {
-        if (!this.backgroundTasks.lookup(key)) { this.backgroundTaskResults.delete(key); continue; }
-        if (result.confirmed) this.backgroundTasks.delivered(key, result.messageId);
-        else this.backgroundTasks.interrupted(key);
-        this.backgroundTaskResults.delete(key);
-      }
-      for (const task of this.backgroundTasks.pending()) {
-        const room = [...this.rooms.values()].find(candidate => candidate.uuid === task.roomUuid);
-        if (!room || task.result === null) continue;
-        room.enqueueBackgroundCompletion(task.participantId, { ...task, result: task.result,
-          claim: messageId => {
-            try { return this.backgroundTasks!.claim(task.key, messageId); }
-            catch (error) { this.backgroundTaskFailure(error); return false; }
-          },
-          finish: (confirmed, messageId) => {
-            this.backgroundTaskResults.set(task.key, { confirmed, messageId });
-            this.flushBackgroundTasks();
-          },
-        });
-      }
-      for (const room of this.rooms.values()) room.resumeBackgroundCompletions();
-      this.backgroundTaskFault = "";
-    } catch (error) { this.backgroundTaskFailure(error); }
-  }
+  registerBackgroundTask(token: string, raw: unknown) { return this.backgroundTasks.register(token, raw); }
+  listBackgroundTasks(token: string) { return this.backgroundTasks.list(token); }
+  getBackgroundTask(token: string, taskId: string) { return this.backgroundTasks.get(token, taskId); }
+  cancelBackgroundTask(token: string, raw: unknown) { return this.backgroundTasks.cancel(token, raw); }
+  completeBackgroundTask(raw: unknown) { return this.backgroundTasks.complete(raw); }
 
 
   listSkills(): SkillMeta[] {
@@ -1542,199 +939,52 @@ export class Hub extends EventEmitter {
   }
 
 
-  private settingsPath(): string {
-    return join(this.dataDir, "settings.json");
-  }
-
-  private loadSettings(initialHumanName?: string): ProgramSettings {
-    const defaults: ProgramSettings = {
-      humanName: initialHumanName ?? "Human",
-      humanDescription: "",
-      humanAvatar: "",
-      bypassPermissionsByDefault: true,
-      profileCompleted: !!initialHumanName,
-      agentSkillsNeedApproval: false,
-      diagrams: { preset: "pop", primary: null },
-      editor: { ...DEFAULT_EDITOR_SETTINGS },
-      appearance: { ...DEFAULT_APPEARANCE },
-      showMoreOnClick: true,
-      wheelStepPercent: WHEEL_STEP_DEFAULT,
-      wheelInertia: false,
-      notifyReplies: "every",
-      appBadge: true,
-      keepAwake: KEEP_AWAKE_DEFAULT,
-      devShowPrompts: false,
-      devShowMemoryIngestion: false,
-      checkForUpdates: true,
-      checkAgentUpdates: true,
-      transcripts: "off",
-      foldAfter: 1200,
-      reconnectMode: "replay",
-      roomDefaults: {},
-      vendorPresets: {},
-    };
-    if (!existsSync(this.settingsPath())) {
-      writeJson(this.settingsPath(), defaults);
-      return defaults;
-    }
-    try {
-      const raw = JSON.parse(readFileSync(this.settingsPath(), "utf8")) as Partial<ProgramSettings>;
-      const loaded = { ...defaults, ...raw, roomDefaults: raw.roomDefaults ?? {}, vendorPresets: raw.vendorPresets ?? {} };
-      const roomDefaults = this.upgradeRoomDefaults(loaded.roomDefaults);
-      if (roomDefaults === loaded.roomDefaults) return loaded;
-      const upgraded = { ...loaded, roomDefaults };
-      writeJson(this.settingsPath(), upgraded);
-      return upgraded;
-    } catch (error) {
-      this.log.warn(`settings.json unreadable (${String(error)}); using defaults`);
-      return defaults;
-    }
-  }
-
-  private upgradeRoomDefaults(raw: ProgramSettings["roomDefaults"]): ProgramSettings["roomDefaults"] {
-    const upgraded = upgradeRoomSettings(raw);
-    if (upgraded.readsOtherRooms !== undefined || upgraded.sharesHistory === false || !legacyRecallAcrossRooms(join(this.dataDir, "memory.json"))) return upgraded;
-    return { ...upgraded, readsOtherRooms: "every-turn" };
+  get settings(): ProgramSettings {
+    return this.programSettings.current;
   }
 
   saveWindowPlacement(report: Record<string, unknown>): void {
-    const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
-    if (!num(report.left) || !num(report.top) || !num(report.width) || !num(report.height)) throw new Error("left, top, width and height must be numbers");
-    const screen = report.screen as Record<string, unknown> | undefined;
-    const record: Record<string, unknown> = {
-      left: Math.round(report.left),
-      top: Math.round(report.top),
-      width: Math.round(report.width),
-      height: Math.round(report.height),
-      maximized: !!report.maximized,
-      savedAt: new Date().toISOString(),
-    };
-    if (screen && num(screen.left) && num(screen.top) && num(screen.width) && num(screen.height)) {
-      record.screen = { left: Math.round(screen.left), top: Math.round(screen.top), width: Math.round(screen.width), height: Math.round(screen.height) };
-    }
-    writeJson(join(this.dataDir, "window.json"), record);
+    this.programSettings.saveWindowPlacement(report);
   }
 
   updateSettings(patch: Record<string, unknown>): ProgramSettings {
-    const next: ProgramSettings = { ...this.settings, roomDefaults: { ...this.settings.roomDefaults }, vendorPresets: { ...this.settings.vendorPresets } };
-    if (patch.humanName !== undefined) {
-      const name = String(patch.humanName).trim();
-      if (!/^[\p{L}\p{N}][\p{L}\p{N}_-]{0,23}$/u.test(name)) throw new Error("humanName must be 1-24 letters, digits, _ or - (no spaces)");
-      next.humanName = name;
-    }
-    if (patch.humanDescription !== undefined) next.humanDescription = String(patch.humanDescription).slice(0, 200);
-    if (patch.humanAvatar !== undefined) next.humanAvatar = cleanFace(String(patch.humanAvatar), "vibemate");
-    if (patch.bypassPermissionsByDefault !== undefined) next.bypassPermissionsByDefault = patch.bypassPermissionsByDefault === true || patch.bypassPermissionsByDefault === "true";
-    if (patch.profileCompleted !== undefined) next.profileCompleted = patch.profileCompleted === true || patch.profileCompleted === "true";
-    if (patch.agentSkillsNeedApproval !== undefined) next.agentSkillsNeedApproval = patch.agentSkillsNeedApproval === true || patch.agentSkillsNeedApproval === "true";
-    if (patch.showMoreOnClick !== undefined) next.showMoreOnClick = patch.showMoreOnClick === true || patch.showMoreOnClick === "true";
-    if (patch.wheelStepPercent !== undefined) {
-      const step = Number(patch.wheelStepPercent);
-      if (!Number.isFinite(step)) throw new Error("wheelStepPercent must be a number");
-      next.wheelStepPercent = Math.round(Math.min(WHEEL_STEP_MAX, Math.max(WHEEL_STEP_MIN, step)));
-    }
-    if (patch.wheelInertia !== undefined) next.wheelInertia = patch.wheelInertia === true || patch.wheelInertia === "true";
-    if (patch.notifyReplies !== undefined) {
-      if (patch.notifyReplies !== "every" && patch.notifyReplies !== "to-me" && patch.notifyReplies !== "off") throw new Error("notifyReplies must be every, to-me or off");
-      next.notifyReplies = patch.notifyReplies;
-    }
-    if (patch.appBadge !== undefined) next.appBadge = patch.appBadge === true || patch.appBadge === "true";
-    if (patch.keepAwake !== undefined) {
-      if (!KEEP_AWAKE.includes(patch.keepAwake as KeepAwake)) throw new Error(`keepAwake must be ${KEEP_AWAKE.join(", ")}`);
-      next.keepAwake = patch.keepAwake as KeepAwake;
-    }
-    if (patch.devShowPrompts !== undefined) next.devShowPrompts = patch.devShowPrompts === true || patch.devShowPrompts === "true";
-    if (patch.devShowMemoryIngestion !== undefined) next.devShowMemoryIngestion = patch.devShowMemoryIngestion === true || patch.devShowMemoryIngestion === "true";
-    if (patch.checkForUpdates !== undefined) next.checkForUpdates = patch.checkForUpdates === true || patch.checkForUpdates === "true";
-    if (patch.checkAgentUpdates !== undefined) next.checkAgentUpdates = patch.checkAgentUpdates === true || patch.checkAgentUpdates === "true";
-    if (patch.transcripts !== undefined) {
-      const mode = String(patch.transcripts);
-      if (!TRANSCRIPT_MODES.includes(mode as TranscriptMode)) throw new Error(`transcripts must be one of ${TRANSCRIPT_MODES.join(", ")}`);
-      next.transcripts = mode as TranscriptMode;
-    }
-    if (patch.foldAfter !== undefined) {
-      const n = Number(patch.foldAfter);
-      if (!Number.isInteger(n) || n < 100 || n > 20_000) throw new Error("foldAfter must be an integer between 100 and 20000");
-      next.foldAfter = n;
-    }
-    if (patch.diagrams !== undefined && typeof patch.diagrams === "object" && patch.diagrams) {
-      const d = patch.diagrams as Record<string, unknown>;
-      const preset = String(d.preset ?? next.diagrams?.preset ?? "pop") as DiagramPreset;
-      if (!DIAGRAM_PRESETS.includes(preset)) throw new Error(`diagrams.preset must be one of ${DIAGRAM_PRESETS.join(", ")}`);
-      let primary: string | null = next.diagrams?.primary ?? null;
-      if (d.primary !== undefined) {
-        primary = d.primary === null || d.primary === "" ? null : String(d.primary).trim().toLowerCase();
-        if (primary !== null && !/^#[0-9a-f]{6}$/.test(primary)) throw new Error("diagrams.primary must be a #rrggbb colour or empty");
+    const { settings: next, revision } = this.programSettings.commit(patch);
+    const latest = () => this.programSettings.holds(revision);
+    const lastWord = (deliver: (settings: ProgramSettings) => void): boolean => {
+      deliver(next);
+      if (latest()) return true;
+      for (let seen = this.programSettings.revision; !this.programSettings.ended; seen = this.programSettings.revision) {
+        deliver(this.settings);
+        if (this.programSettings.revision === seen) return false;
       }
-      next.diagrams = { preset, primary };
-    }
-    if (!next.diagrams) next.diagrams = { preset: "pop", primary: null };
-    if (patch.reconnectMode !== undefined) {
-      const mode = String(patch.reconnectMode);
-      if (mode !== "replay" && mode !== "load") throw new Error("reconnectMode must be replay or load");
-      next.reconnectMode = mode;
-    }
-    if (next.reconnectMode !== "load") next.reconnectMode = "replay";
-    if (patch.editor !== undefined && typeof patch.editor === "object" && patch.editor) {
-      const e = patch.editor as Record<string, unknown>;
-      const mode = String(e.mode ?? next.editor?.mode ?? "auto");
-      if (mode !== "auto" && mode !== "default-app" && mode !== "custom") throw new Error("editor.mode must be auto, default-app or custom");
-      const command = String(e.command ?? next.editor?.command ?? "").trim().slice(0, 500);
-      if (mode === "custom" && !command.includes("{file}")) throw new Error("editor.command must mention {file} (and usually {line})");
-      next.editor = { mode, command };
-    }
-    if (patch.appearance !== undefined && typeof patch.appearance === "object" && patch.appearance) {
-      next.appearance = nextAppearance(next.appearance, patch.appearance as Record<string, unknown>);
-    }
-    next.appearance = { ...DEFAULT_APPEARANCE, ...(next.appearance ?? {}) };
-    if (!next.editor) next.editor = { ...DEFAULT_EDITOR_SETTINGS };
-    if (patch.roomDefaults !== undefined && typeof patch.roomDefaults === "object" && patch.roomDefaults) {
-      next.roomDefaults = { ...next.roomDefaults, ...(patch.roomDefaults as Record<string, unknown>) } as ProgramSettings["roomDefaults"];
-    }
-    if (patch.vendorPresets !== undefined && typeof patch.vendorPresets === "object" && patch.vendorPresets) {
-      for (const [vendor, preset] of Object.entries(patch.vendorPresets as Record<string, Partial<VendorPreset>>)) {
-        next.vendorPresets[vendor] = {
-          model: preset?.model ?? null,
-          effort: preset?.effort ?? null,
-          mode: preset?.mode ?? null,
-        };
-      }
-    }
-    this.settings = next;
+      return false;
+    };
     if (!next.devShowMemoryIngestion && patch.devShowMemoryIngestion !== undefined) this.history.memoryDebug.clear();
+    if (!latest()) return this.settings;
     this.agents.settingsChanged();
-    writeJson(this.settingsPath(), this.settings);
-    for (const room of this.rooms.values()) {
-      room.applyProgramSettings({
-        humanName: next.humanName,
-        humanDescription: next.humanDescription,
-        bypassPermissionsByDefault: next.bypassPermissionsByDefault,
-        transcripts: next.transcripts,
-        foldAfter: next.foldAfter,
-        recordPrompts: FROM_SOURCES && next.devShowPrompts,
+    if (!latest()) return this.settings;
+    for (const room of [...this.rooms.values()]) {
+      const told = lastWord((settings) => {
+        if (this.rooms.get(room.id) !== room) return;
+        room.applyProgramSettings({
+          humanName: settings.humanName,
+          humanDescription: settings.humanDescription,
+          bypassPermissionsByDefault: settings.bypassPermissionsByDefault,
+          transcripts: settings.transcripts,
+          foldAfter: settings.foldAfter,
+          recordPrompts: FROM_SOURCES && settings.devShowPrompts,
+        });
       });
+      if (!told) return this.settings;
     }
-    this.emit("event", { type: "settings", settings: this.settings } satisfies HubEvent);
+    if (!lastWord((settings) => this.emit("event", { type: "settings", settings } satisfies HubEvent))) return this.settings;
     this.saveRooms();
+    if (!latest()) return this.settings;
     this.keeper?.review();
     return this.settings;
   }
 
 
-  private roomsPath(): string {
-    return join(this.dataDir, "rooms.json");
-  }
-
-  private keepAttachments(participants: StoredParticipant[]): StoredParticipant[] {
-    if (!this.renamedSkills.size) return participants;
-    return participants.map((p) => {
-      const skills = p.skills?.map((s) => this.renamedSkills.get(s.toLowerCase()) ?? s);
-      if (!skills || skills.every((s, i) => s === p.skills![i])) return p;
-      this.log.info(`${p.name}: attached skills follow the renamed copy (${skills.join(", ")})`);
-      this.renamedAttachments = true;
-      return { ...p, skills };
-    });
-  }
 
   private tellRoomsWhatEndedTheLastRun(): void {
     const mark = join(this.dataDir, "last-fault.json");
@@ -1767,24 +1017,19 @@ export class Hub extends EventEmitter {
   }
 
   private loadRooms(): void {
-    if (!existsSync(this.roomsPath())) return;
+    const file = this.registry.readFile();
+    if (!file) return;
     let backfilled = 0;
     let upgraded = 0;
-    let file: RoomsFile;
-    try {
-      file = JSON.parse(readFileSync(this.roomsPath(), "utf8")) as RoomsFile;
-    } catch (error) {
-      this.log.warn(`rooms.json unreadable (${String(error)}); starting with no rooms`);
-      return;
-    }
     for (const stored of file.rooms ?? []) {
       try {
         const kept = stored.settings ?? {};
         const settings = pastRoomSettings(kept);
         if (settings !== kept) upgraded++;
-        const room = this.instantiate(stored.id, stored.name, stored.dir, settings, stored.createdAt, isIdentity(stored.uuid) ? stored.uuid : newIdentity());
+        const room = this.instantiate(stored.id, stored.name, stored.dir, settings, stored.createdAt, isIdentity(stored.uuid) ? stored.uuid : newIdentity(), stored.scope);
+        if (room.unreadableScope !== undefined) this.log.warn(`room ${stored.id}: its project ${JSON.stringify(room.unreadableScope)} is not an identity; kept as written, and the room reaches no other room until it is put right`);
         if (!isIdentity(stored.uuid)) backfilled++;
-        room.restore(this.keepAttachments(stored.participants ?? []));
+        room.restore(this.registry.keepAttachments(stored.participants ?? []));
         this.log.info(`restored room "${stored.name}" (${stored.id}): ${room.messages.length} messages, ${stored.participants?.length ?? 0} participants offline`);
       } catch (error) {
         this.log.error(`could not restore room ${stored.id}: ${String(error)}`);
@@ -1796,11 +1041,7 @@ export class Hub extends EventEmitter {
   }
 
   saveRooms(): void {
-    const file: RoomsFile = {
-      version: 1,
-      rooms: [...this.rooms.values()].map((room) => room.toStored()),
-    };
-    writeJson(this.roomsPath(), file);
+    this.registry.save();
   }
 
   commitNativeNoteDecision(room: Room, participantId: string, effect: NativeNoteEffect, writeRecord: () => void): NativeNoteDisposition {
@@ -1810,7 +1051,7 @@ export class Hub extends EventEmitter {
       && participant?.kind === "agent" && participant.status !== "left";
     if (!currentOwner() || !participant) return "changed";
     const readSavedParticipant = (): StoredParticipant | null => {
-      const saved = JSON.parse(readFileSync(this.roomsPath(), "utf8")) as RoomsFile;
+      const saved = JSON.parse(readFileSync(this.registry.path, "utf8")) as RoomsFile;
       if (saved.version !== 1 || !Array.isArray(saved.rooms)) throw new Error("native_note_rooms_file_invalid");
       const matches = saved.rooms.filter(row => row.id === room.id);
       if (matches.length !== 1 || matches[0].uuid !== room.uuid || matches[0].dir !== room.dir) return null;
@@ -1837,7 +1078,9 @@ export class Hub extends EventEmitter {
       this.history.transaction(() => { assertSubject(); writeRecord(); });
       return "already_applied";
     }
-    const rooms = [...this.rooms.values()].map(value => value.toStored());
+    const projected = this.registry.project();
+    if (!projected) throw new Error("native_note_rooms_file_changed");
+    const { rooms, serial } = projected;
     const stored = rooms.find(value => value.id === room.id)!.participants.find(value => value.id === participantId)!;
     const next = effect.next;
     stored.notesRevision = next.notesRevision;
@@ -1848,6 +1091,7 @@ export class Hub extends EventEmitter {
     stored.nativeNoteReceipt = next.nativeNoteReceipt ?? undefined;
     commitFiles(this.dataDir, this.history, [{ path: "rooms.json", data: JSON.stringify({ version: 1, rooms }, null, 2) + "\n" }], () => {
       assertSubject();
+      if (!this.registry.stillProjected(serial)) throw new Error("native_note_rooms_file_changed");
       writeRecord();
     });
     return "apply";
@@ -1866,155 +1110,37 @@ export class Hub extends EventEmitter {
   }
 
   importedRoomAddress(name: string, reserved: ReadonlySet<string> = new Set()): string {
-    let base = slugify(name);
-    if (!ROOM_ID_PATTERN.test(base)) base = `room-${randomBytes(6).toString("hex")}`;
-    let id = base;
-    for (let n = 2; this.rooms.has(id) || this.arriving.has(id) || reserved.has(id) || existsSync(join(this.dataDir, "rooms", id)); n++) id = `${base.slice(0, 32)}-${n}`;
-    return id;
+    return this.registry.importedAddress(name, reserved);
   }
 
-  readonly arriving = new Set<string>();
+  get arriving(): ReadonlySet<string> { return this.registry.arriving; }
+  reserveArriving(id: string): ArrivingReservation { return this.registry.reserveArriving(id); }
+  releaseArriving(reservation: ArrivingReservation): void { this.registry.releaseArriving(reservation); }
 
-  private settleArrivingRooms(): void {
-    const roomsDir = join(this.dataDir, "rooms");
-    if (!existsSync(roomsDir)) return;
-    const unsettled: string[] = [];
-    for (const entry of readdirSync(roomsDir, { withFileTypes: true })) {
-      if (!entry.isDirectory() || !ROOM_ID_PATTERN.test(entry.name) || this.arriving.has(entry.name)) continue;
-      const folder = join(roomsDir, entry.name);
-      if (!existsSync(join(folder, ARRIVING))) continue;
-      try {
-        if (this.rooms.has(entry.name)) {
-          (this.fileOps.remove ?? rmSync)(join(folder, ARRIVING), HELD_FILE_RETRIES);
-          this.log.info(`carry import: ${entry.name} had arrived before viberoom stopped; its marker is cleared`);
-          continue;
-        }
-        this.history?.dropRoom(entry.name);
-        removeArrivingFolder(folder, this.fileOps.remove);
-        this.log.warn(`carry import: viberoom stopped while an import wrote ${entry.name}; what it had written is removed`);
-      } catch (error) {
-        unsettled.push(`${entry.name} (${error instanceof Error ? error.message : String(error)})`);
-      }
-    }
-    if (unsettled.length) throw new Error(`what an earlier import left half written could not all be removed yet: ${unsettled.join("; ")}. A program may be holding one of its files; viberoom tries again at its next start and before the next import.`);
-  }
+  private settleArrivingRooms(): void { this.roomImport.settleArriving(); }
 
   fileOps: FileOps = {};
 
-  settleImports(): void {
-    recoverFileTransactions(this.dataDir, this.history, this.fileOps);
-    this.settleArrivingRooms();
+  settleImports(): void { this.roomImport.settle(); }
+
+  importContext(): ImportContext { return this.roomImport.context(); }
+  importLiving(context: ImportContext): boolean { return this.roomImport.living(context); }
+  importOwns(context: ImportContext, reservation: ArrivingReservation): boolean { return this.roomImport.owns(context, reservation); }
+
+  pauseRoomsForImport(ids: string[], options: { waiting: (names: string[]) => void; hurry: () => boolean }, context: ImportContext = this.importContext()): Promise<Pause> {
+    return this.roomImport.pause(context, ids, options);
   }
 
-  async pauseRoomsForImport(ids: string[], options: { waiting: (names: string[]) => void; hurry: () => boolean }): Promise<Map<string, string[]>> {
-    const rooms = ids.map((id) => this.getRoom(id));
-    for (const room of rooms) room.closeDoor();
-    let cut = false;
-    for (;;) {
-      const writing = rooms.flatMap((room) => room.writingVibemates().map((v) => ({ room, ...v })));
-      if (!writing.length) break;
-      if (options.hurry() && !cut) {
-        cut = true;
-        for (const w of writing) w.room.cancelTurn(w.id);
-      }
-      options.waiting(writing.map((w) => w.name));
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    }
-    const running = new Map<string, string[]>();
-    for (const room of rooms) {
-      running.set(room.id, room.liveVibemates().map((v) => v.id));
-      await room.shutdown();
-    }
-    return running;
-  }
-
-  async resumeRoomsAfterImport(paused: Map<string, string[]>): Promise<void> {
-    for (const [id, ids] of paused) {
-      const room = this.rooms.get(id);
-      if (!room) continue;
-      room.reopenDoor();
-      const mode = this.reconnectModeFor(room);
-      for (const pid of ids) {
-        const p = room.participants.get(pid);
-        if (!p || p.kind !== "agent" || p.muted) continue;
-        try {
-          await this.importReconnect(room, pid, mode);
-        } catch (error) {
-          this.log.warn(`room ${room.id}: ${p.name} did not come back after the import: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-    }
-  }
+  resumeRoomsAfterImport(pause: Pause): Promise<void> { return this.roomImport.resume(pause); }
 
   importReconnect: (room: Room, id: string, mode: "load" | "replay") => Promise<unknown> = (room, id, mode) => room.reconnect(id, { mode });
 
-  commitRoomTransfer(changes: { stored: StoredRoom; setup: boolean }[], files: FileChange[], writeRecord: () => void): void {
-    const changed = new Map(changes.map(c => [c.stored.id, c]));
-    if (changed.size !== changes.length) throw new Error("The import targets a room more than once.");
-    for (const { stored, setup } of changes) {
-      if (!/^[a-z0-9][a-z0-9-]{0,199}$/.test(stored.id) || !isIdentity(stored.uuid) || !stored.name.trim() || stored.name.length > 60) throw new Error("The import has invalid room metadata.");
-      const room = this.rooms.get(stored.id);
-      if (room && room.uuid !== stored.uuid) throw new Error("The target room changed. Preview the import again.");
-      if (!room && resolve(stored.dir) !== resolve(this.dataDir, "rooms", stored.id, "workspace")) throw new Error("A carried room must start with its own local working folder.");
-      if (room?.historyDiverted) throw new Error(`The conversation in ${room.name} has unsaved writes. Let those finish before importing.`);
-      if (setup && room?.hasConnectedAgents) throw new Error(`The vibemates in ${room.name} are still running. Look at the import again.`);
-    }
-    for (const change of changes) change.stored = { ...change.stored, settings: pastRoomSettings(change.stored.settings ?? {}) };
-    for (const change of changes) {
-      const room = this.rooms.get(change.stored.id);
-      if (change.setup && room) change.stored = { ...change.stored, participants: carriedParticipants(room.toStored().participants, change.stored.participants as unknown as Record<string, unknown>[]) };
-    }
-    const rooms = [...this.rooms.values()].map(room => changed.get(room.id)?.stored ?? room.toStored());
-    for (const change of changes) if (!this.rooms.has(change.stored.id)) rooms.push(change.stored as ReturnType<Room["toStored"]>);
-    const workspaces: FileChange[] = changes.filter(c => !this.rooms.has(c.stored.id)).map(c => ({ path: join("rooms", c.stored.id, "workspace"), directory: [] }));
-    commitFiles(this.dataDir, this.history, [...workspaces, ...files, { path: "rooms.json", data: JSON.stringify({ version: 1, rooms }, null, 2) + "\n" }], () => {
-      for (const { stored } of changes) if (!this.history.migration(stored.id)) this.history.adoptMirror(stored.id);
-      writeRecord();
-    }, this.fileOps);
-    for (const { stored, setup } of changes) {
-      let room = this.rooms.get(stored.id);
-      if (!room || setup) {
-        room?.removeAllListeners();
-        room = this.instantiate(stored.id, stored.name, stored.dir, stored.settings, stored.createdAt, stored.uuid);
-        room.restore(stored.participants, { quiet: true });
-        this.emit("event", { type: "room.created", room: room.snapshot() } satisfies HubEvent);
-      } else room.importCommitted();
-    }
-    for (const { stored } of changes) this.memory.imported(stored.id);
+  commitRoomTransfer(changes: { stored: StoredRoom; setup: boolean }[], files: FileChange[], writeRecord: () => void, options: { context?: ImportContext; pause?: Pause } = {}): ImportCommit {
+    return this.roomImport.commit(options.context ?? this.importContext(), changes, files, writeRecord, options.pause);
   }
 
   searchHistory(params: { q?: string; rooms?: string; kinds?: string; author?: string; sort?: string; limit?: string; offset?: string; perRoom?: string; deleted?: string }): HistorySearchResponse {
-    if (!this.history) return { hits: [], query: "", usedTrigram: false, unavailable: "the conversation store is off (SQLite is not available in this Node)" };
-    const kinds = (params.kinds ?? "chat").split(",").map((k) => k.trim()).filter((k): k is "chat" | "system" => k === "chat" || k === "system");
-    const asked = params.rooms && params.rooms !== "all" ? params.rooms.split(",").map((r) => r.trim()).filter((r) => this.rooms.has(r)) : [];
-    const rooms = asked.length ? asked : [...this.rooms.keys()];
-    const sort = params.sort === "newest" || params.sort === "oldest" ? params.sort : "rank";
-    const people = this.nameDirectory(rooms);
-    const author = params.author?.trim();
-    const query: SearchQuery = {
-      text: params.q ?? "",
-      rooms,
-      kinds: kinds.length ? kinds : ["chat"],
-      authors: author ? people.holders(author).map((h) => ({ roomId: h.roomId, id: h.id })) : undefined,
-      sort,
-      limit: clampInt(params.limit, 40, 1, 200),
-      offset: clampInt(params.offset, 0, 0, 100_000),
-      perRoom: params.perRoom ? clampInt(params.perRoom, 10, 1, 200) : undefined,
-      includeDeleted: params.deleted === "1",
-    };
-    const stale = this.staleHistoryRoomsAfterRetry(rooms).map((id) => this.rooms.get(id)?.name ?? id);
-    const result = this.history.search(query);
-    const names = namesInQuery(params.q ?? "", people).map(({ term, holder, others }) => ({ term, roomId: holder.roomId, now: holder.now ?? null, others }));
-    return {
-      ...result,
-      hits: result.hits.map((h) => {
-        const now = people.now(h.roomId, h.from);
-        return { ...h, roomName: this.rooms.get(h.roomId)?.name ?? h.roomId, ...(now && now !== h.fromName ? { fromNow: now } : {}) };
-      }),
-      ...(names.length ? { names } : {}),
-      roomsSearched: rooms.length,
-      ...(stale.length ? { stale } : {}),
-    };
+    return this.historyAccess.search(params);
   }
 
   private openHistory(): HistoryStore {
@@ -2027,132 +1153,57 @@ export class Hub extends EventEmitter {
 
   historyBackupEveryMs = 10 * 60_000;
   historyBackupKeep = 5;
-  private backupTimer: NodeJS.Timeout | null = null;
 
-  startBackups(): void {
-    if (this.backupTimer) return;
-    this.backupTimer = setInterval(() => {
-      void this.backupHistory().catch((error) => this.log.warn(`history backup failed: ${error instanceof Error ? error.message : String(error)}`));
-      for (const room of this.rooms.values()) room.purgeAcceptReceipts();
-    }, this.historyBackupEveryMs);
-    this.backupTimer.unref();
-  }
+  startBackups(): void { this.historyAccess.startBackups(); }
 
   adoptRoomCopy(id: string): Promise<RoomRecovery> {
     const room = this.getRoom(id);
     return room.adoptCopy(() => this.backupHistory(), () => this.rooms.get(id) === room);
   }
 
-  async backupHistory(): Promise<string> {
-    const dir = join(this.dataDir, "backups");
-    mkdirSync(dir, { recursive: true });
-    const file = join(dir, `history-${new Date().toISOString().replace(/[:.]/g, "-")}.db`);
-    const part = `${file}.part`;
-    try {
-      await this.history.backup(part);
-      renameSync(part, file);
-    } catch (error) {
-      rmSync(part, { force: true });
-      throw error;
-    }
-    const older = readdirSync(dir).filter((f) => /^history-.*\.db$/.test(f)).sort();
-    for (const f of older.slice(0, Math.max(0, older.length - this.historyBackupKeep))) rmSync(join(dir, f), { force: true });
-    return file;
-  }
+  backupHistory(): Promise<string> { return this.historyAccess.backup(); }
 
   historyRetryMs = 30_000;
-  private readonly historyRetriedAt = new Map<string, number>();
 
-  private retryStaleMirror(roomId: string): void {
-    if (!this.staleHistoryRooms.has(roomId)) return;
-    const now = Date.now();
-    if (now - (this.historyRetriedAt.get(roomId) ?? 0) < this.historyRetryMs) return;
-    this.historyRetriedAt.set(roomId, now);
-    const room = this.rooms.get(roomId);
-    if (room) this.mirrorRoom(roomId, room);
+  staleHistoryRoomsAfterRetry(roomIds: Iterable<string>): string[] { return this.historyAccess.staleAfterRetry(roomIds); }
+
+  nameDirectory(roomIds: string[]): NameDirectory { return this.historyAccess.nameDirectory(roomIds); }
+
+  roomsForAgentSearch(roomId: string): { id: string; name: string }[] { return this.historyAccess.roomsForAgentSearch(roomId); }
+
+  private canReadSharedHistory(caller: Room, target: Room): boolean { return this.historyAccess.canReadShared(caller, target); }
+
+  setScopePolicy(policy: ((caller: string, target: string | null) => boolean) | null): void { this.historyAccess.setScopePolicy(policy); }
+
+  private productOperations = new ProductOperations();
+  setOperations(operations: readonly ProductOperation[]): void { this.productOperations = new ProductOperations(operations); }
+
+  operationDefinitions(token: string) { return this.resolveMcpToken(token) ? this.productOperations.definitions() : null; }
+
+  async runOperation(token: string, operation: string, args: unknown): Promise<OperationOutcome | null> {
+    const target = this.resolveMcpToken(token);
+    if (!target) return null;
+    const { room, participantId } = target;
+    const name = ((room.snapshot() as { participants?: { id: string; name: string }[] }).participants ?? []).find((p) => p.id === participantId)?.name ?? "A vibemate";
+    return this.productOperations.call(operation, { room: { id: room.id, uuid: room.uuid, scope: room.scope }, participant: { id: participantId, name } }, args);
   }
 
-  staleHistoryRoomsAfterRetry(roomIds: Iterable<string>): string[] {
-    const stale: string[] = [];
-    for (const id of roomIds) {
-      this.retryStaleMirror(id);
-      if (this.staleHistoryRooms.has(id)) stale.push(id);
-    }
-    return stale;
-  }
-
-  nameDirectory(roomIds: string[]): NameDirectory {
-    const current = roomIds.flatMap((id) => [...(this.rooms.get(id)?.participants.values() ?? [])].map((p) => ({ roomId: id, id: p.id, name: p.name })));
-    return new NameDirectory(this.history?.nameUses(roomIds) ?? [], current);
-  }
-
-  roomsForAgentSearch(roomId: string): { id: string; name: string }[] {
-    const own = this.rooms.get(roomId);
-    if (!own) return [];
-    if (own.settings.readsOtherRooms === "off") return [{ id: own.id, name: own.settings.name }];
-    return [...this.rooms.values()]
-      .filter((room) => room.id === roomId || this.canReadSharedHistory(own, room))
-      .map((room) => ({ id: room.id, name: room.settings.name }));
-  }
-
-  private canReadSharedHistory(caller: Room, target: Room): boolean {
-    return caller.settings.readsOtherRooms !== "off" && target.settings.sharesHistory && !caller.readOnly && !target.readOnly
-      && !this.staleHistoryRoomsAfterRetry([target.id]).length;
-  }
+  private roomsReachedFrom(callerId: string): Room[] { return this.historyAccess.roomsReachedFrom(callerId); }
 
   readMessageForAgent(callerRoomId: string, participantId: string, seq: number | undefined, around: number, selector?: string, copy?: string, messageId?: string, version?: string): Record<string, unknown> {
-    const caller = this.getRoom(callerRoomId);
-    caller.assertHistoryAccessForAgent(participantId);
-    let target = caller;
-    if (selector !== undefined) {
-      const byId = this.rooms.get(selector);
-      const candidates = byId ? [byId] : [...this.rooms.values()].filter(room => room.settings.name === selector);
-      const matches = candidates.filter(room => room === caller || this.canReadSharedHistory(caller, room));
-      if (matches.length > 1) throw new Error(`room ${JSON.stringify(selector)} is ambiguous; use its room ID from search_history`);
-      if (!matches.length) throw new Error(`room ${JSON.stringify(selector)} is not available to this vibemate`);
-      target = matches[0];
-    }
-    try {
-      if (messageId !== undefined) {
-        const message = target.messages.find(m => m.id === messageId && visibleToAgents(m));
-        if (!message) throw new Error("message is not available in this room");
-        if (version !== undefined && sourceVersion(message) !== version) throw new Error("the requested source version is not available; the current message differs");
-        seq = message.seq;
-      }
-      if (seq === undefined) throw new Error("read_message needs seq or message_id");
-      if (copy !== undefined) seq = target.numberFromCopy(copy, seq);
-      const content = target === caller
-        ? caller.readMessageForAgent(participantId, seq, around)
-        : target.readVisibleMessageForAgent(seq, around, `${caller.participants.get(participantId)!.name} from ${JSON.stringify(caller.settings.name)}`);
-      return { room: target.id, roomName: target.settings.name, ...content };
-    } catch (error) {
-      if (target === caller) throw error;
-      throw new Error(`room ${JSON.stringify(target.settings.name)}: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    return this.historyAccess.readMessageForAgent(this.getRoom(callerRoomId), participantId, seq, around, selector, copy, messageId, version);
   }
 
-  historyForAgent(roomId: string): HistoryStore | null {
-    this.retryStaleMirror(roomId);
-    if (this.staleHistoryRooms.has(roomId)) throw new Error("the conversation store is out of sync for this room; history could not be searched until it is reconciled");
-    return this.history;
-  }
+  historyForAgent(roomId: string): HistoryStore | null { return this.historyAccess.historyForAgent(roomId); }
 
-  private mirrorRoom(id: string, room: Room): void {
-    try {
-      const { upserted, marked } = this.history.reconcile(id, room.messages.filter(committed));
-      this.staleHistoryRooms.delete(id);
-      if (upserted || marked) this.log.info(`history store: room ${id} reconciled (${upserted} written, ${marked} marked removed)`);
-    } catch (error) {
-      this.log.warn(`history store: room ${id} could not be reconciled: ${error instanceof Error ? error.message : String(error)}`);
-      this.staleHistoryRooms.add(id);
-    }
-  }
-
-  private instantiate(id: string, name: string, dir: string, settings: Partial<RoomSettings>, createdAt: number, uuid: string = newIdentity()): Room {
+  private instantiate(id: string, name: string, dir: string, settings: Partial<RoomSettings>, createdAt: number, uuid: string = newIdentity(), scope?: unknown, making?: { life: number; reservation?: ArrivingReservation }): Room {
+    const life = making?.life ?? this.registry.life;
+    let made: Room | undefined, failedEarly = false;
     const room = new Room({
       id,
       uuid,
       folderId: this.folderId,
+      scope,
       name,
       dir,
       dataDir: join(this.dataDir, "rooms", id),
@@ -2169,7 +1220,7 @@ export class Hub extends EventEmitter {
       optionCatalog: this.optionCatalog,
       skills: this.skillsBridge,
       history: this.history,
-      onHistoryFailure: (roomId) => this.staleHistoryRooms.add(roomId),
+      onHistoryFailure: () => { if (made) this.historyAccess.markStale(made); else failedEarly = true; },
       onNativePending: roomId => this.pendingNativeRooms.add(roomId),
       commitNativeNoteDecision: (room, participantId, effect, writeRecord) => this.commitNativeNoteDecision(room, participantId, effect, writeRecord),
       heldParticipantIds: () => this.automationTargets(uuid),
@@ -2180,156 +1231,40 @@ export class Hub extends EventEmitter {
       pictures: this.pictures,
     });
     room.on("event", (event: RoomEvent) => {
+      if (!this.registry.speaks(room)) return;
       this.emit("event", { type: "room.event", roomId: id, event } satisfies HubEvent);
-      if (event.type === "participant" || event.type === "participant.removed" || event.type === "room") this.saveRooms();
-      if (event.type === "participant" || event.type === "participant.removed") this.keeper?.review();
+      if (event.type !== "participant" && event.type !== "participant.removed" && event.type !== "room") return;
+      if (!this.registry.speaks(room)) return;
+      this.saveRooms();
+      if (event.type === "room" || !this.registry.speaks(room)) return;
+      this.keeper?.review();
     });
-    room.on("humanActivity", () => this.automationEvent(room, "first-human-message"));
-    this.rooms.set(id, room);
+    room.on("humanActivity", () => { if (this.registry.speaks(room)) this.automationEvent(room, "first-human-message"); });
+    if (!this.registry.adopt(room, life, making?.reservation)) {
+      room.removeAllListeners();
+      throw new Error(this.registry.ended ? "viberoom is shutting down; no room is made now" : life !== this.registry.life ? "viberoom was reset; this room is not made" : `the address ${id} is another making's`);
+    }
+    made = room;
+    if (failedEarly) this.historyAccess.markStale(room);
     this.memory?.attachRoom(id);
     return room;
   }
 
-  workspaceNotice(dir: string): string | null {
-    const found = INSTRUCTION_FILES.filter((f) => existsSync(join(dir, f)));
-    if (existsSync(join(dir, ".cursor", "rules"))) found.push(".cursor/rules");
-    return found.length ? `The working directory contains ${found.join(", ")}; agents will read these by their own conventions in addition to the room brief.` : null;
+  workspaceNotice(dir: string): string | null { return this.lifecycle.workspaceNotice(dir); }
+  createRoom(input: { name: string; dir?: string | null; settings?: Partial<RoomSettings>; uuid?: string; scope?: string | null }): { room: Room; notices: string[] } {
+    return this.lifecycle.createRoom(input);
   }
-
-  createRoom(input: { name: string; dir?: string | null; settings?: Partial<RoomSettings>; uuid?: string }): { room: Room; notices: string[] } {
-    const name = input.name.trim();
-    if (!name || name.length > 60) throw new Error("room name must be 1-60 characters");
-    let id = slugify(name);
-    if (!ROOM_ID_PATTERN.test(id)) id = `room-${Date.now().toString(36)}`;
-    let candidate = id;
-    for (let n = 2; this.rooms.has(candidate) || this.arriving.has(candidate); n++) candidate = `${id}-${n}`;
-    id = candidate;
-
-    const notices: string[] = [];
-    let dir: string;
-    if (input.dir && input.dir.trim()) {
-      dir = resolve(input.dir.trim());
-      if (!existsSync(dir)) throw new Error(`working directory does not exist: ${dir}`);
-      const notice = this.workspaceNotice(dir);
-      if (notice) notices.push(notice);
-    } else {
-      dir = join(this.dataDir, "rooms", id, "workspace");
-      mkdirSync(dir, { recursive: true });
-    }
-
-    const settings = input.settings?.emoji === undefined
-      ? { ...input.settings, emoji: freshFace("room", [...this.rooms.values()].map((r) => r.settings.emoji)) }
-      : { ...input.settings, emoji: cleanFace(input.settings.emoji, "room") };
-    const room = this.instantiate(id, name, dir, settings, Date.now(), isIdentity(input.uuid) ? input.uuid : newIdentity());
-    for (const notice of notices) room.postNotice(notice);
-    this.saveRooms();
-    this.emit("event", { type: "room.created", room: room.snapshot() } satisfies HubEvent);
-    this.log.info(`created room "${name}" (${id}) with workspace ${dir}`);
-    return { room, notices };
+  createRoomFromTemplate(input: { templateId: string; name: string; dir?: string | null; scope?: string | null; vibemates: { name: string; agentType: string; model?: string | null; effort?: string | null; mode?: string | null }[] }): Promise<{ room: Room; notices: string[] }> {
+    return this.lifecycle.createRoomFromTemplate(input);
   }
-
-  async createRoomFromTemplate(input: {
-    templateId: string;
-    name: string;
-    dir?: string | null;
-    vibemates: { name: string; agentType: string; model?: string | null; effort?: string | null; mode?: string | null }[];
-  }): Promise<{ room: Room; notices: string[] }> {
-    const template: RoomTemplate | undefined = this.templates.get(input.templateId);
-    if (!template) throw new Error(`no such template: ${input.templateId}`);
-    const { room, notices } = this.createRoom({ name: input.name, dir: input.dir || template.dir || null, settings: roomSettingsFromTemplate(template) });
-    const installed = new Set(listRecipes().filter((r) => !r.unavailableReason).map((r) => r.id));
-    for (const [i, tv] of template.vibemates.entries()) {
-      const choice = { ...(input.vibemates[i] ?? { name: tv.name, agentType: "" }) };
-      if (!choice.agentType && tv.agentType) {
-        if (installed.has(tv.agentType as AgentTypeId)) choice.agentType = tv.agentType;
-        else notices.push(`${choice.name || tv.name}: the template runs it on ${tv.agentType}, which is not installed here; pick another agent in the roster.`);
-      }
-      const skills = (tv.skills ?? []).filter((name) => {
-        const ok = !!this.skills.get(name);
-        if (!ok) notices.push(`${choice.name || tv.name}: skill "${name}" is not in the library; not attached.`);
-        return ok;
-      });
-      if (!choice.agentType) {
-        try {
-          room.addUnstaffed({ name: choice.name || tv.name, tagline: tv.tagline, role: tv.role, avatar: tv.avatar, skills, textCheck: "notice" });
-        } catch (error) {
-          notices.push(`${choice.name || tv.name} could not be added: ${error instanceof Error ? error.message : String(error)}`);
-        }
-        continue;
-      }
-      try {
-        await room.inviteAgent({
-          agentType: choice.agentType,
-          name: choice.name || tv.name,
-          tagline: tv.tagline,
-          role: tv.role,
-          avatar: tv.avatar,
-          skills,
-          replyDelay: tv.replyDelay,
-          model: choice.model ?? tv.model,
-          effort: choice.effort ?? tv.effort,
-          mode: choice.mode ?? tv.mode,
-          textCheck: "notice",
-        });
-      } catch (error) {
-        notices.push(`${choice.name || tv.name} could not be summoned: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    if (room.settings.customRules.length > room.settings.briefTextLimit) notices.push(`The room rules from the template are ${room.settings.customRules.length} characters, over this room's limit of ${room.settings.briefTextLimit}; kept as they are, but the next edit has to fit.`);
-    this.saveRooms();
-    return { room, notices };
+  createProposedRoom(plan: NewRoomPlan, by: { proposer: string; human: string }): Promise<{ room: Room; notices: string[] }> {
+    return this.lifecycle.createProposedRoom(plan, by);
   }
-
-  async createProposedRoom(plan: NewRoomPlan, by: { proposer: string; human: string }): Promise<{ room: Room; notices: string[] }> {
-    const { room, notices } = this.createRoom({ name: plan.name, dir: null, settings: { reachableFromMessengers: false } });
-    const installed = new Set(listRecipes().filter((r) => !r.unavailableReason).map((r) => r.id));
-    for (const one of plan.vibemates) {
-      const agentType = one.agentType && installed.has(one.agentType as AgentTypeId) ? one.agentType : "";
-      if (one.agentType && !agentType) notices.push(`${one.name}: ${one.agentType} is not installed here; it waits in the roster until you cast it.`);
-      try {
-        const seated = agentType
-          ? await room.inviteAgent({ agentType, name: one.name, tagline: one.tagline, role: one.role, avatar: one.avatar, model: one.model, effort: one.effort, mode: CREATED_MODE, textCheck: "notice" })
-          : room.addUnstaffed({ name: one.name, tagline: one.tagline, role: one.role, avatar: one.avatar, textCheck: "notice" });
-        seated.createdByVibemate = true;
-      } catch (error) {
-        notices.push(`${one.name} could not be added: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    this.markOpened(room.id);
-    room.hubRecord(`${by.proposer} proposed this room; ${by.human} created it.`);
-    this.saveRooms();
-    return { room, notices };
-  }
-
   async resolveNewRoom(roomId: string, key: string, create: boolean): Promise<{ status: "created" | "refused"; room?: string; notices: string[] }> {
-    const from = this.getRoom(roomId);
-    const proposal = from.pendingNewRoom(key);
-    if (!proposal) throw new Error("no such proposed room");
-    if (!create) {
-      from.settleNewRoom(key, "refused");
-      return { status: "refused", notices: [] };
-    }
-    const { room, notices } = await this.createProposedRoom(proposal.plan, { proposer: proposal.participantName, human: this.settings.humanName });
-    from.settleNewRoom(key, "created", room.id);
-    return { status: "created", room: room.id, notices };
+    return this.lifecycle.resolveNewRoom(this.getRoom(roomId), key, create);
   }
-
   saveRoomAsTemplate(roomId: string, input: { name: string; description: string; emoji?: string; template?: Partial<Pick<RoomTemplate, "dir" | "settings" | "vibemates">> }): RoomTemplate {
-    const name = input.name.trim();
-    if (!name) throw new Error("the template needs a name");
-    const room = this.getRoom(roomId);
-    const base = room.templateOf();
-    const edited = input.template ?? {};
-    const saved = this.templates.save({
-      name,
-      description: input.description.trim(),
-      emoji: (input.emoji ?? room.settings.emoji) || undefined,
-      dir: edited.dir?.trim() || base.dir,
-      settings: { ...base.settings, ...(edited.settings ?? {}) },
-      vibemates: edited.vibemates ?? base.vibemates,
-    });
-    this.emit("event", { type: "templates" } satisfies HubEvent);
-    return saved;
+    return this.lifecycle.saveRoomAsTemplate(this.getRoom(roomId), input);
   }
 
   async agentOptions(recipeId: string, refresh: boolean): Promise<DiscoveredOptions> {
@@ -2346,61 +1281,21 @@ export class Hub extends EventEmitter {
   }
 
   getRoom(id: string): Room {
-    const room = this.rooms.get(id);
-    if (!room) throw new Error(`no such room: ${id}`);
-    return room;
+    return this.registry.get(id);
   }
 
-  readonly openRooms: string[] = [];
+  get openRooms(): readonly string[] { return this.registry.openRooms; }
 
   markOpened(id: string): void {
-    this.getRoom(id);
-    if (this.openRooms.includes(id)) return;
-    this.openRooms.push(id);
-    this.emit("event", { type: "rooms.opened", roomIds: [...this.openRooms] } satisfies HubEvent);
+    this.registry.markOpened(id);
   }
 
   forgetRoomMemory(id: string, providerId: string): void {
-    const room = this.getRoom(id);
-    const config = this.memoryStore.get();
-    const entry = providerEntry(config.provider);
-    if (!entry?.roomForget || providerId !== entry.id) throw new Error("The memory provider changed or cannot forget a room. Reopen the room settings.");
-    if (entry.fields.some(field => field.kind === "secret" && !config.providers[entry.id]?.[field.key])) throw new Error(`Set the ${entry.label} key in Settings before requesting deletion.`);
-    room.updateSettings({ remembers: false });
-    this.saveRooms();
-    this.memory.forgetRoom(id);
+    this.lifecycle.forgetRoomMemory(this.getRoom(id), providerId);
   }
 
-  async removeRoom(id: string): Promise<void> {
-    const room = this.getRoom(id);
-    this.memory.detachRoom(id);
-    await room.shutdown();
-    this.automations?.store.removeRoom(room.uuid);
-    this.backgroundTasks?.removeRoom(room.uuid);
-    this.rooms.delete(id);
-    try {
-      this.history?.dropRoom(id);
-      this.history?.memory.drop(`room:${room.uuid}`);
-    } catch (error) {
-      this.log.warn(`history store: room ${id} not dropped: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    const at = this.openRooms.indexOf(id);
-    if (at >= 0) this.openRooms.splice(at, 1);
-    this.saveRooms();
-    this.emit("event", { type: "room.removed", roomId: id } satisfies HubEvent);
-    const folder = join(this.dataDir, "rooms", id);
-    if (existsSync(folder)) {
-      const trash = join(this.dataDir, "trash");
-      mkdirSync(trash, { recursive: true });
-      const target = join(trash, `${id}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
-      try {
-        renameSync(folder, target);
-        this.log.info(`removed room ${id}; its folder is in ${target}`);
-      } catch (error) {
-        this.log.warn(`removed room ${id}, but its folder could not be moved to trash: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    } else this.log.info(`removed room ${id}`);
-    this.keeper?.review();
+  removeRoom(id: string): Promise<void> {
+    return this.lifecycle.removeRoom(this.getRoom(id));
   }
 
   update: UpdateInfo | null = null;
@@ -2465,7 +1360,7 @@ export class Hub extends EventEmitter {
       settings: this.settings,
       update: this.update,
       agentUpdates: this.agents.view(),
-      automationPending: this.automationPending(),
+      automationPending: this.automationPending() ?? {},
       automationJobs: this.automationJobs(),
       recipes: publicRecipes(),
       logins: this.logins.list(),
@@ -2510,14 +1405,10 @@ export class Hub extends EventEmitter {
         const result = await transcriptWriter.stop(this.dataDir, plain / 2);
         if (result.timedOut) this.log.warn(`shutdown: diagnostic writes reached their deadline; ${result.abandonedRecords} pending record(s) were abandoned`);
       } },
-      { name: "rooms-file" as const, budget: plain, work: () => this.saveRooms() },
-      ...(this.backupTimer ? [{ name: "backup" as const, budget: plain, work: async () => {
-        if (this.backupTimer) clearInterval(this.backupTimer);
-        this.backupTimer = null;
-        await this.backupHistory();
-      } }] : []),
+      { name: "rooms-file" as const, budget: plain, work: () => { this.registry.saveFinal(); } },
+      ...(this.historyAccess.backupsStarted ? [{ name: "backup" as const, budget: plain, work: () => this.historyAccess.finalBackup() }] : []),
       { name: "automations" as const, budget: plain, work: () => this.automations?.close() },
-      { name: "background-tasks" as const, budget: plain, work: () => this.backgroundTasks?.close() },
+      { name: "background-tasks" as const, budget: plain, work: () => this.backgroundTasks.close() },
       { name: "memory" as const, budget: plain, work: () => this.memory.settled() },
       { name: "history" as const, budget: plain, work: () => this.history.close() },
     ];
@@ -2548,16 +1439,19 @@ export class Hub extends EventEmitter {
     };
     const plain = options.stageMs ?? SHUTDOWN_STAGE_MS;
 
-    this.clearRestart();
+    this.restarts.dispose();
     this.keeper?.close();
     this.keeper = null;
     if (this.channelsRetry) clearTimeout(this.channelsRetry);
     this.channelsRetry = null;
     this.leaving.abort();
     try { stopProductionPrivateTrial(this); } catch { this.log.warn("private-trial startup withdrawal refused"); }
-    this.revokeTrialBudgetCards("hub_shutdown");
-    if (this.backgroundTaskTimer) clearInterval(this.backgroundTaskTimer);
-    this.backgroundTaskTimer = null;
+    this.desk.revokeTrialBudgetCards("hub_shutdown");
+    this.desk.dispose();
+    this.programSettings.dispose();
+    this.registry.dispose();
+    this.backgroundTasks.dispose();
+    this.historyAccess.dispose();
     if (this.nativeReportTimer) clearInterval(this.nativeReportTimer);
     this.nativeReportTimer = null;
     this.automations?.stop();
@@ -2566,30 +1460,48 @@ export class Hub extends EventEmitter {
     return steps;
   }
 
+  private readonly importWriters = new Set<() => Promise<() => void>>();
+  addImportWriters(hold: () => Promise<() => void>): () => void {
+    this.importWriters.add(hold);
+    return () => { this.importWriters.delete(hold); };
+  }
+
   async reset(): Promise<void> {
+    const releases: Array<() => void> = [];
+    try {
+      for (const hold of [...this.importWriters]) releases.push(await hold());
+      try { this.settleArrivingRooms(); }
+      catch (error) { this.log.warn(`carry import: ${error instanceof Error ? error.message : String(error)}`); }
+      await this.erase();
+    } finally {
+      for (const release of releases) release();
+    }
+  }
+
+  private async erase(): Promise<void> {
     try { stopProductionPrivateTrial(this); } catch { this.log.warn("private-trial startup withdrawal refused"); }
-    this.revokeTrialBudgetCards("hub_reset");
+    this.desk.reset();
     this.memoryStore.invalidateTrialRevision();
     if (this.channelsRetry) clearTimeout(this.channelsRetry);
     this.channelsRetry = null;
     this.log.warn("erasing the whole data folder on the human's request");
     for (const id of this.rooms.keys()) this.memory.detachRoom(id);
     for (const room of this.rooms.values()) await room.shutdown();
-    this.backgroundTaskResults.clear();
-    for (const [id, room] of this.rooms) { this.history?.dropRoom(id); this.automations?.store.removeRoom(room.uuid); this.backgroundTasks?.removeRoom(room.uuid); }
+    this.backgroundTasks.reset([...this.rooms.values()].map((room) => room.uuid));
+    for (const [id, room] of this.rooms) { this.history?.dropRoom(id); this.automations?.store.removeRoom(room.uuid); this.historyAccess.dropRoom(room); }
+    for (const id of this.registry.accepted) if (!this.rooms.has(id)) this.history?.dropRoom(id);
     this.history.memory.drop();
-    this.rooms.clear();
+    this.registry.reset();
     for (const token of this.mcpTokens.keys()) this.mcpTokens.delete(token);
     rmSync(join(this.dataDir, "rooms"), { recursive: true, force: true });
-    rmSync(this.roomsPath(), { force: true });
+    rmSync(this.registry.path, { force: true });
     rmSync(this.skills.dir, { recursive: true, force: true });
     rmSync(this.looks.dir, { recursive: true, force: true });
     mkdirSync(join(this.dataDir, "rooms"), { recursive: true });
     mkdirSync(this.skills.dir, { recursive: true });
     this.skills.list();
     this.skills.seedBuiltins();
-    rmSync(this.settingsPath(), { force: true });
-    this.settings = this.loadSettings();
+    this.programSettings.reset();
     for (const view of this.connections.view()) {
       if (view.group === "own") await this.connections.removeOwn(view.id);
       else if (view.state !== "not-connected") await this.connections.disconnect(view.id);
@@ -2602,36 +1514,8 @@ export class Hub extends EventEmitter {
   }
 }
 
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
-}
 
 function writeJson(path: string, value: unknown): void {
   writeFileAtomic(path, JSON.stringify(value, null, 2));
 }
 
-export interface HistorySearchResponse {
-  hits: Array<SearchHit & { roomName: string; fromNow?: string }>;
-  names?: { term: string; roomId: string; now: string | null; others: string[] }[];
-  query: string;
-  usedTrigram: boolean;
-  roomsSearched?: number;
-  unavailable?: string;
-  stale?: string[];
-}
-
-function clampInt(raw: string | undefined, fallback: number, lo: number, hi: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(hi, Math.max(lo, Math.floor(n)));
-}
-
-function committed(message: ChatMessage): boolean {
-  return !message.streaming && Number.isInteger(message.seq) && message.seq > 0;
-}

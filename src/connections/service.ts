@@ -466,8 +466,9 @@ export class Connections {
     return this.signIns.get(id)?.done ?? null;
   }
 
-  cancelSignIn(id: string): void {
-    this.signIns.get(id)?.cancel();
+  cancelSignIn(id: string, attempt?: Promise<ConnectionView>): void {
+    const current = this.signIns.get(id);
+    if (current && (!attempt || current.done === attempt)) current.cancel();
   }
 
   connect(id: string): Promise<ConnectionView> {

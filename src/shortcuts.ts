@@ -95,13 +95,16 @@ export function shortcutScript(lnk: string, wscript: string, vbs: string, workin
   return lines.join("\n");
 }
 
-export function aumidSyncScript(profileDir: string, shortcuts: string[]): string {
+export function aumidSyncScript(profileDir: string, shortcuts: string[], launcher: string): string {
   const list = shortcuts.map((s) => `'${psq(s)}'`).join(", ");
   return [
     "$ErrorActionPreference = 'SilentlyContinue'",
     "Add-Type -TypeDefinition @'",
     LNK_AUMID_TYPE,
     "'@",
+    "$shell = New-Object -ComObject WScript.Shell",
+    `$own = [IO.Path]::GetFullPath('${psq(launcher)}')`,
+    "function Test-Own($lnk) { try { $s = $shell.CreateShortcut($lnk); $a = $s.Arguments.Trim().Trim('\"'); return ((Split-Path $s.TargetPath -Leaf) -ieq 'wscript.exe') -and $a -and ([IO.Path]::GetFullPath($a) -ieq $own) } catch { return $false } }",
     `$marker = '${psq(profileDir)}'`,
     "$aumid = ''",
     "for ($i = 0; $i -lt 20 -and -not $aumid; $i++) {",
@@ -111,7 +114,7 @@ export function aumidSyncScript(profileDir: string, shortcuts: string[]): string
     "    if ($proc -and $proc.MainWindowHandle -ne 0) { $aumid = [LnkAumid]::GetWindow($proc.MainWindowHandle); if ($aumid) { break } }",
     "  }",
     "}",
-    `if ($aumid) { foreach ($lnk in @(${list})) { if ((Test-Path $lnk) -and ([LnkAumid]::Get($lnk) -ne $aumid)) { [LnkAumid]::Set($lnk, $aumid) } } }`,
+    `if ($aumid) { foreach ($lnk in @(${list})) { if ((Test-Path $lnk) -and (Test-Own $lnk) -and ([LnkAumid]::Get($lnk) -ne $aumid)) { [LnkAumid]::Set($lnk, $aumid) } } }`,
   ].join("\n");
 }
 

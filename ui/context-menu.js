@@ -11,11 +11,15 @@
     return false;
   }
 
-  function install({ doc = root.document } = {}) {
-    doc.addEventListener("contextmenu", (e) => {
+  function install({ root: scope, doc = scope?.ownerDocument || (scope?.nodeType === 9 ? scope : root.document) } = {}) {
+    scope = scope || doc;
+    const onMenu = (e) => {
       if (!keepsBrowserMenu(e.target, doc.getSelection && doc.getSelection())) e.preventDefault();
-    });
+    };
+    scope.addEventListener("contextmenu", onMenu);
+    return { dispose: () => scope.removeEventListener("contextmenu", onMenu) };
   }
 
+  Object.defineProperty(install, "disposable", { value: true });
   root.VIBEROOM_CONTEXT_MENU = { install, keepsBrowserMenu };
 })(typeof window !== "undefined" ? window : globalThis);

@@ -22,63 +22,92 @@
   const settingName = key => SETTING_NAMES[key] ?? key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, c => c.toUpperCase());
 
   async function open(initialRoom, helpers = {}) {
-    const dialog = document.createElement("dialog");
+    if (helpers.signal?.aborted) return;
+    const root = helpers.root ?? document.body, doc = root.ownerDocument ?? document;
+    const dialog = doc.createElement("dialog");
     dialog.className = "dialog wide carry-dialog";
     dialog.innerHTML = `<header class="cx-head"><button type="button" class="cx-back" data-carry-act="home" aria-label="Back" hidden>${icon("back")}</button><h3 class="cx-title">Move rooms between computers</h3>${button("close", "Close")}</header><p class="cx-error" role="alert" hidden></p><div class="cx-body"><div class="cx-step" role="status">${art("carry-in", "is-small")}<p class="cx-lead">Getting your rooms…</p></div></div>`;
-    document.body.appendChild(dialog); dialog.showModal();
     const body = dialog.querySelector(".cx-body"), errorBox = dialog.querySelector(".cx-error");
     const controller = new AbortController();
-    let closed = false, phase = "home", catalog, estimates = [], estimateJob, job, downloaded = false, exported;
+    let closed = false, forced = false, closing, applied = false, phase = "home", catalog, estimates = [], estimateJob, job, downloaded = false, exported;
     let exportSelection, exportParts = { conversation: true, settings: true, resources: true, memory: true, userMemory: true }, newLabel;
     let inspected, fileName = "", exportedName = "viberoom.viberoom", exportedBytes = 0, selected = [], dependencyChoices = {}, preview, importUserMemory = false, userMemoryChoice, planning = null, replanTimer = null;
     let removedRoom = initialRoom?.id || "", removedOffset = 0;
     let lastAnswerAt = 0, quietTimer = null;
     const openDetails = new Set();
+    const listeners = [], screenListeners = [], pauses = new Map();
+    const unlisten = list => { for (const remove of list.splice(0)) remove(); };
+    const listen = (target, type, listener, persistent = false) => {
+      if (closed) return;
+      target.addEventListener(type, listener);
+      (persistent ? listeners : screenListeners).push(() => target.removeEventListener(type, listener));
+    };
     const $ = query => dialog.querySelector(query);
 
-    function error(value) { errorBox.textContent = value instanceof Error ? value.message : String(value); errorBox.hidden = false; }
-    function clearError() { errorBox.hidden = true; errorBox.textContent = ""; }
+    function error(value) { if (closed) return; errorBox.textContent = value instanceof Error ? value.message : String(value); errorBox.hidden = false; }
+    function clearError() { if (closed) return; errorBox.hidden = true; errorBox.textContent = ""; }
     async function request(path, payload, raw = false, patient = false) {
+      controller.signal.throwIfAborted();
       const response = await fetch(path, { signal: patient ? controller.signal : AbortSignal.any([controller.signal, AbortSignal.timeout(raw ? 120000 : 30000)]), ...(payload === undefined ? {} : { method: "POST", headers: raw ? { "Content-Type": "application/octet-stream" } : { "Content-Type": "application/json" }, body: raw ? payload : JSON.stringify(payload) }) });
+      controller.signal.throwIfAborted();
       const result = await response.json();
+      controller.signal.throwIfAborted();
       if (!response.ok) throw Object.assign(new Error(result.error || `The transfer request failed (${response.status}).`), { status: response.status });
       return result;
     }
     async function cancel(id) { if (id) await fetch(`/api/carry/${encodeURIComponent(id)}/cancel`, { method: "POST", signal: AbortSignal.timeout(10000), headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {}); }
-    async function close() {
-      if (closed) return;
-      closed = true; controller.abort(); clearTimeout(replanTimer); clearInterval(quietTimer); dialog.remove();
-      if (phase === "applying") return;
-      await Promise.all([cancel(estimateJob), downloaded ? Promise.resolve() : cancel(job)]);
+    function close() {
+      if (closed) return closing;
+      closed = true; controller.abort(); clearTimeout(replanTimer); clearInterval(quietTimer);
+      for (const [timer, resume] of pauses) { clearTimeout(timer); resume(); }
+      pauses.clear(); unlisten(screenListeners); unlisten(listeners);
+      if (dialog.open) dialog.close();
+      dialog.remove();
+      closing = phase === "applying" || applied ? Promise.resolve() : Promise.all([cancel(estimateJob), downloaded ? Promise.resolve() : cancel(job)]).then(() => {});
+      return closing;
     }
-    dialog.addEventListener("cancel", event => { event.preventDefault(); void close(); });
+    function dispose() { forced = true; return close(); }
+    listen(dialog, "cancel", event => { event.preventDefault(); void close(); }, true);
+    listen(dialog, "close", dispose, true);
+    if (helpers.signal) listen(helpers.signal, "abort", dispose, true);
+    function pause(ms) {
+      controller.signal.throwIfAborted();
+      return new Promise(resolve => {
+        const timer = setTimeout(() => { pauses.delete(timer); resolve(); }, ms);
+        pauses.set(timer, resolve);
+      });
+    }
     async function poll(id, onProgress) {
       while (!closed) {
         const state = await request(`/api/carry/${encodeURIComponent(id)}`);
+        controller.signal.throwIfAborted();
         if (state.status !== "working") return state;
         onProgress?.(state);
-        await new Promise(resolve => setTimeout(resolve, 350));
+        await pause(350);
       }
       throw new DOMException("Closed", "AbortError");
     }
     async function follow(id, onProgress) {
       lastAnswerAt = Date.now();
-      for (let pause = 350; !closed;) {
+      for (let wait = 350; !closed;) {
         try {
           const state = await request(`/api/carry/${encodeURIComponent(id)}`, undefined, false, true);
-          lastAnswerAt = Date.now(); pause = 350;
+          controller.signal.throwIfAborted();
+          lastAnswerAt = Date.now(); wait = 350;
           if (state.status !== "working") return state;
           onProgress?.(state);
         } catch (err) {
           if (closed || err?.status) throw err;
-          pause = Math.min(pause * 2, 3000);
+          wait = Math.min(wait * 2, 3000);
         }
-        await new Promise(resolve => setTimeout(resolve, pause));
+        await pause(wait);
       }
       throw new DOMException("Closed", "AbortError");
     }
 
     function show(next, title, html) {
+      if (closed) return;
+      unlisten(screenListeners);
       if (next !== "applying") { clearInterval(quietTimer); quietTimer = null; }
       phase = next;
       $(".cx-title").textContent = title;
@@ -87,6 +116,7 @@
       body.scrollTop = 0;
     }
     function working(text, scene = "carry-in") {
+      if (closed) return;
       show("working", $(".cx-title").textContent, `<div class="cx-working">${art(scene, "is-busy")}<p class="cx-lead" role="status">${esc(text)}</p><div class="cx-bar" aria-hidden="true"></div><p class="cx-hint">You can close this window to stop. Nothing has changed yet.</p></div>`);
     }
 
@@ -117,6 +147,7 @@
       const go = $('[data-carry-act="prepare-export"]'); if (go) go.disabled = !exportSelection.size && !exportParts.userMemory;
     }
     function renderExport() {
+      if (closed) return;
       clearError();
       const label = newLabel ?? (catalog.source.label || catalog.source.suggested);
       show("export", "Take rooms with you", `<form class="cx-form" data-export-form>
@@ -134,10 +165,10 @@
         <footer class="cx-actions"><span class="cx-total" data-export-total></span>${button("prepare-export", "Create the file", "primary")}</footer>
       </form>`);
       updateExportTotals();
-      $("#cx-encrypt").addEventListener("change", event => { for (const row of dialog.querySelectorAll("[data-pass-field]")) row.hidden = !event.target.checked; if (event.target.checked) $("#cx-passphrase").focus(); });
-      $("[data-copy-label]").addEventListener("input", event => { $("[data-label-view]").textContent = event.target.value; });
-      for (const el of dialog.querySelectorAll("[data-export-room], [data-export-part]")) el.addEventListener("change", () => { keepExportInputs(); updateExportTotals(); });
-      $("[data-export-form]").addEventListener("submit", event => { event.preventDefault(); void act("prepare-export"); });
+      listen($("#cx-encrypt"), "change", event => { for (const row of dialog.querySelectorAll("[data-pass-field]")) row.hidden = !event.target.checked; if (event.target.checked) $("#cx-passphrase").focus(); });
+      listen($("[data-copy-label]"), "input", event => { $("[data-label-view]").textContent = event.target.value; });
+      for (const el of dialog.querySelectorAll("[data-export-room], [data-export-part]")) listen(el, "change", () => { keepExportInputs(); updateExportTotals(); });
+      listen($("[data-export-form]"), "submit", event => { event.preventDefault(); void act("prepare-export"); });
     }
     function renderExported(result) {
       exported = result;
@@ -151,31 +182,37 @@
     }
 
     function renderDrop() {
+      if (closed) return;
       clearError();
       show("import", "Bring rooms in", `<div class="cx-drop" data-drop tabindex="0" role="button" aria-label="Choose a viberoom file">${art("carry-in", "is-float")}
         <strong>Drop the file here</strong><span>or <button type="button" class="cx-link" data-carry-act="choose-file">choose it on this computer</button></span>
         <input type="file" data-import-file accept=".viberoom,.jsonl,.json,application/octet-stream" hidden>
         <small>Files from viberoom end in .viberoom. Older conversation files (.jsonl) open too.</small></div>`);
       const drop = $("[data-drop]"), input = $("[data-import-file]");
-      input.addEventListener("change", () => { const file = input.files?.[0]; if (file) void upload(file).catch(failed); });
-      drop.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); input.click(); } });
-      drop.addEventListener("dragover", event => { event.preventDefault(); drop.classList.add("is-over"); });
-      drop.addEventListener("dragleave", () => drop.classList.remove("is-over"));
-      drop.addEventListener("drop", event => { event.preventDefault(); drop.classList.remove("is-over"); const file = event.dataTransfer?.files?.[0]; if (file) void upload(file).catch(failed); });
+      listen(input, "change", () => { const file = input.files?.[0]; if (file) void upload(file).catch(failed); });
+      listen(drop, "keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); input.click(); } });
+      listen(drop, "dragover", event => { event.preventDefault(); drop.classList.add("is-over"); });
+      listen(drop, "dragleave", () => drop.classList.remove("is-over"));
+      listen(drop, "drop", event => { event.preventDefault(); drop.classList.remove("is-over"); const file = event.dataTransfer?.files?.[0]; if (file) void upload(file).catch(failed); });
     }
     function renderPassword(message) {
+      if (closed) return;
       show("password", "Bring rooms in", `<form class="cx-center" data-unlock>${art("key-mini")}<p class="cx-lead">${esc(fileName)} is locked</p><label class="cx-field is-narrow">Password<input type="password" data-import-pass autocomplete="off" maxlength="4096" required></label><footer class="cx-actions is-center">${button("unlock", "Open the file", "primary")}</footer></form>`);
       if (message) error(message); else clearError();
-      $("[data-import-pass]").focus(); $("[data-unlock]").addEventListener("submit", event => { event.preventDefault(); void act("unlock"); });
+      $("[data-import-pass]").focus(); listen($("[data-unlock]"), "submit", event => { event.preventDefault(); void act("unlock"); });
     }
     async function upload(file) {
+      controller.signal.throwIfAborted();
       if (file.size > 1024 ** 3) throw new Error("This file is larger than 1 GB.");
       if (job) { await cancel(job); job = null; }
+      controller.signal.throwIfAborted();
+      applied = false;
       fileName = file.name; working(`Opening ${file.name} (${bytes(file.size)})…`);
       const started = await request("/api/carry/upload", file, true); job = started.id;
       await inspectedState(await poll(job));
     }
     async function inspectedState(state) {
+      controller.signal.throwIfAborted();
       if (state.status === "password") { renderPassword(); return; }
       if (state.status === "error") throw new Error(state.error);
       inspected = state.result;
@@ -194,6 +231,7 @@
       return selected.filter(c => c.selected).map(({ selected: _s, matched: _m, ...choice }) => choice);
     }
     async function plan() {
+      controller.signal.throwIfAborted();
       const payload = { rooms: choicesPayload(), dependencies: dependencyChoices, userMemory: importUserMemory, ...(userMemoryChoice ? { userMemoryChoice } : {}) };
       if (!payload.rooms.length && !importUserMemory) { preview = { rooms: [], dependencies: [], ready: false }; renderSummary(); return; }
       const mine = planning = Symbol("plan");
@@ -316,6 +354,7 @@
     }
 
     function renderSummary(refreshed = false) {
+      if (closed) return;
       for (const d of dialog.querySelectorAll("details[data-key]")) { if (d.open) openDetails.add(d.dataset.key); else openDetails.delete(d.dataset.key); }
       const scroll = body.scrollTop;
       const skipped = inspected.rooms.filter(r => !selected.find(c => c.uuid === r.uuid)?.selected);
@@ -337,7 +376,7 @@
     }
 
     function wireSummary() {
-      const onChange = (selector, update) => { for (const el of dialog.querySelectorAll(selector)) el.addEventListener("change", () => { update(el); replan(); }); };
+      const onChange = (selector, update) => { for (const el of dialog.querySelectorAll(selector)) listen(el, "change", () => { update(el); replan(); }); };
       const choiceOf = el => { const card = el.closest("[data-review-room], [data-skipped-room]"); const id = card.dataset.reviewRoom || card.dataset.skippedRoom; return selected.find(c => c.uuid === id); };
       onChange("[data-branch]", el => { choiceOf(el).branch = el.value; });
       onChange("[data-setup]", el => { choiceOf(el).setup = el.value; });
@@ -358,15 +397,18 @@
       return parts.length ? `Bringing in ${parts.join(" and ")}…` : "Bringing your rooms in…";
     }
     function renderApplying(progress) {
+      if (closed) return;
       const waiting = /^Waiting for /.test(progress || "");
       if (phase !== "applying") {
         show("applying", "Bring rooms in", `<div class="cx-working">${art("carry-in", "is-busy")}<p class="cx-lead" data-progress role="status"></p><div class="cx-bar" aria-hidden="true"></div><p class="cx-hint" data-wait-hint hidden>They finish their reply first, so nothing is cut off. ${button("hurry", "Don't wait")}</p><p class="cx-hint" data-quiet-hint hidden>A large room takes a while. viberoom pauses while it writes the conversation and answers again when it is done. You can close this window: the import goes on, and the room appears when it is in.</p></div>`);
-        quietTimer = setInterval(() => { const hint = $("[data-quiet-hint]"); if (hint) hint.hidden = Date.now() - lastAnswerAt < 3000; }, 500);
+        quietTimer = setInterval(() => { if (closed) return; const hint = $("[data-quiet-hint]"); if (hint) hint.hidden = Date.now() - lastAnswerAt < 3000; }, 500);
       }
       $("[data-progress]").textContent = progress ? `${progress}…` : arriving();
       $("[data-wait-hint]").hidden = !waiting;
     }
     function renderDone(result) {
+      if (closed) return;
+      applied = true;
       const lines = result.rooms.map(r => `<li><b>${esc(r.name)}</b>: ${r.messages || r.files ? [r.messages ? count(r.messages, "message") : "", r.files ? count(r.files, "picture or file", "pictures and files") : ""].filter(Boolean).join(" and ") + " arrived" : "already up to date"}</li>`);
       if (result.userMemory) lines.push("<li><b>Your preferences</b> are updated</li>");
       const first = result.rooms[0];
@@ -376,17 +418,19 @@
     }
 
     async function removed() {
+      controller.signal.throwIfAborted();
       clearError();
       removedRoom ||= catalog.rooms[0]?.id;
       show("removed", "Earlier versions of messages", `<p class="cx-hint">Messages that were replaced or set aside when rooms were combined. Nothing here is lost.</p><label class="cx-field">Room<select data-removed-room>${catalog.rooms.map(r => `<option value="${esc(r.id)}"${r.id === removedRoom ? " selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label><div data-removed-list role="status">Loading…</div>`);
       if (!removedRoom) { $("[data-removed-list]").textContent = "There are no rooms here yet."; return; }
-      $("[data-removed-room]").addEventListener("change", event => { removedRoom = event.target.value; removedOffset = 0; void removed().catch(failed); });
+      listen($("[data-removed-room]"), "change", event => { removedRoom = event.target.value; removedOffset = 0; void removed().catch(failed); });
       const result = await request(`/api/carry/removed?room=${encodeURIComponent(removedRoom)}&offset=${removedOffset}`);
-      if (phase !== "removed") return;
+      if (closed || phase !== "removed") return;
       $("[data-removed-list]").innerHTML = result.items.length ? `<ul class="cx-versions">${result.items.map(item => `<li><button type="button" data-carry-act="removed-detail" data-key="${esc(item.key)}"><span class="cx-version-head"><b>${esc(item.fromName || "System")}</b><small>${esc(new Date(item.ts).toLocaleString())}</small></span><span class="cx-version-text">${esc(item.text || "[no text]")}</span></button></li>`).join("")}</ul><footer class="cx-actions">${removedOffset ? button("removed-prev", "Newer") : ""}${result.more ? button("removed-next", "Older") : ""}</footer>` : `<div class="cx-center">${art("done", "is-small")}<p class="cx-hint">Nothing was set aside in this room.</p></div>`;
     }
 
     async function act(action, target) {
+      if (closed) return;
       clearError();
       try {
         if (action === "close") return await close();
@@ -405,9 +449,11 @@
           if (encrypt && (!passphrase || passphrase !== $("#cx-passphrase-repeat").value)) throw new Error("Type the same password in both fields.");
           $("#cx-passphrase").value = $("#cx-passphrase-repeat").value = "";
           if (job && !downloaded) await cancel(job);
-          downloaded = false; working("Packing your rooms…", "carry-out");
+          controller.signal.throwIfAborted();
+          downloaded = false; applied = false; working("Packing your rooms…", "carry-out");
           const started = await request("/api/carry/export", { rooms: [...exportSelection], ...exportParts, sourceLabel: newLabel, ...(encrypt ? { passphrase } : {}) });
           job = started.id; const state = await poll(job);
+          if (closed) return;
           if (state.status === "error") { renderExport(); throw new Error(state.error); }
           catalog.source = { ...catalog.source, label: newLabel };
           const one = exportSelection.size === 1 ? catalog.rooms.find(r => exportSelection.has(r.id)) : null;
@@ -417,7 +463,7 @@
           renderExported({ ...state.result, encrypted: encrypt, fileName: exportedName });
         } else if (action === "download") {
           const saved = await window.VIBEROOM_SAVE.saveFile({ name: exportedName, url: `/api/carry/${job}/download`, bytes: exportedBytes, description: "viberoom rooms", type: "application/octet-stream", extension: ".viberoom" });
-          if (saved === "cancelled") return;
+          if (closed || saved === "cancelled") return;
           downloaded = true;
           target.innerHTML = `${icon("check")} Saved — save again`;
         } else if (action === "unlock") {
@@ -431,19 +477,20 @@
           renderApplying();
           lastAnswerAt = Date.now();
           try { await request(`/api/carry/${job}/apply`, { previewToken: preview.previewToken }, false, true); }
-          catch (err) { renderSummary(); throw err; }
+          catch (err) { if (!closed) renderSummary(); throw err; }
           let state;
           try { state = await follow(job, s => renderApplying(s.progress)); }
-          catch (err) { if (err?.status) renderDrop(); throw err; }
-          if (state.status === "applied") { renderDone(state.result); helpers.imported?.(state.result); }
+          catch (err) { if (!closed && err?.status) renderDrop(); throw err; }
+          if (closed) return;
+          if (state.status === "applied") { renderDone(state.result); if (!closed) helpers.imported?.(state.result); }
           else if (state.status === "ready") { preview = state.result; renderSummary(!!preview.refreshed); }
           else { phase = "summary"; await plan(); throw new Error(state.error || "The import did not finish."); }
-        } else if (action === "open-room") { const id = target.dataset.room; await close(); helpers.openRoom?.(id); }
+        } else if (action === "open-room") { const id = target.dataset.room; await close(); if (!forced && !helpers.signal?.aborted) helpers.openRoom?.(id); }
         else if (action === "dependency-view") {
           const details = target.closest("[data-library-key]"), path = target.dataset.path;
           const base = `/api/carry/${job}/dependency?key=${encodeURIComponent(details.dataset.libraryKey)}&path=${encodeURIComponent(path)}`;
           const comparison = await request(base);
-          if (!details.isConnected) return;
+          if (closed || !details.isConnected) return;
           details.querySelector("[data-library-comparison]").innerHTML = `<div class="cx-compare">${[["ours", "Here"], ["incoming", sourceName()]].map(([side, label]) => { const file = comparison[side]; return `<div><b>${esc(label)}</b><pre>${esc(file ? file.text : "(not there)")}</pre>${file ? `${file.shortened ? '<p class="cx-hint">Shortened.</p>' : ""}<a data-ui="button" data-kind="ghost" download href="${base}&download=${side}">Save the whole file (${bytes(file.bytes)})</a>` : ""}</div>`; }).join("")}</div>`;
         } else if (action === "removed-next") { removedOffset += 50; await removed(); }
         else if (action === "removed-prev") { removedOffset = Math.max(0, removedOffset - 50); await removed(); }
@@ -458,20 +505,28 @@
       if (phase === "working") { if (inspected && preview) renderSummary(); else if (fileName) renderDrop(); else renderHome(); }
       error(err);
     }
-    dialog.addEventListener("click", event => { const target = event.target.closest("[data-carry-act]"); if (target && !target.disabled) void act(target.dataset.carryAct, target); });
-    dialog.addEventListener("change", event => { if (event.target.matches("[data-target]")) { const field = event.target.closest("details")?.querySelector("[data-name-field]"); if (field) field.hidden = !!event.target.value; } });
+    listen(dialog, "click", event => { const target = event.target.closest("[data-carry-act]"); if (target && !target.disabled) void act(target.dataset.carryAct, target); }, true);
+    listen(dialog, "change", event => { if (event.target.matches("[data-target]")) { const field = event.target.closest("details")?.querySelector("[data-name-field]"); if (field) field.hidden = !!event.target.value; } }, true);
 
+    const handle = { dialog, close, dispose };
+    if (helpers.signal?.aborted) { void dispose(); return; }
+    try { root.appendChild(dialog); dialog.showModal(); if (!closed) helpers.onOpen?.(handle); }
+    catch (err) { void dispose(); throw err; }
     try {
       catalog = await request("/api/carry");
+      if (closed) return handle;
       exportSelection = new Set(initialRoom ? [initialRoom.id] : catalog.rooms.map(r => r.id));
       renderHome();
       if (catalog.rooms.length) {
         const started = await request("/api/carry/estimate", { rooms: catalog.rooms.map(r => r.id) }); estimateJob = started.id;
         const result = await poll(estimateJob);
+        if (closed) return handle;
         if (result.status === "ready") { estimates = result.result; if (phase === "export") { keepExportInputs(); renderExport(); } }
         await cancel(estimateJob); estimateJob = null;
       }
     } catch (err) { failed(err); }
+    return handle;
   }
+  Object.defineProperty(open, "scoped", { value: true });
   window.ViberoomCarry = { open };
 })();

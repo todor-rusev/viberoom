@@ -17,13 +17,11 @@ import { parseReadMessageArgs } from "./message-read.js";
 import { parseMessageCheckArgs } from "./message-check.js";
 import { AgentMessageError } from "./agent-message.js";
 import { readFile, realpath, stat } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { Logger, requestLogPath } from "./log.js";
 import { bodyPageForWindow, eventForWindow, messageForWindow, roomForWindow, snapshotForWindow, wireRevision } from "./window-wire.js";
 import { checkGate, keyFrom, OPENING_PARAM } from "./local-gate.js";
-import { keyMatches, loadOrCreateKey, openingNonce, openingValid } from "./local-key.js";
+import { keyMatches, loadOrCreateKey, mintOpening, openingNonce, openingValid } from "./local-key.js";
 import { clearDiagnosticLogs, diagnosticLogStats } from "./diagnostic-logs.js";
 import { parseClientTraces, traceOperation, TRACE_ID_HEADER, TRACE_REPORT_PATH, TRACE_SINCE_HEADER, validTraceId, type RequestTrace } from "./mcp-diagnostics.js";
 import type { ConsentFeature, Hub, HubEvent, SecretRequest } from "./hub.js";
@@ -53,6 +51,16 @@ import { acceptUpgrade, type WebSocketPeer } from "./ws.js";
 
 let editorFound: DetectedEditor | null | undefined;
 
+const APP_SCRIPT = '<script src="/app.js"></script>';
+const PAGE_TITLE = "<title>viberoom</title>";
+
+export function withProduct(html: string, product: { name: string } | null): string {
+  if (!product) return html;
+  if (html.split(APP_SCRIPT).length !== 2 || html.split(PAGE_TITLE).length !== 2) throw new Error("the window's page has no single title and app.js to make it the application's");
+  const name = product.name.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  return html.replace(PAGE_TITLE, `<title>${name}</title>`).replace(APP_SCRIPT, `<script src="/product.js"></script>\n  ${APP_SCRIPT}`);
+}
+
 export function withLook(html: string, look: unknown): string {
   if (typeof look !== "string" || look === "classic" || !/^[a-z][a-z0-9-]{0,30}$/.test(look)) return html;
   return html.replace('<html lang="en">', `<html lang="en" data-look="${look}">`);
@@ -71,26 +79,6 @@ function currentEditor(): DetectedEditor | null {
   return editorFound;
 }
 
-const STATIC_FILES: Record<string, { file: string; type: string; dir?: "ui" | "assets" | "node_modules" | "vendor" }> = {
-  "/": { file: "index.html", type: "text/html; charset=utf-8" },
-  "/styleguide": { file: "styleguide.html", type: "text/html; charset=utf-8" },
-  "/guide": { file: "guide.html", type: "text/html; charset=utf-8" },
-  "/manifest.json": { file: "manifest.json", type: "application/manifest+json; charset=utf-8" },
-  "/icon.svg": { file: "icon.svg", type: "image/svg+xml", dir: "assets" },
-  "/icon-256.png": { file: "icon-256.png", type: "image/png", dir: "assets" },
-  "/icon-512.png": { file: "icon-512.png", type: "image/png", dir: "assets" },
-  "/favicon.ico": { file: "icon.ico", type: "image/x-icon", dir: "assets" },
-  "/vendor-icons/claude.svg": { file: "vendors/claude.svg", type: "image/svg+xml", dir: "assets" },
-  "/vendor-icons/codex.svg": { file: "vendors/codex.svg", type: "image/svg+xml", dir: "assets" },
-  "/vendor-icons/gemini.svg": { file: "vendors/gemini.svg", type: "image/svg+xml", dir: "assets" },
-  "/vendor-icons/cursor.svg": { file: "vendors/cursor.svg", type: "image/svg+xml", dir: "assets" },
-  "/vendor-icons/opencode.svg": { file: "vendors/opencode.svg", type: "image/svg+xml", dir: "assets" },
-  "/vendor-icons/copilot.svg": { file: "vendors/copilot.svg", type: "image/svg+xml", dir: "assets" },
-  "/vendor-icons/grok.svg": { file: "vendors/grok.svg", type: "image/svg+xml", dir: "assets" },
-  "/vendor-icons/hermes.svg": { file: "vendors/hermes.svg", type: "image/svg+xml", dir: "assets" },
-  "/vendor/marked.umd.js": { file: "marked/lib/marked.umd.js", type: "text/javascript; charset=utf-8", dir: "node_modules" },
-  "/vendor/prism.js": { file: "prismjs/prism.js", type: "text/javascript; charset=utf-8", dir: "node_modules" },
-};
 
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
@@ -154,41 +142,46 @@ function fileHeaders(type: string, cache: string): Record<string, string> {
 const PRISM_LANGUAGE = /^\/vendor\/prism-lang\/([a-z0-9-]{1,32})\.js$/;
 const MERMAID_FILE = /^\/vendor\/mermaid\/((?:chunks\/mermaid\.esm\.min\/)?[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.mjs)$/;
 
-const UI_FILE = /^\/([a-z0-9_-]+\.(js|css|html|svg|json|png|ico))$/i;
 const FACE_PICTURE = /^\/faces\/([a-z][a-z0-9-]{1,31})\.webp$/;
 const CONNECTION_LOGO = /^\/connection-logos\/([a-z][a-z0-9-]{1,31})\.svg$/;
-const UI_TYPES: Record<string, string> = {
-  js: "text/javascript; charset=utf-8",
-  css: "text/css; charset=utf-8",
-  html: "text/html; charset=utf-8",
-  svg: "image/svg+xml",
-  json: "application/json; charset=utf-8",
-  png: "image/png",
-  ico: "image/x-icon",
-};
+
+export const EXTENSION_API_PREFIX = "/api/ext/";
+
+export interface ExtensionRequest {
+  method: string;
+  path: string;
+  query: URLSearchParams;
+  body(): Promise<unknown>;
+  json(status: number, body: unknown): void;
+}
+export type ExtensionApi = (request: ExtensionRequest) => boolean | Promise<boolean>;
 
 export interface RunningServer {
   url: string;
   server: Server;
   key: string;
-  close(): void;
+  openingUrl(): string;
+  close(): Promise<void>;
   updateAutostart(status: AutostartStatus): void;
 }
 
-import { hostFields, hostOf, productVersionsFromApp, runByApp, storeApp, type Host, type InsideBox } from "./host.js";
+import { hostFields, hostOf, productVersionsFromApp, runByApp, storeApp, type Host } from "./host.js";
 import { checkForUpdate, installUpdate, newerBuildThanRunning, restartWithNewBuild, runsFromSourceCheckout, type UpdateChannel } from "./update.js";
 import { exportRoom, importRoom, previewImport } from "./export-room.js";
 import { CarryTransfers } from "./carry-transfers.js";
 import { publicRecipes } from "./recipes.js";
 import { thinState } from "./state-thinning.js";
 import { qrSvg } from "./qr.js";
+import { LOOKS_CUSTOM_CSS, STATIC_FILES, UI_FILE, UI_TYPES, assetsDir, staticPath, uiDir } from "./ui-files.js";
+
+const PAGE_FILE = /^\/page\/((?:[a-z0-9_-]+\/)*[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.(js|mjs|css|html|svg|json|png|ico|woff2))$/i;
+const PAGE_TYPES: Record<string, string> = { ...UI_TYPES, mjs: "text/javascript; charset=utf-8", woff2: "font/woff2" };
 
 export interface BuildInfo {
   name: string;
   version: string;
   build: string;
   staleSource?: string | null;
-  insideBox?: InsideBox;
   host?: Host;
   staleBuild?: string | null;
   sourceCheckout?: boolean;
@@ -200,28 +193,40 @@ export interface DataFolderAccess {
   narrow: () => { others: string[]; known: boolean };
 }
 
-export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo, onShutdownRequest: () => void, extras: { autostart?: AutostartControl; dataFolder?: DataFolderAccess; run?: { startedAs: StartReason; startedAt: number }; updates?: UpdateChannel; appUpdates?: AppUpdatesControl; server?: Server } = {}): Promise<RunningServer> {
-  const host = info.host ?? hostOf("npm", info.insideBox);
+export interface ServerExtras {
+  autostart?: AutostartControl;
+  dataFolder?: DataFolderAccess;
+  run?: { startedAs: StartReason; startedAt: number };
+  updates?: UpdateChannel;
+  npmUpdates?: boolean;
+  appUpdates?: AppUpdatesControl;
+  server?: Server;
+  page?: { dir: string };
+  api?: ExtensionApi;
+  product?: { script: string; name: string };
+}
+
+export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo, onShutdownRequest: () => void, extras: ServerExtras = {}): Promise<RunningServer> {
+  const pageDir = extras.page ? resolve(extras.page.dir) : null;
+  if (pageDir && !fileExists(join(pageDir, "index.html"))) throw new Error(`the page folder ${pageDir} has no index.html`);
+  const productScript = extras.product ? resolve(extras.product.script) : null;
+  const productName = extras.product ? extras.product.name.trim() : "";
+  if (extras.product && (!productName || productName.length > 40)) throw new Error("a product's name must be 1-40 characters");
+  if (productScript && !fileExists(productScript)) throw new Error(`the product script ${productScript} does not exist`);
+  if (productScript && pageDir) throw new Error("an application brings either its own page or a product script for the window's page, not both");
+  const host = info.host ?? hostOf("npm");
   const transfers = new CarryTransfers(hub, info.version, log.child("carry"));
   const memory = new MemoryService(hub);
-  const uiDir = fileURLToPath(new URL("../ui/", import.meta.url));
-  const assetsDir = fileURLToPath(new URL("../assets/", import.meta.url));
-  const vendorDir = fileURLToPath(new URL("../vendor/", import.meta.url));
-  const resolveModule = createRequire(import.meta.url).resolve;
-  const packageDir = (name: string): string => dirname(resolveModule(`${name}/package.json`));
-  const staticPath = (entry: { file: string; dir?: "ui" | "assets" | "node_modules" | "vendor" }): string => {
-    if (entry.dir === "vendor") return vendorDir + entry.file;
-    if (entry.dir !== "node_modules") return (entry.dir === "assets" ? assetsDir : uiDir) + entry.file;
-    const slash = entry.file.indexOf("/");
-    return join(packageDir(entry.file.slice(0, slash)), entry.file.slice(slash + 1));
-  };
   const clients = new Set<ServerResponse>();
   const sockets = new Set<WebSocketPeer>();
   const dataFolder = (): unknown => (extras.dataFolder ? { path: extras.dataFolder.path, ...extras.dataFolder.state() } : null);
   const startedAt = extras.run ? extras.run.startedAt : Date.now();
   const startedAs: StartReason = extras.run ? extras.run.startedAs : "by-hand";
   const perMessage = { images: IMAGES_PER_MESSAGE, quotes: QUOTES_PER_MESSAGE, audio: AUDIO_PER_MESSAGE, video: VIDEOS_PER_MESSAGE };
-  const snapshot = (): unknown => ({ ...(snapshotForWindow(hub.snapshot()) as Record<string, unknown>), autostart: extras.autostart?.status() ?? null, dataFolder: dataFolder(), perMessage, version: { ...info, pid: process.pid, startedAt, startedAs } });
+  const installation = () => ({ updates: extras.appUpdates && productVersionsFromApp(host) ? "application" : extras.updates ? "feed"
+    : extras.npmUpdates ? (productVersionsFromApp(host) ? "application" : storeApp(host) ? "store" : "npm") : null,
+    autostart: !!extras.autostart, restart: hub.canRestart });
+  const snapshot = (): unknown => ({ ...(snapshotForWindow(hub.snapshot()) as Record<string, unknown>), installation: installation(), autostart: extras.autostart?.status() ?? null, dataFolder: dataFolder(), perMessage, version: { ...info, pid: process.pid, startedAt, startedAs } });
 
   const withNumbers = (event: HubEvent): HubEvent => {
     if (event.type !== "room.event" || event.event.type !== "message") return event;
@@ -333,6 +338,23 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (path.startsWith(EXTENSION_API_PREFIX)) {
+      let body: Promise<unknown> | null = null;
+      let handled: boolean;
+      try {
+        handled = extras.api ? await extras.api({
+          method: req.method ?? "GET", path: path.slice(EXTENSION_API_PREFIX.length), query: url.searchParams,
+          body: () => (body ??= readJson(req)), json: (status, value) => sendJson(res, status, value),
+        }) : false;
+      } catch (error) {
+        if (!(error instanceof UnwritableAnswer) || res.headersSent) throw error;
+        sendJson(res, 500, { error: error.message });
+        return;
+      }
+      if (!res.headersSent) sendJson(res, handled ? 500 : 404, { error: handled ? "the application did not answer this request" : "not found" });
+      return;
+    }
+
     if (await transfers.handle(req, res, url)) return;
 
     const font = req.method === "GET" && path.match(/^\/fonts\/([a-z0-9-]+\.(woff2|css))$/i);
@@ -373,17 +395,38 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
-    if (req.method === "GET" && path === "/looks-custom.css") {
+    if (req.method === "GET" && path === LOOKS_CUSTOM_CSS) {
       const css = await hub.looks.css();
       res.writeHead(200, { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-cache" });
       res.end(css);
       return;
     }
 
+    const pageFile = req.method === "GET" && pageDir ? (path === "/" ? ["/", "index.html", "html"] : path.match(PAGE_FILE)) : null;
+    if (pageFile) {
+      let read: Buffer;
+      try {
+        read = await readFile(join(pageDir!, pageFile[1]));
+      } catch {
+        sendJson(res, 404, { error: `no such file: ${pageFile[1]}` });
+        return;
+      }
+      res.writeHead(200, fileHeaders(PAGE_TYPES[pageFile[2].toLowerCase()], "no-cache"));
+      res.end(path === "/" ? Buffer.from(withLook(read.toString("utf8"), hub.settings.appearance?.look)) : read);
+      return;
+    }
+
+    if (req.method === "GET" && path === "/product.js" && productScript) {
+      const read = await readFile(productScript);
+      res.writeHead(200, fileHeaders("text/javascript; charset=utf-8", "no-cache"));
+      res.end(read);
+      return;
+    }
+
     if (req.method === "GET" && STATIC_FILES[path]) {
       const entry = STATIC_FILES[path];
       const read = await readFile(staticPath(entry));
-      const body = path === "/" ? Buffer.from(withLook(read.toString("utf8"), hub.settings.appearance?.look)) : read;
+      const body = path === "/" ? Buffer.from(withProduct(withLook(read.toString("utf8"), hub.settings.appearance?.look), productScript ? { name: productName } : null)) : read;
       res.writeHead(200, fileHeaders(entry.type, entry.dir === "node_modules" ? "public, max-age=3600" : "no-cache"));
       res.end(body);
       return;
@@ -579,6 +622,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     }
 
     if (req.method === "GET" && path === "/api/update") {
+      if (!installation().updates) { sendJson(res, 400, { error: "This application does not provide updates here." }); return; }
       if (productVersionsFromApp(host) && extras.appUpdates) {
         if (url.searchParams.get("check") === "1") hub.setUpdate(await extras.appUpdates.check());
         sendJson(res, 200, hub.update ?? extras.appUpdates.state());
@@ -591,11 +635,13 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         sendJson(res, 200, hub.update ?? extras.updates.state());
         return;
       }
+      if (!extras.npmUpdates) throw new Error("This application does not provide an npm updater.");
       if (url.searchParams.get("check") === "1") hub.setUpdate(await checkForUpdate(hub.dataDir, info.version, { force: true }));
       sendJson(res, 200, hub.update ?? { current: info.version, latest: null, available: false, checkedAt: null, error: null });
       return;
     }
     if (req.method === "POST" && path === "/api/update/install") {
+      if (!installation().updates) { sendJson(res, 400, { error: "This application does not provide updates here." }); return; }
       const mainUrl = new URL("./main.js", import.meta.url).href;
       if (productVersionsFromApp(host) && extras.appUpdates) {
         const done = await extras.appUpdates.apply();
@@ -614,6 +660,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         return;
       }
       if (runByApp(host)) throw new Error("this viberoom is the installed application, and it updates by its own installer, not through npm. Download the newer version and run it; your rooms stay where they are.");
+      if (!extras.npmUpdates) throw new Error("This application does not provide an npm updater.");
       if (runsFromSourceCheckout(mainUrl)) throw new Error("this viberoom runs from a source checkout; update it with git pull and npm run update");
       const latest = hub.update?.available ? hub.update.latest : null;
       if (!latest) throw new Error("no newer version is known; check for updates first");
@@ -637,7 +684,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
     }
 
     if (req.method === "GET" && path === "/api/version") {
-      const mine = keyMatches(localKey.value, keyFrom(req.headers));
+      const mine = keyMatches(localKey.value, keyFrom(req.headers, livePort()));
       sendJson(res, 200, { ...info, ...hostFields(host), keyed: mine, staleBuild: newerBuildThanRunning(new URL("./main.js", import.meta.url).href, info.build), ...(mine ? { dataDir: hub.dataDir, pid: process.pid, startedAt, startedAs, stopsWithinMs: hub.shutdownWithinMs(), stopChecksRun: true } : {}) });
       return;
     }
@@ -812,6 +859,13 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    if (req.method === "GET" && path === "/api/mcp/operations") {
+      const operations = hub.operationDefinitions(url.searchParams.get("token") ?? "");
+      if (!operations) sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+      else sendJson(res, 200, { ok: true, operations });
+      return;
+    }
+
     if (req.method === "GET" && path === "/api/secrets") {
       sendJson(res, 200, { ok: true, requests: hub.openSecrets() });
       return;
@@ -913,9 +967,20 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       return;
     }
 
+    const meantRoom = (selector: string, outcome = "nothing was changed"): Room | null => {
+      const room = hub.getRoom(decodeURIComponent(selector));
+      const meant = url.searchParams.get("room");
+      if (meant !== null && meant !== room.uuid) {
+        sendJson(res, 409, { error: `This room was replaced by another at the same address; ${outcome}.`, code: "room_replaced" });
+        return null;
+      }
+      return room;
+    };
+
     const toolDetails = req.method === "GET" && path.match(/^\/api\/rooms\/([^/]+)\/messages\/([^/]+)\/tools\/([^/]+)$/);
     if (toolDetails) {
-      const room = hub.getRoom(decodeURIComponent(toolDetails[1]));
+      const room = meantRoom(toolDetails[1], "nothing was read");
+      if (!room) return;
       const call = room.toolCallDetails(decodeURIComponent(toolDetails[2]), decodeURIComponent(toolDetails[3]));
       if (!call) { sendJson(res, 404, { error: "This tool call is no longer available." }); return; }
       sendJson(res, 200, call);
@@ -1434,6 +1499,13 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
       });
       return;
     }
+    if (path === "/api/mcp/operations/call") {
+      const outcome = await hub.runOperation(String(body.token ?? ""), String(body.name ?? ""), body.arguments);
+      if (!outcome) sendJson(res, 403, { error: "unknown skills token (the session it belonged to is gone)" });
+      else if (outcome.ok) sendJson(res, 200, { ok: true, result: outcome.result });
+      else sendJson(res, { unknown_operation: 404, invalid_arguments: 400, refused: 409, internal_error: 500 }[outcome.code], outcome);
+      return;
+    }
     if (path === "/api/mcp/connections/call") {
       const target = hub.resolveMcpToken(String(body.token ?? ""));
       if (!target) {
@@ -1773,7 +1845,9 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     const recovery = path.match(/^\/api\/rooms\/([^/]+)\/recovery$/);
     if (recovery) {
-      sendJson(res, 200, await hub.adoptRoomCopy(decodeURIComponent(recovery[1])));
+      const room = meantRoom(recovery[1]);
+      if (!room) return;
+      sendJson(res, 200, await hub.adoptRoomCopy(room.id));
       return;
     }
 
@@ -1927,6 +2001,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         templateId: String(body.template ?? ""),
         name: String(body.name ?? ""),
         dir: optionalString(body.dir),
+        scope: optionalString(body.scope),
         vibemates: vibemates.map((v) => {
           const o = (v ?? {}) as Record<string, unknown>;
           return { name: String(o.name ?? ""), agentType: String(o.agentType ?? ""), model: optionalString(o.model), effort: optionalString(o.effort), mode: optionalString(o.mode) };
@@ -1941,14 +2016,17 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         name: String(body.name ?? ""),
         dir: optionalString(body.dir),
         settings: (body.settings as Record<string, unknown> | undefined) ?? {},
+        scope: optionalString(body.scope),
       });
       sendJson(res, 200, { ok: true, room: room.snapshot(), notices });
       return;
     }
 
-    const roomAction = path.match(/^\/api\/rooms\/([^/]+)\/(send|files|typing|invite|settings|focus|rename|dir|delete|memory-forget|open|template-preview|save-template)$/);
+
+    const roomAction = path.match(/^\/api\/rooms\/([^/]+)\/(send|typing|invite|settings|focus|rename|dir|restart-in-folder|delete|memory-forget|open|template-preview|save-template)$/);
     if (roomAction) {
-      const room = hub.getRoom(decodeURIComponent(roomAction[1]));
+      const room = meantRoom(roomAction[1]);
+      if (!room) return;
       const action = roomAction[2];
       if (action === "open") {
         hub.markOpened(room.id);
@@ -2020,14 +2098,25 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         hub.saveRooms();
         sendJson(res, 200, { ok: true });
       } else if (action === "dir") {
-        const result = await room.setDir(String(body.dir ?? ""));
+        const restart = body.restart === undefined ? "now" : body.restart;
+        if (restart !== "now" && restart !== "later") {
+          sendJson(res, 400, { error: 'restart must be "now" or "later".' });
+          return;
+        }
+        const result = await room.setDir(String(body.dir ?? ""), restart);
         const notice = hub.workspaceNotice(result.dir);
         if (notice) room.postNotice(notice);
         hub.saveRooms();
         sendJson(res, 200, { ok: true, ...result });
-      } else {
+      } else if (action === "restart-in-folder") {
+        const result = await room.restartInFolder();
+        hub.saveRooms();
+        sendJson(res, 200, { ok: true, ...result });
+      } else if (action === "delete") {
         await hub.removeRoom(room.id);
         sendJson(res, 200, { ok: true });
+      } else {
+        sendJson(res, 404, { error: `No room action "${action}".` });
       }
       return;
     }
@@ -2053,7 +2142,8 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     const messagePin = path.match(/^\/api\/rooms\/([^/]+)\/messages\/([^/]+)\/pin$/);
     if (messagePin) {
-      const room = hub.getRoom(decodeURIComponent(messagePin[1]));
+      const room = meantRoom(messagePin[1]);
+      if (!room) return;
       const message = room.setPinned(decodeURIComponent(messagePin[2]), body.pinned === true || body.pinned === "true");
       sendJson(res, 200, { ok: true, pinned: !!message.pinned });
       return;
@@ -2061,7 +2151,8 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     const messagePinLabel = path.match(/^\/api\/rooms\/([^/]+)\/messages\/([^/]+)\/pin-label$/);
     if (messagePinLabel) {
-      const room = hub.getRoom(decodeURIComponent(messagePinLabel[1]));
+      const room = meantRoom(messagePinLabel[1]);
+      if (!room) return;
       const message = room.setPinLabel(decodeURIComponent(messagePinLabel[2]), typeof body.label === "string" ? body.label : "");
       sendJson(res, 200, { ok: true, label: message.pinLabel ?? null });
       return;
@@ -2069,14 +2160,16 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     const diagramFailure = path.match(/^\/api\/rooms\/([^/]+)\/messages\/([^/]+)\/diagram$/);
     if (diagramFailure) {
-      const room = hub.getRoom(decodeURIComponent(diagramFailure[1]));
+      const room = meantRoom(diagramFailure[1]);
+      if (!room) return;
       sendJson(res, 200, room.reportDiagramFailure(decodeURIComponent(diagramFailure[2]), Number(body.block), String(body.source ?? ""), String(body.error ?? "")));
       return;
     }
 
     const messageEdit = path.match(/^\/api\/rooms\/([^/]+)\/messages\/([^/]+)\/edit$/);
     if (messageEdit) {
-      const room = hub.getRoom(decodeURIComponent(messageEdit[1]));
+      const room = meantRoom(messageEdit[1]);
+      if (!room) return;
       const mode = body.mode === "rewrite" ? "rewrite" : "notify";
       const result = await room.editMessage(decodeURIComponent(messageEdit[2]), String(body.text ?? ""), mode);
       hub.saveRooms();
@@ -2086,7 +2179,8 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
 
     const participantAction = path.match(/^\/api\/rooms\/([^/]+)\/participants\/([^/]+)\/(cancel|nudge|remove|config|persona|reconnect|sleep|mute|unmute|respawn|retry|staff|restaff|notes|take-notes|restart-installed)$/);
     if (participantAction) {
-      const room = hub.getRoom(decodeURIComponent(participantAction[1]));
+      const room = meantRoom(participantAction[1]);
+      if (!room) return;
       const id = decodeURIComponent(participantAction[2]);
       const action = participantAction[3];
       if (action === "cancel") {
@@ -2190,6 +2284,7 @@ export function startServer(hub: Hub, port: number, log: Logger, info: BuildInfo
         url,
         server,
         key: localKey.value,
+        openingUrl: () => `${url}?${OPENING_PARAM}=${mintOpening(localKey.value)}`,
         updateAutostart: autostart => broadcast({ type: "autostart", autostart }),
         close: () => {
           const cleanup = transfers.close().catch(error => log.warn(`transfer cleanup: ${error instanceof Error ? error.message : String(error)}`));
@@ -2397,9 +2492,18 @@ function quoteList(value: unknown): QuoteInput[] {
   });
 }
 
+class UnwritableAnswer extends Error {}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  let text: string | undefined;
+  try {
+    text = JSON.stringify(body);
+  } catch (error) {
+    throw new UnwritableAnswer(`the answer cannot be written as JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (typeof text !== "string") throw new UnwritableAnswer("the answer cannot be written as JSON: it has no value");
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(body));
+  res.end(text);
 }
 
 const BODY_MAX_BYTES = (RECORDING_MAX_BYTES * 4) / 3 + 64 * 1024;

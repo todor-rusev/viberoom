@@ -20,6 +20,8 @@
   const heldMessageById = (room, id) => indexedMessage(room.messages, id);
   const heldMessageIndex = (room, id) => messageIndex(room.messages)?.byId.get(id)?.at ?? -1;
   const messageById = (room, id) => heldMessageById(room, id) || indexedMessage(room.pinnedOlder, id);
+  const messageInCollection = (room, id, collection) => collection === "olderPins" ? indexedMessage(room.pinnedOlder, id)
+    : collection === "held" ? heldMessageById(room, id) : messageById(room, id);
   function sortMessages(room) {
     room.messages.sort(compareMessages);
     messageIndexes.delete(room.messages);
@@ -76,5 +78,15 @@
     if (stored !== undefined) return stored + room.messages.filter(m => m.streaming && (!chatsOnly || m.kind === "chat")).length;
     return room.messages.filter(m => !chatsOnly || m.kind === "chat").length + (room.history?.hidden || 0);
   }
-  root.HistoryWindow = { cursorOf, compareCursor, compareMessages, knownMessages, heldMessageById, heldMessageIndex, messageById, renameMessage, sortMessages, insertMessage, capture, sameRange, current, mergePage, retainUnchanged, acceptSnapshot, count };
+  function syncCount(room) {
+    if (room.history?.total === undefined) return;
+    if (room.history.indexed) {
+      room.history.hidden = 0;
+      room.history.oldest = null;
+      return;
+    }
+    room.history.hidden = Math.max(0, room.history.total - room.messages.filter(m => m.seq > 0 && !m.streaming).length);
+    room.history.oldest = room.history.hidden && room.messages.length ? cursorOf(room.messages[0]) : null;
+  }
+  root.HistoryWindow = { cursorOf, compareCursor, compareMessages, knownMessages, heldMessageById, heldMessageIndex, messageById, messageInCollection, renameMessage, sortMessages, insertMessage, capture, sameRange, current, mergePage, retainUnchanged, acceptSnapshot, count, syncCount };
 })(typeof window !== "undefined" ? window : globalThis);

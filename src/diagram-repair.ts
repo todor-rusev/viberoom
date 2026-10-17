@@ -79,25 +79,26 @@ export const boundedError = (error: string) => {
 
 export type FailureOutcome = "repairing" | "failed" | "unchanged";
 
-export function recordFailure(repairs: DiagramRepair[], block: number, error: string, canRepair: boolean, now: number): FailureOutcome {
+export function recordFailure(repairs: readonly DiagramRepair[], block: number, error: string, canRepair: boolean, now: number): { outcome: FailureOutcome; repairs: readonly DiagramRepair[] } {
   const known = repairs.find((r) => r.block === block);
-  if (known ? known.state !== "fixed" : !canRepair) return "unchanged";
-  const state = canRepair && (known?.attempts ?? 0) < DIAGRAM_REPAIR_ATTEMPTS ? "repairing" : "failed";
-  if (known) Object.assign(known, { state, error: boundedError(error), since: now });
-  else repairs.push({ block, state, error: boundedError(error), attempts: 0, previous: [], since: now });
-  return state;
+  if (known ? known.state !== "fixed" : !canRepair) return { outcome: "unchanged", repairs };
+  const state: DiagramRepair["state"] = canRepair && (known?.attempts ?? 0) < DIAGRAM_REPAIR_ATTEMPTS ? "repairing" : "failed";
+  const next: DiagramRepair[] = known ? withBlock(repairs, { ...known, state, error: boundedError(error), since: now })
+    : [...repairs, { block, state, error: boundedError(error), attempts: 0, previous: [], since: now }];
+  return { outcome: state, repairs: next };
 }
 
-export function recordFix(repairs: DiagramRepair[], block: number, replaced: string, now: number): void {
+export function recordFix(repairs: readonly DiagramRepair[], block: number, replaced: string, now: number): DiagramRepair[] {
   const known = repairs.find((r) => r.block === block);
   if (!known || known.state !== "repairing") throw new Error(`diagram ${block} is not waiting for a fix`);
-  Object.assign(known, { state: "fixed", attempts: known.attempts + 1, since: now });
-  known.previous.push(replaced);
+  return withBlock(repairs, { ...known, state: "fixed", attempts: known.attempts + 1, since: now, previous: [...known.previous, replaced] });
 }
 
-export function giveUp(repairs: DiagramRepair[] | undefined, block: number, now: number): boolean {
+export function giveUp(repairs: readonly DiagramRepair[] | undefined, block: number, now: number): DiagramRepair[] | null {
   const known = repairs?.find((r) => r.block === block);
-  if (!known || known.state !== "repairing") return false;
-  Object.assign(known, { state: "failed", since: now });
-  return true;
+  if (!repairs || !known || known.state !== "repairing") return null;
+  return withBlock(repairs, { ...known, state: "failed", since: now });
 }
+
+const withBlock = (repairs: readonly DiagramRepair[], entry: DiagramRepair): DiagramRepair[] =>
+  repairs.map((r) => (r.block === entry.block ? entry : r));

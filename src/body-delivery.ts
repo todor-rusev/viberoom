@@ -16,17 +16,27 @@ export type BodyRow = {
 } & { [F in AttachmentField]?: unknown[] };
 export interface BodyRef { id: string; version?: number }
 
-export function registerBodyReader(row: BodyRow, id: string, epoch: string): boolean {
-  if (row.from !== "human" || row.kind !== "chat") return false;
+export function withBodyReader(row: BodyRow, id: string, epoch: string): BodyDelivery | null {
+  if (row.from !== "human" || row.kind !== "chat") return null;
   const delivery = row.bodyDelivery ?? { version: 1, readers: {} };
-  if (delivery.readers[id]?.epoch === epoch) return false;
-  row.bodyDelivery = { ...delivery, readers: { ...delivery.readers, [id]: { epoch, version: 0 } } };
+  if (delivery.readers[id]?.epoch === epoch) return null;
+  return { ...delivery, readers: { ...delivery.readers, [id]: { epoch, version: 0 } } };
+}
+
+export function registerBodyReader(row: BodyRow, id: string, epoch: string): boolean {
+  const next = withBodyReader(row, id, epoch);
+  if (!next) return false;
+  row.bodyDelivery = next;
   return true;
 }
 
-export function resetBodyDelivery(row: BodyRow): void {
+export function nextBodyVersion(row: BodyRow): BodyDelivery {
   const previous = row.bodyDelivery ?? { version: 1, readers: {} };
-  row.bodyDelivery = { version: previous.version + 1, readers: { ...previous.readers } };
+  return { version: previous.version + 1, readers: { ...previous.readers } };
+}
+
+export function resetBodyDelivery(row: BodyRow): void {
+  row.bodyDelivery = nextBodyVersion(row);
 }
 
 export function bodyRefs(rows: BodyRow[]): BodyRef[] {
@@ -36,9 +46,10 @@ export function bodyRefs(rows: BodyRow[]): BodyRef[] {
 
 const vibemateReply = (row: BodyRow): boolean => row.kind === "chat" && row.from !== "human" && row.from !== "system" && !row.streaming;
 
-export function supplyBodies(rows: BodyRow[], refs: BodyRef[], id: string, epoch: string): BodyRow[] {
+export function suppliedBodies(rows: readonly BodyRow[], refs: BodyRef[], id: string, epoch: string): Map<string, BodyDelivery> {
   const byId = new Map(rows.map(row => [row.id, row]));
-  const changed = new Set<BodyRow>();
+  const changed = new Map<string, BodyDelivery>();
+  const deliveryOf = (row: BodyRow) => changed.get(row.id) ?? row.bodyDelivery;
   for (const ref of refs) {
     const source = byId.get(ref.id);
     if (!source) continue;
@@ -46,21 +57,30 @@ export function supplyBodies(rows: BodyRow[], refs: BodyRef[], id: string, epoch
     const row = edit ? byId.get(edit.id) : source;
     if (!edit && row && vibemateReply(row) && ref.version === 1) {
       if (row.from === id) continue;
-      const delivery = row.bodyDelivery ?? { version: 1, readers: {} };
+      const delivery = deliveryOf(row) ?? { version: 1, readers: {} };
       if (delivery.readers[id]?.epoch === epoch && delivery.readers[id].version >= 1) continue;
-      row.bodyDelivery = { ...delivery, readers: { ...delivery.readers, [id]: { epoch, version: 1 } } };
-      changed.add(row);
+      changed.set(row.id, { ...delivery, readers: { ...delivery.readers, [id]: { epoch, version: 1 } } });
       continue;
     }
-    if (!row?.bodyDelivery || row.from !== "human" || row.kind !== "chat") continue;
-    const delivery = row.bodyDelivery;
+    const delivery = row && deliveryOf(row);
+    if (!row || !delivery || row.from !== "human" || row.kind !== "chat") continue;
     const prior = delivery.readers[id]?.epoch === epoch ? delivery.readers[id].version : 0;
     const version = edit ? edit.version : ref.version;
     if (!version || version > delivery.version || prior >= version) continue;
     if (edit && (!edit.complete || (edit.append && prior !== edit.fromVersion)
       || (!edit.append && (ATTACHMENT_KINDS.some((kind) => row[kind.field]?.length) || row.quotes?.length) && !prior))) continue;
-    row.bodyDelivery = { ...delivery, readers: { ...delivery.readers, [id]: { epoch, version } } };
-    changed.add(row);
+    changed.set(row.id, { ...delivery, readers: { ...delivery.readers, [id]: { epoch, version } } });
   }
-  return [...changed];
+  return changed;
+}
+
+export function supplyBodies(rows: readonly BodyRow[], refs: BodyRef[], id: string, epoch: string): BodyRow[] {
+  const byId = new Map(rows.map(row => [row.id, row]));
+  const changed: BodyRow[] = [];
+  for (const [rowId, delivery] of suppliedBodies(rows, refs, id, epoch)) {
+    const row = byId.get(rowId)!;
+    row.bodyDelivery = delivery;
+    changed.push(row);
+  }
+  return changed;
 }

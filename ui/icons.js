@@ -10,6 +10,8 @@
 
   const PARTS = {
     plus: { v: `<path d="M12 5v14"/>`, h: `<path d="M5 12h14"/>` },
+    projects: { back: `<path d="M7 4h10"/>`, mid: `<path d="M5 7.5h14"/>`, front: `<rect x="3" y="11" width="18" height="9" rx="2"/>` },
+    more: { a: `<path d="M5 12h.01" stroke-width="3"/>`, b: `<path d="M12 12h.01" stroke-width="3"/>`, c: `<path d="M19 12h.01" stroke-width="3"/>` },
     rooms: { tl: `<rect x="4" y="4" width="7" height="7" rx="2"/>`, tr: `<rect x="13" y="4" width="7" height="7" rx="2"/>`, bl: `<rect x="4" y="13" width="7" height="7" rx="2"/>`, br: `<rect x="13" y="13" width="7" height="7" rx="2"/>` },
     skills: { left: `<path d="M2 4.5h5.5a4 4 0 0 1 4 4V20a3 3 0 0 0-3-3H2z"/>`, right: `<path d="M22 4.5h-5.5a4 4 0 0 0-4 4V20a3 3 0 0 1 3-3H22z"/>` },
     settings: { hub: GEAR_HUB, teeth: GEAR_TEETH },
@@ -174,7 +176,8 @@
     check: `<path d="M20 6L9 17l-5-5"/>`,
     alert: `<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>`,
     info: `<circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/>`,
-    more: `<path d="M5 12h.01M12 12h.01M19 12h.01" stroke-width="3"/>`,
+    more: whole("more"),
+    projects: whole("projects"),
     logout: `<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>`,
     link: `<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>`,
     wand: `<path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8L19 13M17.8 6.2L19 5M3 21l9-9M12.2 6.2L11 5"/>`,
@@ -233,19 +236,37 @@
   }
 
   const HOSTS = "button, a[href], label, summary, [role='button']";
-  function playOnHover(root) {
-    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-    root.addEventListener("pointerover", (event) => {
-      const host = event.target instanceof Element ? event.target.closest(HOSTS) : null;
-      if (!host || host.contains(event.relatedTarget) || still?.matches) return;
-      for (const glyph of host.querySelectorAll(".rig")) play(glyph);
-    });
+  function playOnHover(root = document) {
+    const view = root.ownerDocument?.defaultView || root.defaultView;
+    const still = view.matchMedia?.("(prefers-reduced-motion: reduce)");
+    const playing = new Map();
+    const onHover = (event) => {
+      const host = event.target?.nodeType === 1 ? event.target.closest(HOSTS) : null;
+      if (!host || !root.contains(host) || (event.relatedTarget?.nodeType && host.contains(event.relatedTarget)) || still?.matches) return;
+      for (const glyph of host.querySelectorAll(".rig")) {
+        const stop = play(glyph, () => playing.delete(glyph));
+        if (stop) playing.set(glyph, stop);
+      }
+    };
+    root.addEventListener("pointerover", onHover);
+    return { dispose() {
+      root.removeEventListener("pointerover", onHover);
+      for (const stop of playing.values()) stop();
+    } };
   }
 
-  function play(glyph) {
+  function play(glyph, onDone = () => {}) {
     if (glyph.classList.contains("play")) return;
     glyph.classList.add("play");
-    Promise.allSettled(glyph.getAnimations({ subtree: true }).map((a) => a.finished)).then(() => glyph.classList.remove("play"));
+    let finished = false;
+    const stop = () => {
+      if (finished) return;
+      finished = true;
+      glyph.classList.remove("play");
+      onDone();
+    };
+    Promise.allSettled(glyph.getAnimations({ subtree: true }).map((a) => a.finished)).then(stop);
+    return stop;
   }
 
   function waver({ face, rx, antenna = "M0 -116v-8.5", bulb = [0, -128.5] }) {
@@ -366,5 +387,6 @@
     return `<svg viewBox="${(SCENES[name] && BOXES[name]) || "0 0 120 80"}" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
   }
 
+  Object.defineProperty(playOnHover, "disposable", { value: true });
   window.Icons = { install, svg, rig, playOnHover, play, scene, names: Object.keys(ICONS), rigs: Object.keys(PARTS), scenes: Object.keys(SCENES) };
 })();

@@ -33,7 +33,7 @@ export interface QuotableMessage {
   audience?: "agents" | "human";
 }
 
-export function resolveQuotes(inputs: QuoteInput[], messages: QuotableMessage[], drafts?: ReadonlyMap<string, QuotableMessage>): Quote[] {
+export function resolveQuotes(inputs: QuoteInput[], messages: readonly QuotableMessage[], drafts?: ReadonlyMap<string, QuotableMessage>): Quote[] {
   const out: Quote[] = [];
   const used = new Set<number>();
   let next = 1;
@@ -66,7 +66,7 @@ export function visibleToAgents<T extends { kind: QuotableMessage["kind"]; audie
 }
 
 export function agentReadableWindow<T extends { seq: number; kind: QuotableMessage["kind"]; audience?: QuotableMessage["audience"] }>(
-  messages: T[],
+  messages: readonly T[],
   seq: number,
   around: number,
 ): { message: T; before: T[]; after: T[] } | null {

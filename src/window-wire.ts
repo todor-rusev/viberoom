@@ -52,7 +52,8 @@ export function previewText(text: string, limit = 240): string {
 export function messageIndexEntry(message: ChatMessage): unknown {
   return { id: message.id, seq: message.seq, displayOrder: message.displayOrder, kind: message.kind,
     from: message.from, fromName: message.fromName, to: message.to, toNames: message.toNames,
-    ts: message.ts, pinned: message.pinned, pinLabel: message.pinLabel, streaming: message.streaming, text: previewText(message.text),
+    ts: message.ts, pinned: message.pinned, pinLabel: message.pinLabel, streaming: message.streaming,
+    ...(Object.hasOwn(message, "audience") ? { audience: message.audience } : {}), text: previewText(message.text),
     bodyMissing: true, bodyChars: message.text.length };
 }
 export function roomForWindow(value: unknown, options: { index?: boolean; keepRange?: boolean } = {}): unknown {

@@ -1,0 +1,80 @@
+<!-- viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>viberoom · your voice</title>
+  <link rel="icon" href="/favicon.ico?v=12" sizes="16x16 32x32 48x48 64x64 128x128 256x256">
+  <link rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="/looks.css">
+  <link rel="stylesheet" href="/looks-custom.css">
+  <link rel="stylesheet" href="/components.css">
+  <link rel="stylesheet" href="/app.css">
+  <style>    html, body { overflow: auto; }
+    .guide { max-width: 780px; margin: 0 auto; padding: 28px 24px 90px; }
+    .g-back { margin: 0 0 18px; font-size: var(--fs-sm); font-weight: 700; }
+    .g-back a { color: var(--muted); text-decoration: none; }
+    .g-back a:hover { color: var(--primary); }
+    .guide h1 { font-size: 28px; margin: 0 0 10px; }
+    .guide .lead { font-size: var(--fs-lg); color: var(--ink-2); margin: 0 0 10px; line-height: 1.5; }
+    .guide p, .guide li { line-height: 1.55; }
+    .guide p a:not([data-ui]), .guide li a { color: var(--primary); }
+    .g-part { margin: 34px 0 0; }
+    .g-part h2 { font-size: 19px; margin: 0 0 8px; }
+    .g-part ul { margin: 0 0 12px; padding-left: 20px; }
+    .g-part li { margin: 0 0 8px; }
+    .g-aside { font-size: var(--fs-sm); color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main class="guide">
+    <p class="g-back"><a href="/">← viberoom</a></p>
+    <h1>Your voice</h1>
+    <p class="lead">Speak instead of typing: the microphone in the message field turns what you say into words, or sends the recording itself as a voice message. The vibemates can also read replies aloud. A speech service of your choice does the hearing and the reading; viberoom sends it only the recordings and the replies you choose.</p>
+    <p>You set it up in <b>Settings → Voice</b>, or ask a vibemate to walk you through it. Nothing here is a recommendation: the right service is the one that fits what matters to you.</p>
+
+    <section class="g-part">
+      <h2>What to weigh</h2>
+      <ul>
+        <li><b>How exact it is</b> in your language, with your accent and with the names you use. A larger model is usually more exact and slower.</li>
+        <li><b>What it costs.</b> Most services charge by the minute of audio; some have a free allowance; a server on your own computer costs nothing per minute but needs a capable computer.</li>
+        <li><b>Where your voice goes.</b> A service on the internet receives each recording; a server on this computer keeps it here.</li>
+        <li><b>How fast the words come back</b>, and whether it can also read replies aloud in your language.</li>
+      </ul>
+    </section>
+
+    <section class="g-part">
+      <h2>The choices in Settings → Voice</h2>
+      <ul>
+        <li><b>OpenAI</b>: its own speech models, for hearing and for reading aloud. A key from platform.openai.com.</li>
+        <li><b>Groq</b>: Whisper models on Groq's servers. A key from console.groq.com.</li>
+        <li><b>Your own server</b>: any server or service with OpenAI's audio API. A Whisper server on this computer keeps your voice here; you give its address and the name of its model.</li>
+      </ul>
+      <p>Each service names its own models, and their prices change; its own pages say what it offers today. The model field shows an example; any model the service lists for speech works.</p>
+      <p class="g-aside">Other services with OpenAI's audio API also go under <i>Your own server</i>. For example OpenRouter: the endpoint <code>https://openrouter.ai/api/v1</code>, a model name with its maker in front, such as <code>openai/whisper-1</code>, and an OpenRouter key. It does not use the names viberoom gives to help with spelling. A transcription request may time out after 60 seconds of processing; that is processing time, not a one-minute limit on the recording.</p>
+    </section>
+
+    <section class="g-part">
+      <h2>When nothing is heard</h2>
+      <p>viberoom measures each recording. When the microphone gave only silence, nothing is sent and you are told so. The usual reasons:</p>
+      <ul>
+        <li><b>The browser may not use the microphone.</b> The browser asks the first time; a refusal stays in its site settings for this page.</li>
+        <li><b>The system may not let the browser use it.</b> On Windows: Settings → Privacy &amp; security → Microphone, with access for desktop apps on. On macOS: System Settings → Privacy &amp; Security → Microphone, with your browser allowed. On Linux: the sound settings' input; a browser installed as a Flatpak or a Snap also needs the microphone allowed for it.</li>
+        <li><b>Another microphone is chosen</b>, or it is muted: the system's sound settings show which input is used and whether it moves when you speak.</li>
+      </ul>
+    </section>
+
+    <section class="g-part">
+      <h2>What this does not do</h2>
+      <ul>
+        <li>It does not listen on its own: the microphone records only between your presses, and a recording you cancel goes nowhere.</li>
+        <li>It does not show your key to anyone: it is kept encrypted on this computer and never shown again.</li>
+      </ul>
+    </section>
+  </main>
+  <script src="/tokens.js"></script>
+  <script src="/icons.js"></script>
+  <script src="/guide.js"></script>
+</body>
+</html>

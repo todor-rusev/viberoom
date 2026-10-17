@@ -90,10 +90,48 @@
     return catalogue;
   }
 
-  function facePicker({ kind, current, onPick, emoji, none, field }) {
+  function pickerLife(wrap, { root, signal } = {}, cleanup = () => {}) {
+    let disposed = false;
+    const listeners = [];
+    function dispose() {
+      if (disposed) return;
+      disposed = true;
+      signal?.removeEventListener("abort", dispose);
+      for (const remove of listeners.splice(0)) remove();
+      cleanup();
+      wrap.remove();
+    }
+    function active() {
+      if (disposed) return false;
+      if (signal?.aborted || root && !root.contains(wrap)) { dispose(); return false; }
+      return true;
+    }
+    function listen(target, type, callback) {
+      const listener = event => { if (active()) callback(event); };
+      target.addEventListener(type, listener);
+      listeners.push(() => target.removeEventListener(type, listener));
+    }
+    signal?.addEventListener("abort", dispose, { once: true });
+    return { active, listen, dispose, get disposed() { return disposed; } };
+  }
+  const fieldPickers = new WeakMap();
+
+  function facePicker({ kind, current, onPick, emoji, none, field, root, signal }) {
+    const document = root?.ownerDocument || (root?.nodeType === 9 ? root : field?.ownerDocument) || globalThis.document;
     const UI = globalThis.UI;
     const wrap = document.createElement("div");
     wrap.className = "face-pick";
+    if (field) fieldPickers.get(field)?.dispose();
+    const originalType = field?.type;
+    let emojiGrid, picturesTurn = 0;
+    const life = pickerLife(wrap, { root, signal }, () => {
+      picturesTurn++;
+      emojiGrid?.dispose();
+      if (field && fieldPickers.get(field) === wrap) {
+        fieldPickers.delete(field);
+        if (field.type === "hidden") field.type = originalType;
+      }
+    });
     let value = current || "";
     let tab = "pictures";
     const tabs = document.createElement("div");
@@ -106,6 +144,7 @@
     emojiTab.className = "face-pick-emoji";
     let typed = null;
     const pick = (next) => {
+      if (!life.active()) return;
       value = next;
       if (typed) typed.value = PICTURE.test(next) ? "" : next;
       if (field) field.value = next;
@@ -113,9 +152,10 @@
       onPick(next);
       renderPictures();
     };
-    const emojiGrid = searchableGrid(emoji, value, (picked) => pick(picked), none);
+    emojiGrid = searchableGrid(emoji, value, (picked) => pick(picked), none, { root, document });
     emojiTab.appendChild(emojiGrid);
     if (field) {
+      fieldPickers.set(field, wrap);
       field.type = "hidden";
       typed = document.createElement("input");
       typed.type = "text";
@@ -126,7 +166,7 @@
       typed.spellcheck = false;
       typed.setAttribute("aria-label", "Any emoji");
       typed.value = PICTURE.test(value) ? "" : value;
-      typed.addEventListener("input", () => { value = typed.value.trim(); field.value = value; emojiGrid.setValue(value); renderPictures(); });
+      life.listen(typed, "input", () => { value = typed.value.trim(); field.value = value; emojiGrid.setValue(value); renderPictures(); });
       emojiTab.appendChild(typed);
     }
     const renderTabs = () => {
@@ -134,15 +174,22 @@
       pictures.hidden = tab !== "pictures";
       emojiTab.hidden = tab !== "emoji";
     };
-    tabs.addEventListener("click", (e) => {
+    life.listen(tabs, "click", (e) => {
       const b = e.target.closest("[data-face-tab]");
       if (!b) return;
       e.preventDefault();
       tab = b.dataset.faceTab;
       renderTabs();
     });
+    life.listen(pictures, "click", (event) => {
+      const button = event.target.closest("[data-face-value]");
+      if (button && pictures.contains(button)) pick(button.dataset.faceValue);
+    });
     const renderPictures = () => {
+      if (life.disposed || signal?.aborted) return;
+      const turn = ++picturesTurn;
       loadFaces().then(({ groups, faces }) => {
+        if (turn !== picturesTurn || !life.active()) return;
         pictures.innerHTML = "";
         if (none) {
           const b = document.createElement("button");
@@ -150,7 +197,7 @@
           b.className = "face-pick-none" + (!value ? " selected" : "");
           b.textContent = none.label;
           b.title = none.title;
-          b.addEventListener("click", () => pick(""));
+          b.dataset.faceValue = "";
           pictures.appendChild(b);
         }
         for (const group of groups.filter((g) => g.for === kind)) {
@@ -174,7 +221,7 @@
             img.loading = "lazy";
             img.decoding = "async";
             b.appendChild(img);
-            b.addEventListener("click", () => pick(id));
+            b.dataset.faceValue = id;
             grid.appendChild(b);
           }
           pictures.append(head, grid);
@@ -185,11 +232,14 @@
     renderTabs();
     renderPictures();
     wrap.setValue = (v) => {
+      if (!life.active()) return;
       value = v || "";
       emojiGrid.setValue(value);
       if (typed) typed.value = PICTURE.test(value) ? "" : value;
       renderPictures();
     };
+    wrap.dispose = life.dispose;
+    if (signal?.aborted) life.dispose();
     return wrap;
   }
 
@@ -260,9 +310,11 @@
     return emoji === query || emojiName(emoji).includes(query);
   }
 
-  function searchableGrid(list, current, onPick, none) {
+  function searchableGrid(list, current, onPick, none, options = {}) {
+    const document = options.document || options.root?.ownerDocument || (options.root?.nodeType === 9 ? options.root : globalThis.document);
     const wrap = document.createElement("div");
     wrap.className = "emoji-pick";
+    const life = pickerLife(wrap, options);
     const search = document.createElement("input");
     search.type = "search";
     search.className = "emoji-search";
@@ -273,32 +325,24 @@
     const grid = document.createElement("div");
     grid.className = "avatar-picker";
     let value = current || "";
-    const button = (text, title, cls, onClick) => {
+    const button = (text, title, cls, picked) => {
       const b = document.createElement("button");
       b.type = "button";
       b.textContent = text;
       if (title) b.title = title;
       b.className = cls;
-      b.addEventListener("click", onClick);
+      b.dataset.emojiValue = picked;
       return b;
     };
     const render = () => {
       grid.innerHTML = "";
       const q = search.value.trim().toLowerCase();
       if (none && !q) {
-        grid.appendChild(button(none.label, none.title, "none" + (!value ? " selected" : ""), () => {
-          value = "";
-          onPick("");
-          render();
-        }));
+        grid.appendChild(button(none.label, none.title, "none" + (!value ? " selected" : ""), ""));
       }
       const shown = q ? list.filter((e) => emojiMatches(e, q)) : list;
       for (const e of shown) {
-        grid.appendChild(button(e, emojiName(e), e === value ? "selected" : "", () => {
-          value = e;
-          onPick(e);
-          render();
-        }));
+        grid.appendChild(button(e, emojiName(e), e === value ? "selected" : "", e));
       }
       if (!shown.length) {
         const empty = document.createElement("div");
@@ -307,28 +351,41 @@
         grid.appendChild(empty);
       }
     };
+    life.listen(grid, "click", event => {
+      const button = event.target.closest("[data-emoji-value]");
+      if (!button || !grid.contains(button)) return;
+      value = button.dataset.emojiValue;
+      onPick(value);
+      if (life.active()) render();
+    });
     for (const type of ["input", "change"]) {
-      search.addEventListener(type, (e) => {
+      life.listen(search, type, (e) => {
         e.stopPropagation();
         if (type === "input") render();
       });
     }
-    search.addEventListener("keydown", (e) => {
+    life.listen(search, "keydown", (e) => {
       e.stopPropagation();
       if (e.key === "Enter") e.preventDefault();
     });
     wrap.append(search, grid);
     render();
     wrap.setValue = (v) => {
+      if (!life.active()) return;
       value = v || "";
       render();
     };
+    wrap.dispose = life.dispose;
+    if (options.signal?.aborted) life.dispose();
     return wrap;
   }
 
-  function pickerElement(current, onPick, field) {
-    return facePicker({ kind: "vibemate", current, onPick, emoji: GALLERY, none: { label: "Aa", title: "Initials" }, field });
+  function pickerElement(current, onPick, field, options = {}) {
+    return facePicker({ ...options, kind: "vibemate", current, onPick, emoji: GALLERY, none: { label: "Aa", title: "Initials" }, field });
   }
 
+  Object.defineProperty(pickerElement, "scoped", { value: true });
+  Object.defineProperty(facePicker, "scoped", { value: true });
+  Object.defineProperty(searchableGrid, "scoped", { value: true });
   window.Avatars = { avatarSvg, avatarHtml, castColour, initials, pickerElement, facePicker, faceUrl, loadFaces, searchableGrid, emojiName, GALLERY };
 })();

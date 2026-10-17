@@ -789,6 +789,7 @@
       activeShadow: "var(--shadow-tile)",
       cut: p.bg,
       mark: p.primary,
+      rule: p.lav2,
     },
     cast: {
       c1: p.primary,
@@ -1100,6 +1101,8 @@
     toolbar: {
       padPaper: p.softer,
       padEdge: `0 1px 1px ${alpha(p.ink, 0.08)}`,
+      proposalBg: p.orange,
+      proposalInk: p.black,
       searchPaper: p.softer,
       searchEdge: `0 1px 1px ${alpha(p.ink, 0.08)}`,
       searchRadius: "var(--r-pill)",
@@ -1354,7 +1357,7 @@
         const waitingPeach = mix(mix(p.orangeLight, p.white, 0.6), mix(p.orangeDeep, p.white, 0.5), 0.5);
         return {
           page: { bg: `linear-gradient(180deg, ${TEAMS.frameTop} 0%, ${TEAMS.frameTop} 35%, ${TEAMS.frameWarm} 70%, ${TEAMS.frameFoot} 100%)` },
-          rail: { bg: "transparent", cut: TEAMS.frameTop },
+          rail: { bg: "transparent", cut: TEAMS.frameTop, rule: mix(TEAMS.frameTop, p.ink, 0.16) },
           side: { bg: paper },
           chatHead: { bg: paper },
           composer: { areaBg: "var(--page-bg)", bg: p.white, radius: "12px", padX: "12px", shadow: `0 0 0 1px ${mix(TEAMS.paper, p.ink, 0.16)}, 0 1px 2px ${alpha(p.ink, 0.06)}` },
@@ -1820,7 +1823,7 @@
       dialog: "the glass behind a dialog",
       scrim: "the dark glass behind a picture or a diagram",
       toast: "a toast: the ink with the paper's colour on it",
-      rail: "the main menu: activeBg, logoShadow; structure: bg (a column of its own colour, transparent by default), ink / hoverInk / activeInk (its glyphs on it), activeShadow (the mark of the place you are: a raised tile, or a bar at the edge as inset 2px 0 0 c), cut (the ring that sets a dot off the rail), mark (the ring around the room you are in)",
+      rail: "the main menu: activeBg, logoShadow; structure: bg (a column of its own colour, transparent by default), ink / hoverInk / activeInk (its glyphs on it), activeShadow (the mark of the place you are: a raised tile, or a bar at the edge as inset 2px 0 0 c), cut (the ring that sets a dot off the rail), mark (the ring around the room you are in), rule (the faint line between the rail's groups)",
       cast: "the vibemates' own colours (c1-c8): the eight a room hands out in turn, worn by a face's ring, its tile's tint, its name and its ticks; a vibemate keeps its slot, so the cast follows the look",
       timeline: "the strips beside the chat",
       bubble: "the message balloon: everyone else's (bg, ink, border, shadow) and your own (mineBg: always an image, a flat colour as linear-gradient(c, c); mineInk, mineShadow and the parts inside it; mineWaitingBg / mineWaitingShadow while it waits for a vibemate still at work, the attention gradient unless the look draws its own); structure: pad / minePad (CSS padding), corners / mineCorners (four corners, the one at the face first for a reply)",
@@ -1851,7 +1854,7 @@
       mention: "a name written in a message (@Name): own (how much of its vibemate's colour, 100% by default), ink (the rest), bg (a chip under it, transparent by default); in your own message bubble.mineMentionInk and mineChipBg",
       chat: "the chat as a whole, its head, the talk and the band you write in: bg (its one paper; transparent leaves the column's own); edgeColor / edgeShadowColor the talk's edges under the head and over the band (a line of two screen pixels and a soft shadow into the talk; transparent for none)",
       chatHead: "the chat's head: roomName (display of the room's name before its folder: none, or block), border (a line under it: 0 for none), bg (its paper; transparent leaves the chat's)",
-      toolbar: "the chat's toolbar: padPaper and padEdge (the pad under each glyph), searchPaper, searchEdge and searchRadius (the search's pad)",
+      toolbar: "the chat's toolbar: padPaper and padEdge (the pad under each glyph), proposalBg and proposalInk (the pending automation count), searchPaper, searchEdge and searchRadius (the search's pad)",
       hubRow: "hub-row: a line the room writes (lineDir, lineAlign, lineGap and rule: the line around it, under the faces or centred between hairlines; ink, tones, the one that leads somewhere: actionBg / actionShadow; prefix / prefixGap: what stands before the line, none or a prompt)",
       hero: "the welcome screen's hero",
       feature: "the welcome screen's feature tiles (emojiBg, shadow)",

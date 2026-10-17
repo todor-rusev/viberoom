@@ -587,6 +587,7 @@
   --rail-active-shadow: var(--shadow-tile);
   --rail-cut: #e3e6ec;
   --rail-mark: #5d65c7;
+  --rail-rule: #c3c6ce;
   --cast-c-1: #5d65c7;
   --cast-c-2: #1d8f6a;
   --cast-c-3: #f2a635;
@@ -834,6 +835,8 @@
   --chat-head-bg: #fdfcfa;
   --toolbar-pad-paper: #f1f1f8;
   --toolbar-pad-edge: 0 1px 1px rgba(28, 27, 51, 0.08);
+  --toolbar-proposal-bg: #f88f4e;
+  --toolbar-proposal-ink: #000000;
   --toolbar-search-paper: #f1f1f8;
   --toolbar-search-edge: 0 1px 1px rgba(28, 27, 51, 0.08);
   --toolbar-search-radius: var(--r-pill);
@@ -1154,6 +1157,8 @@ code .open-link { color: inherit; }
 .toast.warn { background: var(--warm-ink); }
 .toast.error { background: var(--rose-ink); }
 .toast.leaving { animation: fade-out var(--t-base) var(--ease-out) forwards; }
+.toast-action { flex: none; margin-left: auto; align-self: center; background: none; border: 1px solid currentColor; color: inherit; font: inherit; padding: 2px 10px; border-radius: calc(8px * var(--r-scale)); cursor: pointer; opacity: 0.9; }
+.toast-action:hover, .toast-action:focus-visible { opacity: 1; background: color-mix(in srgb, currentColor 14%, transparent); }
 .segmented { display: inline-flex; background: var(--soft); border-radius: var(--r-pill); padding: 3px; gap: 2px; }
 .segmented button { border: 0; background: transparent; border-radius: var(--r-pill); padding: 6px 12px; font-size: var(--fs-sm); font-weight: var(--w-bold); color: var(--muted); transition: background var(--t-fast), color var(--t-fast); }
 .segmented button.active { background: var(--card); color: var(--primary); box-shadow: var(--shadow-tile); }

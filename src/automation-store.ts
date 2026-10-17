@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { dayInZone, nextOccurrence, parseAutomation, type AutomationDefinition } from "./automation-schedule.js";
+import { holdsFolder, takeFolder, type FolderLock } from "./folder-lock.js";
 import { TimedDatabase } from "./timed-db.js";
 
 export interface AutomationJob extends AutomationDefinition {
@@ -22,17 +23,20 @@ export interface AutomationProposal {
 }
 
 const liveOwners = new Set<string>();
-function alive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
-}
 
 export class AutomationStore {
   private readonly db: TimedDatabase;
   private readonly owner = randomUUID();
+  private readonly folder: FolderLock | null = null;
   private closed = false;
   constructor(file: string, now = Date.now()) {
-    mkdirSync(dirname(file), { recursive: true });
-    this.db = TimedDatabase.open(file);
+    const dataDir = dirname(file);
+    mkdirSync(dataDir, { recursive: true });
+    if (!holdsFolder(dataDir)) {
+      this.folder = takeFolder(dataDir, { pid: process.pid });
+      if (!this.folder) throw new Error("Another running viberoom owns these automations.");
+    }
+    try { this.db = TimedDatabase.open(file); } catch (error) { this.folder?.release(); throw error; }
     try {
       const version = Number(this.db.prepare("PRAGMA user_version").get()?.user_version);
       if (version > 1) throw new Error("This automation store requires a newer viberoom.");
@@ -46,12 +50,12 @@ export class AutomationStore {
         PRAGMA user_version=1;`);
       this.transaction(() => {
         const old = this.db.prepare("SELECT pid, token FROM owner WHERE id=1").get() as {pid:number;token:string} | undefined;
-        if (old && (Number(old.pid) === process.pid ? liveOwners.has(old.token) : alive(Number(old.pid)))) throw new Error("Another running viberoom owns these automations.");
+        if (old && Number(old.pid) === process.pid && liveOwners.has(old.token)) throw new Error("These automations are already open in this viberoom.");
         this.db.prepare("INSERT OR REPLACE INTO owner VALUES(1,?,?)").run(process.pid, this.owner);
         for (const run of this.runs(undefined, "running")) this.writeRun({ ...run, status: "interrupted", delivery: "unconfirmed", finishedAt: now, detail: "The previous run ended without a confirmed result. Review it before running again." });
       });
       liveOwners.add(this.owner);
-    } catch (error) { this.db.close(); throw error; }
+    } catch (error) { this.db.close(); this.folder?.release(); throw error; }
   }
 
   private transaction<T>(fn: () => T): T {
@@ -218,6 +222,6 @@ export class AutomationStore {
       for (const run of this.runs(undefined, "running")) this.writeRun({ ...run, status: "interrupted", delivery: "unconfirmed", finishedAt: now, detail: "The room stopped before this run had a confirmed result." });
       this.db.prepare("DELETE FROM owner WHERE token=?").run(this.owner);
     });
-    this.closed = true; liveOwners.delete(this.owner); this.db.close();
+    this.closed = true; liveOwners.delete(this.owner); this.db.close(); this.folder?.release();
   }
 }

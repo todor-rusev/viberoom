@@ -15,8 +15,10 @@ import type { CarryWorkerTask, DependencyFolder } from "./carry-worker.js";
 import type { CarryPlanPreview, PlannedDependency, PlannedRoom, RoomImportChoice } from "./carry-plan.js";
 import type { BranchChoice, CarryState } from "./carry-merge.js";
 import type { CarryAlternative, CarryHead, CarryNumber, CarryRevision } from "./carry-history.js";
-import { ARRIVING, HELD_FILE_RETRIES, type ArrivingProgress } from "./carry-write.js";
+import { ARRIVING, HELD_FILE_RETRIES, takeBackOrSay, type ArrivingProgress } from "./carry-write.js";
 import type { Hub, StoredRoom } from "./hub.js";
+import type { ArrivingReservation } from "./hub/room-registry.js";
+import type { ImportCommit, ImportContext, Pause } from "./hub/room-import.js";
 import type { Logger } from "./log.js";
 import type { FileChange } from "./file-transaction.js";
 import { roomForExport } from "./export-room.js";
@@ -45,6 +47,7 @@ interface Job {
 }
 interface PlanMeta { userMemory?: PortableMemory; userMemoryMode?: "merge" | "replace"; rooms: PlannedRoom[]; dependencies: PlannedDependency[]; directoryVersions: { path: string; hash: string }[]; fileVersions: { path: string; hash: string | null }[] }
 interface PlanInput { selected: SelectedRoom[]; dependencies: Record<string, "ours" | "incoming">; userMemory: boolean; userMemoryChoice?: "ours" | "incoming" | "both" }
+interface Written { room: PlannedRoom; reservation: ArrivingReservation; attempt: string }
 class StalePreview extends Error {}
 
 function decisions(preview: CarryPlanPreview): string {
@@ -67,7 +70,10 @@ export class CarryTransfers {
   private readonly lock: DatabaseSync;
   private readonly timer: NodeJS.Timeout;
   private closing = false;
+  private holds = 0;
+  private readonly unhold: () => void;
   constructor(private readonly hub: Hub, private readonly product: string, private readonly log: Logger) {
+    this.unhold = hub.addImportWriters(() => this.holdWriters());
     this.parent = join(hub.dataDir, "transfers");
     mkdirSync(this.parent, { recursive: true, mode: 0o700 });
     if (lstatSync(this.parent).isSymbolicLink()) throw new Error("The transfer folder must be inside the viberoom data folder.");
@@ -94,6 +100,20 @@ export class CarryTransfers {
     if (dirname(full) !== resolve(this.root) || !/^[0-9a-f-]{36}$/.test(full.slice(dirname(full).length + 1))) throw new Error("Invalid transfer cleanup path.");
     rmSync(full, { recursive: true, force: true });
   }
+  private async holdWriters(): Promise<() => void> {
+    this.holds++;
+    let released = false;
+    const release = () => { if (!released) { released = true; this.holds--; } };
+    try {
+      for (const job of this.jobs.values()) if (job.applying) job.hurry = true;
+      for (const job of [...this.jobs.values()]) if (job.worker) await job.worker.terminate();
+      await Promise.allSettled([...this.jobs.values()].map(job => job.pending));
+      return release;
+    } catch (error) { release(); throw error; }
+  }
+  private assertNotHeld(): void {
+    if (this.holds > 0) throw new Error("viberoom is erasing its data. Try again after it finishes.");
+  }
   async close(): Promise<void> {
     if (this.closing) return;
     this.closing = true; clearInterval(this.timer);
@@ -102,12 +122,14 @@ export class CarryTransfers {
       await job.pending;
       try { this.remove(job.dir); } catch { }
     }
+    this.unhold();
     this.jobs.clear();
     this.lock.exec("rollback"); this.lock.close();
     if (dirname(resolve(this.root)) === resolve(this.parent)) { try { rmSync(this.root, { recursive: true, force: true }); } catch { } }
   }
   private create(kind: Job["kind"]): Job {
     if (this.closing) throw new Error("viberoom is shutting down. Try again after it starts.");
+    this.assertNotHeld();
     if ([...this.jobs.values()].filter(j => j.status === "working").length >= 2 || this.jobs.size >= 8) throw new Error("Finish or close another transfer before starting this one.");
     const id = randomUUID(), dir = join(this.root, id); mkdirSync(dir, { mode: 0o700 });
     const job: Job = { id, dir, touched: Date.now(), kind, status: "working" }; this.jobs.set(id, job); return job;
@@ -119,6 +141,7 @@ export class CarryTransfers {
   }
   private async work<T>(job: Job, task: CarryWorkerTask, onProgress?: (step: ArrivingProgress) => void): Promise<T> {
     if (this.closing || this.jobs.get(job.id) !== job) throw new Error("This transfer was cancelled or viberoom is shutting down.");
+    if (this.holds > 0) throw new Error("viberoom is erasing its data; the transfer stopped.");
     return new Promise<T>((resolve, reject) => {
       const worker = new Worker(new URL("./carry-worker.js", import.meta.url), { workerData: task, resourceLimits: { maxOldGenerationSizeMb: 1024 } });
       job.worker = worker;
@@ -221,6 +244,7 @@ export class CarryTransfers {
   }
 
   private plan(job: Job, input: PlanInput): void {
+    this.assertNotHeld();
     if (job.kind !== "import" || job.status === "working" || job.applying) throw new Error("This transfer is still being prepared.");
     if (!input.dependencies || typeof input.dependencies !== "object" || Array.isArray(input.dependencies) || Object.values(input.dependencies).some(value => value !== "ours" && value !== "incoming")) throw new Error("Choose which shared definitions to keep.");
     this.hub.settleImports();
@@ -241,10 +265,12 @@ export class CarryTransfers {
   }
 
   private startApply(job: Job): void {
+    this.assertNotHeld();
     const reviewed = job.result as CarryPlanPreview;
     job.applying = true; job.hurry = false; job.status = "working"; job.error = undefined; job.progress = undefined;
     const started = Date.now();
-    job.pending = new Promise<void>(resolve => setImmediate(resolve)).then(() => this.applyNow(job, reviewed)).then(outcome => {
+    const context = this.hub.importContext();
+    job.pending = new Promise<void>(resolve => setImmediate(resolve)).then(() => this.applyNow(job, reviewed, context)).then(outcome => {
       if ("review" in outcome) { job.result = outcome.review; job.status = "ready"; this.log.info(`carry import: the rooms moved on, the summary goes back for another look (${Date.now() - started} ms)`); }
       else { job.result = outcome.applied; job.status = "applied"; job.previewToken = undefined; }
     }, error => {
@@ -254,18 +280,19 @@ export class CarryTransfers {
     }).finally(() => { job.applying = false; job.progress = undefined; job.touched = Date.now(); });
   }
 
-  private async applyNow(job: Job, reviewed: CarryPlanPreview): Promise<{ applied: unknown } | { review: unknown }> {
+  private async applyNow(job: Job, reviewed: CarryPlanPreview, context: ImportContext): Promise<{ applied: unknown } | { review: unknown }> {
+    if (!this.hub.importLiving(context)) throw new Error("viberoom was reset or is shutting down; nothing was imported.");
     this.hub.settleImports();
     const restarting = this.roomsToRestart(job);
-    const paused = restarting.length ? await this.hub.pauseRoomsForImport(restarting, {
+    const pause = restarting.length ? await this.hub.pauseRoomsForImport(restarting, {
       waiting: names => { job.progress = `Waiting for ${names.join(", ")} to finish writing`; },
       hurry: () => !!job.hurry,
-    }) : null;
+    }, context) : undefined;
     try {
       for (let attempt = 1; ; attempt++) {
         job.progress = undefined;
         try {
-          return { applied: await this.commitPlan(job) };
+          return { applied: await this.commitPlan(job, context, pause) };
         } catch (error) {
           if (!(error instanceof StalePreview) || attempt >= 3) throw error;
         }
@@ -274,7 +301,7 @@ export class CarryTransfers {
         if (!fresh.ready || decisions(fresh) !== decisions(reviewed)) return { review: { ...fresh, refreshed: true } };
       }
     } finally {
-      if (paused) await this.hub.resumeRoomsAfterImport(paused);
+      if (pause) await this.hub.resumeRoomsAfterImport(pause);
     }
   }
 
@@ -286,12 +313,12 @@ export class CarryTransfers {
     } finally { stage.close(); }
   }
 
-  private async commitPlan(job: Job): Promise<unknown> {
+  private async commitPlan(job: Job, context: ImportContext, pause?: Pause): Promise<unknown> {
     const versions = job.versions;
     if (!versions) throw new Error("Review this import before applying it.");
     const started = Date.now();
     const stage = new CarryStage(join(job.dir, "stage"));
-    const written: PlannedRoom[] = [];
+    const written: Written[] = [];
     let committed = false;
     try {
       const plan = stage.meta<PlanMeta>("plan");
@@ -327,9 +354,10 @@ export class CarryTransfers {
       roomsCurrent();
       for (const room of plan.rooms) {
         if (!room.made || !room.changed) continue;
-        this.hub.arriving.add(room.stored.id);
-        written.push(room);
-        await this.work(job, { type: "write-room", room: { history: this.hub.history.path, stageDir: stage.dir, dataDir: this.hub.dataDir, uuid: room.uuid, target: room.stored.id, aliases: room.aliases, rows: room.rows } }, step => {
+        if (!this.hub.importLiving(context)) throw new Error("viberoom was reset or is shutting down; nothing was imported.");
+        const write: Written = { room, reservation: this.hub.reserveArriving(room.stored.id), attempt: randomUUID() };
+        written.push(write);
+        await this.work(job, { type: "write-room", room: { history: this.hub.history.path, stageDir: stage.dir, dataDir: this.hub.dataDir, uuid: room.uuid, target: room.stored.id, attempt: write.attempt, aliases: room.aliases, rows: room.rows } }, step => {
           job.progress = step.phase === "messages" ? `Writing ${step.done.toLocaleString("en")} of ${step.total.toLocaleString("en")} messages` : `Copying ${step.done.toLocaleString("en")} of ${step.total.toLocaleString("en")} pictures and files`;
         });
       }
@@ -342,7 +370,8 @@ export class CarryTransfers {
       const sources = [stage.meta<CarrySource>("source")!, ...stage.db.prepare("select value from meta where key like 'source:%'").all().map(row => JSON.parse(String(row.value)) as CarrySource)];
       const changedSources = sources.filter(source => knownSources.get(source.uuid) !== source.label);
       const changes = plan.rooms.filter(room => room.changed || changedSources.length).map(p => ({ stored: p.stored, setup: p.setup }));
-      if (changes.length || files.length || changedSources.length || plan.userMemory) this.hub.commitRoomTransfer(changes, files, () => {
+      let commit: ImportCommit = { built: [], unbuilt: [] };
+      if (changes.length || files.length || changedSources.length || plan.userMemory) commit = this.hub.commitRoomTransfer(changes, files, () => {
         if (plan.userMemory) {
           if (plan.userMemoryMode === "merge") this.hub.history.memory.mergeScope("user", plan.userMemory);
           else this.hub.history.memory.importScope("user", plan.userMemory);
@@ -368,9 +397,11 @@ export class CarryTransfers {
           history.carry.learnNumbers(id, stage.planRows<CarryNumber>(room.uuid, "number"));
         }
         for (const source of changedSources) this.hub.history.carry.source(source.uuid, source.label);
-      });
+      }, { context, pause });
       committed = true;
-      for (const room of written) {
+      if (commit.unbuilt.length) this.log.warn(`carry import: ${commit.unbuilt.join(", ")} imported and built at the next start`);
+      for (const { room, reservation } of written) {
+        if (!this.hub.importOwns(context, reservation)) continue;
         try { rmSync(join(this.hub.dataDir, "rooms", room.stored.id, ARRIVING), HELD_FILE_RETRIES); }
         catch (error) { this.log.warn(`carry import: the marker of ${room.stored.id} stays until the next start (${error instanceof Error ? error.message : String(error)})`); }
       }
@@ -380,15 +411,21 @@ export class CarryTransfers {
       this.log.info(`carry import applied: ${arrived.rooms.map(r => `${r.name} (${r.messages} messages, ${r.files} files)`).join(", ") || "shared memory only"}; ${written.length ? `written by the worker in ${wroteMs} ms, then ` : ""}${Date.now() - held} ms on the hub's main thread`);
       return arrived;
     } catch (error) {
-      if (!committed) for (const room of written) {
-        try { await this.work(job, { type: "take-back-room", history: this.hub.history.path, dataDir: this.hub.dataDir, target: room.stored.id }); }
-        catch (cause) { this.log.warn(`carry import: what was written for ${room.stored.id} is taken back at the next start (${cause instanceof Error ? cause.message : String(cause)})`); }
+      let failure = error;
+      if (!committed) for (const write of written) {
+        try { await takeBackOrSay(failure, () => this.takeBack(job, context, write)); }
+        catch (said) { failure = said; }
       }
-      throw error;
+      throw failure;
     } finally {
       stage.close();
-      for (const room of written) this.hub.arriving.delete(room.stored.id);
+      for (const { reservation } of written) this.hub.releaseArriving(reservation);
     }
+  }
+
+  private async takeBack(job: Job, context: ImportContext, { room, reservation, attempt }: Written): Promise<void> {
+    if (!this.hub.importOwns(context, reservation) || this.hub.rooms.has(room.stored.id)) return;
+    await this.work(job, { type: "take-back-room", history: this.hub.history.path, dataDir: this.hub.dataDir, target: room.stored.id, attempt });
   }
 
   async handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {

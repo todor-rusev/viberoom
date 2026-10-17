@@ -155,11 +155,31 @@
 
   const instances = new WeakMap();
 
+  function checkedSnapshot(value) {
+    const bad = () => { throw new TypeError("Invalid composer snapshot"); };
+    const selection = (item, text) => {
+      if (!item || !Number.isSafeInteger(item.start) || !Number.isSafeInteger(item.end) ||
+          item.start < 0 || item.end < item.start || item.end > text.length) bad();
+      return { start: item.start, end: item.end };
+    };
+    if (!value || value.format !== 1 || typeof value.text !== "string" || !Array.isArray(value.history) ||
+        !value.history.length || value.history.length > HISTORY_MAX || !Number.isSafeInteger(value.at) ||
+        value.at < 0 || value.at >= value.history.length) bad();
+    const history = value.history.map((entry) => {
+      if (!entry || typeof entry.text !== "string") bad();
+      return { text: entry.text, ...selection(entry, entry.text) };
+    });
+    if (history[value.at].text !== value.text) bad();
+    return { format: 1, text: value.text, selection: selection(value.selection, value.text), history, at: value.at };
+  }
+
   class Composer {
     constructor(el, hooks = {}) {
       this.el = el;
       this.hooks = hooks;
       this.doc = el.ownerDocument;
+      this.disposed = false;
+      this.listeners = [];
       el.setAttribute("contenteditable", "true");
       el.setAttribute("role", "textbox");
       el.setAttribute("aria-multiline", "true");
@@ -172,6 +192,7 @@
       this.composing = false;
       this.dispatching = false;
       this.revealQueued = false;
+      this.revealFrame = null;
       this.draw();
       this.listen();
     }
@@ -233,6 +254,45 @@
     addEventListener(...args) { this.el.addEventListener(...args); }
     removeEventListener(...args) { this.el.removeEventListener(...args); }
 
+    snapshot() {
+      if (this.disposed) throw new Error("Composer is disposed");
+      const text = this.value, selection = this.selection();
+      let history = this.history.map((entry) => ({ ...entry }));
+      let at = this.at;
+      if (text !== this.text) {
+        history = history.slice(0, at + 1);
+        history.push({ text, ...selection });
+        if (history.length > HISTORY_MAX) history.shift();
+        at = history.length - 1;
+      }
+      return { format: 1, text, selection: { ...selection }, history, at };
+    }
+    restore(snapshot) {
+      if (this.disposed) throw new Error("Composer is disposed");
+      if (this.composing) throw new Error("Cannot restore composer state during composition");
+      const value = checkedSnapshot(snapshot);
+      this.text = value.text;
+      this.saved = value.selection;
+      this.history = value.history;
+      this.at = value.at;
+      this.last = { type: "", time: 0 };
+      this.draw();
+      if (this.focused()) {
+        this.place();
+        this.reveal();
+      }
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      for (const [target, type, listener] of this.listeners) target.removeEventListener(type, listener);
+      this.listeners.length = 0;
+      if (this.revealFrame !== null) this.doc.defaultView?.cancelAnimationFrame?.(this.revealFrame);
+      this.revealFrame = null;
+      this.revealQueued = false;
+      this.hooks = {};
+      instances.delete(this.el);
+    }
     reset(text = "") {
       const t = String(text);
       this.commit(t, t.length, t.length, null);
@@ -373,13 +433,14 @@
       return firstBox(things);
     }
     reveal() {
-      if (!this.text || this.revealQueued) return;
+      if (this.disposed || !this.text || this.revealQueued) return;
       const frame = this.doc.defaultView?.requestAnimationFrame;
       if (!frame) return this.revealNow();
       this.revealQueued = true;
-      frame(() => {
+      this.revealFrame = frame(() => {
+        this.revealFrame = null;
         this.revealQueued = false;
-        if (this.focused()) this.revealNow();
+        if (!this.disposed && this.focused()) this.revealNow();
       });
     }
     revealNow() {
@@ -407,9 +468,14 @@
       this.commit(text, sel.start, sel.end, type || "insertText", true);
     }
 
+    listenTo(target, type, listener) {
+      target.addEventListener(type, listener);
+      this.listeners.push([target, type, listener]);
+    }
     listen() {
       const el = this.el;
-      el.addEventListener("beforeinput", (e) => {
+      const on = (type, listener) => this.listenTo(el, type, listener);
+      on("beforeinput", (e) => {
         const t = e.inputType || "";
         if (t === "historyUndo" || t === "historyRedo") {
           e.preventDefault();
@@ -420,18 +486,18 @@
         } else if (t.startsWith("format")) e.preventDefault();
         else if (t === "insertFromDrop" || t === "insertFromPaste") e.preventDefault();
       });
-      el.addEventListener("input", (e) => {
+      on("input", (e) => {
         if (this.dispatching) return;
         if (this.composing || e.isComposing) return;
         this.sync(e.inputType);
       });
-      el.addEventListener("compositionstart", () => { this.composing = true; });
-      el.addEventListener("compositionend", () => {
+      on("compositionstart", () => { this.composing = true; });
+      on("compositionend", () => {
         this.composing = false;
         this.sync("insertCompositionText");
       });
-      el.addEventListener("keydown", (e) => this.key(e));
-      el.addEventListener("paste", (e) => {
+      on("keydown", (e) => this.key(e));
+      on("paste", (e) => {
         if (this.hooks.onPaste) this.hooks.onPaste(e);
         if (e.defaultPrevented) return;
         e.preventDefault();
@@ -440,7 +506,7 @@
         if (text) this.edit(text, undefined, undefined, "insertFromPaste");
       });
       for (const kind of ["copy", "cut"]) {
-        el.addEventListener(kind, (e) => {
+        on(kind, (e) => {
           const s = this.selection();
           if (s.start === s.end || !e.clipboardData) return;
           e.preventDefault();
@@ -448,8 +514,8 @@
           if (kind === "cut") this.edit("", s.start, s.end, "deleteByCut");
         });
       }
-      el.addEventListener("dragstart", (e) => e.preventDefault());
-      el.addEventListener("drop", (e) => {
+      on("dragstart", (e) => e.preventDefault());
+      on("drop", (e) => {
         const dt = e.dataTransfer;
         if (!dt || (dt.files && dt.files.length) || [...(dt.types || [])].includes("Files")) return;
         const text = String(dt.getData("text/plain") || "").replace(/\r\n?/g, "\n");
@@ -459,7 +525,7 @@
         this.focus();
         this.edit(text, at, at, "insertFromDrop");
       });
-      this.doc.addEventListener("selectionchange", () => {
+      this.listenTo(this.doc, "selectionchange", () => {
         if (!this.focused() || this.composing) return;
         this.saved = this.selection();
       });
@@ -525,5 +591,6 @@
     pointAt,
     MENTION_RE,
   };
+  Object.defineProperty(api.attach, "disposable", { value: true });
   root.Composer = api;
 })(typeof window !== "undefined" ? window : globalThis);

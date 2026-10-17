@@ -147,6 +147,16 @@ function sdkAt(root,supplied){
   const pkg=JSON.parse(readFileSync(file(result,'package.json'),'utf8'));
   assert.equal(pkg.name,'@getzep/zep-cloud');assert.equal(pkg.version,'3.28.0');return result;
 }
+function shippedEmits(product,emitNames){
+  const privateEmits=new Set(product.privateTests.filter(p=>!p.endsWith('.d.ts')).flatMap(p=>{const stem='dist/'+p.slice(4,-3);return [stem+'.js',stem+'.js.map',stem+'.d.ts'];}));
+  const declarations=new Set(product.sourceEmit.map(p=>p.emit.slice(0,-3)+'.d.ts'));
+  const emitted=emitNames.filter(p=>!privateEmits.has(p)&&!declarations.has(p));
+  assert.deepEqual(emitted,[...product.sourceEmit.map(p=>p.emit),...product.runtimeAssets].sort(),'graph_release_source_emit_bijection');
+  return emitted;
+}
+export function assertGraphReleaseEmits(root=here){
+  return shippedEmits(productSourceInventory(root),names(join(root,'dist')).map(p=>'dist/'+p));
+}
 function snapshot(root,sdkRoot,{installed=false}={}){
   verifyDeclaredPackage(root);const spec=graphReleaseLayout(root);
   const product=productSourceInventory(root),{sources,sourceEmit}=product;
@@ -155,9 +165,7 @@ function snapshot(root,sdkRoot,{installed=false}={}){
     assert.ok(!sourceNames.some(p=>/\.test(?:\.|$)/.test(p))&&!emitNames.some(p=>/\.test(?:\.|$)/.test(p)),'graph_release_installed_private_test');
     assert.deepEqual(sourceNames,sources,'graph_release_installed_product_source_set');
   }
-  const privateEmits=new Set(product.privateTests.filter(p=>!p.endsWith('.d.ts')).flatMap(p=>{const stem='dist/'+p.slice(4,-3);return [stem+'.js',stem+'.js.map',stem+'.d.ts'];}));
-  const emitted=emitNames.filter(p=>!privateEmits.has(p));
-  assert.deepEqual(emitted,[...sourceEmit.map(p=>p.emit),...product.runtimeAssets].sort(),'graph_release_source_emit_bijection');
+  const emitted=shippedEmits(product,emitNames);
   const files=[...new Set([...sources,...emitted,...spec.privateCode,...spec.sourceOracleCode,BUNDLE,...META])].sort().map(p=>pinned(root,p));
   const sdk=sdkAt(root,sdkRoot),sdkFiles=names(sdk).map(p=>pinned(sdk,p));
   return {schema:'resident-private-preparation-package-v1',status:'LOCAL_SOURCE_DEPLOYMENT_BYTES_BOUND_ONLY',files,sourceEmit,

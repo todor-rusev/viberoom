@@ -48,16 +48,27 @@
     return "handed";
   }
 
-  function install({ doc = root.document, onError = () => {} } = {}) {
-    doc.addEventListener("click", (event) => {
+  function install({ root: scope, doc = scope?.ownerDocument ?? (scope?.nodeType === 9 ? scope : root.document), onError = () => {} } = {}) {
+    scope ??= doc;
+    let disposed = false;
+    const onClick = (event) => {
       const link = event.target && event.target.closest ? event.target.closest("a[download][href]") : null;
-      if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || way(doc) !== "picker") return;
+      if (disposed || !link || !scope.contains(link) || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || way(doc) !== "picker") return;
       event.preventDefault();
       const address = new URL(link.href, doc.baseURI);
       const name = link.getAttribute("download") || decodeURIComponent(address.pathname.split("/").pop() || "") || "file";
-      saveFile({ name, url: address.href, bytes: Number(link.dataset.bytes) || 0 }, doc).catch(onError);
-    });
+      saveFile({ name, url: address.href, bytes: Number(link.dataset.bytes) || 0 }, doc).catch(error => { if (!disposed) onError(error); });
+    };
+    scope.addEventListener("click", onClick);
+    return {
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        scope.removeEventListener("click", onClick);
+      },
+    };
   }
 
+  Object.defineProperty(install, "disposable", { value: true });
   root.VIBEROOM_SAVE = { saveFile, way, install };
 })(typeof window !== "undefined" ? window : globalThis);

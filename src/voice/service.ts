@@ -1,6 +1,7 @@
 // viberoom - Copyright (c) 2026 Todor Rusev - AGPL-3.0-or-later; see LICENSE
 
 import { readFile } from "node:fs/promises";
+import { ConsentChangedError } from "../consent-changed.js";
 import { decodeData } from "../files.js";
 import type { Logger } from "../log.js";
 import { AUTO_READS, READERS, isLanguageCode, isVoiceName, readingConsentWords, readingReadiness, voiceConsentWords, voiceReadiness, type AutoRead, type Reader, type VoiceConfigStore, type VoiceView } from "./config.js";
@@ -32,6 +33,21 @@ function promptOf(names: string[]): string | undefined {
   return words.length > 1 ? `${words.join(", ")}.` : undefined;
 }
 
+export function echoesPrompt(text: string, prompt: string | undefined): boolean {
+  if (!prompt) return false;
+  const name = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
+  const given = prompt.replace(/\.$/, "").split(", ").map(name);
+  const heard = text.split(/[,.;:!?\n]+/).map(name).filter(Boolean);
+  if (heard.length < 2) return false;
+  let at = 0;
+  for (const one of heard) {
+    at = given.indexOf(one, at);
+    if (at < 0) return false;
+    at++;
+  }
+  return true;
+}
+
 export class VoiceService {
   constructor(readonly store: VoiceConfigStore, private readonly log: Logger, private readonly send: typeof transcribe = transcribe, private readonly say: typeof synthesize = synthesize, private readonly check: typeof checkKey = checkKey) {}
 
@@ -48,7 +64,7 @@ export class VoiceService {
     return this.store.describe();
   }
 
-  set(patch: { provider?: unknown; settings?: unknown; consent?: unknown; language?: unknown; reading?: unknown }): VoiceView {
+  set(patch: { provider?: unknown; settings?: unknown; consent?: unknown; language?: unknown; reading?: unknown; consentWords?: unknown }): VoiceView {
     if (patch.provider !== undefined && patch.provider !== "off" && !voiceProvider(String(patch.provider))) throw new Error(`the voice provider is off or one of: ${VOICE_PROVIDERS.map((e) => e.id).join(", ")}`);
     if (patch.settings !== undefined && (typeof patch.settings !== "object" || patch.settings === null || Array.isArray(patch.settings))) throw new Error("settings must be an object of the provider's fields");
     if (patch.consent !== undefined && typeof patch.consent !== "boolean") throw new Error("consent must be true or false");
@@ -59,7 +75,16 @@ export class VoiceService {
     if (patch.settings !== undefined && !target) throw new Error("choose a provider before its settings");
     if (reading.consent !== undefined && !target) throw new Error("choose a provider before consenting to its reading");
     const settings = patch.settings !== undefined && target ? coerceVoiceSettings(target, this.store.get().providers[target.id] ?? {}, patch.settings as Record<string, unknown>) : null;
+    const shown = patch.consentWords;
+    if (shown !== undefined && (typeof shown !== "string" || patch.provider !== undefined || patch.settings !== undefined || (patch.consent === true) === (reading.consent === true)))
+      throw new Error("consentWords go with one consent alone, as text");
     this.store.update((s) => {
+      if (typeof shown === "string") {
+        const current = voiceProvider(s.provider);
+        if (!current || current.id !== target?.id) throw new ConsentChangedError();
+        const now = patch.consent === true ? voiceConsentWords(current, s.providers[current.id] ?? {}) : readingConsentWords(current, s.providers[current.id] ?? {});
+        if (now !== shown) throw new ConsentChangedError();
+      }
       if (patch.provider !== undefined) s.provider = targetId;
       if (settings && target) s.providers[target.id] = settings;
       if (typeof patch.language === "string") s.language = patch.language;
@@ -112,8 +137,13 @@ export class VoiceService {
     const settings = state.providers[entry.id] ?? {};
     const endpoint: TranscribeEndpoint = { baseUrl: entry.baseUrl(settings), apiKey: fieldValue(entry, settings, "apiKey"), model: fieldValue(entry, settings, "model") };
     const started = Date.now();
-    const text = await this.send(endpoint, { audio, mimeType }, { language: language || state.language || undefined, prompt: promptOf(names) });
+    const prompt = promptOf(names);
+    const text = await this.send(endpoint, { audio, mimeType }, { language: language || state.language || undefined, prompt });
     const length = typeof seconds === "number" && Number.isFinite(seconds) ? `${seconds.toFixed(1)} s of audio` : "a recording";
+    if (echoesPrompt(text, prompt)) {
+      this.log.info(`${length} (${Math.round(audio.length / 1024)} KB) came back as only the names given for spelling: taken as nothing heard (${entry.id}, ${endpoint.model})`);
+      throw new Error("Nothing could be heard in the recording.");
+    }
     this.log.info(`${length} (${Math.round(audio.length / 1024)} KB) made ${text.length} characters of text in ${((Date.now() - started) / 1000).toFixed(1)} s (${entry.id}, ${endpoint.model})`);
     return text;
   }

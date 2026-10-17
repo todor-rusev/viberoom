@@ -257,17 +257,17 @@ function patchCodexBackgroundDelivery(file) {
   patch.once('      onTurnStarted?.(reviewStarted.turn.id, reviewStarted.reviewThreadId);', '      await onTurnStarted?.(reviewStarted.turn.id, reviewStarted.reviewThreadId);');
   patch.once('        this.handleCommandTurnStarted(sessionState, options, turnId, threadId);', '        return this.handleCommandTurnStarted(sessionState, options, turnId, threadId);');
   patch.once('      options.onTurnStarted(turnId, threadId);', '      return options.onTurnStarted(turnId, threadId);');
-  patch.once('      const commandPromise = this.availableCommands.tryHandleCommand(params.prompt, sessionState, {', `      // /goal's native response has no turn ID. Keep its existing command lane isolated; the
+  patch.once('      const commandPromise = promptCommands.tryHandleCommand(params.prompt, sessionState, {', `      // /goal's native response has no turn ID. Keep its existing command lane isolated; the
       // bridge resumes after the command's explicit completion for later goal continuations.
-      const viberoomLegacyGoal = this.availableCommands.parseCommand(params.prompt)?.name === "goal";
+      const viberoomLegacyGoal = promptCommands.parseCommand(params.prompt)?.name === "goal";
       if (viberoomLegacyGoal) promptEventHandler.backgroundDelivery.beginLegacyCommand();
       activePrompt.viberoomBackgroundLegacyEnd = () => {
         if (viberoomLegacyGoal) promptEventHandler.backgroundDelivery.endLegacyCommand();
       };
-      const commandPromise = this.availableCommands.tryHandleCommand(params.prompt, sessionState, {`);
-  patch.once('        onTurnStartPending: () => {\n          sessionState.lastTokenUsage = null;', `        onTurnStartPending: () => {
+      const commandPromise = promptCommands.tryHandleCommand(params.prompt, sessionState, {`);
+  patch.once('        onTurnStartPending: () => {\n          this.beginPromptTokenUsage(sessionState);', `        onTurnStartPending: () => {
           activePrompt.viberoomBackgroundNativeStart = true;
-          sessionState.lastTokenUsage = null;`);
+          this.beginPromptTokenUsage(sessionState);`);
   patch.once('        onTurnStarted: (turnId, threadId) => {\n          const turn = { threadId, turnId };', `        onTurnStarted: async (turnId, threadId) => {
           if (!viberoomLegacyGoal) await activePrompt.viberoomBackgroundStart(turnId);
           const turn = { threadId, turnId };`);
@@ -278,22 +278,22 @@ function patchCodexBackgroundDelivery(file) {
       if (commandResult.handled) {
         if (viberoomLegacyGoal) activePrompt.viberoomBackgroundNativeStart = false;
         promptNotificationsActive = false;`);
-  patch.once('      const sendPromptPromise = this.runWithProcessCheck(', `      activePrompt.viberoomBackgroundNativeStart = true;
-      const sendPromptPromise = this.runWithProcessCheck(`);
+  patch.once('      const sendPromptPromise = this.runOnAppServer(', `      activePrompt.viberoomBackgroundNativeStart = true;
+      const sendPromptPromise = this.runOnAppServer(`);
   patch.once('              (turnId) => {\n                const turn = { threadId: params.sessionId, turnId };', `              async (turnId) => {
                 await activePrompt.viberoomBackgroundStart(turnId);
                 const turn = { threadId: params.sessionId, turnId };`);
   patch.once('          (turnId) => {\n            const turn = { threadId: params.sessionId, turnId };', `          async (turnId) => {
             await activePrompt.viberoomBackgroundStart(turnId);
             const turn = { threadId: params.sessionId, turnId };`);
-  patch.once('          const implementationPromise = this.runWithProcessCheck(', `          activePrompt.viberoomBackgroundPrepare();
+  patch.once('          const implementationPromise = this.runOnAppServer(', `          activePrompt.viberoomBackgroundPrepare();
           activePrompt.viberoomBackgroundNativeStart = true;
-          const implementationPromise = this.runWithProcessCheck(`);
-  patch.once('      promptNotificationsActive = false;\n      try {\n        await this.codexAcpClient.waitForSessionNotifications(params.sessionId);', `      promptNotificationsActive = false;
+          const implementationPromise = this.runOnAppServer(`);
+  patch.once('      promptNotificationsActive = false;\n      try {\n        await promptClient.waitForSessionNotifications(params.sessionId);', `      promptNotificationsActive = false;
       activePrompt.viberoomBackgroundLegacyEnd?.();
       await activePrompt.viberoomBackgroundEnd?.();
       try {
-        await this.codexAcpClient.waitForSessionNotifications(params.sessionId);`);
+        await promptClient.waitForSessionNotifications(params.sessionId);`);
   patch.once('      _meta: {\n        steering: {', `      _meta: {
         "viberoom.backgroundMessages": 1,
         steering: {`);
@@ -308,15 +308,15 @@ function patchCodexAdapter(file) {
     source = source.replace(anchor, replacement);
   };
   once(
-    'codex = process.platform === "win32" ? spawn(`"${codexPath}" app-server`, { shell: true, env: spawnEnv }) : spawn(codexPath, ["app-server"], { env: spawnEnv });',
-    'codex = process.platform === "win32" && /\\.(?:cmd|bat)$/i.test(codexPath) ? spawn(`"${codexPath}" app-server`, { shell: true, env: spawnEnv, windowsHide: true }) : spawn(codexPath, ["app-server"], { env: spawnEnv, windowsHide: true });',
+    'codex = process.platform === "win32" ? (0, import_cross_spawn.default)(codexPath, appServerStartupArgs, { env: spawnEnv }) : spawn(codexPath, appServerStartupArgs, { env: spawnEnv });',
+    'codex = process.platform === "win32" ? (0, import_cross_spawn.default)(codexPath, appServerStartupArgs, { env: spawnEnv, windowsHide: true }) : spawn(codexPath, appServerStartupArgs, { env: spawnEnv, windowsHide: true });',
   );
   once(
-    'codex = spawn(process.execPath, [bundledCodexPath, "app-server"], { env: spawnEnv });',
-    'codex = spawn(process.execPath, [bundledCodexPath, "app-server"], { env: spawnEnv, windowsHide: true });',
+    'codex = spawn(process.execPath, [bundledCodexPath, ...appServerStartupArgs], { env: spawnEnv });',
+    'codex = spawn(process.execPath, [bundledCodexPath, ...appServerStartupArgs], { env: spawnEnv, windowsHide: true });',
   );
   writeFileSync(file, source);
-  console.log("patched codex-acp: codex app-server starts without a console window on Windows, an .exe without cmd.exe");
+  console.log("patched codex-acp: codex app-server starts without a console window; upstream launcher and startup arguments are preserved");
 }
 
 function patchCodexStandingBrief(file) {
@@ -348,23 +348,29 @@ function patchCodexStandingBrief(file) {
 `,
   );
   once(
-    "      config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers),\n",
-    "      config: await this.viberoomStanding(await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers), request),\n",
+    `    const sessionConfig = await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers);
+    const response = await this.codexClient.threadStart({
+      config: sessionConfig.config,`,
+    `    const sessionConfig = await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers);
+    const response = await this.codexClient.threadStart({
+      config: await this.viberoomStanding(sessionConfig.config, request),`,
   );
   for (const method of ["resumeSession", "loadSession"]) {
     once(
       `  async ${method}(request, onSubscribed) {
     const additionalDirectories = readAdditionalDirectories(request.cwd, request.additionalDirectories, request._meta);
     await this.refreshSkills(request.cwd, additionalDirectories);
+    const sessionConfig = await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? []);
     const response = await this.resumeThread({
       excludeTurns: true,
-      config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? []),`,
+      config: sessionConfig.config,`,
       `  async ${method}(request, onSubscribed) {
     const additionalDirectories = readAdditionalDirectories(request.cwd, request.additionalDirectories, request._meta);
     await this.refreshSkills(request.cwd, additionalDirectories);
+    const sessionConfig = await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? []);
     const response = await this.resumeThread({
       excludeTurns: true,
-      config: await this.viberoomStanding(await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? []), request),`,
+      config: await this.viberoomStanding(sessionConfig.config, request),`,
     );
   }
   writeFileSync(file, source);
@@ -379,14 +385,14 @@ function patchClaudeAdapter(file) {
     source = source.replace(anchor, replacement);
   };
   once(
-    "        const ensureActiveTurn = async (resultUserMessageUuid) => {",
-    "        const ensureActiveTurn = async (resultUserMessageUuid, dispatchedTurn, explicitOwnership) => {",
+    "        const ensureActiveTurn = async (resultUserMessageUuid, resultUserMessageUuids) => {",
+    "        const ensureActiveTurn = async (resultUserMessageUuid, resultUserMessageUuids, dispatchedTurn, explicitOwnership) => {",
   );
-  once(`        const ensureActiveTurn = async (resultUserMessageUuid, dispatchedTurn, explicitOwnership) => {
+  once(`        const ensureActiveTurn = async (resultUserMessageUuid, resultUserMessageUuids, dispatchedTurn, explicitOwnership) => {
             if (session.activeTurn) {
                 if (!isHeldOpen(session.activeTurn)) {
                     return;`,
-    `        const ensureActiveTurn = async (resultUserMessageUuid, dispatchedTurn, explicitOwnership) => {
+    `        const ensureActiveTurn = async (resultUserMessageUuid, resultUserMessageUuids, dispatchedTurn, explicitOwnership) => {
             if (session.activeTurn) {
                 if (!isHeldOpen(session.activeTurn)) {
                     if (explicitOwnership && dispatchedTurn && session.activeTurn !== dispatchedTurn) activateTurn(dispatchedTurn);
@@ -415,13 +421,15 @@ function patchClaudeAdapter(file) {
             activateTurn(head);`,
   );
   once(
-    "                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind);",
+    `                        const startedByClaudeCode = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind);
+                        const isAutonomousResult = startedByClaudeCode && !answersPendingPrompt(message);`,
     `                        // Prefer the SDK's explicit ownership list; lifecycle inference is for older producers.
                         const consumedUuids = Array.isArray(message.user_message_uuids)
                             ? new Set(message.user_message_uuids.filter((uuid) => typeof uuid === "string")) : null;
                         const absorbedPrompts = (session.turnQueue ?? []).filter((t) =>
                             !t.settled && !t.commandResultSeen && t.deferredSettle === undefined && t.steeredSettle === undefined
                             && !["discarded", "refused", "cancelled"].includes(t.commandFinished)
+                            && !session.cancelledPrompts?.has(t.promptUuid)
                             && (consumedUuids ? consumedUuids.has(t.promptUuid)
                                 : (t.commandStarted || t.commandFinished === "completed" || session.activeTurn === t)));
                         // viberoom: never apply one result twice, including a repeated human result.
@@ -449,8 +457,8 @@ function patchClaudeAdapter(file) {
                             : message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind) && absorbedPrompts.length === 0;`,
   );
   once(
-    "                                await ensureActiveTurn(message.user_message_uuid);",
-    `                                await ensureActiveTurn(consumedUuids && dispatchedOwner ? dispatchedOwner.promptUuid : message.user_message_uuid, dispatchedOwner, consumedUuids !== null);
+    "                                await ensureActiveTurn(message.user_message_uuid, message.user_message_uuids);",
+    `                                await ensureActiveTurn(consumedUuids && dispatchedOwner ? dispatchedOwner.promptUuid : message.user_message_uuid, message.user_message_uuids, dispatchedOwner, consumedUuids !== null);
                                 // Only after the adapter accepted the owner (orphan/cancel checks included).
                                 // Share its terminal outcome rather than reactivating each command and resetting
                                 // the stop reason/usage, or bypassing early refusal/error/deferral exits.
@@ -472,10 +480,11 @@ function patchClaudeAdapter(file) {
                                             resolve(value);
                                             share(value.stopReason === "cancelled" ? "cancelled" : "notReported", (extra) => extra.resolve(value));
                                         };
-                                        // the error and its title (0.86.0 rejects with both), for the owner and each absorbed command
-                                        dispatchedOwner.reject = (error, title) => {
-                                            reject(error, title);
-                                            share("providerError", (extra) => extra.reject(error, title));
+                                        // Upstream 0.93 rejects legacy clients with one protocol error object.
+                                        // Share that exact error; negotiated AIR failure metadata travels in resolve(value).
+                                        dispatchedOwner.reject = (error) => {
+                                            reject(error);
+                                            share("providerError", (extra) => extra.reject(error));
                                         };
                                     }
                                 }`,
